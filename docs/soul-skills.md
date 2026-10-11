@@ -8,7 +8,7 @@ for #603/#312. Learning guides selected adaptations through the existing soul
 revision/proposal policy. Explicit source updates merge a reviewed candidate into
 the standalone library. Install, uninstall, workspace or global loading and a
 read-only `status` and `search` are described below. Other repository adapters
-are not implemented, and search has no adapter yet (#902).
+are not implemented; search has one local adapter, `local-text` (#902).
 
 The [dream maintenance guide](soul-skill-dream-design.md) describes the implemented
 owner CLI, daemon scheduling, bounded definition/learned-skill inputs, the soul's
@@ -519,13 +519,25 @@ the package within 8,192 entries, 64 MiB and 8 MiB per file, and refuses
 agent-bot soul skill search --soul AGENT_ID QUERY [--json]
 ```
 
-`search` is the entry point for knowledge search (#902). No search adapter
-exists yet, so it says so plainly: after checking the caller (the owner may
-search any soul, a soul only its own), that the soul exists and that the query
-is non-empty text of at most 4096 bytes, it fails with
-`skill-search-no-adapter` and exits 1. It sets up no service, reads no package
-content, writes nothing and returns no results. Which adapter comes first and
-how its results cite their sources are tracked on #902.
+`search` answers from the adapter the host names in
+`settings.skillSearchAdapter` (#902; a host setting, never part of a soul
+package). It first checks the caller (the owner may search any soul, a soul
+only its own), that the soul exists, and that the query is non-empty text of
+at most 4096 bytes and 16 words.
+
+- Unset: it fails with `skill-search-no-adapter` and exits 1. Nothing is set up
+  or searched.
+- `local-text`: it reads the soul's live package once and refuses with
+  `skill-search-drift` unless the bytes are the declared revision. It then
+  matches every query word, case-insensitively, per line in the files dream
+  maintenance reads: root `AGENTS.md`, `soul.md`/`SOUL.md` and eligible
+  `skills/` files. The manifest, policy, generated files, private state and
+  binary files are not searched. Each result cites the file `path`, the
+  sha256 `digest` of its bytes and the `line`, quotes up to 240 characters,
+  and is marked `relationship: sourced`; the top level names the `revision`,
+  so anyone can check a citation again. A removed file is not in the revision
+  and is never cited. Results stop at 100 (`truncated`). It writes nothing and
+  sets up no service.
 
 ## What is not captured
 

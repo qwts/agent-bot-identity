@@ -1,1 +1,1 @@
-- The soul skills guide documents `agent-bot soul skill search`, which reports that no search adapter is configured (#902).
+- The soul skills guide documents `agent-bot soul skill search`: the `settings.skillSearchAdapter` host setting, the plain no-adapter failure, and how `local-text` cites the soul revision, file path, digest and line (#902).
