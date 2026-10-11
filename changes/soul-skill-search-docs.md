@@ -1,0 +1,1 @@
+- The soul skills guide documents `agent-bot soul skill search`, which reports that no search adapter is configured (#902).
