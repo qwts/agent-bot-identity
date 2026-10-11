@@ -44,6 +44,7 @@ const LAUNCH_PATHS = {
   'install-gh-shim.mjs': [1, 'owner-run: zsh-profile via ensureBlock, from the owner\'s install'],
   'cli/dispatch.mjs': [2, 'first-party: agent-bot subcommands'],
   'claude-worktree-create.mjs': [2, 'first-party: setup-worktree; git'],
+  'daemon-client.mjs': [1, 'first-party: identity-entry.mjs under the caller\'s own env, the env the operation would see in-process (identityOp, #645)'],
   // Owner-run tools, opened by the owner's own command.
   'skill.mjs': [2, 'owner-run: gh api; git'],
   'secret-providers/pass-cli.mjs': [1, 'owner-run: pass-cli'],
