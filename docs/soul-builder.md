@@ -413,11 +413,16 @@ per-harness overrides in the top-level `harnesses` object:
 Both objects are optional. Each settings object accepts only `model` (a
 nonempty string), `reasoningEffort` (`low`, `medium`, `high`),
 `permissionMode` (`safe`, `autopilot`, the same mode names as `soul mode`),
-`env`, and `permissions` (both below). Overrides replace only declared fields;
-omitted fields inherit shared defaults.
+`env`, and `permissions` (both below). A per-harness override also accepts
+`provider` ([soul-providers.md](soul-providers.md)) and `install`
+([soul-runtimes.md](soul-runtimes.md)); neither is accepted under the shared
+`harness`. Overrides replace only declared fields; omitted fields inherit
+shared defaults.
 Model IDs are copied verbatim, so use overrides for harness-specific IDs.
 The supported override names are `claude`, `codex`, `gemini`, `opencode`,
-`cursor`, `copilot`, `devin`, and `muse`. Unknown names, unknown settings keys,
+`cursor`, `copilot`, `devin`, `muse`, and `kiro`. Qwen Code has no override
+name: it is in the report, and the shared `harness` settings are listed there
+as unsupported. Unknown names, unknown settings keys,
 and invalid values fail package validation with their full declaration path.
 Other top-level manifest extensions retain their existing opaque behavior.
 
@@ -427,8 +432,12 @@ Other top-level manifest extensions retain their existing opaque behavior.
 | Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported | `model_provider` + `[model_providers.<id>]` |
 | Gemini / `.gemini/settings.json` | `model.name` | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` | `provider.<id>` with `{env:KEY}` |
-| Cursor, Copilot, Devin, Kiro | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
-| Muse | Won't do: no adapter | Won't do | Won't do | Won't do | Won't do | Won't do |
+| Cursor, Copilot, Devin, Kiro, Qwen Code | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| Muse | Won't do: no verified definition adapter | Won't do | Won't do | Won't do | Won't do | Won't do |
+
+`tests/soul-builder-settings-matrix.test.mjs` keeps this table in step with
+the builder: every harness in the report has one row, and a cell says
+Unsupported exactly where the build report lists that setting as unsupported.
 
 `provider` (`harnesses.<h>.provider`, [soul-providers.md](soul-providers.md))
 renders the non-secret half only; the secret itself is stored with
@@ -660,6 +669,44 @@ receives the declared effort in `_meta.claudeCode.options.effort` on
 With no explicit declaration, the daemon sends no effort mutation, leaving the
 harness's default or resumed-session state in place. There is no owner effort
 picker or effort reset setting today.
+
+### Env and permission rules on a daemon turn
+
+The daemon resolves the mode, the model and the reasoning effort itself
+(above). It does not resolve `env` or `permissions`; what a daemon turn gets
+for those depends on the adapter that runs it:
+
+- **Claude.** The pinned adapter (`@zed-industries/claude-code-acp` 0.16.2,
+  `e5b8368`) starts every session with
+  `settingSources: ["user", "project", "local"]` in the turn's working
+  directory ([`acp-agent.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/acp-agent.ts#L1060-L1084)),
+  so the `.claude/settings.json` the builder renders into the soul's home is
+  read on a daemon turn there, as on a direct open: its `env` and its rules.
+  The adapter's PreToolUse hook answers from the same files' `deny`, then
+  `allow` rules before the daemon is asked
+  ([`settings.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/settings.ts#L446-L470),
+  [`tools.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/tools.ts#L787-L831)).
+  A declared `deny` therefore holds on both paths. A matching `allow` rule
+  also runs the tool without reaching the daemon's approval queue, whatever
+  the mode; in a repo, the repo's own rules do the same. This is not yet
+  under the ask-before-loosening rule above (open on #379).
+- **OpenCode.** A daemon turn runs as the daemon's own `agent-bot` agent,
+  whose ruleset (`OPENCODE_DAEMON_PERMISSION` in `acp-registry.mjs`) starts
+  with `"*": "ask"`. OpenCode appends an agent's rules after the config's
+  ([`agent.ts`](https://github.com/anomalyco/opencode/blob/545f51d26cc39a907d2867492d498d9607ea5fa4/packages/opencode/src/agent/agent.ts#L272-L293))
+  and the last matching rule wins
+  ([`permission/index.ts`](https://github.com/anomalyco/opencode/blob/545f51d26cc39a907d2867492d498d9607ea5fa4/packages/opencode/src/permission/index.ts#L28-L38),
+  v1.18.32). So the rendered `permission.bash` / `permission.edit`, and with
+  them a declared `deny`, apply to a direct open only; under the daemon every
+  shell or edit call asks the daemon, which decides by the resolved mode
+  (open on #379).
+- **Codex.** No permission rules are rendered for Codex. Its `env` is the
+  `[shell_environment_policy.set]` table in the rendered config; whether a
+  daemon turn reads that file depends on the soul's Codex tool home, which
+  #617 owns. Daemon turns stay in `workspace-write` whatever the mode.
+- **Gemini, Cursor, Copilot, Devin, Kiro and Qwen Code** have no enabled
+  daemon lane in `acp-registry.mjs`, so a direct open is the only path, and
+  Muse renders no settings.
 
 ## The soul's MCP entry (#378)
 

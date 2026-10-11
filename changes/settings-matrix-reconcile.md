@@ -1,0 +1,1 @@
+- `docs/soul-builder.md`'s settings matrix now matches the builder: Kiro is listed as an override name, Qwen Code has a row, `provider` and `install` are documented as per-harness keys, and a new section says what a daemon turn does with declared `env` and allow/deny rules for Claude and OpenCode. A test keeps the matrix and the build report in step (#379).
