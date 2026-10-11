@@ -165,7 +165,7 @@ test('comms off leaves a soul\'s own MCP file alone and reports no merge', (t) =
   reseal(root);
   const result = buildSoulDirectory(root);
   assert.deepEqual({ writes: result.writes, removals: result.removals, merged: result.merged },
-    { writes: ['CLAUDE.md', 'GEMINI.md'], removals: [], merged: [] });
+    { writes: ['.opencode/plugins/agent-bot-soul.js', 'CLAUDE.md', 'GEMINI.md'], removals: [], merged: [] });
   assert.equal(readFileSync(join(root, '.mcp.json'), 'utf8'), own);
   assert.deepEqual(result.harnesses.claude.rendered, ['instructions']);
 });
@@ -185,7 +185,7 @@ test('a soul that ships its own MCP file keeps its servers and gains ours', (t) 
     { path: '.mcp.json', harness: 'claude', kept: ['postgres'] },
     { path: 'opencode.json', harness: 'opencode', kept: ['files'] },
   ]);
-  assert.deepEqual(checked.writes, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
+  assert.deepEqual(checked.writes, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.opencode/plugins/agent-bot-soul.js', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
   assert.equal(readFileSync(join(root, '.mcp.json'), 'utf8'), `${JSON.stringify({ mcpServers: { postgres: { command: 'pg-mcp' } } }, null, 2)}\n`,
     '--check never writes');
   buildSoulDirectory(root);
@@ -277,7 +277,7 @@ test('--check --json reports every harness and never leaves a primitive unreport
   const report = JSON.parse(dirty.stdout);
   assert.deepEqual(Object.keys(report).sort(), ['drift', 'harnesses', 'merged', 'removals', 'warnings', 'writes']);
   assert.deepEqual(report.warnings, []);
-  assert.deepEqual(report.drift.sort(), ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
+  assert.deepEqual(report.drift.sort(), ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.opencode/plugins/agent-bot-soul.js', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md', 'opencode.json']);
   assert.deepEqual(report.merged, []);
   assert.deepEqual(report.harnesses.claude, {
     rendered: ['instructions', 'mcp'], files: ['.mcp.json', 'CLAUDE.md'],
@@ -287,7 +287,7 @@ test('--check --json reports every harness and never leaves a primitive unreport
   });
   assert.deepEqual(report.harnesses.codex.rendered, ['instructions', 'mcp']);
   assert.deepEqual(report.harnesses.gemini.files, ['.gemini/settings.json', 'GEMINI.md']);
-  assert.deepEqual(report.harnesses.opencode.files, ['opencode.json']);
+  assert.deepEqual(report.harnesses.opencode.files, ['.opencode/plugins/agent-bot-soul.js', 'opencode.json']);
   // Every harness the toolkit knows is named, so nothing is dropped in silence.
   assert.deepEqual(Object.keys(report.harnesses).sort(), ['claude', 'codex', 'copilot', 'cursor', 'devin', 'gemini', 'kiro', 'muse', 'opencode', 'qwen']);
   assert.ok(Object.values(report.harnesses).every((entry) => entry.rendered.includes('instructions')

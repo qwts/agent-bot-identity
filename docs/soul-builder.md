@@ -48,7 +48,7 @@ A native consumer receives no duplicate configuration folder.
 | Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` | `.claude/settings.json` `hooks` |
 | Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` | Unsupported |
 | Codex | Native `AGENTS.md` | None yet (Codex reads `.codex/skills/` and `.agents/skills/`, not `.claude/skills/`) | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | `.agents/skills/source-command-<name>/SKILL.md` (commands without arguments, shell or `@` includes; only when the soul targets Codex) | `.codex/hooks.json` |
-| OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | Unsupported |
+| OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | `.opencode/plugins/agent-bot-soul.js` |
 | Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Unsupported (replaced by skills) | `.cursor/hooks.json` |
 | Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
 | Devin CLI | Claude-compatible consumer | Shared Claude skills; `.devin/` only for agents | Shared `.mcp.json` | `.devin/agents/<name>.md` | Shared `.claude/commands/<name>.md` (imported as skills) | Shared `.claude/settings.json` |
@@ -745,12 +745,49 @@ uses for the lifecycle adapters.
 | Codex | `.codex/hooks.json` | Hooks need `[features] hooks = true`, which the user-level policy `sync-hooks` writes |
 | Cursor | `.cursor/hooks.json` | `version: 1`; blocking events carry `failClosed: true` |
 | Copilot CLI | `.github/hooks/agent-bot-soul.json` | A dedicated file; other `.github/hooks/*.json` files stay the soul's |
-| OpenCode | None yet | Hooks are a JS plugin, not a config file. The `opencode` dialect row and its translation in `agent-hook` are in place, checked against OpenCode 1.18.34; the generated `.opencode/plugins/agent-bot-soul.js` that calls them is the next slice, so until then every hook is listed under `unsupported.hooks` |
+| OpenCode | `.opencode/plugins/agent-bot-soul.js` | A generated plugin, rendered for every soul; see [OpenCode](#opencode) below. `session-end` and `agent-stop` have no OpenCode event and are listed under `unsupported.hooks` |
 | Gemini CLI, Muse, Kiro | None | No dialect row yet; every hook is listed under `unsupported.hooks` |
 
 Cursor's and Copilot's project hook files, like their `hook-dialects.mjs` rows,
 assume the harness tolerates the leading `_comment` marker key; Cursor's row is
 marked unverified there.
+
+### OpenCode
+
+OpenCode has no hook config file: it loads every `.opencode/plugins/*.js` as a
+plugin module and awaits its hooks in its own process (checked against
+OpenCode 1.18.34, the `opencode` row in `hook-dialects.mjs`). The builder
+renders one fixed plugin there, `opencodeHookPlugin()` in `soul-builder.mjs`,
+for every soul and not only one that declares hooks. OpenCode has no
+user-level lifecycle adapter, so this plugin is how the runner's built-in
+identity and confinement guards reach an OpenCode session at all.
+
+| OpenCode hook | Canonical events | Blocking |
+| --- | --- | --- |
+| `tool.execute.before` | `pre-tool-use`; `pre-command` for `bash`; `pre-file-write` for `write`, `edit`, `apply_patch` | Yes |
+| `chat.message` | `prompt-submit` | Yes |
+| `tool.execute.after` | `post-tool-use` | No |
+| `event` (`session.created` only) | `session-start` | No |
+
+For each one it runs `agent-bot agent-hook --event <event> --dialect opencode`
+from PATH with the hook's input and output merged into one JSON object on
+stdin, plus `directory`, and `AGENT_BOT_HOOKS_DIR` set to the soul's `hooks/`
+beside the plugin. Exit 0 allows. Exit 2 denies, and the plugin throws with
+the runner's stderr, which is how OpenCode aborts a tool call or a prompt. On a
+blocking event the plugin also throws when `agent-bot` is not on PATH, crashes,
+exits with any other status, or does not answer within 15 s
+(`AGENT_BOT_PLUGIN_TIMEOUT_MS` can only shorten that). A non-blocking event
+never throws. The bash call is command-scanned on `pre-tool-use`, and
+`write`, `edit` and `apply_patch` are confined path by path there, so the
+guards do not depend on the narrower events.
+
+The file starts with the generated marker, so it follows the same rules as
+every generated file: a rebuild rewrites it, and an unmarked file at that path
+is the soul's own plugin. The build refuses it as a conflict and never
+overwrites or removes it; other files in `.opencode/plugins/` are never
+touched. `agent-bot doctor` reports the plugin in each active soul as
+`hooks.opencode_plugin`: missing, out of date, or replaced by an unmarked file
+is a warning, because OpenCode sessions there run without the guards.
 
 ### Who owns what
 
@@ -778,7 +815,8 @@ from each of the two entries on the same event.
 
 Each harness adds `hooks: {received, rendered}` and `unsupported.hooks`, with
 hook names spelled `<event>/<name>` and byte-sorted; `rendered` gains `hooks`
-and `files` includes the hook file when at least one hook rendered. A harness
+and `files` includes the hook file when at least one hook rendered (OpenCode's
+plugin, rendered for every soul, is always among OpenCode's `files`). A harness
 whose dialect cannot express an event lists that event's hooks under
 `unsupported.hooks` rather than dropping them. The plain summary prints the
 same: `gemini: instructions, mcp (unsupported: hooks pre-command/50-no-force-push)`.
