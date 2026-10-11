@@ -1,0 +1,1 @@
+- Soul skills now reach Codex: `agent-bot soul build` writes a marked copy of each to `.agents/skills/<name>/` when the soul targets Codex, never touching other skills there, and `agent-bot doctor` reports drift as `skills.codex` (#378).

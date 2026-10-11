@@ -66,7 +66,8 @@ const HARNESS_FILES = Object.freeze({
   // checked against openai/codex `rust-v0.157.0`, where `multi_agent` is stable.
   // Codex has no project commands; a command becomes the skill its own
   // command importer writes, `.agents/skills/source-command-<name>/SKILL.md`.
-  codex: Object.freeze({ instructions: null, skills: null, mcp: '.codex/config.toml', subagents: '.codex/agents/', commands: `.agents/skills/${CODEX_COMMAND_SKILL}` }),
+  // Soul skills get a marked copy in `.agents/skills/<name>/` beside them.
+  codex: Object.freeze({ instructions: null, skills: '.agents/skills/', mcp: '.codex/config.toml', subagents: '.codex/agents/', commands: `.agents/skills/${CODEX_COMMAND_SKILL}` }),
   opencode: Object.freeze({ instructions: null, skills: null, mcp: 'opencode.json', subagents: '.opencode/agent/', commands: '.opencode/command/' }),
   cursor: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.cursor/mcp.json', subagents: '.cursor/agents/' }),
   copilot: Object.freeze({ instructions: null, skills: '.claude/skills/', mcp: '.mcp.json', subagents: '.github/agents/', commands: '.claude/commands/' }),
@@ -81,7 +82,10 @@ const HARNESS_FILES = Object.freeze({
 
 // The workspace-relative folder a harness reads skills from, or null when it
 // has none (#603: `soul skill load` places one skill there).
+// Codex's `.agents/skills/` is shared with Qwen Code and OpenCode, so `soul
+// skill load` does not place skills there.
 export function harnessSkillsDirectory(harness) {
+  if (harness === 'codex') return null;
   return Object.hasOwn(HARNESS_FILES, harness) ? HARNESS_FILES[harness].skills : undefined;
 }
 
@@ -379,8 +383,8 @@ export function soulCommsDeclared(source) {
 // soul.json `skills.disabled` switches skills off without deleting them
 // (GeniusBar#64): their `skills/<name>/` stays in the package and no harness
 // gets a rendered copy. Read like the comms flag, straight from the bytes.
-// Codex command skills go to the shared `.agents/skills/`, which Qwen Code
-// and OpenCode read too, so they render only for a soul whose
+// Codex soul and command skills go to the shared `.agents/skills/`, which
+// Qwen Code and OpenCode read too, so they render only for a soul whose
 // `preferredHarnesses` names Codex or is empty (no preference: every harness).
 export const AGENTS_SKILLS_READERS = Object.freeze(['qwen', 'opencode']);
 export function soulTargets(manifest, harness) {
@@ -782,10 +786,14 @@ export const AgentBotSoul = async ({ directory }) => {
 // `hooks` is declaredHooks(entries): rendered hooks share one runner entry per
 // event, so the names come from the package, not the output.
 export function harnessReport(output, { comms = true, manifest = {}, hooks = [] } = {}) {
-  const skills = [...output.keys()].some((path) => Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
+  // A Codex command skill is a command, not a soul skill.
+  const skills = [...output.keys()].some((path) => !path.startsWith(HARNESS_FILES.codex.commands)
+    && Object.values(HARNESS_FILES).some((files) => files.skills && path.startsWith(files.skills)));
   const names = (prefix) => prefix ? [...output.keys()].filter((path) => path.startsWith(prefix))
     .map((path) => path.slice(prefix.length).replace(/(?:\/SKILL\.md|(?:\.agent)?\.(md|toml))$/, '')).sort(compare) : [];
   const received = { subagents: names(HARNESS_FILES.claude.subagents), commands: names(HARNESS_FILES.claude.commands) };
+  const codexSkills = [...new Set([...output.keys()].filter((path) => path.startsWith(HARNESS_FILES.codex.skills)
+    && !path.startsWith(HARNESS_FILES.codex.commands)).map((path) => path.split('/')[2]))].sort(compare);
   const report = {};
   for (const [harness, files] of Object.entries(HARNESS_FILES)) {
     const settingsTarget = SETTINGS_TARGETS.find((target) => target.harness === harness);
@@ -832,8 +840,10 @@ export function harnessReport(output, { comms = true, manifest = {}, hooks = [] 
     // A Codex command skill is also a skill to the other `.agents/skills/`
     // readers, beside their native command: a known effect, reported by name
     // whenever both are on disk (launch preference does not stop either).
+    // Soul skills likewise: each is in the reader's own skills folder too.
     const duplicates = { commands: AGENTS_SKILLS_READERS.includes(harness)
-      ? names(HARNESS_FILES.codex.commands).filter((name) => primitives.commands.rendered.includes(name)) : [] };
+      ? names(HARNESS_FILES.codex.commands).filter((name) => primitives.commands.rendered.includes(name)) : [],
+    skills: AGENTS_SKILLS_READERS.includes(harness) ? codexSkills : [] };
     report[harness] = { rendered, files: paths, ...primitives, duplicates,
       settings: { received: settingKeys, rendered: deliveredSettings },
       hooks: { received: [...hooks], rendered: deliveredHooks }, unsupported };
@@ -1141,14 +1151,21 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
     const appendix = pointers.length ? `\n\nSupporting files retained in the source skill directory:\n${pointers.join('\n')}\n` : '';
     output.set(`.claude/${path}`, Buffer.from(`${front.replace(/\n?$/, '\n')}${MARKER}\n${content.slice(front.length)}${appendix}`));
   }
-  // Gemini and Qwen Code do not discover Claude-compatible skills; each gets
-  // the same marked copy in its native skill directory. Qwen also keeps its
-  // own skills in `.qwen/skills/`; those are unmarked, so they stay its own.
+  // Gemini, Qwen Code and Codex do not discover Claude-compatible skills;
+  // each gets the same marked copy in its native skill directory. Qwen keeps
+  // its own skills in `.qwen/skills/`, and other tools theirs in
+  // `.agents/skills/`; those are unmarked, so they stay their own.
+  const codex = soulTargets(soulManifest(source), 'codex');
+  const folders = codex ? ['.gemini/', '.qwen/', '.agents/'] : ['.gemini/', '.qwen/'];
   for (const [path, bytes] of [...output]) {
     if (!path.startsWith('.claude/skills/')) continue;
-    for (const folder of ['.gemini/', '.qwen/']) output.set(path.replace(/^\.claude\//, folder), Buffer.from(bytes));
+    // Codex's command skills own the `source-command-` names there.
+    if (codex && path.startsWith(`.claude/skills/${CODEX_COMMAND_SKILL}`)) {
+      throw new Error(`skills/${path.split('/')[2]}: the ${CODEX_COMMAND_SKILL} prefix is reserved for Codex command skills`);
+    }
+    for (const folder of folders) output.set(path.replace(/^\.claude\//, folder), Buffer.from(bytes));
   }
-  renderPrimitives(source, output, { codexCommands: soulTargets(soulManifest(source), 'codex') });
+  renderPrimitives(source, output, { codexCommands: codex });
   // The soul's MCP entry (#378), unless its soul.json turned comms off. A soul
   // that already ships one of these files keeps its own servers: the disk
   // layer hands those bytes over as an explicit input, so rendering stays pure

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { buildHarnessFiles, harnessReport } from '../soul-builder.mjs';
 import { populationFile, upsertSoul, registerSoulDir } from '../agent-population.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
+import { codexSkillsCheck } from '../readiness.mjs';
 import { computePackageRevision, readSoulPackageEntries, GENERATED_HARNESS_MARKER as MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
@@ -105,16 +106,16 @@ test('skills retain front matter first, copy text/scripts, preserve executable m
   buildSoulDirectory(root);
   const skill = readFileSync(join(root, '.claude/skills/hello/SKILL.md'), 'utf8');
   assert.ok(skill.startsWith(`---\nname: hello\ndescription: Say hello\n---\n${MARKER}\nHello\n`));
-  for (const folder of ['.gemini', '.qwen']) assert.equal(readFileSync(join(root, `${folder}/skills/hello/SKILL.md`), 'utf8'), skill);
+  for (const folder of ['.gemini', '.qwen', '.agents']) assert.equal(readFileSync(join(root, `${folder}/skills/hello/SKILL.md`), 'utf8'), skill);
   assert.match(skill, /\.\.\/\.\.\/\.\.\/skills\/hello\/assets\/blob.bin/);
   assert.equal(readFileSync(join(root, '.claude/skills/hello/references/help.md'), 'utf8'), `${MARKER}\nHelp\n`);
   assert.equal(readFileSync(join(root, '.claude/skills/hello/scripts/run.sh'), 'utf8'), `#!/bin/sh\n# ${MARKER}\necho hello\n`);
-  for (const folder of ['.claude', '.gemini', '.qwen']) assert.equal(statSync(join(root, `${folder}/skills/hello/scripts/run.sh`)).mode & 0o111, 0o111, folder);
+  for (const folder of ['.claude', '.gemini', '.qwen', '.agents']) assert.equal(statSync(join(root, `${folder}/skills/hello/scripts/run.sh`)).mode & 0o111, 0o111, folder);
   assert.equal(existsSync(join(root, '.claude/skills/hello/config.json')), false);
   assert.equal(computePackageRevision(root), revision);
   rmSync(join(root, 'skills/hello'), { recursive: true });
   buildSoulDirectory(root);
-  for (const folder of ['.claude', '.gemini', '.qwen']) assert.equal(existsSync(join(root, `${folder}/skills/hello`)), false, folder);
+  for (const folder of ['.claude', '.gemini', '.qwen', '.agents']) assert.equal(existsSync(join(root, `${folder}/skills/hello`)), false, folder);
 });
 
 test('Qwen Code skills touch only marked files: its own skills stay, and one at a rendered path is a conflict (#378)', (t) => {
@@ -142,6 +143,102 @@ test('Qwen Code skills touch only marked files: its own skills stay, and one at 
   for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), curated, path);
 });
 
+test('Codex soul skills touch only marked files in .agents/skills/, and rebuilds are byte-identical (#378)', (t) => {
+  const root = fixture(t);
+  put(root, 'skills/hello/SKILL.md', '---\nname: hello\ndescription: Say hello\n---\nHello\n');
+  // Another tool's or person's skills share the folder.
+  const own = ['.agents/skills/mine/SKILL.md', '.agents/skills/mine/notes.md', '.agents/README.md'];
+  for (const path of own) put(root, path, 'authored\n');
+  const revision = computePackageRevision(root);
+  const built = buildSoulDirectory(root);
+  assert.equal(readFileSync(join(root, '.agents/skills/hello/SKILL.md'), 'utf8'), readFileSync(join(root, '.claude/skills/hello/SKILL.md'), 'utf8'));
+  assert.ok(built.harnesses.codex.rendered.includes('skills'));
+  assert.ok(built.harnesses.codex.files.includes('.agents/skills/hello/SKILL.md'));
+  assert.equal(computePackageRevision(root), revision);
+  const rebuilt = buildSoulDirectory(root);
+  assert.deepEqual([rebuilt.writes, rebuilt.removals, rebuilt.drift], [[], [], []]);
+  assert.deepEqual(buildSoulDirectory(root, { check: true }).drift, []);
+  // Removing the soul's skill removes only its marked copy.
+  rmSync(join(root, 'skills/hello'), { recursive: true });
+  assert.deepEqual(buildSoulDirectory(root, { check: true }).removals, ['.agents/skills/hello/SKILL.md', '.claude/skills/hello/SKILL.md',
+    '.gemini/skills/hello/SKILL.md', '.qwen/skills/hello/SKILL.md']);
+  buildSoulDirectory(root);
+  assert.equal(existsSync(join(root, '.agents/skills/hello')), false);
+  for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), 'authored\n', path);
+  // An unmarked skill where a soul skill would render is never overwritten.
+  put(root, 'skills/mine/SKILL.md', '---\nname: mine\ndescription: Ours\n---\nOurs\n');
+  for (const check of [true, false]) assert.throws(() => buildSoulDirectory(root, { check }), /unmarked generated path conflict: .*\.agents\/skills\/mine\/SKILL\.md/);
+  for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), 'authored\n', path);
+});
+
+test('doctor reports each soul\'s Codex skills as current, out of date or blocked by an unmarked file (#378)', (t) => {
+  const soul = (id) => {
+    const root = fixture(t);
+    put(root, 'skills/hello/SKILL.md', '---\nname: hello\ndescription: Say hello\n---\nHello\n');
+    buildSoulDirectory(root);
+    return { id, soulDir: root };
+  };
+  const current = soul('agent_current');
+  put(current.soulDir, '.agents/skills/mine/SKILL.md', 'authored\n');
+  const empty = { id: 'agent_empty', soulDir: join(current.soulDir, 'missing') };
+  const ready = codexSkillsCheck({ souls: [current, empty] });
+  assert.equal(ready.id, 'skills.codex');
+  assert.equal(ready.status, 'ready');
+  assert.deepEqual(ready.evidence.current, ['agent_current']);
+
+  const stale = soul('agent_stale');
+  writeFileSync(join(stale.soulDir, '.agents/skills/hello/SKILL.md'), `---\nname: hello\ndescription: x\n---\n${MARKER}\nOld\n`);
+  const leftover = soul('agent_leftover');
+  rmSync(join(leftover.soulDir, 'skills/hello'), { recursive: true });
+  const drifted = codexSkillsCheck({ souls: [current, stale, leftover] });
+  assert.equal(drifted.status, 'warning');
+  assert.equal(drifted.code, 'codex-skills-stale');
+  assert.deepEqual(drifted.evidence.stale, ['agent_stale', 'agent_leftover']);
+  assert.deepEqual(drifted.evidence.paths, { agent_stale: ['.agents/skills/hello/SKILL.md'], agent_leftover: ['.agents/skills/hello/SKILL.md'] });
+  assert.match(drifted.action, /agent-bot soul build/);
+
+  const unmarked = soul('agent_unmarked');
+  writeFileSync(join(unmarked.soulDir, '.agents/skills/hello/SKILL.md'), 'authored\n');
+  const blocked = codexSkillsCheck({ souls: [unmarked] });
+  assert.equal(blocked.code, 'codex-skills-unmarked');
+  assert.deepEqual(blocked.evidence.paths, { agent_unmarked: ['.agents/skills/hello/SKILL.md'] });
+  // The check never writes: the unmarked file and the stale copy stay as they are.
+  assert.equal(readFileSync(join(unmarked.soulDir, '.agents/skills/hello/SKILL.md'), 'utf8'), 'authored\n');
+  assert.match(readFileSync(join(stale.soulDir, '.agents/skills/hello/SKILL.md'), 'utf8'), /Old/);
+});
+
+test('Codex soul skills render only for a soul that targets Codex, and Qwen and OpenCode report them as duplicates (#378)', () => {
+  const skill = '---\nname: hello\ndescription: Say hello\n---\nHello\n';
+  const build = (preferredHarnesses, extra = []) => {
+    const manifest = { preferredHarnesses };
+    const output = buildHarnessFiles([{ path: 'AGENTS.md', mode: '100644', bytes: Buffer.from('# Soul\n') },
+      { path: 'soul.json', mode: '100644', bytes: Buffer.from(JSON.stringify(manifest)) },
+      { path: 'skills/hello/SKILL.md', mode: '100644', bytes: Buffer.from(skill) }, ...extra]);
+    return { output, report: harnessReport(output, { manifest }) };
+  };
+  const duplicates = (report) => Object.fromEntries(Object.entries(report).map(([harness, { duplicates }]) => [harness, duplicates.skills])
+    .filter(([, names]) => names.length));
+  const other = build(['claude', 'qwen', 'opencode']);
+  assert.equal([...other.output.keys()].some((path) => path.startsWith('.agents/')), false);
+  assert.deepEqual(duplicates(other.report), {});
+  for (const preferred of [['codex'], ['codex', 'qwen'], []]) {
+    const { output, report } = build(preferred);
+    assert.ok(output.has('.agents/skills/hello/SKILL.md'), String(preferred));
+    assert.deepEqual(duplicates(report), { qwen: ['hello'], opencode: ['hello'] }, String(preferred));
+  }
+  // A command skill alone is a command, not a soul skill, to every harness.
+  const commandOnly = buildHarnessFiles([{ path: 'AGENTS.md', mode: '100644', bytes: Buffer.from('# Soul\n') },
+    { path: 'commands/ship.md', mode: '100644', bytes: Buffer.from('Ship it.\n') }]);
+  for (const [harness, { rendered, duplicates: { skills } }] of Object.entries(harnessReport(commandOnly))) {
+    assert.equal(rendered.includes('skills'), false, harness);
+    assert.deepEqual(skills, [], harness);
+  }
+  // `source-command-` names belong to Codex's command skills there.
+  const reserved = { path: 'skills/source-command-ship/SKILL.md', mode: '100644', bytes: Buffer.from('---\nname: source-command-ship\ndescription: x\n---\nx\n') };
+  assert.throws(() => build(['codex'], [reserved]), /skills\/source-command-ship: the source-command- prefix is reserved for Codex command skills/);
+  assert.ok(build(['claude'], [reserved]).output.has('.claude/skills/source-command-ship/SKILL.md'));
+});
+
 test('a disabled skill renders nothing for any harness while its source directory and the other skills stay', (t) => {
   const root = fixture(t);
   put(root, 'skills/hello/SKILL.md', '---\nname: hello\ndescription: Say hello\n---\nHello\n');
@@ -155,7 +252,7 @@ test('a disabled skill renders nothing for any harness while its source director
   declare(['hello']);
   const { entries } = readSoulPackageEntries(root);
   const output = buildHarnessFiles(entries);
-  assert.deepEqual([...output.keys()].filter((path) => /skills\//.test(path)), ['.claude/skills/other/SKILL.md', '.gemini/skills/other/SKILL.md', '.qwen/skills/other/SKILL.md']);
+  assert.deepEqual([...output.keys()].filter((path) => /skills\//.test(path)), ['.agents/skills/other/SKILL.md', '.claude/skills/other/SKILL.md', '.gemini/skills/other/SKILL.md', '.qwen/skills/other/SKILL.md']);
   assert.equal(harnessReport(output).claude.rendered.includes('skills'), true);
   const sourcePaths = entries.map((entry) => entry.path);
   for (const path of ['skills/hello/SKILL.md', 'skills/hello/references/help.md', 'skills/hello/scripts/run.sh']) assert.ok(sourcePaths.includes(path), path);

@@ -39,15 +39,15 @@ slices (#378) appended `.qwen/commands/`, then `.qwen/agents/`, then
 
 Outputs are built for all supported consumers, independently of
 `preferredHarnesses` (which is launch preference, not a build allowlist),
-with one exception: Codex command skills, below, which other harnesses would
-also read.
+with one exception: Codex soul and command skills, below, which other
+harnesses would also read.
 A native consumer receives no duplicate configuration folder.
 
 | Harness | Instructions | Skills / generated folder | MCP (#378) | Subagents | Commands | Hooks |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` | `.claude/settings.json` `hooks` |
 | Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Won't do: experimental upstream | `.gemini/commands/<name>.toml` | Unsupported |
-| Codex | Native `AGENTS.md` | None yet (Codex reads `.codex/skills/` and `.agents/skills/`, not `.claude/skills/`) | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | `.agents/skills/source-command-<name>/SKILL.md` (commands without arguments, shell or `@` includes; only when the soul targets Codex) | `.codex/hooks.json` |
+| Codex | Native `AGENTS.md` | `.agents/skills/<name>/` (marked files only; only when the soul targets Codex) | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | `.agents/skills/source-command-<name>/SKILL.md` (commands without arguments, shell or `@` includes; only when the soul targets Codex) | `.codex/hooks.json` |
 | OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | `.opencode/plugins/agent-bot-soul.js` |
 | Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Won't do: replaced by skills upstream | `.cursor/hooks.json` |
 | Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
@@ -176,6 +176,21 @@ Adapter evidence (official docs read 2026-10-07):
   home, as its native command and as a `source-command-<name>` skill
   (`preferredHarnesses` does not stop them): a known effect, and the build
   report names those commands under that harness's `duplicates.commands`.
+  Soul skills (#378) follow the same rules: when the soul targets Codex,
+  each gets the same marked copy in `.agents/skills/<name>/` that Claude,
+  Gemini and Qwen Code get, with its marked siblings and executable bits.
+  Only marked files there are the builder's: another tool's or person's
+  skill is never changed or removed, and an unmarked file where a soul skill
+  would render is a conflict. Qwen Code then sees each soul skill in
+  `.qwen/skills/` and `.agents/skills/`, and OpenCode in `.claude/skills/`
+  and `.agents/skills/`, so the report names them under those harnesses'
+  `duplicates.skills`. A soul skill named `source-command-<anything>` would
+  collide with a command skill, so that prefix fails the build for a soul
+  that targets Codex. `soul skill load` still places nothing in
+  `.agents/skills/`. `agent-bot doctor` reports each active soul's Codex
+  skills as `skills.codex`: a marked copy that is out of date or should be
+  gone, or an unmarked file where one would render, is a warning, found by
+  the build's own `--check` and never written.
 - Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay
@@ -917,9 +932,6 @@ allowlist); Codex commands that take arguments, run shell or include files;
 hooks for Gemini CLI and Kiro (OpenCode hooks shipped in #893 and #898; see
 [OpenCode](#opencode)); and a signed-in check that Cursor and Kiro accept the
 `_comment` marker key.
-
-Soul skills do not reach Codex yet: it reads `.codex/skills/` and
-`.agents/skills/`, not `.claude/skills/`.
 
 The renderer, injected entry and `reachPolicyRules()` now share the
 `agent-reach` name through `reach-contract.mjs`. Rebuilds remove the old
