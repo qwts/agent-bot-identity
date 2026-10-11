@@ -23,10 +23,11 @@
 // it approval also asks keyd, on that call, whether it recorded exactly
 // those pins (`owner/pins-status`); without keyd, as in CI, it never is.
 //
-// This slice ships the format, the verifier (Ed25519 and SSHSIG, including
-// FIDO `sk-ssh-ed25519@openssh.com` keys and their presence flags), the pins,
-// ssh store and CLI-only signed challenge fallback. The keyd store's
-// `owner/sign` RPC and pins from the organization profile follow.
+// Built: the format, the verifier (Ed25519 and SSHSIG, including FIDO
+// `sk-ssh-ed25519@openssh.com` keys and their presence flags), the pins, the
+// ssh store, the keyd store (keyd's `owner/sign`, wired by cli/owner.mjs as
+// `keydStore`) for `owner sign` and `owner enroll`, and the signed challenge
+// fallback, which ssh keys answer.
 
 import { execFileSync } from 'node:child_process';
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from 'node:crypto';
@@ -583,22 +584,26 @@ export function parseLifetime(text, { max }) {
   return seconds;
 }
 
-// Builds, signs and returns the token for a statement or a challenge.
-export function signPayload(fields, { keyPath, sign = sshSign, now = Date.now() } = {}) {
-  const key = sshKeyFor(keyPath);
+// Builds, signs and returns the token for a statement or a challenge: with
+// the ssh key at `keyPath`, or with `store`, the keyd store
+// (owner-presence.mjs's keydStatementStore), which shows the owner the
+// payload and signs it only on their approval.
+export async function signPayload(fields, { keyPath, sign = sshSign, store = null, now = Date.now() } = {}) {
+  const key = store ? store.key : sshKeyFor(keyPath);
   const iat = Math.floor(now / 1000);
   const payload = {
-    v: 1, aud: STATEMENT_AUDIENCE, alg: 'sshsig', key: sshFingerprint(key.blob), nonce: newNonce(), iat, ...fields,
+    v: 1, aud: STATEMENT_AUDIENCE, alg: store ? store.alg : 'sshsig', key: sshFingerprint(key.blob), nonce: newNonce(), iat, ...fields,
     exp: iat + fields.lifetime,
   };
   delete payload.lifetime;
   const segment = encodePayload(payload);
-  return { token: `s1.${segment}.${sign(segment, keyPath).toString('base64url')}`, payload, key };
+  const signature = store ? await store.sign(segment) : sign(segment, keyPath);
+  return { token: `s1.${segment}.${signature.toString('base64url')}`, payload, key };
 }
 
 // --- Command ---------------------------------------------------------------
 
-export const OWNER_USAGE = 'usage: agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json] | owner sign "<text>" --repo OWNER/NAME --issue N --key PATH [--expires 7d] | owner sign --challenge <JSON> --key PATH | owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key] | owner keys [--json] | owner remove NAME';
+export const OWNER_USAGE = 'usage: agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json] | owner sign "<text>" --repo OWNER/NAME --issue N (--key PATH | --store keyd) [--expires 7d] | owner sign --challenge <JSON> --key PATH | owner enroll --store keyd [--name NAME] | owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key] | owner keys [--json] | owner remove NAME';
 
 const usage = (message) => statementError('owner-usage', `${message}\n${OWNER_USAGE}`);
 
@@ -608,6 +613,10 @@ const usage = (message) => statementError('owner-usage', `${message}\n${OWNER_US
 function soulRefusal(markers, action, { env, cwd }) {
   const found = markers({ env, cwd });
   return found.length ? statementError('owner-credential-required', `${action} is owner only; this caller has a soul's ${found.join(', ')}`) : null;
+}
+
+function noKeydStore() {
+  throw statementError('owner-store-unavailable', 'no agent-bot-keyd is wired to sign owner statements for this command');
 }
 
 function noAttest() {
@@ -707,6 +716,9 @@ export async function ownerCommand(argv, {
   // (pins, { env, home }) => { attested, code, reason }: whether keyd vouches
   // for exactly these owner pins, asked per call (#753). Never throws.
   attestPins = noPinAttestation,
+  // ({ env, home }) => the keyd store (owner-presence.mjs's
+  // keydStatementStore): keyd's statement key and its `owner/sign`.
+  keydStore = noKeydStore,
 } = {}) {
   const [command, ...rest] = argv;
   const { parseArgs } = await import('node:util');
@@ -759,9 +771,9 @@ export async function ownerCommand(argv, {
     }
     case 'sign': {
       const { values, positionals } = parse({ repo: { type: 'string' }, issue: { type: 'string' }, key: { type: 'string' },
-        expires: { type: 'string' }, challenge: { type: 'string' } });
+        expires: { type: 'string' }, challenge: { type: 'string' }, store: { type: 'string' } });
       if (values.challenge !== undefined) {
-        if (positionals.length || values.repo !== undefined || values.issue !== undefined || values.expires !== undefined) {
+        if (positionals.length || values.repo !== undefined || values.issue !== undefined || values.expires !== undefined || values.store !== undefined) {
           throw usage('owner sign --challenge takes only the challenge and --key');
         }
         if (!values.key) throw usage('owner sign --challenge needs --key PATH, the SSH key matching the challenge');
@@ -780,19 +792,35 @@ export async function ownerCommand(argv, {
         return { token };
       }
       if (positionals.length !== 1) throw usage('owner sign takes the statement text as one argument');
-      if (!values.key) throw usage('owner sign needs --key PATH, the ssh key to sign with');
+      const viaKeyd = values.store === 'keyd';
+      if (values.store !== undefined && !['keyd', 'ssh'].includes(values.store)) throw usage('--store is keyd or ssh');
+      if (viaKeyd && values.key !== undefined) throw usage('owner sign --store keyd takes no --key: keyd holds the key');
+      if (!viaKeyd && !values.key) throw usage('owner sign needs --key PATH, the ssh key to sign with, or --store keyd');
       const scope = scopeFlags(values, { required: true });
       const problem = textProblem(positionals[0]);
       if (problem) throw usage(problem);
+      const lifetime = values.expires ? parseLifetime(values.expires, { max: STATEMENT_LIFETIME.max }) : STATEMENT_LIFETIME.default;
+      if (viaKeyd) {
+        // keyd shows the owner the payload itself, so an agent running the
+        // terminal cannot have other words signed; a soul still may not put
+        // the prompt in front of the owner (ADR-0753 sections 2 and 5).
+        const found = markers({ env, cwd });
+        if (found.length) throw statementError('owner-credential-required', `owner sign is owner only; this caller has a soul's ${found.join(', ')}`);
+        const store = await keydStore({ env, home });
+        const at = now();
+        writeErr(`Signing as the owner, for ${scope.repo}#${scope.number}, until ${new Date((Math.floor(at / 1000) + lifetime) * 1000).toISOString()}:\n  ${positionals[0]}\nagent-bot-keyd shows you this text; approve only if it matches.\n`);
+        const { token } = await signPayload({ kind: 'statement', text: positionals[0], scope, action: null, lifetime }, { store, now: at });
+        write(armorStatement(token));
+        return { token };
+      }
       const found = [...markers({ env, cwd }), ...harnessMarkers(env)];
       if (found.length) {
         throw statementError('owner-credential-required',
           `owner sign runs only where no agent runs; this caller has ${found.join(', ')}. The ssh store cannot show you what it signs, so sign on a machine or terminal no agent controls.`);
       }
-      const lifetime = values.expires ? parseLifetime(values.expires, { max: STATEMENT_LIFETIME.max }) : STATEMENT_LIFETIME.default;
       const at = now();
       writeErr(`Signing as the owner, for ${scope.repo}#${scope.number}, until ${new Date((Math.floor(at / 1000) + lifetime) * 1000).toISOString()}:\n  ${positionals[0]}\nTouch your security key or enter its PIN if asked.\n`);
-      const { token } = signPayload({ kind: 'statement', text: positionals[0], scope, action: null, lifetime },
+      const { token } = await signPayload({ kind: 'statement', text: positionals[0], scope, action: null, lifetime },
         { keyPath: values.key, sign, now: at });
       write(armorStatement(token));
       return { token };
@@ -801,17 +829,15 @@ export async function ownerCommand(argv, {
       const { values, positionals } = parse({ store: { type: 'string' }, key: { type: 'string' }, name: { type: 'string' },
         'verify-required': { type: 'boolean' }, 'allow-software-key': { type: 'boolean' } });
       if (positionals.length) throw usage('owner enroll takes no positional arguments');
-      if (values.store === 'keyd') {
-        throw statementError('owner-store-unavailable', 'the keyd store needs keyd\'s owner/sign RPC, which is not built yet (#753); enrol an ssh security key with --store ssh');
+      if (!['keyd', 'ssh'].includes(values.store)) throw usage('owner enroll needs --store keyd or --store ssh');
+      const viaKeyd = values.store === 'keyd';
+      if (viaKeyd && (values.key !== undefined || values['verify-required'] || values['allow-software-key'])) {
+        throw usage('owner enroll --store keyd takes only --name: keyd holds the key and always asks with Touch ID or your password');
       }
-      if (values.store !== 'ssh') throw usage('owner enroll needs --store ssh');
-      if (!values.key) throw usage('owner enroll needs --key PATH, the ssh key to pin');
-      const name = values.name ?? 'ssh';
+      if (!viaKeyd && !values.key) throw usage('owner enroll needs --key PATH, the ssh key to pin');
+      const name = values.name ?? values.store;
       if (!KEY_NAME.test(name)) throw usage('--name is 1 to 32 lowercase letters, digits and dashes');
-      const key = sshKeyFor(values.key);
-      const softwareKey = key.type === SSH_ED25519;
-      const fingerprint = sshFingerprint(key.blob);
-      const action = `owner enroll ${name} ${fingerprint}`;
+      let fingerprint = '-';
       const record = (decision, detail) => {
         try { receipt({ event: 'owner-key', operation: 'enroll', decision, detail }, { env, home }); } catch { /* the outcome stands without its receipt */ }
       };
@@ -819,28 +845,54 @@ export async function ownerCommand(argv, {
         record('refused', `${name} ${fingerprint}: ${error.code}`);
         throw error;
       };
-      const soul = soulRefusal(markers, `owner enroll ${name} ${fingerprint}`, { env, cwd });
-      if (soul) refuse(soul);
-      if (softwareKey && !values['allow-software-key']) {
-        refuse(statementError('owner-key-software',
-          `${values.key} is a plain ssh-ed25519 key, readable by any agent in your account. Use a security key (sk-ssh-ed25519), or pass --allow-software-key to pin it anyway.`));
+      let key;
+      let keyd = null;
+      if (viaKeyd) {
+        // A soul may not put keyd's prompt in front of the owner.
+        const soul = soulRefusal(markers, `owner enroll ${name}`, { env, cwd });
+        if (soul) refuse(soul);
+        try { keyd = await keydStore({ env, home }); } catch (error) {
+          record('failed', `${name} -: ${error.code ?? 'error'}`);
+          throw error;
+        }
+        key = keyd.key;
+      } else {
+        key = sshKeyFor(values.key);
       }
-      if (softwareKey && values['verify-required']) refuse(usage('--verify-required applies only to a security key'));
+      const softwareKey = !viaKeyd && key.type === SSH_ED25519;
+      fingerprint = sshFingerprint(key.blob);
+      const action = `owner enroll ${name} ${fingerprint}`;
+      if (!viaKeyd) {
+        const soul = soulRefusal(markers, action, { env, cwd });
+        if (soul) refuse(soul);
+        if (softwareKey && !values['allow-software-key']) {
+          refuse(statementError('owner-key-software',
+            `${values.key} is a plain ssh-ed25519 key, readable by any agent in your account. Use a security key (sk-ssh-ed25519), or pass --allow-software-key to pin it anyway.`));
+        }
+        if (softwareKey && values['verify-required']) refuse(usage('--verify-required applies only to a security key'));
+      }
       // Checked now so a doomed enrolment asks nobody, and again under the
       // lock when the pin is written.
       const current = readOwnerKeys(store);
       const early = enrolmentConflict(current, name, fingerprint);
       if (early) refuse(early);
-      const pin = { name, store: 'ssh', alg: 'sshsig', publicKey: key.line, fingerprint, verifyRequired: Boolean(values['verify-required']),
-        softwareKey, pinnedAt: new Date(now()).toISOString() };
+      const pin = viaKeyd
+        ? { name, store: 'keyd', alg: 'ed25519', publicKey: keyd.publicKey, fingerprint, verifyRequired: false, softwareKey: false,
+          pinnedAt: new Date(now()).toISOString() }
+        : { name, store: 'ssh', alg: 'sshsig', publicKey: key.line, fingerprint, verifyRequired: Boolean(values['verify-required']),
+          softwareKey, pinnedAt: new Date(now()).toISOString() };
       try {
         // Possession: the new key signs a challenge for this enrolment, and
-        // keyd is asked only if that verifies under the pin itself.
-        writeErr(`Proving you hold ${name} (${fingerprint}): touch the security key or enter its PIN if asked.\n`);
+        // keyd is asked to trust the new key set only if that verifies under
+        // the pin itself. With the keyd store that is two prompts, as the
+        // owner chose on #753: this signature, then the key set.
+        writeErr(viaKeyd
+          ? `Enrolling agent-bot-keyd's owner statement key as ${name} (${fingerprint}). agent-bot-keyd asks you twice: first to sign this enrolment, then to trust the new key set.\n`
+          : `Proving you hold ${name} (${fingerprint}): touch the security key or enter its PIN if asked.\n`);
         const text = `Enrol owner key ${name} (${fingerprint}) on ${host()}`;
-        const { token } = signPayload({ kind: 'challenge', text,
+        const { token } = await signPayload({ kind: 'challenge', text,
           scope: { host: host() }, action: createHash('sha256').update(action, 'utf8').digest('hex'), lifetime: CHALLENGE_LIFETIME.default },
-        { keyPath: values.key, sign, now: now() });
+        viaKeyd ? { store: keyd, now: now() } : { keyPath: values.key, sign, now: now() });
         verifyStatement(token, { keys: [pin], now: now() });
       } catch (error) {
         record('failed', `${name} ${fingerprint}: ${error.code ?? 'error'}`);
@@ -861,8 +913,10 @@ export async function ownerCommand(argv, {
       }
       record('approved', `${name} ${fingerprint}`);
       write(`pinned owner key ${name} (${fingerprint}) in ${ownerKeysPath(store)}\n`);
-      writeErr('The ssh store has no trusted display: run `agent-bot owner sign` only on a machine or terminal where no agent runs in your account.\n');
-      if (softwareKey) writeErr('This is a software key: any process that can read the key file can sign as you. A security key is stronger.\n');
+      if (!viaKeyd) {
+        writeErr('The ssh store has no trusted display: run `agent-bot owner sign` only on a machine or terminal where no agent runs in your account.\n');
+        if (softwareKey) writeErr('This is a software key: any process that can read the key file can sign as you. A security key is stronger.\n');
+      }
       return pin;
     }
     case 'keys': {

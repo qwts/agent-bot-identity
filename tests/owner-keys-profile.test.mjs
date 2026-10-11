@@ -187,7 +187,7 @@ test('every reader refuses a vouched pin the profile does not list, and accepts 
     fallbackConsent: async (asked) => { dialog.push(asked); return { method: 'consent' }; },
   });
   const ledger = createChallengeLedger({ env, home, attest });
-  const { token } = signPayload({ kind: 'statement', text: 'Ship the profile slice.', scope: SCOPE, action: null, lifetime: 3600 },
+  const { token } = await signPayload({ kind: 'statement', text: 'Ship the profile slice.', scope: SCOPE, action: null, lifetime: 3600 },
     { keyPath: owner.keyPath, sign: owner.sign });
   const verify = () => ownerCommand(['verify', token, '--repo', SCOPE.repo, '--issue', '753', '--json'],
     { env, home, write: () => {}, attestPins: attest });
