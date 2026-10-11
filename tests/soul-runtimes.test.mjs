@@ -163,15 +163,18 @@ test('the catalog pins versions per supported major with an https URL and a 64-h
 });
 
 test('a declared version is a major, a range of one, or exact, and resolves to the newest matching pin', () => {
-  assert.equal(resolveCatalogPin('node', '24').version, RUNTIME_CATALOG.node.at(-1).version);
-  assert.equal(resolveCatalogPin('node', '24.x').version, RUNTIME_CATALOG.node.at(-1).version);
-  assert.equal(resolveCatalogPin('node', '22').version, RUNTIME_CATALOG.node[0].version);
-  assert.equal(resolveCatalogPin('node', RUNTIME_CATALOG.node[1].version).version, RUNTIME_CATALOG.node[1].version);
+  // The newest pin on a line, worked out here rather than read from catalog order, which keeps superseded pins.
+  const newestOn = (name, line) => RUNTIME_CATALOG[name].map((pin) => pin.version).filter((v) => v.startsWith(`${line}.`))
+    .sort((a, b) => { const [x, y] = [a, b].map((v) => v.split('.').map(Number)); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; }).at(-1);
+  assert.equal(resolveCatalogPin('node', '24').version, newestOn('node', '24'));
+  assert.equal(resolveCatalogPin('node', '24.x').version, newestOn('node', '24'));
+  assert.equal(resolveCatalogPin('node', '22').version, newestOn('node', '22'));
+  for (const pin of RUNTIME_CATALOG.node) assert.equal(resolveCatalogPin('node', pin.version).version, pin.version, 'every pinned version resolves exactly');
   assert.equal(resolveCatalogPin('node', '24.0.0'), null, 'an exact version the catalog does not pin');
   assert.equal(resolveCatalogPin('node', '20'), null);
-  assert.equal(resolveCatalogPin('python', '3.12').version, RUNTIME_CATALOG.python[0].version);
-  assert.equal(resolveCatalogPin('python', '3').version, RUNTIME_CATALOG.python.at(-1).version, 'the newest minor');
-  assert.equal(resolveCatalogPin('go', '1').version, RUNTIME_CATALOG.go[0].version);
+  assert.equal(resolveCatalogPin('python', '3.12').version, newestOn('python', '3.12'));
+  assert.equal(resolveCatalogPin('python', '3').version, newestOn('python', '3'), 'the newest minor');
+  assert.equal(resolveCatalogPin('go', '1').version, newestOn('go', '1'));
   assert.equal(resolveCatalogPin('go', '>=1.20'), null, 'comparators are not ranges');
   assert.equal(resolveCatalogPin('ruby', '3'), null);
   // A bump keeps the superseded pin: the range takes the newest, the exact version still finds the old (#617).
