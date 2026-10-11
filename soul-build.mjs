@@ -6,9 +6,19 @@ import { pathToFileURL } from 'node:url';
 import { buildHarnessFiles, declaredHooks, harnessReport, hasGeneratedJsonMarker, HOOK_TARGETS, MCP_TARGETS, mergeableMcpServers, settingsTargets } from './soul-builder.mjs';
 import { readSoulPackageEntries } from './soul-package.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
-import { currentAgentId } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { soulDirInfo } from './soul-dir.mjs';
 import { REACH_SERVER_NAME } from './reach-contract.mjs';
+
+// The session's Agent ID: the environment first, so the common case starts
+// no process; only without one does identity's entry read the checkout pin
+// (#645, F6).
+function sessionAgentId({ env = process.env, cwd } = {}) {
+  const fromEnv = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID;
+  if (fromEnv) return validateAgentId(fromEnv);
+  return identityOp('current', { pinOnly: true }, cwd === undefined ? {} : { cwd });
+}
 
 function stat(path) {
   try { return lstatSync(path); }
@@ -188,7 +198,7 @@ export function main(argv = process.argv.slice(2), options = {}) {
   }
   let directory = paths[0];
   if (!directory) {
-    const id = currentAgentId(options);
+    const id = sessionAgentId(options);
     if (!id) throw new Error('no current soul; pass PATH or set an Agent ID');
     directory = soulDirInfo(id, options).soulDir;
   }

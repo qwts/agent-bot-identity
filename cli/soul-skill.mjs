@@ -6,7 +6,7 @@ import { importSkill, listSkills, showSkill, verifySkill, checkSkill, planSkillU
 import { skillLearningPacket, proposeSkillLearning, readLearningOutcome } from '../skill-learning.mjs';
 import { checkSoulSkillSource, proposeSoulSkillCandidate } from '../skill-source-check.mjs';
 import { NOT_CAPTURED } from '../skill-references.mjs';
-import { currentAgentId } from '../agent-identity.mjs';
+import { identityOp } from '../daemon-client.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
 import { assertUninstallCurrent, stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
 import { soulSkillStatus } from '../skill-status.mjs';
@@ -78,7 +78,7 @@ files; what a harness fetches or reads on its own (web fetch, MCP tools) is not.
 // Every successful report states what capture leaves out (#312).
 const report = (result, json) => `${JSON.stringify({ ...result, notCaptured: NOT_CAPTURED }, null, json ? 0 : 2)}\n`;
 async function portableCheckMain(args, json, { stdout, stderr, assertSoulTarget = id => {
-  if (currentAgentId() !== id) throw new Error('a soul may check portable sources only for its own package; bind an Agent ID first');
+  if (identityOp('current') !== id) throw new Error('a soul may check portable sources only for its own package; bind an Agent ID first');
 }, ...options }) {
   const [id, flag, agentId] = args;
   if (args.length !== 3 || !id || id.startsWith('--') || flag !== '--soul' || !agentId || agentId.startsWith('--')) { stderr.write(USAGE); return 2; }
@@ -95,7 +95,7 @@ async function portableCheckMain(args, json, { stdout, stderr, assertSoulTarget 
   }
 }
 async function learningMain(args, json, { stdout, stderr, assertSoulTarget = id => {
-  if (currentAgentId() !== id) throw new Error('a soul may record learning only for its own package; bind an Agent ID first');
+  if (identityOp('current') !== id) throw new Error('a soul may record learning only for its own package; bind an Agent ID first');
 }, ...options }) {
   const [id, ...rest] = args, parsed = {};
   for (let i = 0; i < rest.length; i += 2) {
@@ -159,7 +159,7 @@ const askOwnerForSoul = (action, { env, presence = keydPresenceWithoutDialog }) 
 // the soul asks for itself, and a soul cannot present the owner's principal.
 async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
   ownerGate = (action, options) => assertOwnerAction(action, { ...options, detect: false }), askOwner = askOwnerForSoul,
-  assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may load skills only into its own worktrees; bind an Agent ID first'); }, ...options }) {
+  assertSoulTarget = id => { if (identityOp('current') !== id) throw new Error('a soul may load skills only into its own worktrees; bind an Agent ID first'); }, ...options }) {
   const [name, ...rest] = args, values = {}, flags = new Set();
   for (let i = 0; i < rest.length; i++) {
     const key = { '--soul': 'agentId', '--workspace': 'workspace', '--harness': 'harness', '--reason': 'reason' }[rest[i]];
@@ -215,7 +215,7 @@ async function loadMain(verb, args, json, { stdout, stderr, markers = soulMarker
 // install/uninstall (#603) record through the existing revision path: an
 // owner (no soul marker) applies an owner-gated edit; a soul proposes.
 async function installMain(verb, args, json, { stdout, stderr, markers = soulMarkers, readStdin = () => readFileSync(0, 'utf8'),
-  assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may change only its own skills; bind an Agent ID first'); },
+  assertSoulTarget = id => { if (identityOp('current') !== id) throw new Error('a soul may change only its own skills; bind an Agent ID first'); },
   assertUser, trashOptions = {}, trash: trashMove, recordRemoval, runRevision = revisionCommand, ...options }) {
   const [target, ...rest] = args, flags = new Set();
   let agentId;
@@ -279,7 +279,7 @@ async function installMain(verb, args, json, { stdout, stderr, markers = soulMar
 }
 // status (#603) is read-only: the owner may read any soul, a soul only its own.
 function statusMain(args, json, { stdout, stderr, markers = soulMarkers,
-  assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may read only its own skill status; bind an Agent ID first'); }, ...options }) {
+  assertSoulTarget = id => { if (identityOp('current') !== id) throw new Error('a soul may read only its own skill status; bind an Agent ID first'); }, ...options }) {
   if (args.length !== 2 || args[0] !== '--soul' || !args[1] || args[1].startsWith('--')) { stderr.write(USAGE); return 2; }
   try {
     if (markers({ env: options.env, cwd: options.cwd }).length) assertSoulTarget(args[1]);
@@ -295,7 +295,7 @@ function statusMain(args, json, { stdout, stderr, markers = soulMarkers,
 // search (#902) checks the caller as status does: the owner may search any
 // soul, a soul only its own. With no adapter configured it reports so and exits 1.
 function searchMain(args, json, { stdout, stderr, markers = soulMarkers,
-  assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may search only its own knowledge; bind an Agent ID first'); }, ...options }) {
+  assertSoulTarget = id => { if (identityOp('current') !== id) throw new Error('a soul may search only its own knowledge; bind an Agent ID first'); }, ...options }) {
   if (args.length !== 3 || args[0] !== '--soul' || !args[1] || args[1].startsWith('--') || args[2].startsWith('--')) { stderr.write(USAGE); return 2; }
   try {
     if (markers({ env: options.env, cwd: options.cwd }).length) assertSoulTarget(args[1]);

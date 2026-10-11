@@ -7,8 +7,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from './config.mjs';
-import { currentAgentId } from './agent-identity.mjs';
 import { validateAgentId } from './identity-format.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, soulDirectory } from './agent-population.mjs';
@@ -18,6 +18,15 @@ import { readBinding } from './agent-binding.mjs';
 import { confinementEvents, supportsContext, vendorEvent } from './hook-dialects.mjs';
 import { vouchKeyPath, vouchStateDir } from './vouch.mjs';
 import { skillLibraryRoot } from './skill-library-paths.mjs';
+
+// The session's Agent ID: the environment first, so the common case starts
+// no process; only without one does identity's entry read the checkout pin
+// (#645, F6).
+function sessionAgentId({ env = process.env, cwd } = {}) {
+  const fromEnv = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID;
+  if (fromEnv) return validateAgentId(fromEnv);
+  return identityOp('current', { pinOnly: true }, cwd === undefined ? {} : { cwd });
+}
 
 const MODES = ['off', 'warn', 'deny'];
 function readJson(file, fallback) {
@@ -335,7 +344,7 @@ export function confinementCheck(envelope, opts = {}) {
   if (patch) { try { targets = applyPatchTargets(patchText(envelope)); } catch (error) { patchError = error.message; } }
   else if (envelope.file_path) targets = [envelope.file_path];
   try {
-    const agentId = opts.binding?.agentId ?? currentAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
+    const agentId = opts.binding?.agentId ?? sessionAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
     if (agentId) {
       const denied = credentialGuard(envelope, agentId, opts);
       if (denied) return denied;
@@ -352,7 +361,7 @@ export function confinementCheck(envelope, opts = {}) {
   if (preTool && !patch && !FILE_TOOL.test(envelope.tool_name ?? '')) return allow;
   let mode = 'warn';
   try {
-    const agentId = opts.binding?.agentId ?? currentAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
+    const agentId = opts.binding?.agentId ?? sessionAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
     if (!agentId) return allow;
     const cwd = envelope.cwd ?? opts.cwd;
     for (const target of targets) {

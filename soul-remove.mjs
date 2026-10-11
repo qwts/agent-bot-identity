@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
-import { readAgentIdentity } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import {
   archiveSoulDirs, listSouls, populationFile, retireIdentityWithPopulation, setSoulParent, showSoul, showSoulByName, soulDirectory, soulShownName,
@@ -71,7 +71,7 @@ async function describeSoul(soul, { file, env, home, stateDir, depth, running })
   let directory = null;
   try { directory = soulDirectory(soul.id, { file, env, home }); } catch { /* no soul directory */ }
   let harness = null;
-  try { harness = readAgentIdentity(soul.id, { stateDir }).harness ?? null; } catch { /* no identity record here */ }
+  try { harness = identityOp('read', { id: soul.id, stateDir }).harness ?? null; } catch { /* no identity record here */ }
   return {
     agentId: soul.id, name: soul.name, displayName: soulShownName(soul, directory), status: soul.status, harness,
     parentId: soul.parentId, running: await running(soul.id), depth,
