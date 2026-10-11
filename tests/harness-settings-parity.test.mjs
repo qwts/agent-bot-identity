@@ -281,6 +281,12 @@ for (const harness of ['claude', 'codex']) {
   });
 }
 
+test('Gemini: the rendered model is where Gemini CLI and the repo layer read it', (t) => {
+  const { soulDir } = fixture(t, 'safe', { model: 'soul-model' });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(soulDir, '.gemini/settings.json'), 'utf8')).model, { name: 'soul-model' });
+  assert.equal(repoModel(soulDir, 'gemini'), packageModel(soulDir, 'gemini'));
+});
+
 test('a package model is any nonempty string the package contract accepts', (t) => {
   const long = `provider/${'m'.repeat(200)}`;
   const { soulDir } = fixture(t, 'safe', { model: long });
@@ -319,8 +325,16 @@ test('a repo model is read only from the files and keys the harness uses for it'
   // Gemini and OpenCode read their own project files.
   assert.equal(repoModel(repo, 'gemini'), null);
   mkdirSync(path.join(repo, '.gemini'));
-  writeFileSync(path.join(repo, '.gemini/settings.json'), JSON.stringify({ model: 'gemini-repo' }));
+  writeFileSync(path.join(repo, '.gemini/settings.json'), JSON.stringify({ model: { name: 'gemini-repo', maxSessionTurns: 5 } }));
   assert.equal(repoModel(repo, 'gemini'), 'gemini-repo');
+  // The older flat string still counts; an object without a string name declares nothing.
+  writeFileSync(path.join(repo, '.gemini/settings.json'), JSON.stringify({ model: 'gemini-flat' }));
+  assert.equal(repoModel(repo, 'gemini'), 'gemini-flat');
+  for (const model of [{ maxSessionTurns: 5 }, { name: 7 }, { name: ' ' }, ['gemini-array']]) {
+    writeFileSync(path.join(repo, '.gemini/settings.json'), JSON.stringify({ model }));
+    assert.equal(repoModel(repo, 'gemini'), null);
+  }
+  writeFileSync(path.join(repo, '.gemini/settings.json'), JSON.stringify({ model: { name: 'gemini-repo' } }));
   writeFileSync(path.join(repo, 'opencode.json'), JSON.stringify({ model: 'provider/opencode-repo' }));
   assert.equal(repoModel(repo, 'opencode'), 'provider/opencode-repo');
   assert.equal(repoModel(repo, 'devin'), null);

@@ -390,13 +390,19 @@ Other top-level manifest extensions retain their existing opaque behavior.
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` | `env` | `permissions.allow` / `permissions.deny` | `env.ANTHROPIC_BASE_URL` (endpoint only) |
 | Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported | `model_provider` + `[model_providers.<id>]` |
-| Gemini / `.gemini/settings.json` | `model` | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| Gemini / `.gemini/settings.json` | `model.name` | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` | `provider.<id>` with `{env:KEY}` |
 | Cursor, Copilot, Devin, Muse, Kiro | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 
 `provider` (`harnesses.<h>.provider`, [soul-providers.md](soul-providers.md))
 renders the non-secret half only; the secret itself is stored with
 `agent-bot soul secret` and injected at launch, never written by the builder.
+
+Gemini CLI's settings schema makes `model` an object whose `name` is the
+model ([v0.63.0 `settingsSchema.ts`](https://github.com/google-gemini/gemini-cli/blob/573846625af9e93b3b968e0e0b86bb093a4c9b16/packages/cli/src/config/settingsSchema.ts#L1062-L1078)),
+and `/model` saves the pick to `model.name`. The builder writes `model.name`,
+keeps other authored keys in that object, and replaces an older flat `model`
+string.
 
 Claude's installed 2.1.290 settings schema describes `effortLevel` as
 “Persisted effort level for supported models.” The builder uses that native
@@ -563,7 +569,8 @@ read once per turn), the first layer that names one is sent as
 - The repo's own file in the turn's working directory: Claude's `model` in
   `.claude/settings.local.json`, then `.claude/settings.json`; Codex's root
   `model` in `.codex/config.toml` (bare or quoted key, basic or literal
-  string); Gemini's in `.gemini/settings.json`; OpenCode's in
+  string); Gemini's `model.name` (or an older flat `model` string) in
+  `.gemini/settings.json`; OpenCode's in
   `opencode.json`. They are read the same guarded way as for the mode, opened
   once without following a link or blocking.
 - The package's declared `model` for that harness, so a soul working in a

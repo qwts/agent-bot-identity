@@ -52,7 +52,7 @@ for (const harness of names) {
         assert.ok(value.startsWith(`# ${MARKER}\nmodel = "${settings.model}"\nmodel_reasoning_effort = "${settings.reasoningEffort}"\n`));
         assert.ok(value.includes(`approval_policy = "${override ? 'never' : 'on-request'}"\nsandbox_mode = "${override ? 'danger-full-access' : 'workspace-write'}"\n`));
         assert.match(value, /\[mcp_servers.agent-reach\]/);
-      } else if (harness === 'gemini') assert.equal(json(output, '.gemini/settings.json').model, settings.model);
+      } else if (harness === 'gemini') assert.deepEqual(json(output, '.gemini/settings.json').model, { name: settings.model });
       else if (harness === 'opencode') {
         const value = json(output, 'opencode.json');
         assert.equal(value.model, settings.model);
@@ -105,9 +105,12 @@ test('authored JSON/TOML keeps unrelated keys and servers, replaces owned keys, 
   assert.deepEqual(json(output, 'opencode.json').permission, { edit: 'ask', bash: 'ask', webfetch: 'deny' });
   for (const path of ['.claude/settings.json', '.gemini/settings.json', 'opencode.json']) {
     assert.equal(json(output, path).theme, 'dark');
-    assert.equal(json(output, path).model, 'shared-model');
     assert.equal(json(output, path)._comment, MARKER);
   }
+  assert.equal(json(output, '.claude/settings.json').model, 'shared-model');
+  assert.equal(json(output, 'opencode.json').model, 'shared-model');
+  // The authored flat Gemini string is the same setting, now at `model.name`.
+  assert.deepEqual(json(output, '.gemini/settings.json').model, { name: 'shared-model' });
   const toml = output.get('.codex/config.toml').toString();
   assert.ok(!toml.includes('"old"'));
   assert.match(toml, /# keep\nother = true\n\n\[profiles.local\]\nmodel = "profile-model"/);
@@ -117,6 +120,20 @@ test('authored JSON/TOML keeps unrelated keys and servers, replaces owned keys, 
   assert.deepEqual([...authored].map(([path, bytes]) => [path, bytes.toString('base64')]), snapshot);
   assert.ok([...output.values()].every((bytes) => !bytes.includes(13)));
   for (const { path } of SETTINGS_TARGETS) assert.ok(isGeneratedPath(path), path);
+});
+
+test('Gemini keeps the model at model.name and authored keys beside it', () => {
+  // Gemini CLI v0.63.0's settings schema: `model` is an object whose `name` is the model.
+  const source = entries(manifest({ harness: { model: 'gemini-pick' } }));
+  const authored = new Map([['.gemini/settings.json', Buffer.from(JSON.stringify({ model: { name: 'old', maxSessionTurns: 5 }, theme: 'dark' }))]]);
+  const output = buildHarnessFiles(source, { authored });
+  assert.deepEqual(json(output, '.gemini/settings.json').model, { name: 'gemini-pick', maxSessionTurns: 5 });
+  assert.equal(json(output, '.gemini/settings.json').theme, 'dark');
+  assert.deepEqual(output, buildHarnessFiles(source, { authored: output }));
+  for (const model of [['old'], 7, null]) {
+    const odd = new Map([['.gemini/settings.json', Buffer.from(JSON.stringify({ model }))]]);
+    assert.throws(() => buildHarnessFiles(source, { authored: odd }), /\.gemini\/settings\.json model must be a JSON object to merge settings/);
+  }
 });
 
 test('Codex merge respects quoted keys, multiline values, tables, and TOML string escaping', () => {
