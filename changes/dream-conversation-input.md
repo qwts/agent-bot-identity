@@ -1,0 +1,1 @@
+- Dream runs now read the soul's own recorded conversation: the newest part of the session its wake record places in the soul's Codex tool home, never the host's store or another soul's. Dream input moves to format 2, which records the session and digest but not the text; format 1 records stay valid (#603).

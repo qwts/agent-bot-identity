@@ -230,9 +230,10 @@ available to that soul through a supported reader. Execution facts from
 explicit unsupported coverage; they cannot be replaced by reading arbitrary
 host-wide harness stores or another soul's sessions.
 
-The first implementation supports definition and learned-skill sources only,
-verified against the soul revision and file digests. Memory-tool and conversation
-adapters report `unsupported` until implemented. A conversation reader must use
+The first implementation supported definition and learned-skill sources only,
+verified against the soul revision and file digests. Memory-tool adapters report
+`unsupported` until implemented; the conversation reader below covers the soul's
+own recorded session. A conversation reader must use
 the same verified store origin as its session; an unknown origin cannot be
 guessed from a current environment override. These are explicit partial coverage,
 not proof that every soul knowledge source was maintained.
@@ -258,6 +259,43 @@ excerpts are explicit. Selection cursors are revision-bound pagination only;
 they never assert successful processing or advance a maintenance checkpoint.
 The host must pass the registered canonical soul directory. This internal reader
 does not expose daemon controls or activate execution.
+
+### Conversation input
+
+Input format 2 adds the soul's own conversation (#603, owner decision 1). The
+daemon passes the soul's wake-session record for its harness, and only that
+session is read, only when the record says it lives in the soul's tool home
+(`store: soul`). The recorded origin decides; the current tool-home routing is
+not consulted. A session in the host's store, a missing or damaged record, a
+harness without a reader, `.soul-state/runs` and other souls' sessions are never
+read and report `conversations: unsupported`. Codex is the first reader: it
+looks under `.soul-state/tools/codex/sessions/` for
+`rollout-*-<session>.jsonl`, newest first by the date-named directories and
+file names, follows no link, and stops at the first match, so a thread with
+several rollout files is read from its newest. Each directory, the store root included, is
+pinned while it is listed: it must not be a link, the descriptor opened with
+`O_DIRECTORY | O_NOFOLLOW` must be that directory, and the name must still be
+that directory afterwards, so a directory swapped for a link is refused. The
+newest matching name is the session's file whatever it is: if it is a link,
+the session is refused rather than an older rollout read. Once the file is open,
+its only name must still be that path, reached through no link. No budget spans the whole store,
+so a growing history never makes a recorded session unreadable; each directory
+listing is bounded to 4096 entries instead. A recorded soul-store session that
+is missing, linked or hardlinked, outside the tool home, binary or not UTF-8, or behind a
+single directory over that bound, reports `unavailable`; it never fails the run.
+
+The excerpt is the newest whole lines within 64 KiB, since the file is a live,
+append-only log, and its digest is of the delivered excerpt. The whole file is
+first checked for NUL bytes and valid UTF-8 in one streaming pass, so an older
+binary part is refused too; `size` is the file
+size when read and `truncated` says older lines were left out. Durable metadata
+names the harness, session, digest, size, excerpt bytes and truncation, never
+the text. The prompt presents the excerpt as untrusted context for what to
+learn, not a source to report on: outcome items still name package sources only,
+so a conversation earns no processing credit. Format 1 metadata stays valid
+exactly as recorded. Memory sources remain `unsupported`. An older daemon
+refuses a journal holding a format-2 `inputs-prepared` event, so readers must be
+upgraded before opening a journal written with format 2.
 
 Inventory entries identify the source, revision/checksum or adapter cursor, and
 why it was selected. Source content remains untrusted data. Credentials, runtime

@@ -1,11 +1,21 @@
 // Read-only maintenance input capture. The host supplies the registered,
 // canonical soul directory; no model-provided locator chooses another root.
 import { createHash } from 'node:crypto';
+import { closeSync, constants, fstatSync, lstatSync, opendirSync, openSync, readSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import { computePackageRevisionFromEntries, readSoulPackageEntries } from './soul-package.mjs';
 import { kindOf } from './soul-profile.mjs';
+import { toolHomePath } from './soul-tool-homes.mjs';
 
 export const DREAM_INPUT_LIMITS = Object.freeze({ entries: 100, bytes: 1024 * 1024, excerptBytes: 64 * 1024 });
 export const DREAM_PACKAGE_LIMITS = Object.freeze({ maxEntries: 4096, maxBytes: 16 * 1024 * 1024, maxFileBytes: 1024 * 1024, maxDepth: 32 });
+export const DREAM_CONVERSATION_LIMITS = Object.freeze({ excerptBytes: 64 * 1024, entries: 4096 });
+// Conversation coverage from input format 2: `supported` delivered an excerpt,
+// `unsupported` has no reader for this soul (no recorded session, a session in
+// the host's store, or a harness without a reader), `unavailable` names a
+// recorded soul-store session that could not be read safely.
+const CONVERSATION_COVERAGE = ['supported', 'unsupported', 'unavailable'];
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const eligible = entry => entry.mode !== '040000' && (['AGENTS.md', 'soul.md', 'SOUL.md'].includes(entry.path)
@@ -23,8 +33,8 @@ export function validateDreamInputMetadata(value) {
   const count = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max;
   const sourcePath = value => typeof value === 'string' && value.length <= 4096 && !!kindOf(value)
     && eligible({ path: value });
-  keys(value, ['schemaVersion', 'revision', 'sources', 'coverage', 'nextCursor']);
-  if (value.schemaVersion !== 1 || !hash(value.revision) || !Array.isArray(value.sources)
+  keys(value, ['schemaVersion', 'revision', 'sources', 'coverage', 'nextCursor', ...(value?.schemaVersion === 2 ? ['conversation'] : [])]);
+  if (![1, 2].includes(value.schemaVersion) || !hash(value.revision) || !Array.isArray(value.sources)
     || value.sources.length > DREAM_INPUT_LIMITS.entries) invalid();
   const paths = new Set();
   let suppliedBytes = 0;
@@ -37,7 +47,18 @@ export function validateDreamInputMetadata(value) {
   }
   keys(value.coverage, ['definition', 'memory', 'conversations', 'eligible', 'selected', 'suppliedBytes', 'skippedBinary', 'remaining']);
   const coverage = value.coverage;
-  if (coverage.definition !== 'supported' || coverage.memory !== 'unsupported' || coverage.conversations !== 'unsupported'
+  // Format 1 never read conversations; format 2 names the one it delivered.
+  const conversation = value.schemaVersion === 2 ? value.conversation : null;
+  if (conversation !== null) {
+    keys(conversation, ['harness', 'sessionId', 'digest', 'size', 'excerptBytes', 'truncated']);
+    if (!Object.hasOwn(CONVERSATION_READERS, conversation.harness) || typeof conversation.sessionId !== 'string' || !SESSION_ID.test(conversation.sessionId)
+      || !hash(conversation.digest) || !Number.isSafeInteger(conversation.size) || conversation.size < 0
+      || !count(conversation.excerptBytes, DREAM_CONVERSATION_LIMITS.excerptBytes) || conversation.excerptBytes > conversation.size
+      || conversation.truncated !== (conversation.excerptBytes < conversation.size)) invalid();
+  }
+  if (value.schemaVersion === 1 ? coverage.conversations !== 'unsupported'
+    : !CONVERSATION_COVERAGE.includes(coverage.conversations) || (coverage.conversations === 'supported') !== (conversation !== null)) invalid();
+  if (coverage.definition !== 'supported' || coverage.memory !== 'unsupported'
     || !['eligible', 'selected', 'skippedBinary', 'remaining'].every(key => count(coverage[key], DREAM_PACKAGE_LIMITS.maxEntries))
     || coverage.selected !== value.sources.length || coverage.suppliedBytes !== suppliedBytes || suppliedBytes > DREAM_INPUT_LIMITS.bytes
     || coverage.selected + coverage.skippedBinary + coverage.remaining > coverage.eligible) invalid();
@@ -51,16 +72,145 @@ export function validateDreamInputMetadata(value) {
 }
 
 export function dreamInputMetadata(inputs) {
+  const conversation = inputs.schemaVersion === 2 && inputs.conversation !== null
+    ? (({ harness, sessionId, digest, size, excerptBytes, truncated }) => ({ harness, sessionId, digest, size, excerptBytes, truncated }))(inputs.conversation)
+    : null;
   return validateDreamInputMetadata({ schemaVersion: inputs.schemaVersion, revision: inputs.revision,
     sources: inputs.sources.map(({ path, kind, digest, size, excerptBytes, truncated }) => ({ path, kind, digest, size, excerptBytes, truncated })),
-    coverage: structuredClone(inputs.coverage), nextCursor: structuredClone(inputs.nextCursor) });
+    coverage: structuredClone(inputs.coverage), nextCursor: structuredClone(inputs.nextCursor),
+    ...(inputs.schemaVersion === 2 ? { conversation } : {}) });
+}
+
+// The soul's own conversation (#603, owner decision 1): only the session the
+// wake-session record names, only when that record says it lives in the soul's
+// tool home (`store: 'soul'`), and only through a reader for its harness. The
+// host's store, other souls' sessions and `.soul-state/runs` are never read,
+// and the current routing is not consulted: the recorded origin decides.
+// Codex keeps `sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl` under its
+// CODEX_HOME, which a routed soul's tool home is. When a thread has more than
+// one rollout file, the newest one is read.
+const CONVERSATION_READERS = Object.freeze({
+  codex: Object.freeze({ dir: 'sessions', depth: 3, matches: (name, sessionId) => name.startsWith('rollout-') && name.endsWith(`-${sessionId}.jsonl`) }),
+});
+
+// Finds and reads the recorded session's file, or says why it cannot. The
+// excerpt is the newest whole lines within the byte bound, since the file is
+// a live, append-only log; its digest is of the delivered excerpt.
+// `afterDirectoryOpen` is a test seam, called once each directory is opened
+// and before it is listed.
+export function captureDreamConversation(soulDir, session, { afterDirectoryOpen = () => {} } = {}) {
+  const reader = session && Object.hasOwn(CONVERSATION_READERS, session.harness) ? CONVERSATION_READERS[session.harness] : null;
+  if (!reader || session.store !== 'soul' || typeof session.sessionId !== 'string' || !SESSION_ID.test(session.sessionId)) {
+    return { coverage: 'unsupported', conversation: null };
+  }
+  const unavailable = { coverage: 'unavailable', conversation: null };
+  let fd = null;
+  try {
+    const home = realpathSync(toolHomePath(soulDir, session.harness));
+    if (home !== path.join(realpathSync(soulDir), path.relative(soulDir, toolHomePath(soulDir, session.harness)))) return unavailable;
+    // Newest first, never following a link: Codex names day directories and
+    // rollout files by start time, so descending name order reaches the most
+    // recent session first and the walk stops at its first match. No budget
+    // spans the whole store, so a growing history cannot make a recorded
+    // session unreadable; each directory listing is bounded instead, and
+    // only a single directory over that bound reports `unavailable`.
+    //
+    // Node cannot list a directory through a descriptor, so each directory
+    // (the store root and every year, month and day) is pinned instead: it
+    // must not be a link before it is opened, the descriptor opened with
+    // O_DIRECTORY | O_NOFOLLOW must be that directory, and the name must
+    // still be that same directory, not a link, once it has been listed.
+    // Anything else refuses the session rather than skipping ahead.
+    const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
+    const list = directory => {
+      const before = lstatSync(directory);
+      if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('unsafe directory');
+      const pin = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      const names = [];
+      try {
+        if (!same(fstatSync(pin), before)) throw new Error('directory changed');
+        afterDirectoryOpen(directory);
+        const dir = opendirSync(directory);
+        try {
+          for (let entry; (entry = dir.readSync()) !== null;) {
+            if (names.length === DREAM_CONVERSATION_LIMITS.entries) throw new Error('limit');
+            names.push(entry);
+          }
+        } finally { dir.closeSync(); }
+        const after = lstatSync(directory);
+        if (after.isSymbolicLink() || !same(after, before) || !same(fstatSync(pin), before)) throw new Error('directory changed');
+      } finally { closeSync(pin); }
+      return names.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
+    };
+    // The newest name that matches is the session's file, whatever it is: a
+    // link or anything else there refuses the session below rather than
+    // falling back to an older rollout.
+    const walk = (directory, depth) => {
+      for (const entry of list(directory)) {
+        const file = path.join(directory, entry.name);
+        if (depth < reader.depth) {
+          if (entry.isDirectory()) { const match = walk(file, depth + 1); if (match) return match; }
+        } else if (reader.matches(entry.name, session.sessionId)) return file;
+      }
+      return null;
+    };
+    // The store root must resolve to itself inside the tool home.
+    const root = path.join(home, reader.dir);
+    if (realpathSync(root) !== root) return unavailable;
+    const file = walk(root, 0);
+    if (file === null) return unavailable;
+    // As the package reader does: no hardlink (another store's file can share
+    // the inode), and the opened descriptor must be the file that was checked.
+    const checked = lstatSync(file);
+    if (!checked.isFile() || checked.nlink !== 1 || realpathSync(file) !== file) return unavailable;
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const info = fstatSync(fd), { size } = info;
+    if (!info.isFile() || info.nlink !== 1 || info.dev !== checked.dev || info.ino !== checked.ino) return unavailable;
+    // Checked again once open: the file's only name is still this path inside
+    // the soul's tool home, reached through no link, so its bytes are the soul's.
+    const reached = lstatSync(file);
+    if (reached.isSymbolicLink() || reached.dev !== info.dev || reached.ino !== info.ino || realpathSync(file) !== file) return unavailable;
+    // The whole file, not only the delivered tail, must be text: one
+    // streaming pass in excerpt-sized chunks, so memory stays bounded
+    // however long the session grows.
+    {
+      const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }), chunk = Buffer.alloc(DREAM_CONVERSATION_LIMITS.excerptBytes);
+      for (let offset = 0; offset < size;) {
+        const count = readSync(fd, chunk, 0, Math.min(chunk.length, size - offset), offset);
+        if (count === 0) return unavailable;
+        const part = chunk.subarray(0, count);
+        if (part.includes(0)) return unavailable;
+        decoder.decode(part, { stream: true });
+        offset += count;
+      }
+      decoder.decode();
+    }
+    const start = Math.max(0, size - DREAM_CONVERSATION_LIMITS.excerptBytes);
+    const buffer = Buffer.alloc(size - start);
+    let read = 0;
+    while (read < buffer.length) {
+      const bytes = readSync(fd, buffer, read, buffer.length - read, start + read);
+      if (bytes === 0) break;
+      read += bytes;
+    }
+    let bytes = buffer.subarray(0, read);
+    // A tail that starts mid-file starts after its first line break, so no
+    // partial line or split UTF-8 character is delivered.
+    if (start > 0) { const newline = bytes.indexOf(0x0a); bytes = newline === -1 ? bytes.subarray(bytes.length) : bytes.subarray(newline + 1); }
+    const excerpt = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    return { coverage: 'supported', conversation: { harness: session.harness, sessionId: session.sessionId, digest: digest(bytes), size,
+      excerpt, excerptBytes: bytes.length, truncated: bytes.length < size } };
+  } catch { return unavailable; }
+  finally { if (fd !== null) closeSync(fd); }
 }
 
 export const dreamInputMetadataDigest = value => digest(Buffer.from(JSON.stringify(validateDreamInputMetadata(value))));
 
 // This cursor is selection progress, never evidence of completed maintenance.
 // A new revision invalidates it; an unknown same-revision path is refused.
-export function captureDreamInputs(soulDir, { cursor = null } = {}) {
+// Given `session` (the host's wake-session record for this soul, or null),
+// capture uses input format 2 and adds the soul's own conversation.
+export function captureDreamInputs(soulDir, { cursor = null, session } = {}) {
   let snapshot;
   try {
     snapshot = readSoulPackageEntries(soulDir, { limits: DREAM_PACKAGE_LIMITS, requiredFormatVersion: 2 });
@@ -102,10 +252,12 @@ export function captureDreamInputs(soulDir, { cursor = null } = {}) {
     sources.push({ path: entry.path, kind: kindOf(entry.path), digest: digest(entry.bytes), size: entry.bytes.length,
       excerpt, excerptBytes, truncated: excerptBytes < entry.bytes.length });
   }
+  const conversation = session === undefined ? null : captureDreamConversation(soulDir, session);
   return {
-    schemaVersion: 1, revision, sources,
-    coverage: { definition: 'supported', memory: 'unsupported', conversations: 'unsupported',
+    schemaVersion: conversation ? 2 : 1, revision, sources,
+    coverage: { definition: 'supported', memory: 'unsupported', conversations: conversation?.coverage ?? 'unsupported',
       eligible: candidates.length, selected: sources.length, suppliedBytes, skippedBinary, remaining: candidates.length - index },
     nextCursor: index < candidates.length && index > start ? { revision, path: candidates[index - 1].path } : null,
+    ...(conversation ? { conversation: conversation.conversation } : {}),
   };
 }

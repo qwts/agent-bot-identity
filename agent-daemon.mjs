@@ -2188,6 +2188,8 @@ export async function runDaemon({
   dream = createDreamService({ directory: path.join(path.dirname(daemonStateFile({ env, home })), 'dream'),
     turns, executorFor, isPaused, now, approvals: request => server.interaction.requestTurnApproval(request),
     verifyRevisionEvidence: request => verifyDreamRevisionEvidence({ ...request, stateDir: stateDirectory({ env, home }) }),
+    // The soul's own conversation (#603): the session its wake record names.
+    recordedSession: (agentId, harness) => createWakeSessions({ file: wakeSessionsFile({ env, home }) }).recorded(agentId, harness),
     lookupSoul: agentId => {
       const options = { env, home, file: populationFile({ env, home }) };
       const row = showSoul(agentId, options), identity = identities(agentId);

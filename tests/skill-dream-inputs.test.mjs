@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { computePackageRevision, computePackageRevisionFromEntries, readSoulPackageEntries, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
-import { captureDreamInputs, dreamInputMetadata, dreamInputMetadataDigest, validateDreamInputMetadata, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
+import { captureDreamConversation, captureDreamInputs, dreamInputMetadata, dreamInputMetadataDigest, validateDreamInputMetadata, DREAM_CONVERSATION_LIMITS, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
 
 const HASH = `sha256:${'0'.repeat(64)}`;
 function fixture(t, formatVersion = 2) {
@@ -147,4 +147,158 @@ test('bounded verification refuses a manifest replaced between format-2 inventor
     f.put('soul.json', JSON.stringify({ ...f.manifest, description: 'changed during capture' }));
     return new Map();
   } }), /manifest changed during read/);
+});
+
+// The soul's own conversation (#603, owner decision 1, input format 2).
+const THREAD = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
+function conversationFixture(t) {
+  const f = fixture(t);
+  const day = path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions', '2026', '10', '10');
+  const file = path.join(day, `rollout-2026-10-10T10-00-00-${THREAD}.jsonl`);
+  const write = text => { mkdirSync(day, { recursive: true }); writeFileSync(file, text); };
+  return { ...f, day, file, write, session: { harness: 'codex', sessionId: THREAD, store: 'soul' } };
+}
+
+test('a recorded soul-store session is delivered as format 2, with the excerpt kept out of durable metadata', t => {
+  const f = conversationFixture(t);
+  f.write('{"type":"user","text":"remember the owner prefers short replies"}\n');
+  const captured = captureDreamInputs(f.root, { session: f.session });
+  assert.equal(captured.schemaVersion, 2);
+  assert.equal(captured.coverage.conversations, 'supported');
+  assert.equal(captured.conversation.excerpt, readFileSync(f.file, 'utf8'));
+  assert.equal(captured.conversation.digest, `sha256:${createHash('sha256').update(readFileSync(f.file)).digest('hex')}`);
+  assert.deepEqual([captured.conversation.truncated, captured.revision], [false, captureDreamInputs(f.root).revision], 'the tool home is not package content');
+  const metadata = dreamInputMetadata(captured);
+  assert.equal(JSON.stringify(metadata).includes('short replies'), false);
+  assert.deepEqual(metadata.conversation, { harness: 'codex', sessionId: THREAD, digest: captured.conversation.digest,
+    size: captured.conversation.size, excerptBytes: captured.conversation.excerptBytes, truncated: false });
+  assert.equal(dreamInputMetadataDigest(structuredClone(metadata)), dreamInputMetadataDigest(metadata));
+  for (const mutate of [
+    value => { value.conversation.excerpt = 'SECRET_CANARY'; },
+    value => { value.conversation.sessionId = '../other'; },
+    value => { value.conversation.harness = 'claude'; },
+    value => { value.conversation.truncated = true; },
+    value => { value.conversation.excerptBytes = DREAM_CONVERSATION_LIMITS.excerptBytes + 1; },
+    value => { value.coverage.conversations = 'unavailable'; },
+    value => { value.conversation = null; },
+    value => { delete value.conversation; },
+    value => { value.schemaVersion = 1; },
+    value => { value.schemaVersion = 3; },
+  ]) {
+    const value = structuredClone(metadata); mutate(value);
+    assert.throws(() => validateDreamInputMetadata(value), { code: 'dream-input-metadata-invalid' });
+  }
+  // Format 1 stays exactly as before: no conversation key, always unsupported.
+  const legacy = dreamInputMetadata(captureDreamInputs(f.root));
+  assert.equal(legacy.schemaVersion, 1);
+  assert.equal(Object.hasOwn(legacy, 'conversation'), false);
+  assert.throws(() => validateDreamInputMetadata({ ...legacy, conversation: null }), { code: 'dream-input-metadata-invalid' });
+  assert.throws(() => validateDreamInputMetadata({ ...legacy, coverage: { ...legacy.coverage, conversations: 'supported' } }), { code: 'dream-input-metadata-invalid' });
+});
+
+test('only the recorded session in the soul store is read; anything else is unsupported or unavailable', t => {
+  const f = conversationFixture(t);
+  f.write('{"type":"user"}\n');
+  const coverage = session => captureDreamInputs(f.root, { session });
+  for (const session of [null, { ...f.session, store: 'host' }, { ...f.session, harness: 'claude' }, { ...f.session, sessionId: '../escape' }]) {
+    const captured = coverage(session);
+    assert.deepEqual([captured.schemaVersion, captured.coverage.conversations, captured.conversation], [2, 'unsupported', null]);
+  }
+  // A recorded session that is missing or reached through a link is unavailable.
+  assert.equal(coverage({ ...f.session, sessionId: '0199a1b2-c3d4-7e5f-8a9b-000000000000' }).coverage.conversations, 'unavailable');
+  // A thread with several rollout files is read from its newest one.
+  const later = path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions', '2026', '10', '11', `rollout-2026-10-11T09-00-00-${THREAD}.jsonl`);
+  mkdirSync(path.dirname(later), { recursive: true }); writeFileSync(later, '{"newest":true}\n');
+  assert.equal(coverage(f.session).conversation.excerpt, '{"newest":true}\n');
+  rmSync(path.dirname(later), { recursive: true });
+  // A newest matching rollout that is a link refuses the session; the older file is not used instead.
+  const linked = path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions', '2026', '10', '11', `rollout-2026-10-11T09-00-00-${THREAD}.jsonl`);
+  mkdirSync(path.dirname(linked), { recursive: true }); symlinkSync(f.file, linked);
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'no fall back past a linked newest rollout');
+  rmSync(path.dirname(linked), { recursive: true });
+  // A directory swapped for a link after it was checked is refused, root or day.
+  const swapped = mkdtempSync(path.join(tmpdir(), 'dream-swapped-'));
+  t.after(() => rmSync(swapped, { recursive: true, force: true }));
+  for (const target of ['sessions', path.join('sessions', '2026', '10', '10')]) {
+    const directory = path.join(realpathSync(f.root), '.soul-state', 'tools', 'codex', target);
+    let swappedOnce = false;
+    const result = captureDreamConversation(f.root, f.session, { afterDirectoryOpen: opened => {
+      if (opened !== directory || swappedOnce) return;
+      swappedOnce = true;
+      renameSync(directory, `${directory}.real`);
+      symlinkSync(`${directory}.real`, directory);
+    } });
+    assert.ok(swappedOnce, target);
+    assert.equal(result.coverage, 'unavailable', `a ${target} swapped for a link is refused`);
+    rmSync(directory); renameSync(`${directory}.real`, directory);
+  }
+  assert.equal(coverage(f.session).coverage.conversations, 'supported');
+  const outside = mkdtempSync(path.join(tmpdir(), 'dream-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), '{"secret":true}\n');
+  rmSync(f.file); symlinkSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), f.file);
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a linked file is never followed');
+  rmSync(f.file); linkSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), f.file);
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a hardlinked file from another store is refused');
+  rmSync(path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions'), { recursive: true });
+  mkdirSync(path.join(outside, '2026', '10', '10'), { recursive: true });
+  writeFileSync(path.join(outside, '2026', '10', '10', `rollout-x-${THREAD}.jsonl`), '{"secret":true}\n');
+  symlinkSync(outside, path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions'));
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a linked store is never followed');
+  // A linked store root is refused before it is listed, whatever it holds.
+  writeFileSync(path.join(outside, '2026', '10', '10', `rollout-2026-10-10T10-00-00-${THREAD}.jsonl`), '{"secret":true}\n');
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a linked store root is never walked');
+  rmSync(path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions'));
+  f.write('{"bytes":"\u0000"}\n'.replace('\\u0000', '\0'));
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'binary content is not delivered');
+});
+
+test('a long session delivers its newest whole lines within the bound', t => {
+  const f = conversationFixture(t);
+  const line = index => `${JSON.stringify({ index, text: 'é'.repeat(200) })}\n`;
+  const lines = Array.from({ length: 400 }, (_, index) => line(index));
+  f.write(lines.join(''));
+  const { conversation } = captureDreamInputs(f.root, { session: f.session });
+  assert.equal(conversation.truncated, true);
+  assert.ok(conversation.excerptBytes <= DREAM_CONVERSATION_LIMITS.excerptBytes);
+  assert.equal(conversation.size, Buffer.byteLength(lines.join('')));
+  assert.ok(conversation.excerpt.endsWith(lines.at(-1)) && lines.includes(conversation.excerpt.split('\n')[0] + '\n'), 'whole lines, newest last');
+  assert.equal(dreamInputMetadata({ ...captureDreamInputs(f.root, { session: f.session }) }).conversation.truncated, true);
+  // Binary or invalid UTF-8 bytes in the omitted older part still refuse the session.
+  for (const bad of [Buffer.from([0x7b, 0x00, 0x7d, 0x0a]), Buffer.from([0x7b, 0xff, 0x7d, 0x0a])]) {
+    writeFileSync(f.file, Buffer.concat([bad, Buffer.from(lines.join(''))]));
+    assert.equal(captureDreamInputs(f.root, { session: f.session }).coverage.conversations, 'unavailable');
+  }
+  // A multibyte character split across the streaming chunk boundary is still valid text.
+  const edge = Buffer.concat([Buffer.alloc(DREAM_CONVERSATION_LIMITS.excerptBytes - 1, 0x61), Buffer.from('é\n'), Buffer.from(lines.join(''))]);
+  writeFileSync(f.file, edge);
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).coverage.conversations, 'supported');
+});
+
+test('a growing session store never makes the recorded session unavailable, whichever day it started', t => {
+  const f = conversationFixture(t);
+  const sessions = path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions');
+  // More than DREAM_CONVERSATION_LIMITS.entries entries across the store: 60 days of 80 other sessions.
+  let entries = 0;
+  for (let day = 1; day <= 60; day++) {
+    const dir = path.join(sessions, '2026', String(7 + Math.floor((day - 1) / 30)).padStart(2, '0'), String((day - 1) % 30 + 1).padStart(2, '0'));
+    mkdirSync(dir, { recursive: true });
+    for (let index = 0; index < 80; index++) {
+      writeFileSync(path.join(dir, `rollout-2026-x-${String(index).padStart(8, '0')}-0000-4000-8000-${String(day).padStart(12, '0')}.jsonl`), '{}\n');
+    }
+    entries += 81;
+  }
+  assert.ok(entries > DREAM_CONVERSATION_LIMITS.entries);
+  // The newest session is found first; the oldest is still found past every newer day.
+  f.write('{"newest":true}\n');
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).conversation.excerpt, '{"newest":true}\n');
+  rmSync(f.file);
+  const oldest = path.join(sessions, '2026', '01', '01', `rollout-2026-01-01T00-00-00-${THREAD}.jsonl`);
+  mkdirSync(path.dirname(oldest), { recursive: true }); writeFileSync(oldest, '{"oldest":true}\n');
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).conversation.excerpt, '{"oldest":true}\n');
+  // Only one directory listing past the bound is unavailable, and says so rather than guessing.
+  const crowded = path.join(sessions, '2026', '01', '02');
+  mkdirSync(crowded, { recursive: true });
+  for (let index = 0; index <= DREAM_CONVERSATION_LIMITS.entries; index++) writeFileSync(path.join(crowded, `f${index}`), '');
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).coverage.conversations, 'unavailable');
 });
