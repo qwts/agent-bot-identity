@@ -291,20 +291,32 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    answer that disagrees with the cache means one of the two was replaced, so
    neither may be used on its own: the owner is asked through the
    administrator dialog, which a soul cannot answer, and the answer is
-   receipted (`operation: repin-presence-key`). Approved, the cache is
-   re-pinned to what the binary reports. Refused, or with nobody to ask,
+   receipted (`operation: repin-presence-key`). The dialog names the cached
+   key and the binary's by fingerprint (`SHA256:`, as `ssh-keygen -l` and
+   keyd's owner-key prompt print them). Approved, the cache is re-pinned to
+   what the binary reports. Refused, or with nobody to ask,
    `pinnedPresenceKey` throws `presence-pin-mismatch`, leaves the cache where
-   it can be examined, and the owner gate refuses without another prompt;
-   removing `presence.pub` pins again. A well-formed answer that agrees, or a
-   first pin, is written to `presence.pub` with the signer to
+   it can be examined, and the owner gate refuses without another prompt.
+   Removing `presence.pub` does not pin again on its own: a missing or
+   unparseable cache with a pin on record — a `presence.signer`, or an
+   `owner/presence` or `owner/pins-attest` receipt in keyd's `audit.jsonl` —
+   goes to the same dialog, so a planted presence seed is never a silent first
+   pin. A well-formed answer that agrees, or a first pin with nothing on
+   record, is written to `presence.pub` with the signer to
    `presence.signer`. Both files are left at mode 0600, whether new or
    replacing a pin that did not parse (#746).
 5. Any other failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
 The key is never taken from the socket, and never from the cache alone. A
-file in `presence.pub` that does not parse as a key is treated as no pin, and
-step 2 runs again.
+file in `presence.pub` that does not parse as a key is treated as no cache, and
+step 4 asks the owner if a pin is on record.
+
+The daemon and commands a soul runs (`agent-bot soul skill load --global`)
+use `keydPresenceWithoutDialog`: keyd's own prompt only. Where step 3 or 4
+would raise the administrator dialog, they refuse with
+`keyd-signer-unverified` or `presence-pin-mismatch` instead, and the action
+does not happen.
 
 The requirement is checked on every call, not only when a key is pinned. A
 host that pinned its key before #594 has that pin checked against the binary

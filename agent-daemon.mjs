@@ -82,7 +82,9 @@ import { isComputerUse } from './permission-risk.mjs';
 import { appendAuditReceipt, assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
-import { confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner } from './owner-action.mjs';
+import {
+  confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, keydPresenceWithoutDialog, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner,
+} from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
 import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
@@ -1692,7 +1694,8 @@ function rememberedLoosening(agentId, operation, { env, home }) {
   return answers.at(-1)?.status ?? null;
 }
 
-// Where keyd cannot ask, a loosening gets no administrator dialog.
+// Where keyd cannot ask, a loosening gets no administrator dialog: neither as
+// the fallback below nor to re-pin keyd's presence key (#753).
 const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a loosening has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
 
 // A person's no through keyd.
@@ -1700,7 +1703,7 @@ const ownerDeclined = (error) => error?.code === 'owner-declined';
 
 export function daemonModeFor({
   env = process.env, home = homedir(), config, now = () => new Date(),
-  presence = undefined,
+  presence = keydPresenceWithoutDialog,
   ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, allowChallenge: false, consent: noLooseningDialog }) }),
   log = (line) => process.stderr.write(`${line}\n`),
 } = {}) {

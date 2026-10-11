@@ -19,6 +19,7 @@ import { verifyPrincipalOwner } from './owner-principal.mjs';
 
 export { consentOwner, ownerCredentialRequired, soulMarkers } from './owner-gate.mjs';
 export { verifyPrincipalOwner } from './owner-principal.mjs';
+export { keydPresenceWithoutDialog } from './owner-presence.mjs';
 
 export const populationSouls = (env = process.env) => () => listSouls({ file: populationFile({ env }) });
 
