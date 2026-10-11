@@ -21,7 +21,8 @@
 //                                          // from an agent session (#675)
 //       "keydTeamId": "ABCDE12345",        // Developer ID team that signs keyd (#594)
 //       "keydIdentifier": "agent-bot-keyd", // keyd's code-signing identifier (#594)
-//       "soulCoauthorDomain": "souls.example.org" // soul co-author email domain (ADR-0815)
+//       "soulCoauthorDomain": "souls.example.org", // soul co-author email domain (ADR-0815)
+//       "skillSearchAdapter": "local-text"  // soul skill search adapter (#902)
 //     },
 //     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
 //   }
@@ -332,6 +333,20 @@ export function soulCoauthorDomainSetting(config = loadConfig()) {
   return value;
 }
 
+// The adapter `soul skill search` uses (#902), or null when none is
+// configured and search reports that plainly. A host setting, never part of
+// a soul package. `local-text` searches the soul's own definition and skill
+// files; it sets up no service.
+export const SKILL_SEARCH_ADAPTERS = Object.freeze(['local-text']);
+export function skillSearchAdapterSetting(config = loadConfig()) {
+  const value = settingsSection(config).skillSearchAdapter;
+  if (value === undefined) return null;
+  if (!SKILL_SEARCH_ADAPTERS.includes(value)) {
+    throw new Error(`invalid settings.skillSearchAdapter: expected one of ${SKILL_SEARCH_ADAPTERS.join(', ')}`);
+  }
+  return value;
+}
+
 function validateSettings(config) {
   const settings = settingsSection(config);
   validateOwner(config);
@@ -340,6 +355,7 @@ function validateSettings(config) {
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
   if (settings.unmanagedAuthors !== undefined) unmanagedAuthorsSetting(config);
   soulCoauthorDomainSetting(config);
+  skillSearchAdapterSetting(config);
   keydSignerSetting(config);
   rosterScope(config);
   validateFeatures(config);

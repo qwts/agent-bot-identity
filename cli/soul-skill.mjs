@@ -9,7 +9,8 @@ import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
 import { assertUninstallCurrent, stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
-import { soulSkillSearch, soulSkillStatus } from '../skill-status.mjs';
+import { soulSkillStatus } from '../skill-status.mjs';
+import { soulSkillSearch } from '../skill-search.mjs';
 import { loadGlobalSkill, loadSkill, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
 import { assertOwnerAction, keydPresenceWithoutDialog, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
@@ -66,8 +67,10 @@ status reads a soul's skills and says how each fact is known: installed files
 rechecked now against their install record (verified or drifted), learning
 receipts (agent-reported), and knowledge coverage (unknown: no adapter yet).
 It writes nothing; a soul may read only its own.
-search reports that no knowledge search adapter is configured and exits 1;
-it sets up no service and returns no results.
+search matches words in the soul's own definition and skill files through
+the adapter the host's settings.skillSearchAdapter names (local-text); each
+result cites the soul revision, the file path, its sha256 and the line. With
+no adapter configured it says so and exits 1; no service is ever set up.
 dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
 Results carry notCaptured: only these commands capture and recheck instruction
 files; what a harness fetches or reads on its own (web fetch, MCP tools) is not.
@@ -289,15 +292,15 @@ function statusMain(args, json, { stdout, stderr, markers = soulMarkers,
     return 1;
   }
 }
-// search (#902) has no adapter yet: it checks the caller, the soul and the
-// query as status does, then reports the missing adapter as an error.
+// search (#902) checks the caller as status does: the owner may search any
+// soul, a soul only its own. With no adapter configured it reports so and exits 1.
 function searchMain(args, json, { stdout, stderr, markers = soulMarkers,
   assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may search only its own knowledge; bind an Agent ID first'); }, ...options }) {
   if (args.length !== 3 || args[0] !== '--soul' || !args[1] || args[1].startsWith('--') || args[2].startsWith('--')) { stderr.write(USAGE); return 2; }
   try {
     if (markers({ env: options.env, cwd: options.cwd }).length) assertSoulTarget(args[1]);
-    soulSkillSearch(args[1], args[2], options);
-    return 1; // unreachable: search without an adapter always throws
+    stdout.write(report(soulSkillSearch(args[1], args[2], options), json));
+    return 0;
   } catch (error) {
     const failure = { code: error.code ?? 'skill-search-failed', message: error.message };
     if (json) stdout.write(`${JSON.stringify({ error: failure })}\n`);

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { upsertSoul } from '../agent-population.mjs';
@@ -10,7 +11,9 @@ import { adoptSoulPackage, decideSoulProposal, prepareRevisionEdit, revisionHist
 import { importSkill } from '../skill-library.mjs';
 import { installRecordPath } from '../skill-install.mjs';
 import { learningReceipts, proposeSkillLearning } from '../skill-learning.mjs';
-import { SKILL_SEARCH_QUERY_BYTES, soulSkillSearch, soulSkillStatus } from '../skill-status.mjs';
+import { soulSkillStatus } from '../skill-status.mjs';
+import { SKILL_SEARCH_LIMITS, soulSkillSearch } from '../skill-search.mjs';
+import { skillSearchAdapterSetting } from '../config.mjs';
 import { readSoulPackageEntries } from '../soul-package.mjs';
 import { main } from '../cli/soul-skill.mjs';
 
@@ -126,10 +129,10 @@ test('search reports the missing adapter plainly, after checking the caller, the
   assert.equal(text.out, '');
   assert.match(text.err, /skill-search-no-adapter/);
   assert.equal(readSoulPackageEntries(f.directory).manifest.revision, before, 'search writes nothing');
-  for (const query of ['', '   ', 'a\0b', 'x'.repeat(SKILL_SEARCH_QUERY_BYTES + 1)]) {
+  for (const query of ['', '   ', 'a\0b', 'x'.repeat(SKILL_SEARCH_LIMITS.queryBytes + 1)]) {
     assert.throws(() => soulSkillSearch(f.id, query, f.options), { code: 'skill-search-query-invalid' }, JSON.stringify(query.slice(0, 8)));
   }
-  assert.throws(() => soulSkillSearch(f.id, 'x'.repeat(SKILL_SEARCH_QUERY_BYTES), f.options), { code: 'skill-search-no-adapter' });
+  assert.throws(() => soulSkillSearch(f.id, 'x'.repeat(SKILL_SEARCH_LIMITS.queryBytes), f.options), { code: 'skill-search-no-adapter' });
   const unknown = 'agent_00000000-0000-4000-8000-000000000000';
   assert.throws(() => soulSkillSearch(unknown, 'deploy steps', f.options), error => error.code !== 'skill-search-no-adapter');
   const soul = { ...f.options, markers: () => ['Agent ID'], assertSoulTarget: target => { if (target !== f.id) throw new Error('not yours'); } };
@@ -140,4 +143,64 @@ test('search reports the missing adapter plainly, after checking the caller, the
   for (const argv of [['search'], ['search', '--soul', f.id], ['search', f.id, 'q'], ['search', '--soul', f.id, '--trash'], ['search', '--soul', f.id, 'q', 'extra']]) {
     assert.equal((await f.run(argv)).code, 2, argv.join(' '));
   }
+});
+
+// Edits the live package and records the new bytes as its declared revision.
+function rewrite(f, files) {
+  for (const [file, bytes] of Object.entries(files)) {
+    if (bytes === null) rmSync(path.join(f.directory, file), { recursive: true, force: true });
+    else put(path.join(f.directory, file), bytes);
+  }
+  const manifest = JSON.parse(readFileSync(path.join(f.directory, 'soul.json'), 'utf8'));
+  manifest.revision = computePackageRevision(f.directory);
+  put(path.join(f.directory, 'soul.json'), JSON.stringify(manifest));
+  return manifest.revision;
+}
+
+test('local-text search cites the soul revision, path, file digest and line of each sourced match', async t => {
+  const f = fixture(t), local = { ...f.options, config: { settings: { skillSearchAdapter: 'local-text' } } };
+  const deploy = '---\nname: deploy\ndescription: Shipping notes\n---\nRun the Deploy script first.\nThen deploy again.\n';
+  const revision = rewrite(f, { 'AGENTS.md': 'Always run the DEPLOY script with care.\n', 'skills/deploy/SKILL.md': deploy,
+    'skills/deploy/blob.bin': Buffer.from([0, 1, 2]), 'policy.json': JSON.stringify({ mode: 'ask', note: 'deploy script' }),
+    '.soul-state/notes.md': 'deploy script in private state\n' });
+  const found = soulSkillSearch(f.id, 'deploy  Script', local);
+  const sha = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  assert.deepEqual(found, { agentId: f.id, adapter: 'local-text', revision, verification: 'verified', query: 'deploy  Script', truncated: false,
+    results: [
+      { path: 'AGENTS.md', digest: sha('Always run the DEPLOY script with care.\n'), line: 1, text: 'Always run the DEPLOY script with care.', relationship: 'sourced' },
+      { path: 'skills/deploy/SKILL.md', digest: sha(deploy), line: 5, text: 'Run the Deploy script first.', relationship: 'sourced' }],
+    coverage: { eligible: 3, searched: 2, skippedBinary: 1 } }, 'manifest, policy and private state are not searched');
+  // A removed file is not in the revision, so it is never cited.
+  rewrite(f, { 'skills/deploy': null });
+  assert.deepEqual(soulSkillSearch(f.id, 'deploy script', local).results.map(result => result.path), ['AGENTS.md']);
+  // Bytes that are not the declared revision cannot be cited.
+  put(path.join(f.directory, 'AGENTS.md'), 'changed deploy script\n');
+  assert.throws(() => soulSkillSearch(f.id, 'deploy', local), { code: 'skill-search-drift' });
+  rewrite(f, { 'AGENTS.md': `${'match line\n'.repeat(SKILL_SEARCH_LIMITS.results + 5)}${'x'.repeat(500)} match\n` });
+  const many = soulSkillSearch(f.id, 'match', local);
+  assert.equal(many.results.length, SKILL_SEARCH_LIMITS.results);
+  assert.equal(many.truncated, true);
+  rewrite(f, { 'AGENTS.md': `${'é'.repeat(500)} match\n` });
+  assert.equal(Array.from(soulSkillSearch(f.id, 'match', local).results[0].text).length, SKILL_SEARCH_LIMITS.lineChars + 1, 'long lines are cut on a character');
+  assert.throws(() => soulSkillSearch(f.id, Array.from({ length: SKILL_SEARCH_LIMITS.terms + 1 }, (_, i) => `w${i}`).join(' '), local), { code: 'skill-search-query-invalid' });
+  const json = await f.run(['search', '--soul', f.id, 'match', '--json'], { ...f.owner, config: local.config });
+  assert.equal(json.code, 0, json.err);
+  assert.equal(json.json.results[0].path, 'AGENTS.md');
+  assert.equal(typeof json.json.notCaptured, 'string');
+});
+
+test('skillSearchAdapter is a host setting: unset is none, only known adapters load', () => {
+  assert.equal(skillSearchAdapterSetting({}), null);
+  assert.equal(skillSearchAdapterSetting({ settings: { skillSearchAdapter: 'local-text' } }), 'local-text');
+  for (const value of ['vector', '', null, 1]) {
+    assert.throws(() => skillSearchAdapterSetting({ settings: { skillSearchAdapter: value } }), /invalid settings\.skillSearchAdapter/);
+  }
+});
+
+test('a config file selects the adapter for the CLI', async t => {
+  const f = fixture(t);
+  put(path.join(f.home, '.config/agent-bot/config.json'), JSON.stringify({ settings: { skillSearchAdapter: 'local-text' } }));
+  const found = await f.run(['search', '--soul', f.id, 'original', '--json']);
+  assert.equal(found.code, 0, found.err);
+  assert.equal(found.json.results[0].text, 'Original');
 });
