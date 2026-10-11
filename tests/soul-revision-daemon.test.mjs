@@ -15,7 +15,7 @@ import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionHisto
 const principal = { principal: 'principal_12345678-1234-4123-8123-123456789abc', secret: 'p'.repeat(64),
   brokerUid: process.getuid() + 1, mode: 'group' };
 
-async function fixture(t, { realVerifier = false } = {}) {
+async function fixture(t, { realVerifier = false, grantsTarget = () => true } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'revision-daemon-'));
   const env = { HOME: root, PATH: process.env.PATH, AGENT_BOT_CONFIG: join(root, 'config.json'),
     AGENT_COMMS_SHARED_DIR: join(root, 'no-broker') };
@@ -30,11 +30,14 @@ async function fixture(t, { realVerifier = false } = {}) {
   writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
   const { id } = mintAgentIdentity({ ...options, appSlug: 'test-agent', packageRevision: computePackageRevision(packagePath) });
   const calls = [];
-  const revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env,
+  const revisionPrincipal = (credential, { target }) => verifyPrincipalOwner(credential, { env, target,
     clientFactory: () => ({ request: async (request) => {
       calls.push(request);
       if (request.auth.secret !== principal.secret) throw new Error(request.auth.secret);
-      return { uptimeMs: 1 };
+      assert.equal(request.op, 'principal-target-check');
+      assert.equal(Object.isFrozen(target), true);
+      if (!grantsTarget(request.agentId)) throw new Error('principal does not grant this target');
+      return { principal: request.auth.principal, agentId: request.agentId, account: 'target-account' };
     } }),
   });
   const server = createDaemonServer({ env, home: root, config: {}, ...(realVerifier ? {} : { revisionPrincipal }) });
@@ -88,7 +91,8 @@ test('daemon principal path adopts, edits, lists pending revisions, approves and
   assert.deepEqual((await f.call(`?agentId=${f.id}`)).body.proposals, []);
   assert.equal(revisionHistory(f.id, f.options).length, 3);
   assert.equal(f.calls.length, 5);
-  for (const request of f.calls) assert.deepEqual(request, { op: 'health', auth: { principal: principal.principal, secret: principal.secret } });
+  for (const request of f.calls) assert.deepEqual(request, { op: 'principal-target-check', agentId: f.id,
+    auth: { principal: principal.principal, secret: principal.secret } });
 });
 
 test('every daemon revision mutation refuses and audits bearer alone, bad principal, and all binding headers', async (t) => {
@@ -153,4 +157,30 @@ test('daemon default verifier fails closed without a broker; bearer and request 
   assert.equal(result.body.code, 'owner-credential-required');
   assert.ok(!JSON.stringify(result).includes(principal.secret));
   assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+});
+
+test('HTTP revision mutations cannot replace the command target and recheck revoked target grants', async (t) => {
+  const granted = new Set();
+  const f = await fixture(t, { grantsTarget: (agentId) => granted.has(agentId) });
+  const proposal = f.pending();
+  granted.add(f.id);
+  // A different execution account in the broker's response is valid. The
+  // caller account and credential JSON do not select the authorization target.
+  let result = await f.call('/edit', { body: { agentId: f.id, packagePath: f.packagePath, reason: 'Review', principal } });
+  assert.equal(result.status, 200);
+  const before = revisionHistory(f.id, f.options);
+  granted.delete(f.id);
+  const other = 'agent_99999999-9999-4999-8999-999999999999';
+  granted.add(other);
+  for (const action of ['adopt', 'edit', 'approve', 'reject']) {
+    result = await f.call(`/${action}`, { body: { agentId: f.id, proposalId: proposal.proposalId,
+      packagePath: f.packagePath, reason: 'Review', target: { agentId: other }, account: 'caller-selected',
+      principal: { ...principal, agentId: other, target: { agentId: other }, account: 'caller-selected' } } });
+    assert.equal(result.status, 403);
+    assert.equal(result.body.code, 'owner-credential-required');
+    assert.deepEqual(revisionHistory(f.id, f.options), before);
+    assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+  }
+  assert.equal(f.calls.length, 5);
+  assert.ok(f.calls.every((request) => request.op === 'principal-target-check' && request.agentId === f.id));
 });

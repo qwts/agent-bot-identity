@@ -10,6 +10,7 @@ import { assertOwnerAction, confirmOwnerPresence, consentOwner, soulMarkers, ver
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionCommand, revisionHistory } from '../soul-revisions.mjs';
 import { fileURLToPath } from 'node:url';
+import { coldWakeCommand, readColdWakeSettings } from '../cold-wake-settings.mjs';
 
 const PRINCIPAL = 'principal_12345678-1234-4123-8123-123456789abc';
 const SECRET = 'f'.repeat(64);
@@ -36,24 +37,25 @@ function fixture(t) {
   return { root, id, packagePath, options, proposal };
 }
 
-// A broker stand-in: records each request and answers like `health`.
+// A broker stand-in: records each request and echoes the target check.
 function fakeBroker({ fail = null } = {}) {
   const calls = [];
   return { calls, clientFactory: (options) => ({ async request(fields) {
     calls.push({ options, fields });
     if (fail) throw Object.assign(new Error(fail.message), { code: fail.code });
-    return { uptimeMs: 1 };
+    return fields.op === 'principal-target-check'
+      ? { principal: fields.auth.principal, agentId: fields.agentId, account: 'target-account' } : { uptimeMs: 1 };
   } }) };
 }
 
 // The owner gate as the CLI wires it, with every seam injected.
-const gate = (seams) => (action, { principal }) => assertOwnerAction(action, { principal, ...seams });
+const gate = (seams) => (action, { principal, target }) => assertOwnerAction(action, { principal, target, ...seams });
 
 test('a soul with its markers unset is still refused when the principal does not verify', async (t) => {
   const f = fixture(t);
   const broker = fakeBroker({ fail: { code: 'unauthenticated', message: 'this principal is not paired with the broker' } });
   const assertUser = gate({ markers: () => [], consent: () => assert.fail('a presented principal never falls back to the dialog'),
-    verifyPrincipal: (credential) => verifyPrincipalOwner(credential, { paths: { socket: '/nonexistent' }, clientFactory: broker.clientFactory }) });
+    verifyPrincipal: (credential, context) => verifyPrincipalOwner(credential, { ...context, paths: { socket: '/nonexistent' }, clientFactory: broker.clientFactory }) });
   await assert.rejects(revisionCommand(['approve', f.id, f.proposal.proposalId, 'Mine now'],
     { ...f.options, assertUser, principal: owner({ secret: 'b'.repeat(64) }) }),
   (error) => error.code === 'owner-credential-required' && /did not accept the owner principal/.test(error.message)
@@ -79,11 +81,11 @@ test('the owner is accepted through the principal and the record names the princ
   const f = fixture(t);
   const broker = fakeBroker();
   const assertUser = gate({ markers: () => [], consent: () => assert.fail('principal path must not raise the dialog'),
-    verifyPrincipal: (credential) => verifyPrincipalOwner(credential, { paths: { socket: '/broker.sock' }, clientFactory: broker.clientFactory }) });
+    verifyPrincipal: (credential, context) => verifyPrincipalOwner(credential, { ...context, paths: { socket: '/broker.sock' }, clientFactory: broker.clientFactory }) });
   const record = await revisionCommand(['approve', f.id, f.proposal.proposalId, 'Reviewed'], { ...f.options, assertUser, principal: owner() });
   assert.deepEqual(record.authorization, { method: 'principal', principal: PRINCIPAL });
   assert.equal(record.approvedBy, 'user');
-  assert.deepEqual(broker.calls[0].fields, { op: 'health', auth: { principal: PRINCIPAL, secret: SECRET } });
+  assert.deepEqual(broker.calls[0].fields, { op: 'principal-target-check', agentId: f.id, auth: { principal: PRINCIPAL, secret: SECRET } });
   assert.deepEqual(broker.calls[0].options, { socketPath: '/broker.sock', brokerUid: BROKER_UID, mode: 'group' });
   const journal = join(f.options.stateDir, 'soul-revisions', f.id);
   for (const name of readdirSync(journal).filter((n) => n.endsWith('.json'))) {
@@ -257,4 +259,104 @@ test('broker errors cannot reflect a credential into owner errors or audit', asy
     }),
   }), (error) => error.code === 'owner-credential-required' && !error.message.includes(SECRET));
   assert.ok(!readFileSync(auditFile(f.options), 'utf8').includes(SECRET));
+});
+
+test('revision commands bind every principal check to their immutable parsed soul, never credential fields', async (t) => {
+  const other = 'agent_99999999-9999-4999-8999-999999999999';
+  for (const command of ['adopt', 'edit', 'approve', 'reject']) {
+    const f = fixture(t);
+    const input = [command, f.id, command === 'adopt' || command === 'edit' ? f.packagePath : f.proposal.proposalId, 'Review'];
+    const credential = owner({ agentId: other, target: { agentId: other }, account: 'invented' });
+    let checked = 0;
+    await assert.rejects(revisionCommand(input, { ...f.options, principal: credential,
+      assertUser: (action, context) => assertOwnerAction(action, { ...context, env: f.options.env, markers: () => [],
+        verifyPrincipal: async (_credential, { target }) => {
+          checked++;
+          assert.deepEqual(target, { agentId: f.id });
+          assert.equal(Object.isFrozen(target), true);
+          assert.throws(() => { target.agentId = other; }, TypeError);
+          input[1] = other;
+          throw new Error('principal does not grant this target');
+        }, consent: () => assert.fail('no consent fallback on target refusal') }),
+    }), /does not grant this target/);
+    assert.equal(checked, 1);
+    assert.equal(revisionHistory(f.id, f.options).length, 1);
+    assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+  }
+});
+
+test('principal verification snapshots target and principal while the broker request is pending', async () => {
+  const agentId = 'agent_11111111-1111-4111-8111-111111111111';
+  const other = 'agent_99999999-9999-4999-8999-999999999999';
+  const target = { agentId };
+  const credential = owner();
+  let finish;
+  const waiting = verifyPrincipalOwner(credential, { target, clientFactory: () => ({ request(fields) {
+    assert.deepEqual(fields, { op: 'principal-target-check', agentId, auth: { principal: PRINCIPAL, secret: SECRET } });
+    return new Promise((resolve) => { finish = resolve; });
+  } }) });
+  target.agentId = other;
+  credential.principal = 'principal_99999999-9999-4999-8999-999999999999';
+  finish({ principal: PRINCIPAL, agentId, account: 'other-execution-account' });
+  assert.deepEqual(await waiting, { method: 'principal', principal: PRINCIPAL });
+});
+
+test('changing revision argv during authorization cannot substitute the soul that receives the effect', async (t) => {
+  const f = fixture(t);
+  const other = 'agent_99999999-9999-4999-8999-999999999999';
+  const args = ['approve', f.id, f.proposal.proposalId, 'Review'];
+  const record = await revisionCommand(args, { ...f.options, principal: owner(),
+    assertUser: async (_action, { target }) => {
+      assert.deepEqual(target, { agentId: f.id });
+      await Promise.resolve();
+      args[1] = other;
+      return { method: 'principal', principal: PRINCIPAL };
+    },
+  });
+  assert.equal(record.proposalId, f.proposal.proposalId);
+  assert.equal(listSoulProposals(f.id, f.options)[0].status, 'approved');
+  assert.deepEqual(revisionHistory(other, f.options), []);
+});
+
+test('mismatched target responses, old brokers and revoked principals refuse before revision mutation', async (t) => {
+  for (const reply of ['health', 'wrong-soul', 'wrong-principal', 'missing-account', 'revoked']) {
+    const f = fixture(t);
+    const calls = [];
+    const clientFactory = () => ({ async request(fields) {
+      calls.push(fields);
+      if (reply === 'revoked') throw new Error('revoked');
+      if (reply === 'health') return { uptimeMs: 1 };
+      return { principal: reply === 'wrong-principal' ? 'principal_other' : PRINCIPAL,
+        agentId: reply === 'wrong-soul' ? 'agent_other' : f.id,
+        ...(reply === 'missing-account' ? {} : { account: 'execution-account' }) };
+    } });
+    await assert.rejects(revisionCommand(['approve', f.id, f.proposal.proposalId, 'Review'], {
+      ...f.options, principal: owner(), assertUser: gate({ markers: () => [],
+        consent: () => assert.fail('no downgrade to consent'),
+        verifyPrincipal: (credential, context) => verifyPrincipalOwner(credential, { ...context, clientFactory }),
+      }),
+    }), /broker did not accept the owner principal/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].op, 'principal-target-check');
+    assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+  }
+});
+
+test('cold-wake on/off/resume/webhook bind the parsed target and refusal preserves settings and secrets', async (t) => {
+  const f = fixture(t);
+  const url = join(f.root, 'webhook-url'), key = join(f.root, 'webhook-key');
+  writeFileSync(url, 'https://example.invalid/wake');
+  writeFileSync(key, 'not-installed');
+  for (const change of [['on'], ['off'], ['resume', 'read-only'], ['webhook', '--url-file', url, '--key-file', key]]) {
+    await assert.rejects(coldWakeCommand([f.id, ...change, '--principal-stdin'], {
+      ...f.options, readStdin: () => JSON.stringify(owner({ agentId: 'agent_untrusted' })), write: () => assert.fail('no success output'),
+      gate: (action, context) => assertOwnerAction(action, { ...context, markers: () => [],
+        verifyPrincipal: async (_credential, { target }) => {
+          assert.deepEqual(target, { agentId: f.id });
+          assert.equal(Object.isFrozen(target), true);
+          throw new Error('target was revoked');
+        }, consent: () => assert.fail('no consent fallback') }),
+    }), /target was revoked/);
+    assert.deepEqual(readColdWakeSettings(f.options), {});
+  }
 });

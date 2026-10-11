@@ -539,9 +539,9 @@ export function discardRevisionStaging(stagingPath) {
 // The owner gate revisionCommand applies to adopt, edit, approve and reject.
 // Exported so a command built on an owner edit (soul skill uninstall --trash)
 // can run the same gate before an effect outside the revision.
-export function revisionOwnerGate(action, { principal, presence, env, cwd } = {}) {
+export function revisionOwnerGate(action, { principal, target, presence, env, cwd } = {}) {
   return assertOwnerAction(action, {
-    principal, env, cwd,
+    principal, target, env, cwd,
     consent: (action, context) => presenceOrConsent(action, { ...context, presence,
       consent: (action, context) => {
         if (!process.stdin.isTTY || !process.stderr.isTTY) {
@@ -557,7 +557,7 @@ export async function revisionCommand(args, { assertSoulTarget = (id) => {
   if (identityOp('current') !== id) {
     throw new Error('a soul may propose changes only to its own package; bind an Agent ID first');
   }
-}, assertUser = (action, { principal }) => revisionOwnerGate(action, { principal, presence, env: options.env, cwd: options.cwd }),
+}, assertUser = (action, { principal, target }) => revisionOwnerGate(action, { principal, target, presence, env: options.env, cwd: options.cwd }),
 // The owner's principal credential, when the caller presents one; it is
 // passed only to assertUser and never stored.
 principal = null, presence, ...options } = {}) {
@@ -588,7 +588,8 @@ principal = null, presence, ...options } = {}) {
   }
   if (['adopt', 'edit', 'approve', 'reject'].includes(command)) {
     let authorization;
-    try { authorization = await assertUser(`soul revision ${command} ${id}`, { principal }); }
+    const target = Object.freeze({ agentId: id });
+    try { authorization = await assertUser(`soul revision ${command} ${id}`, { principal, target }); }
     catch (error) {
       const failure = error.code === 'owner-consent-unavailable' ? error : ownerCredentialRequired(error.message);
       appendAuditReceipt({ event: 'soul-revision', agentId: id, operation: command, decision: failure.code }, options);

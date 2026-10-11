@@ -16,9 +16,13 @@ authority. No credential is loaded for the caller.
 POST bodies are JSON objects. `packagePath` names a quiescent local `.soul`
 directory readable by the daemon; `reason` is nonempty. `principal` is
 `{ principal: "principal_<uuid>", secret, brokerUid, mode: "group" }`.
-The existing owner verifier checks broker custody in another account and sends
-one authenticated `health` request. Failed verification never falls back to
-consent. Successful journal records retain only `{ method: "principal",
+The owner verifier checks broker custody in another account and sends
+`principal-target-check` for the immutable request `agentId`. The broker
+resolves its registered account and checks the current principal grant; before
+first join, only unrestricted or exact soul-ID grants authorize. Caller-supplied
+accounts/targets cannot override this ID. Failed or unsupported verification
+never falls back to `health` or consent. This grant query is not a signed
+decision receipt. Successful journal records retain only `{ method: "principal",
 principal }` as `authorization`, never the secret.
 
 Listing returns proposal IDs, revision hashes, author, reason, path diff,

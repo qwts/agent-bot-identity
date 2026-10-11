@@ -424,7 +424,7 @@ export function createDaemonServer({
   ownerGate = decisionOwnerGate({ env, challenges: challengeLedger }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
-  revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
+  revisionPrincipal = (credential, { target }) => verifyPrincipalOwner(credential, { env, target }),
 } = {}) {
   const appOptions = { env, home, gate: settingGate, souls: identityAppSouls };
   const appJobs = createIdentityAppJobs(appOptions);
@@ -1146,7 +1146,7 @@ export function createDaemonServer({
           const record = await revisionCommand([revisionAction, agentId, target, body.reason], {
             env, home, now, stateDir: stateDirectory({ env, home }), principal: body.principal ?? null,
             ...(body.expectedParent === undefined ? {} : { expectedParent: body.expectedParent }),
-            assertUser: async (_action, { principal }) => {
+            assertUser: async (_action, { principal, target }) => {
               if (body.consent) {
                 // Reserved host ceremony contract: no client-supplied boolean
                 // or assertion grants consent, and this route raises no GUI.
@@ -1155,7 +1155,7 @@ export function createDaemonServer({
                 });
               }
               if (!principal) throw ownerCredentialRequired();
-              return revisionPrincipal(principal);
+              return revisionPrincipal(principal, { target });
             },
           });
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, record });
