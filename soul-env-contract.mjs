@@ -68,7 +68,8 @@ export const SOUL_LAYOUT = Object.freeze([
 // writes them, so moving identity to its own repository moves no file. Soul
 // lists, classifies and carries the directory with the soul; only identity
 // reads or writes what is in it, and confinement.mjs keeps a soul's own tools
-// out. Everything else in the layout is soul's.
+// out. The other components inside the soul root are soul's; `external` ones,
+// such as host-tools, are the host's (see RETENTION_OF).
 export const IDENTITY_OWNED_COMPONENTS = Object.freeze(['credentials']);
 
 // Ordered: the first matching rule wins, so the specific `.soul-state/`
