@@ -114,20 +114,41 @@ function priorLearning(id, libraryId, history, options) {
     const files = fileMap(entries), entry = files.get(receiptFile(libraryId));
     if (!entry || seen.has(hash(entry.bytes))) continue;
     seen.add(hash(entry.bytes));
-    try {
-      if (entry.bytes.length > 256 * 1024) fail('stored learning receipt exceeds the supported bound');
-      const record = JSON.parse(entry.bytes.toString('utf8'));
-      if (![1, 2].includes(record.schemaVersion) || record.libraryId !== libraryId || record.agentId !== id || !Array.isArray(record.pieces) || record.pieces.length > 128) fail('invalid stored learning receipt');
-      validatePortableReceipt(record, files);
-      records.push({ ...record, revision: revision.revision, pieces: record.pieces.map(piece => {
-        if (piece.status !== 'completed') return piece;
-        relative(piece.destination);
-        const actual = files.get(piece.destination);
-        return { ...piece, verification: actual && hash(actual.bytes) === piece.destinationSha256 && actual.mode === piece.destinationMode ? 'verified-in-revision' : 'changed-or-missing' };
-      }) });
-    } catch { records.push({ revision: revision.revision, status: 'invalid-receipt' }); }
+    const record = storedReceipt(entry, files, libraryId, id);
+    records.push(record ? { ...record, revision: revision.revision } : { revision: revision.revision, status: 'invalid-receipt' });
   }
   return { records, revisionsScanned: Math.min(history.length, 20), truncated: history.length > 20 };
+}
+// One stored receipt checked against the package files beside it, or null
+// when it is malformed. A completed piece is `verified-in-revision` only while
+// its destination keeps the recorded bytes and mode.
+function storedReceipt(entry, files, libraryId, id) {
+  try {
+    if (entry.bytes.length > 256 * 1024) fail('stored learning receipt exceeds the supported bound');
+    const record = JSON.parse(entry.bytes.toString('utf8'));
+    if (![1, 2].includes(record.schemaVersion) || record.libraryId !== libraryId || record.agentId !== id || !Array.isArray(record.pieces) || record.pieces.length > 128) fail('invalid stored learning receipt');
+    validatePortableReceipt(record, files);
+    return { ...record, pieces: record.pieces.map(piece => {
+      if (piece.status !== 'completed') return piece;
+      relative(piece.destination);
+      const actual = files.get(piece.destination);
+      return { ...piece, verification: actual && hash(actual.bytes) === piece.destinationSha256 && actual.mode === piece.destinationMode ? 'verified-in-revision' : 'changed-or-missing' };
+    }) };
+  } catch { return null; }
+}
+/**
+ * Every learning receipt in one package's entries (`provenance/skills/<uuid>/
+ * learning.json`), checked as learning history checks them; a malformed one
+ * is `{ libraryId, status: 'invalid-receipt' }` and the rest still report.
+ */
+export function learningReceipts(entries, agentId) {
+  const files = fileMap(entries), receipts = [];
+  for (const [file, entry] of files) {
+    const match = file.match(/^provenance\/skills\/([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\/learning\.json$/);
+    if (!match) continue;
+    receipts.push(storedReceipt(entry, files, match[1], agentId) ?? { libraryId: match[1], status: 'invalid-receipt' });
+  }
+  return receipts.sort((a, b) => a.libraryId.localeCompare(b.libraryId, 'en'));
 }
 export function skillLearningPacket(libraryId, agentId, options = {}) {
   const accepted = readSkillMaterial(libraryId, options), local = readSkillMaterial(libraryId, { ...options, selection: 'local' });

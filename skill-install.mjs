@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { listSkills, readSkillMaterial } from './skill-library.mjs';
+import { listSkills, readSkillMaterial, skillDirectoryManifest } from './skill-library.mjs';
+import { diffSkillManifest } from './skill-manifest.mjs';
 import { projectSkillSourceProvenance } from './skill-source-provenance.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { soulDirectory } from './agent-population.mjs';
@@ -69,6 +70,30 @@ export function stageSkillInstall(skill, agentId, { now = () => new Date(), ...o
     put(staging, installRecordPath(name), Buffer.from(`${JSON.stringify(record, null, 2)}\n`), '100644');
     return { name, libraryId: id, destination, record: installRecordPath(name), digest: material.digest };
   });
+}
+
+// What changed in an installed skill since install, from its record alone:
+// `verified` (same files, bytes and modes), `drifted` (with the added,
+// modified and removed paths), `unrecorded` (no install record, e.g. an
+// authored skill), `record-invalid`, or `unverifiable` (the folder is past
+// the library's bounds or holds a link). It only reports; uninstall still
+// archives, so an edit is kept in the archive, never lost.
+export function installDrift(directory, recordFile, hasRecord) {
+  if (!hasRecord) return { verification: 'unrecorded', changes: null };
+  let record;
+  try { record = JSON.parse(readFileSync(recordFile, 'utf8')); } catch { record = null; }
+  if (!record?.files || typeof record.files !== 'object' || Array.isArray(record.files) || typeof record.digest !== 'string'
+    || Object.values(record.files).some(file => typeof file?.sha256 !== 'string' || typeof file?.mode !== 'string')) {
+    return { verification: 'record-invalid', changes: null };
+  }
+  let current;
+  try { current = skillDirectoryManifest(directory); }
+  catch (error) { return { verification: 'unverifiable', code: error.code ?? 'skill-inventory-failed', changes: null }; }
+  const changes = diffSkillManifest(record, current);
+  const changed = changes.added.length > 0 || changes.modified.length > 0 || changes.removed.length > 0;
+  // Same files but another digest: the record contradicts itself.
+  if (!changed && current.digest !== record.digest) return { verification: 'record-invalid', changes: null };
+  return { verification: changed ? 'drifted' : 'verified', changes };
 }
 
 /**

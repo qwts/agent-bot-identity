@@ -6,8 +6,9 @@ scripts, activate a harness skill, select an SOP, or create a soul revision.
 This implements local-directory, HTTPS-document and public GitHub-directory acquisition and comparison
 for #603/#312. Learning guides selected adaptations through the existing soul
 revision/proposal policy. Explicit source updates merge a reviewed candidate into
-the standalone library. Managed harness installation/uninstallation, other
-repository adapters and optional knowledge search/status remain unimplemented.
+the standalone library. Install, uninstall, workspace or global loading and a
+read-only `status` are described below; other repository adapters and
+knowledge search remain unimplemented.
 
 The [dream maintenance guide](soul-skill-dream-design.md) describes the implemented
 owner CLI, daemon scheduling, bounded definition/learned-skill inputs, recovery
@@ -29,6 +30,7 @@ agent-bot soul skill install UUID|NAME --soul AGENT_ID --json
 agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] --json
 agent-bot soul skill load NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] --json
 agent-bot soul skill unload NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] --json
+agent-bot soul skill status --soul AGENT_ID --json
 agent-bot soul skill dream --soul AGENT_ID --status --json
 ```
 
@@ -464,6 +466,31 @@ go to the usual audit log. It resolves the destination again
 rather than trusting the record, and removes the copy only while it matches
 the record, so an edited copy is kept (`skill-load-modified`). Nothing here changes the soul package or any
 repository's exclude list.
+
+## Status
+
+`status --soul AGENT_ID` reads the soul's live package and says, for each
+fact, how it is known (owner decision on #603, 2026-10-10). It writes nothing.
+The owner can read any soul; a soul only its own Agent ID.
+
+- `installs`: every `skills/<name>/` folder and every install record. The
+  folder is rechecked now against its record, as uninstall does: `verified`,
+  or `drifted` with `added`, `modified` and `removed` paths (a mode-only change
+  is a modification). `unrecorded` is a skill without a record (authored or
+  learned), `missing` a record whose folder is gone, `record-invalid` a
+  malformed or self-contradicting record, and `unverifiable` a folder past the
+  library's bounds or holding a link.
+- `learning`: every learning receipt. A completed piece is
+  `verified-in-revision` while its destination keeps the recorded bytes and
+  mode, else `changed-or-missing`; a skipped or blocked piece is `not-adopted`.
+  Knowledge outcomes stay `agent-reported`. A malformed receipt is
+  `invalid-receipt`, and the others still report.
+- `knowledge`: `unknown` with `no-capability-adapter`. No retrieval adapter
+  exists yet, so nothing claims embedding, indexing or graph coverage.
+
+Dream maintenance is in the daemon; `dream --status` reports it. Status reads
+the package within 8,192 entries, 64 MiB and 8 MiB per file, and refuses
+(`skill-status-limit`) rather than reporting part of a larger one.
 
 ## What is not captured
 

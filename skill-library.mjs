@@ -384,6 +384,12 @@ export function listSkills(options = {}) {
   } finally { directory.closeSync(); }
   return names.sort().map(id => { const record = showSkill(id, options); return { id, name: record.name, accepted: record.accepted, path: record.path, coverage: record.coverage }; });
 }
+// The file manifest of a skill directory, in the form an import records its
+// local baseline (path -> mode, size, sha256, plus the canonical digest).
+export function skillDirectoryManifest(root, options = {}) {
+  const { files, digest } = inventory(root, options);
+  return { files, digest };
+}
 export function verifySkill(id, options = {}) {
   const { root, record } = load(id, options);
   const current = inventory(path.join(root, record.name), options);
