@@ -144,3 +144,56 @@ test('replay refuses a commit that credits another soul, before anything is crea
   // no owner prompt and no credential receipt.
   await assert.rejects(run([]), /credits another soul/);
 });
+
+test('a worktree built on an older commit than its base is refused before anything is minted (#947)', async () => {
+  // The feature branch was cut before main gained `added.txt`. Publishing it
+  // onto today's main would replay a diff that deletes `added.txt` again.
+  const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-signed-stale-'));
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'commit.gpgsign', 'false');
+  git('config', 'core.hooksPath', '/dev/null');
+  writeFileSync(join(cwd, 'file.txt'), 'base\n');
+  git('add', 'file.txt');
+  git('commit', '-m', 'base');
+  git('remote', 'add', 'origin', 'https://github.com/acme/widgets.git');
+  git('switch', '-c', 'feature');
+  writeFileSync(join(cwd, 'file.txt'), 'feature\n');
+  git('commit', '-am', 'feature');
+  git('switch', 'main');
+  writeFileSync(join(cwd, 'added.txt'), 'merged meanwhile\n');
+  git('add', 'added.txt');
+  git('commit', '-m', 'another PR merged');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  git('switch', 'feature');
+  let minted = 0;
+  const run = (args) => runSignedCommit(parseSignedCommitArgs(args), {
+    cwd,
+    env: gateOnEnv({ GH_AGENT_APP: 'acme-codex-agent' }),
+    stdout: { write: () => {} },
+    mintImpl: async () => { minted += 1; throw new Error('minted'); },
+    fetchImpl: async () => { throw new Error('fetched'); },
+  });
+  const stale = /origin\/main \([0-9a-f]{8}\) is not an ancestor of HEAD.*Rebase first \(git rebase origin\/main\)\. Nothing was written\./;
+  await assert.rejects(run(['--base', 'origin/main', '--dry-run']), stale);
+  await assert.rejects(run(['--base', 'origin/main']), stale);
+  assert.equal(minted, 0);
+  // Without --base the merge-base is used, which the worktree is built on.
+  assert.equal((await run(['--dry-run'])).commits.length, 1);
+  // Once rebased, the same base publishes only the feature's own change.
+  git('rebase', '--quiet', 'origin/main');
+  let output = '';
+  const rebased = await runSignedCommit(parseSignedCommitArgs(['--base', 'origin/main', '--dry-run']), {
+    cwd,
+    env: gateOnEnv(),
+    stdout: { write: (value) => { output += value; } },
+    mintImpl: async () => { throw new Error('minted'); },
+    fetchImpl: async () => { throw new Error('fetched'); },
+  });
+  assert.equal(rebased.commits.length, 1);
+  assert.match(output, /write 100644 file\.txt/);
+  assert.doesNotMatch(output, /added\.txt/);
+});

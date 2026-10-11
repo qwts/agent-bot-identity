@@ -1,0 +1,1 @@
+- `agent-bot signed-commit` refuses, before minting or writing anything, when `--base` (or the default branch) is not an ancestor of HEAD. Publishing a worktree built on an older commit onto a newer base replayed a diff that silently reverted what the base had gained (#947). Rebase onto the base first.

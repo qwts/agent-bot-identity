@@ -73,6 +73,18 @@ function tryGit(args, cwd) {
   try { return gitTrim(args, cwd); } catch { return null; }
 }
 
+// The first commit is replayed as its diff against `base`, onto `base`. A
+// base the worktree is not built on (a branch that moved since the worktree
+// last rebased) would make that diff undo everything the base gained, so it
+// is refused before anything is minted or written (#947).
+function assertBuiltOn(base, label, cwd) {
+  if (tryGit(['merge-base', '--is-ancestor', base, 'HEAD'], cwd) !== null) return;
+  throw new Error(
+    `${label} (${base.slice(0, 8)}) is not an ancestor of HEAD: this worktree is based on an older commit, `
+    + `and publishing onto ${label} would revert what it gained since. Rebase first (git rebase ${label}). Nothing was written.`,
+  );
+}
+
 function localDefaultBranch(cwd) {
   const symbolic = tryGit(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], cwd);
   if (symbolic?.startsWith('origin/')) return symbolic.slice('origin/'.length);
@@ -82,7 +94,7 @@ function localDefaultBranch(cwd) {
 export function signedCommitHelp() {
   return `Usage: agent-bot signed-commit [options]\n\n` +
     `Options:\n` +
-    `  --base <ref>             First parent of the range (default: merge-base with remote default)\n` +
+    `  --base <ref>             First parent of the range; must be an ancestor of HEAD (default: merge-base with remote default)\n` +
     `  --branch <name>          Remote branch (default: current branch)\n` +
     `  --repo <owner/name>      Repository (default: origin URL)\n` +
     `  --dry-run                Preview locally without minting or network access\n` +
@@ -165,6 +177,7 @@ export async function runSignedCommit(options, {
   const localBase = options.base
     ? tryGit(['rev-parse', options.base], cwd)
     : tryGit(['merge-base', `origin/${defaultBranch}`, 'HEAD'], cwd) ?? tryGit(['merge-base', defaultBranch, 'HEAD'], cwd);
+  if (options.base && localBase) assertBuiltOn(localBase, options.base, cwd);
   if (localBase) assertSoulCredits(`${localBase}..HEAD`);
   let api = null;
   if (!options.dryRun) {
@@ -195,6 +208,7 @@ export async function runSignedCommit(options, {
     }
   }
   if (!base) throw new Error(`could not find a merge-base with ${defaultBranch} — pass --base <ref>`);
+  assertBuiltOn(base, options.base ?? defaultBranch, cwd);
   const head = gitTrim(['rev-parse', 'HEAD'], cwd);
   if (base === head) throw new Error('nothing to sign — HEAD is already at the base');
   const commits = gitTrim(['rev-list', '--reverse', `${base}..${head}`], cwd).split('\n').filter(Boolean);
