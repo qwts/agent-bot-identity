@@ -391,6 +391,7 @@ pub mod keychain {
         static kSecACLAuthorizationKeychainItemDelete: CFStringRef;
         static kSecACLAuthorizationKeychainItemModify: CFStringRef;
         static kSecACLAuthorizationChangeOwner: CFStringRef;
+        static kSecACLAuthorizationChangeACL: CFStringRef;
     }
 
     /// A keychain dialog is never an answer anyone gave: keyd asks the owner
@@ -569,6 +570,7 @@ pub mod keychain {
                 kSecACLAuthorizationKeychainItemDelete,
                 kSecACLAuthorizationKeychainItemModify,
                 kSecACLAuthorizationChangeOwner,
+                kSecACLAuthorizationChangeACL,
             ]
         };
         let authorizations = CFArray::<*const c_void>::from_copyable(&rights);
@@ -723,9 +725,13 @@ pub mod keychain {
                 Err("the keychain item could not be written (another took its place)".into())
             }
             Err(error) => {
-                // Put the value back rather than lose it. It goes back
-                // unlocked, which is the state it was found in.
-                let _ = keychain.add_generic_password(service, account, value);
+                // Put an App key back rather than lose it. It goes back
+                // unlocked, which is the state it was found in. A pin is not
+                // put back: an unlocked pin is one keyd refuses anyway, so
+                // leaving it absent keeps the failure closed.
+                if recreatable(service) {
+                    let _ = keychain.add_generic_password(service, account, value);
+                }
                 Err(error)
             }
         }

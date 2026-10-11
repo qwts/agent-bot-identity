@@ -162,7 +162,11 @@ export function pinnedPresenceKey({
   const previous = readPinnedSigner(signerFile);
   const changed = previous && (previous.teamId !== wanted.teamId || previous.identifier !== wanted.identifier);
   const loosened = wanted.teamId === ANY_DEVELOPER_ID || wanted.identifier === ANY_DEVELOPER_ID;
-  const alreadyApproved = previous && !changed;
+  // `presence.signer` sits in a directory a soul can write, so it is never
+  // proof of approval on its own: it only spares the question when a pin is
+  // also cached, and then a key the binary reports differently still goes to
+  // the owner below. With no cache, a loosened signer is asked again.
+  const alreadyApproved = previous && !changed && cached !== null;
   // Loosening who may sign keyd is put to the owner when it first pins and
   // whenever the signer moves. Re-deriving under a signer already recorded as
   // approved is not a new decision, and an owner action is not the place to

@@ -228,6 +228,23 @@ test('pinning under any Developer ID needs the owner and leaves a receipt', (t) 
   assert.match(receipts[1].detail, /any Developer ID team as agent-bot-keyd/);
 });
 
+// presence.signer is writable by a soul, so it never stands in for the owner's
+// approval when there is no pin cached to show nothing new is being pinned.
+test('a signer file with no cached pin does not spare a loosened signer the owner', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const loose = { ...env, AGENT_BOT_KEYD_TEAM_ID: ANY_DEVELOPER_ID };
+  writeFileSync(presenceSignerPath({ env }), `${JSON.stringify({ teamId: ANY_DEVELOPER_ID, identifier: 'agent-bot-keyd' })}\n`);
+  const asked = [];
+  const seams = { env: loose, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {}, run: () => key.raw,
+    receipt: () => {}, approve: (signer) => asked.push(signer) };
+
+  assert.equal(pinnedPresenceKey(seams), key.raw);
+  assert.equal(asked.length, 1, 'asked although the signer file says it was approved');
+  assert.equal(pinnedPresenceKey(seams), key.raw);
+  assert.equal(asked.length, 1, 'not asked again once the same key is cached');
+});
+
 test('pinning again under another team than the pin was taken under needs the owner', (t) => {
   const { env } = home(t);
   const key = presenceKey();
