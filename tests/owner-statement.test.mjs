@@ -13,6 +13,7 @@ import {
   readStatementFile, signChallenge, sshFingerprint, verifyOwnerChallenge, verifyStatement, writeOwnerKeys,
 } from '../owner-statement.mjs';
 import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
+import { attestedOwnerKeys, createPinsGenerationFloor, pinSetDigest } from '../owner-presence.mjs';
 
 const CLI = join(dirname(dirname(fileURLToPath(import.meta.url))), 'agent-bot.mjs');
 const NOW = Date.parse('2026-10-09T22:00:00Z');
@@ -24,6 +25,24 @@ const HAS_SSH_KEYGEN = spawnSync('ssh-keygen', ['-?'], { stdio: 'ignore' }).erro
 // owner-presence.mjs's attestedOwnerKeys: vouched for, or not.
 const vouched = async () => ({ attested: true, generation: 1 });
 const unvouched = async () => ({ attested: false, code: 'pins-mismatch', reason: 'the owner keys on file are not the ones the owner approved through agent-bot-keyd' });
+
+// The real attestedOwnerKeys, against a keyd whose presence key signs a
+// `k1.` record of `approved()` at `generation()`. Each answer goes to `seen`.
+function keydVouching({ approved, generation = () => 1, floor = createPinsGenerationFloor(), seen = [] }) {
+  const { privateKey, raw } = rawEd25519();
+  const record = (nonce) => {
+    const iat = Math.floor(Date.now() / 1000);
+    const segment = Buffer.from(JSON.stringify({ v: 1, aud: 'agent-bot-owner', kind: 'pins', digest: pinSetDigest(approved()),
+      generation: generation(), nonce, iat, exp: iat + 60 })).toString('base64url');
+    return `k1.${segment}.${sign(null, Buffer.from(segment), privateKey).toString('base64url')}`;
+  };
+  return async (pins, options) => {
+    const result = await attestedOwnerKeys(pins, { ...options, floor, pinned: () => raw.toString('base64'),
+      request: async (socket, method, params) => ({ attestation: record(params.nonce) }) });
+    seen.push(result);
+    return result;
+  };
+}
 
 function home(t) {
   const dir = mkdtempSync(join(tmpdir(), 'owner-statement-'));
@@ -300,6 +319,69 @@ test('the owner gate ignores a forged pin keyd does not vouch for, and asks the 
   // A pin file that cannot be read never blocks the dialog either.
   writeFileSync(ownerKeysPath({ env: ctx.env }), '{ not json');
   assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
+});
+
+// keys.json is swapped between the gate's read and keyd's answer: the gate
+// read a forged set, and the file holds the owner's approved set by the time
+// keyd is asked. keyd is asked about the set that was read, so the forged
+// pin never answers.
+test('the terminal gate never trusts a pin file swapped between its read and keyd', async (t) => {
+  const ctx = command(t);
+  const owner = pinFor(securityKey());
+  const forged = securityKey();
+  const forgedPin = pinFor(forged, { name: 'forged' });
+  writeOwnerKeys([forgedPin], { env: ctx.env });
+  const seen = [];
+  const keyd = keydVouching({ approved: () => [owner], seen });
+  const dialog = [];
+  const action = 'soul revision approve agent_12345678-1234-4123-8123-123456789abc proposal_1';
+  const options = {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: () => NOW, challengeHost: () => 'remote-host',
+    presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
+    attestPins: async (pins, opts) => { writeOwnerKeys([owner], { env: ctx.env }); return keyd(pins, opts); },
+    challengePrompt: async ([challenge]) => {
+      const segment = encodePayload({ ...challenge.payload, iat: challenge.payload.iat + 1 });
+      return armorStatement(`s1.${segment}.${forged.sshsig(Buffer.from(segment)).toString('base64url')}`);
+    },
+    fallbackConsent: async (asked) => { dialog.push(asked); return { method: 'consent' }; },
+  };
+  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
+  assert.deepEqual(seen.map((result) => result.code), ['pins-mismatch']);
+  assert.deepEqual(readOwnerKeys({ env: ctx.env }), [owner], 'the file was swapped');
+  // Unswapped, the same keyd vouches for a forged set it did record: the
+  // check is keyd's record of what was read, nothing else.
+  writeOwnerKeys([forgedPin], { env: ctx.env });
+  const recorded = keydVouching({ approved: () => [forgedPin] });
+  assert.equal((await assertOwnerAction(action, { ...options, attestPins: recorded })).method, 'statement');
+  assert.equal(dialog.length, 1);
+});
+
+test('a keyd record older than one seen is pins-stale through the terminal gate: the dialog asks', async (t) => {
+  const ctx = command(t);
+  const key = securityKey();
+  const pin = pinFor(key);
+  writeOwnerKeys([pin], { env: ctx.env });
+  let generation = 5;
+  const seen = [];
+  let prompts = 0;
+  const dialog = [];
+  const action = 'soul revision approve agent_12345678-1234-4123-8123-123456789abc proposal_1';
+  const options = {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: () => NOW, challengeHost: () => 'remote-host',
+    presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
+    attestPins: keydVouching({ approved: () => [pin], generation: () => generation, seen }),
+    challengePrompt: async ([challenge]) => {
+      prompts += 1;
+      const segment = encodePayload({ ...challenge.payload, iat: challenge.payload.iat + 1 });
+      return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+    },
+    fallbackConsent: async (asked) => { dialog.push(asked); return { method: 'consent' }; },
+  };
+  assert.equal((await assertOwnerAction(action, options)).method, 'statement');
+  generation = 3;
+  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
+  assert.deepEqual([prompts, dialog.length], [1, 1]);
+  assert.deepEqual(seen.map((result) => (result.attested ? result.generation : result.code)), [5, 5, 'pins-stale']);
 });
 
 test('the owner-action presence wrapper checks presence once before the challenge flow', async (t) => {
@@ -650,6 +732,32 @@ test('verify reads a token, a file or stdin and answers in JSON', async (t) => {
   const refused = await ctx.run(['verify', block, '--repo', SCOPE.repo, '--issue', '1', '--json']);
   assert.deepEqual(refused, { ok: false, code: 'statement-scope-mismatch' });
   await assert.rejects(ctx.run(['verify', block, '--repo', SCOPE.repo]), { code: 'owner-usage' });
+});
+
+// keys.json is swapped between verify's read and keyd's answer: verify read
+// a set with a forged key that signed the statement, and the file holds the
+// owner's approved set by the time keyd is asked. Not approval.
+test('verify never accepts a statement when the pin file is swapped between its read and keyd', async (t) => {
+  const ctx = command(t);
+  const owner = pinFor(securityKey());
+  const forged = securityKey();
+  writeOwnerKeys([pinFor(forged)], { env: ctx.env });
+  const seen = [];
+  const keyd = keydVouching({ approved: () => [owner], seen });
+  const run = (attestPins) => ownerCommand(['verify', skToken(forged), '--repo', SCOPE.repo, '--issue', '753', '--json'], {
+    env: ctx.env, home: ctx.dir, now: () => NOW, write: (text) => ctx.out.push(text), attestPins });
+  const result = await run(async (pins, options) => { writeOwnerKeys([owner], { env: ctx.env }); return keyd(pins, options); });
+  assert.deepEqual([result.ok, result.code, result.signature, result.pins.code], [false, 'owner-pins-unprotected', 'valid', 'pins-mismatch']);
+  assert.deepEqual(seen.map((answer) => answer.code), ['pins-mismatch']);
+  // A record older than one seen is not approval either.
+  writeOwnerKeys([pinFor(forged)], { env: ctx.env });
+  let generation = 4;
+  const floor = createPinsGenerationFloor();
+  const aging = keydVouching({ approved: () => [pinFor(forged)], generation: () => generation, floor });
+  assert.equal((await run(aging)).ok, true);
+  generation = 2;
+  const stale = await run(aging);
+  assert.deepEqual([stale.ok, stale.pins.code], [false, 'pins-stale']);
 });
 
 test('ssh-keygen signatures from a software key verify end to end', { skip: !HAS_SSH_KEYGEN && 'ssh-keygen is not installed' }, async (t) => {

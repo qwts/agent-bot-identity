@@ -8,17 +8,20 @@
 // route stays on the dialog.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import net from 'node:net';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { approvalsCommand } from '../agent-approvals.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { createChallengeLedger, decisionOwnerGate } from '../owner-action.mjs';
 import { authorizeSouls, bindTransport, enrollPrincipal, setOperations } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
+import { attestedOwnerKeys, createPinsGenerationFloor, pinSetDigest } from '../owner-presence.mjs';
 import {
   SSHSIG_NAMESPACE, armorStatement, createOwnerChallenges, ownerKeysPath, parseSshPublicKey, signChallenge, sshFingerprint, writeOwnerKeys,
 } from '../owner-statement.mjs';
@@ -32,6 +35,30 @@ const roots = [];
 // owner-presence.mjs's attestedOwnerKeys.
 const vouched = async () => ({ attested: true, generation: 1 });
 const unvouched = async () => ({ attested: false, code: 'keyd-untrusted', reason: 'not a record keyd controls' });
+
+// keyd's presence key, signing `k1.` owner key records as keyd/src/pins.rs does.
+function keydPresenceKey() {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
+  const record = ({ digest, generation, nonce }) => {
+    const iat = Math.floor(Date.now() / 1000);
+    const segment = Buffer.from(JSON.stringify({ v: 1, aud: 'agent-bot-owner', kind: 'pins', digest, generation, nonce, iat, exp: iat + 60 })).toString('base64url');
+    return `k1.${segment}.${sign(null, Buffer.from(segment), privateKey).toString('base64url')}`;
+  };
+  return { raw, record };
+}
+
+// The real attestedOwnerKeys, against a keyd that recorded `approved()` at
+// `generation()`. Each answer is pushed to `seen`.
+function keydVouching({ approved, generation = () => 1, floor = createPinsGenerationFloor(), seen = [] }) {
+  const key = keydPresenceKey();
+  return async (pins, options) => {
+    const result = await attestedOwnerKeys(pins, { ...options, floor, pinned: () => key.raw,
+      request: async (socket, method, params) => ({ attestation: key.record({ digest: pinSetDigest(approved()), generation: generation(), nonce: params.nonce }) }) });
+    seen.push(result);
+    return result;
+  };
+}
 
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
@@ -228,6 +255,49 @@ test('the ledger asks keyd about the pins it read, on each request, and keeps th
   assert.equal(await ledger.hook({ request: 'p2' })(action, { summary: 'x' }), null);
   const failing = createChallengeLedger({ env, attest: async () => { throw new Error('keyd crashed'); } });
   assert.equal(await failing.hook({ request: 'p3' })(action, { summary: 'x' }), null);
+});
+
+// keys.json is swapped between the ledger's read and keyd's answer: the
+// ledger read a forged set, and the file holds the owner's approved set by
+// the time keyd is asked. keyd is asked about the set that was read, so it
+// never vouches for the forged one.
+test('a pin file swapped between the ledger read and keyd is never vouched for: the dialog asks', async () => {
+  const { root, env } = scratch();
+  const owner = ownerKey(root, env);
+  const forged = ownerKey(root, env, 'forged');
+  const seen = [];
+  const keyd = keydVouching({ approved: () => [owner.pin], seen });
+  const swapping = async (pins, options) => { writeOwnerKeys([owner.pin], { env }); return keyd(pins, options); };
+  const ledger = createChallengeLedger({ env, attest: swapping });
+  const action = 'approve x';
+  writeOwnerKeys([forged.pin], { env });
+  assert.equal(await ledger.hook({ request: 'p1' })(action, { summary: action }), null);
+  const [challenge] = createOwnerChallenges(action, action, [forged.pin]);
+  writeOwnerKeys([forged.pin], { env });
+  assert.equal(await ledger.hook({ request: 'p1', statement: signed(challenge.payload, forged) })(action, { summary: action }), null);
+  assert.deepEqual(seen.map((result) => result.code), ['pins-mismatch', 'pins-mismatch']);
+  assert.equal(ledger.size, 0);
+  // The same keyd vouches for the owner's set when that is what was read.
+  writeOwnerKeys([owner.pin], { env });
+  await challengesFrom(createChallengeLedger({ env, attest: keyd }).hook({ request: 'p2' }), action);
+});
+
+test('a keyd record older than one seen is pins-stale through the ledger: the dialog asks and the reply is spent', async () => {
+  const { root, env } = scratch();
+  const owner = ownerKey(root, env);
+  writeOwnerKeys([owner.pin], { env });
+  let generation = 5;
+  const seen = [];
+  const ledger = createChallengeLedger({ env, attest: keydVouching({ approved: () => [owner.pin], generation: () => generation, seen }) });
+  const action = 'approve x';
+  const [challenge] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
+  generation = 3;
+  assert.equal(await ledger.hook({ request: 'p1', statement: signed(challenge.payload, owner) })(action, { summary: action }), null);
+  assert.equal(ledger.size, 0);
+  assert.equal(await ledger.hook({ request: 'p2' })(action, { summary: action }), null);
+  assert.deepEqual(seen.map((result) => (result.attested ? result.generation : result.code)), [5, 'pins-stale', 'pins-stale']);
+  generation = 5;
+  await challengesFrom(ledger.hook({ request: 'p3' }), action);
 });
 
 test('the ledger holds a bounded number of pending decisions', async () => {
@@ -484,3 +554,77 @@ test('agent-bot approvals prints the challenges to sign and passes a signed stat
   await assert.rejects(run(['approve', 'p1', '--statement']), /usage/);
   await assert.rejects(run(['list', '--statement', token]), /usage/);
 });
+
+// createDaemonServer's own wiring, nothing injected: no ownerGate, no
+// ledger, no attester. It runs in a child process under no-exec.mjs, so
+// codesign, `agent-bot-keyd presence-key` and the administrator dialog are
+// stubs and nothing can prompt; keyd is a fake owner.sock here. With keyd's
+// record of exactly the pinned set the route answers with a challenge, so
+// the default always asks keyd; with any other record it never does, and
+// the dialog (refused here) decides.
+const HELPERS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'helpers');
+for (const [label, vouches] of [['vouches for the pins', true], ['recorded another key set', false]]) {
+  test(`the default daemon asks keyd on every decision: keyd ${label}`, async () => {
+    // A short HOME: the owner socket path must fit a Unix socket's limit.
+    const home = mkdtempSync(path.join('/tmp', 'ocd-'));
+    roots.push(home);
+    const env = {
+      PATH: process.env.PATH, HOME: home, AGENT_BOT_KEYD_TEAM_ID: 'ABCDE12345', TEST_AGENT_ID: AGENT_ID,
+      AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction'),
+      AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json'),
+      AGENT_BOT_PRINCIPALS_PATH: path.join(home, 'principals.json'),
+      NO_EXEC_LOG: path.join(home, 'exec.jsonl'),
+    };
+    upsertSoul({
+      id: AGENT_ID, appSlug: 'you-codex-agent', parentId: null, status: 'active',
+      spacePath: `/spaces/${AGENT_ID}`, transcriptLocator: null, lastSeen: '2026-08-12T08:00:00.000Z',
+    }, { file: env.AGENT_BOT_POPULATION_PATH });
+    const owner = ownerKey(home, env);
+    writeOwnerKeys([owner.pin], { env });
+    const keyd = keydPresenceKey();
+    env.NO_EXEC_PRESENCE_KEY = keyd.raw;
+    const keydDir = path.join(home, '.local', 'state', 'agent-bot', 'keyd');
+    mkdirSync(keydDir, { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(keydDir, 'keyd.json'), JSON.stringify({ bin: path.join(home, 'agent-bot-keyd') }));
+    const approved = vouches ? [owner.pin] : [ownerKey(home, env, 'other').pin];
+    const methods = [];
+    const socket = net.createServer((connection) => {
+      connection.on('data', (chunk) => {
+        const message = JSON.parse(String(chunk).trim());
+        methods.push(message.method);
+        const reply = message.method === 'owner/pins-status'
+          ? { result: { attestation: keyd.record({ digest: pinSetDigest(approved), generation: 1, nonce: message.params.nonce }) } }
+          : { error: { code: -32001, message: 'nobody can be asked here' } };
+        connection.end(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, ...reply })}\n`);
+      });
+    });
+    await new Promise((resolve) => { socket.listen(path.join(keydDir, 'owner.sock'), resolve); });
+    try {
+      const child = spawn(process.execPath, ['--import', path.join(HELPERS, 'no-exec.mjs'), path.join(HELPERS, 'default-daemon-decision.mjs')],
+        { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (chunk) => { out += chunk; });
+      child.stderr.on('data', (chunk) => { err += chunk; });
+      const status = await new Promise((resolve) => { child.on('close', resolve); });
+      assert.equal(status, 0, err);
+      const result = JSON.parse(out.trim().split('\n').at(-1));
+      assert.deepEqual(methods, ['owner/presence', 'owner/pins-status']);
+      const execs = readFileSync(env.NO_EXEC_LOG, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.ok(execs.some(({ args }) => args[0] === 'presence-key'), 'the presence key came from the (stubbed) binary');
+      const dialogs = execs.filter(({ file }) => file === '/usr/bin/osascript').length;
+      if (vouches) {
+        assert.deepEqual([result.status, result.code, result.challenges], [409, 'owner-challenge-required', 1]);
+        assert.equal(dialogs, 0);
+      } else {
+        assert.equal(result.status, 403);
+        assert.match(result.error, /the owner did not confirm this decision/);
+        assert.equal(dialogs, process.platform === 'darwin' ? 1 : 0, 'the dialog decides, and nobody answers it here');
+      }
+      const audit = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8');
+      assert.equal(audit.includes('"owner-challenged"'), vouches);
+    } finally {
+      await new Promise((resolve) => { socket.close(resolve); });
+    }
+  });
+}
