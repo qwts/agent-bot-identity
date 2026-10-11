@@ -1,6 +1,10 @@
-// Windows account custody for identity-owned private state. This mirrors
-// agent-comms' SID/profile boundary: ownership is read through Get-Acl, and
-// paths must be real files or directories rather than reparse points.
+// Windows account custody: which account owns a file or directory, and
+// creating empty private ones. Shared (#645, owner decision on F11) so
+// identity's vouch key and the comms Windows transport use one boundary check.
+// It reads ownership and attributes only, never a file's contents. This
+// mirrors agent-comms' SID/profile boundary: ownership is read through
+// Get-Acl, and paths must be real files or directories rather than reparse
+// points.
 import { spawnSync } from 'node:child_process';
 
 const POWERSHELL_ARGS = ['-NoProfile', '-NonInteractive', '-Command', '-'];

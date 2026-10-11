@@ -88,6 +88,9 @@ sanctioned contracts remain importable, and none of them is an internal:
 ADR-0645
 counted 147 edges from 72 files into 24 identity files at `0aae907`.
 
+These counts, the tables in §1 and the appendix are the baseline measured at
+`bea2fcf`. Progress against them is tracked in §9.
+
 The full caller list is in the appendix.
 
 ## 1. Modules
@@ -132,7 +135,7 @@ and the F numbers point to the follow-ups in §7.
 | `secret-providers/pass-cli-credentials.mjs` | pass-cli credential store | internal | 1 (host) | F7 |
 | `uninstalled-identity-hook.mjs` | Fallback hook when agent-bot is not installed | internal | 1 (cli) | F13 |
 | `git-publish-scan.mjs` | Which repositories a shell command publishes to | internal | 1 (host) | F9 |
-| `windows-account-custody.mjs` | Windows SID and ACL custody | internal | 1 (comms) | F11 |
+| `windows-account-custody.mjs` | Windows SID and ACL custody | internal | 1 (comms) | F11; moved to `shared` (#925) |
 
 GeniusBar's compatibility check loads agent-bot modules by path, from the
 agent-bot tree it pins. `scripts/compat-driver.mjs:71` imports
@@ -421,6 +424,10 @@ how each one is done, and §9 puts them in order.
 
   The key load should read the public key only, through `daemon vouch-key`
   or a public-key export.
+
+  **Resolved.** comms now gets the vouch public key from the daemon (#920),
+  and the owner placed the Windows custody helpers in `shared` (#925). Both
+  crossings are gone.
 - **F12. Record identity's subtree of the soul layout (D7).** Credential
   files stay under `<soul>/.soul-state/credentials`
   (`soul-credentials.mjs:128`). The layout contract (`soul-env-contract.mjs`)
@@ -480,7 +487,7 @@ mechanical moves; steps 6 to 10 change how a module reaches identity.
 5. **F5 (D3):** make `daemon-client.mjs` the shared daemon contract.
 6. **F12 (D7):** record identity's subtree in `soul-env-contract.mjs`.
 7. **F11:** comms reads the vouch public key only; decide where the Windows
-   custody helpers live.
+   custody helpers live. *Done: #920; custody moved to `shared` in #925.*
 8. **F6, F7 and F8 (D4):** define the identity entry files and daemon routes
    for record operations, credential custody and the owner prompt, then
    move soul's and cli's callers onto them.
@@ -493,6 +500,12 @@ After step 11, nothing outside identity imports identity internals. What
 remains is the three sanctioned contracts: the shared format file, the shared
 daemon contract and host's one identity entry. The
 reviewed contract (ADR-0645 step 7) and the extraction plan (step 8) follow.
+
+**Progress.** Measured with the same scanner after #925, edges into
+identity files other than the sanctioned contracts fell from 192 to 156,
+from 81 files into 29 files: soul 74, host 42, cli 35, comms 5. Identity owns
+43 of 201 runtime files. `windows-account-custody.mjs` is no longer an
+identity file, so its rows in §1 and the appendix record the baseline only.
 
 ## Appendix: every import of an identity file from outside identity
 
@@ -595,5 +608,5 @@ There are 193 import statements, which make the 192 file edges.
   - soul: `confinement.mjs:16`
   - host: `agent-daemon.mjs:90`, `keyd-supervisor.mjs:17`
   - comms: `comms-client.mjs:46`
-- **`windows-account-custody.mjs`** (1):
+- **`windows-account-custody.mjs`** (1; now `shared`, #925):
   - comms: `comms-windows.mjs:8`
