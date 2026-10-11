@@ -106,12 +106,21 @@ async function setup() {
   const owner = ownerKey(root);
   writeOwnerKeys([owner.pin], { env });
   const clock = { at: Date.now() };
-  const challengeLedger = createChallengeLedger({ attest: vouched, env, now: () => clock.at });
-  const ownerGate = decisionOwnerGate({
+  // Every call into the owner gate, keyd presence and keyd's pin record is
+  // counted: a refused inbox reply must never reach the gate or presence.
+  const counts = { gate: 0, presence: 0, attest: 0 };
+  const keyd = { vouching: true };
+  const attest = async (...args) => {
+    counts.attest += 1;
+    return keyd.vouching ? vouched(...args) : { attested: false, code: 'keyd-untrusted', reason: 'not a record keyd controls' };
+  };
+  const challengeLedger = createChallengeLedger({ attest, env, now: () => clock.at });
+  const gate = decisionOwnerGate({
     env, challenges: challengeLedger,
-    presence: async () => { throw Object.assign(new Error('keyd is not running'), { code: 'presence-unavailable' }); },
+    presence: async () => { counts.presence += 1; throw Object.assign(new Error('keyd is not running'), { code: 'presence-unavailable' }); },
     fallbackConsent: async () => { throw new Error('the dialog was reached'); },
   });
+  const ownerGate = (...args) => { counts.gate += 1; return gate(...args); };
   const relay = mailbox();
   const server = createDaemonServer({ env, home: '/nonexistent', config: {}, challengeLedger, ownerGate, asideRelay: relay });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
@@ -186,7 +195,7 @@ async function setup() {
     try { lines = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)); } catch {}
     return lines.filter((receipt) => receipt.event === 'approval-decision' && receipt.decision === 'owner-refused' && /^inbox reply/.test(receipt.detail ?? ''));
   };
-  return { owner, clock, relay, call, deliver, answer, open, until, challenged, prompts, outcomes, wake, close, refusals, server };
+  return { owner, clock, relay, call, deliver, answer, open, until, challenged, prompts, outcomes, wake, close, refusals, server, counts, keyd };
 }
 
 test('the owner\'s signed reply in the inbox finishes the decision the turn waits on', async () => {
@@ -340,6 +349,94 @@ test('a denial challenged from the route is finished as a denial', async () => {
     await t.wake.idle();
     assert.deepEqual(t.outcomes, [{ decision: 'deny' }]);
     assert.equal(await t.answer(answered), 'The owner\'s signed reply denied the request.');
+  } finally {
+    await t.close();
+  }
+});
+
+// Delivers `body` to `soul`'s inbox and returns the daemon's answer, having
+// checked that the reply reached neither the owner gate nor keyd presence.
+async function refusedWithoutAsking(t, body, soul = AGENT_ID) {
+  const before = { ...t.counts };
+  const answered = await t.answer(await t.deliver(body, soul));
+  assert.equal(t.counts.gate - before.gate, 0, `the gate was called for: ${answered}`);
+  assert.equal(t.counts.presence - before.presence, 0, `presence was asked for: ${answered}`);
+  return answered;
+}
+
+test('no refused inbox reply reaches the owner gate or keyd presence', async () => {
+  const t = await setup();
+  try {
+    const { row, payload } = await t.challenged();
+    // Malformed: two blocks; a wrong nonce; an unsigned block; another
+    // action; another scope; the true reply in another soul's inbox.
+    const junk = armorStatement(`s1.${encodePayload(payload)}.${Buffer.from('not a signature').toString('base64url')}`);
+    assert.match(await refusedWithoutAsking(t, `${junk}${junk}`), /^That is not one signed owner statement block/);
+    assert.match(await refusedWithoutAsking(t, reply({ ...payload, nonce: 'A'.repeat(22) }, t.owner)), /^No owner challenge is pending/);
+    assert.match(await refusedWithoutAsking(t, junk), /^That signed reply does not answer/);
+    assert.match(await refusedWithoutAsking(t, forged({ ...payload, action: 'b'.repeat(64) }, t.owner)), /^That signed reply does not answer/);
+    assert.match(await refusedWithoutAsking(t, forged({ ...payload, scope: { host: 'another-host' } }, t.owner)), /^That signed reply does not answer/);
+    const token = reply(payload, t.owner);
+    assert.match(await refusedWithoutAsking(t, token, OTHER_SOUL), /^No owner challenge is pending/);
+    assert.equal(t.refusals().length, 6);
+    assert.equal(t.open().length, 1);
+    // The true reply goes through the gate once and decides.
+    const gateBefore = t.counts.gate;
+    const answered = await t.deliver(token);
+    await t.wake.idle();
+    assert.equal(await t.answer(answered), 'The owner\'s signed reply approved the request.');
+    assert.equal(t.counts.gate - gateBefore, 1);
+    // A replay of it, a reply to a challenge spent on the route, and one
+    // that arrives after its challenge expired ask nobody either.
+    assert.match(await refusedWithoutAsking(t, token), /^No owner challenge is pending/);
+    const second = await t.challenged();
+    const spent = await t.call('/v0/approvals/decide', {
+      proposalId: second.row.proposalId, decision: 'approve', digest: second.row.operationDigest, statement: junk,
+    });
+    assert.equal(spent.status, 403);
+    assert.match(await refusedWithoutAsking(t, reply(second.payload, t.owner)), /^No owner challenge is pending/);
+    t.server.interaction.decideProposalAsOwner({ proposalId: second.row.proposalId, decision: 'deny', digest: second.row.operationDigest });
+    await t.wake.idle();
+    const third = await t.challenged();
+    const late = reply(third.payload, t.owner);
+    t.clock.at = (third.payload.exp + 1) * 1000;
+    assert.match(await refusedWithoutAsking(t, late), /^No owner challenge is pending/);
+    assert.notEqual(row.proposalId, third.row.proposalId);
+  } finally {
+    await t.close();
+  }
+});
+
+test('a reply while keyd does not vouch for the pins is refused and leaves the challenge pending', async () => {
+  const t = await setup();
+  try {
+    const { payload } = await t.challenged();
+    t.keyd.vouching = false;
+    const attestBefore = t.counts.attest;
+    assert.match(await refusedWithoutAsking(t, reply(payload, t.owner)), /^That signed reply does not answer/);
+    assert.ok(t.counts.attest > attestBefore, 'keyd was asked about the pins');
+    t.keyd.vouching = true;
+    await stillPending(t, payload, 'inbox reply does not verify against its pending owner challenge');
+  } finally {
+    await t.close();
+  }
+});
+
+test('of two racing copies of a valid reply, exactly one decides', async () => {
+  const t = await setup();
+  try {
+    const { payload } = await t.challenged();
+    const token = reply(payload, t.owner);
+    const soul = { agentId: AGENT_ID, binding };
+    const copies = ['r1', 'r2'].map((id) => ({ id, from: { principal: OWNER }, body: token, correlation: 'thread-1' }));
+    await Promise.all(copies.map((message) => t.server.ownerReply(soul, message)));
+    await t.wake.idle();
+    assert.deepEqual(t.outcomes, [{ decision: 'approve' }]);
+    const answers = copies.map(({ id }) => t.relay.sent.filter((message) => message.replyTo === id).map((message) => message.body));
+    assert.deepEqual(answers.map((bodies) => bodies.length), [1, 1]);
+    const approved = answers.flat().filter((body) => body === 'The owner\'s signed reply approved the request.');
+    assert.equal(approved.length, 1);
+    assert.equal(t.open().length, 0);
   } finally {
     await t.close();
   }
