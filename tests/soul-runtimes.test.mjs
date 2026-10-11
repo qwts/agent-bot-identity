@@ -421,10 +421,29 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   assert.deepEqual([moved.version, moved.status, moved.pin], ['24.99.0', 'installed', null]);
   await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl });
   assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')).runtimes.node, { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) });
-  // Moving a version between the catalog and the package's own sources replaces its entry.
+  // The entry's provenance follows the install receipt. The same bytes in the package's own sources keep
+  // the catalog install and its release; other bytes reinstall from the package and record null.
+  const stampOf = (version) => JSON.parse(readFileSync(path.join(f.runtimes, 'node', version, INSTALL_STAMP), 'utf8'));
   f.writeManifest((m) => { m.runtimes = { node: { version: '24.99.0', sources: { [PLATFORM]: { url: next.sources[PLATFORM].url, sha256: sha(NODE_ARCHIVE) } } } }; });
   await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn, runImpl: d.runImpl });
-  assert.deepEqual(readRuntimePins(f.dir).pins.runtimes.node, { version: '24.99.0', catalogRelease: null });
+  assert.deepEqual(readRuntimePins(f.dir).pins.runtimes.node, { version: '24.99.0', catalogRelease: stampOf('24.99.0').catalogRelease });
+  assert.match(stampOf('24.99.0').catalogRelease, SHA256_HEX);
+  const ownBytes = archive({ 'node-v24.99.0-darwin-arm64/bin/node': '#!/bin/sh\n', 'node-v24.99.0-darwin-arm64/OWN': 'package' });
+  f.writeManifest((m) => { m.runtimes = { node: { version: '24.99.0', sources: { [PLATFORM]: { url: 'https://example.test/own-node.tgz', sha256: sha(ownBytes) } } } }; });
+  await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives: { 'https://example.test/own-node.tgz': ownBytes } }).fetchFn, runImpl: d.runImpl });
+  assert.deepEqual([stampOf('24.99.0').catalogRelease, readRuntimePins(f.dir).pins.runtimes.node], [null, { version: '24.99.0', catalogRelease: null }]);
+  // Back to the catalog: its bytes differ, so it reinstalls and the release is recorded again.
+  f.writeManifest((m) => { m.runtimes = { node: '24.99.0' }; });
+  await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn, runImpl: d.runImpl });
+  assert.deepEqual(readRuntimePins(f.dir).pins.runtimes.node, { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) });
+  // Two installers racing on a soul with no pins: the one that records second sees the first's pin under the lock and keeps it.
+  rmSync(pinsPath);
+  f.writeManifest((m) => { m.runtimes = { node: '24' }; });
+  rmSync(path.join(f.runtimes, 'node', NODE.version), { recursive: true });
+  const newer = { schemaVersion: 1, runtimes: { node: { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) } }, harnesses: {} };
+  const racing = async (...args) => { writeFileSync(pinsPath, JSON.stringify(newer)); return d.runImpl(...args); };
+  await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: racing });
+  assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')), newer, 'the older catalog\'s install did not overwrite the recorded pin');
   f.writeManifest((m) => { m.runtimes = { node: '24.99.0' }; });
   // A failed install still records what did install before it.
   rmSync(pinsPath);
@@ -447,7 +466,8 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   rmSync(f.runtimes, { recursive: true });
   const corrupting = async (...args) => { writeFileSync(pinsPath, 'not json'); return d.runImpl(...args); };
   const lost = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: corrupting }).then(() => null, (e) => e);
-  assert.match(lost?.message ?? '', /\.soul-state\/runtime-pins\.json is not a small regular JSON file/);
+  assert.match(lost?.message ?? '', /the install's versions were not recorded in \.soul-state\/runtime-pins\.json \(\.soul-state\/runtime-pins\.json is not a small regular JSON file/);
+  assert.deepEqual([lost.code, lost.runtime, lost.action], ['runtime-install-failed', '.soul-state/runtime-pins.json', 'fix or delete .soul-state/runtime-pins.json, then agent-bot soul runtimes install Billy.soul']);
   assert.deepEqual(readdirSync(path.join(f.dir, '.soul-state')).filter((name) => name.startsWith('runtime-pins')), ['runtime-pins.json'], 'no staging remains');
   // A corrupt file is reported and blocks every install, --runtime included, and is left as it is.
   for (const contents of ['{"schemaVersion":2,"runtimes":{},"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24; rm -rf /","catalogRelease":null}},"harnesses":{}}', 'not json',

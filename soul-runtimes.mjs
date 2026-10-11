@@ -333,9 +333,11 @@ export function readRuntimePins(soulDir) {
 // upgrade moves a soul to a newer pin. A missing entry, or one for a version
 // or source no longer installed because the declaration changed, records the
 // current install.
-function recordRuntimePins(soulDir, state, release) {
+function recordRuntimePins(soulDir, inspect, release) {
   const file = pinsFile(soulDir);
   withLock(`${file}.lock`, 'runtime pins', () => {
+    // Inspected under the lock, so a concurrent install's pin is seen and kept, never overwritten.
+    const state = inspect();
     const current = readRuntimePins(soulDir);
     // Malformed since the install began: say the versions were not recorded rather than drop them.
     if (current.problem) throw new Error(current.problem);
@@ -347,7 +349,15 @@ function recordRuntimePins(soulDir, state, release) {
       next[area][row.name] = { version: row.version, catalogRelease };
       changed = true;
     };
-    for (const row of state.runtimes) keep('runtimes', row, row.source === 'catalog' ? release : null);
+    // Provenance follows the install receipt, so the pin and the stamp agree even
+    // when a revision moves a version between the catalog and the same bytes in
+    // its own sources; a stamp from before #617 has none and takes the source's.
+    const provenance = (row) => {
+      const stamp = row.path ? readStamp(row.path) : null;
+      if (stamp && Object.hasOwn(stamp, 'catalogRelease')) return stamp.catalogRelease;
+      return row.source === 'catalog' ? release : null;
+    };
+    for (const row of state.runtimes) keep('runtimes', row, provenance(row));
     for (const row of state.harnesses) keep('harnesses', row, null);
     if (!changed) return;
     const staged = `${file}.${randomUUID()}.tmp`;
@@ -935,7 +945,13 @@ export async function installSoulRuntimes(soulDir, options = {}) {
   const { env = process.env, home = env.HOME ?? homedir(), platform = hostPlatform(), catalog, registry = ACP_SPAWN_REGISTRY } = options;
   const inspect = () => inspectSoulRuntimes(soulDir, { platform, catalog, env, home, registry });
   const pinInstalled = () => {
-    if (existsSync(path.join(soulDir, STATE))) recordRuntimePins(soulDir, inspect(), catalogReleaseHash({ catalog }));
+    if (!existsSync(path.join(soulDir, STATE))) return;
+    try { recordRuntimePins(soulDir, inspect, catalogReleaseHash({ catalog })); }
+    catch (error) {
+      const malformed = readRuntimePins(soulDir).problem;
+      fail('runtime-install-failed', `${options.agentId ?? path.basename(soulDir)}: the install's versions were not recorded in ${STATE}/${RUNTIME_PINS_FILE} (${error.message})`,
+        { runtime: `${STATE}/${RUNTIME_PINS_FILE}`, action: malformed ? `fix or delete ${STATE}/${RUNTIME_PINS_FILE}, then ${installCommand(options.agentId ?? path.basename(soulDir))}` : installCommand(options.agentId ?? path.basename(soulDir)) });
+    }
   };
   let result;
   try { result = await installDeclared(soulDir, options); }

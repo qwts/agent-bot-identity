@@ -94,10 +94,14 @@ pin on its own (#617, owner decision "the new pins file"):
 
 - Install writes it, under a lock and as one atomic replace (mode 0600), after
   every `soul runtimes install` and launch provisioning, a failed one included,
-  for what is installed then. `catalogRelease` is the catalog release the
-  version came from; it is null for a package's own `sources` and for harness
-  installs, whose version `soul.json` already names exactly. uv is recorded
-  when python or a uv tool needs it.
+  for what is installed then, inspected under that lock so a concurrent
+  installer's pin is seen and kept. `catalogRelease` follows the install's
+  receipt: the catalog release its bytes came from, null for a package's own
+  `sources` (the same bytes moved into `sources` keep the catalog install and
+  its release). Harness installs record null; `soul.json` already names their
+  exact version. uv is recorded when python or a uv tool needs it. A failure
+  to record is `runtime-install-failed` naming the pins file, with the action
+  to retry the install (after fixing or deleting a malformed file).
 - An entry that still matches what is installed (its version, and whether it
   came from the catalog) is never changed, even when the catalog release moved.
   An entry is added when none exists, and replaced when the declaration no
