@@ -204,12 +204,13 @@ test('only the recorded session in the soul store is read; anything else is unsu
     const captured = coverage(session);
     assert.deepEqual([captured.schemaVersion, captured.coverage.conversations, captured.conversation], [2, 'unsupported', null]);
   }
-  // A recorded session that is missing, ambiguous or reached through a link is unavailable.
+  // A recorded session that is missing or reached through a link is unavailable.
   assert.equal(coverage({ ...f.session, sessionId: '0199a1b2-c3d4-7e5f-8a9b-000000000000' }).coverage.conversations, 'unavailable');
-  const other = path.join(f.day, `rollout-2026-10-10T11-00-00-${THREAD}.jsonl`);
-  writeFileSync(other, '{}\n');
-  assert.equal(coverage(f.session).coverage.conversations, 'unavailable');
-  rmSync(other);
+  // A thread with several rollout files is read from its newest one.
+  const later = path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions', '2026', '10', '11', `rollout-2026-10-11T09-00-00-${THREAD}.jsonl`);
+  mkdirSync(path.dirname(later), { recursive: true }); writeFileSync(later, '{"newest":true}\n');
+  assert.equal(coverage(f.session).conversation.excerpt, '{"newest":true}\n');
+  rmSync(path.dirname(later), { recursive: true });
   const outside = mkdtempSync(path.join(tmpdir(), 'dream-outside-'));
   t.after(() => rmSync(outside, { recursive: true, force: true }));
   writeFileSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), '{"secret":true}\n');
@@ -236,4 +237,32 @@ test('a long session delivers its newest whole lines within the bound', t => {
   assert.equal(conversation.size, Buffer.byteLength(lines.join('')));
   assert.ok(conversation.excerpt.endsWith(lines.at(-1)) && lines.includes(conversation.excerpt.split('\n')[0] + '\n'), 'whole lines, newest last');
   assert.equal(dreamInputMetadata({ ...captureDreamInputs(f.root, { session: f.session }) }).conversation.truncated, true);
+});
+
+test('a growing session store never makes the recorded session unavailable, whichever day it started', t => {
+  const f = conversationFixture(t);
+  const sessions = path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions');
+  // More than DREAM_CONVERSATION_LIMITS.entries entries across the store: 60 days of 80 other sessions.
+  let entries = 0;
+  for (let day = 1; day <= 60; day++) {
+    const dir = path.join(sessions, '2026', String(7 + Math.floor((day - 1) / 30)).padStart(2, '0'), String((day - 1) % 30 + 1).padStart(2, '0'));
+    mkdirSync(dir, { recursive: true });
+    for (let index = 0; index < 80; index++) {
+      writeFileSync(path.join(dir, `rollout-2026-x-${String(index).padStart(8, '0')}-0000-4000-8000-${String(day).padStart(12, '0')}.jsonl`), '{}\n');
+    }
+    entries += 81;
+  }
+  assert.ok(entries > DREAM_CONVERSATION_LIMITS.entries);
+  // The newest session is found first; the oldest is still found past every newer day.
+  f.write('{"newest":true}\n');
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).conversation.excerpt, '{"newest":true}\n');
+  rmSync(f.file);
+  const oldest = path.join(sessions, '2026', '01', '01', `rollout-2026-01-01T00-00-00-${THREAD}.jsonl`);
+  mkdirSync(path.dirname(oldest), { recursive: true }); writeFileSync(oldest, '{"oldest":true}\n');
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).conversation.excerpt, '{"oldest":true}\n');
+  // Only one directory listing past the bound is unavailable, and says so rather than guessing.
+  const crowded = path.join(sessions, '2026', '01', '02');
+  mkdirSync(crowded, { recursive: true });
+  for (let index = 0; index <= DREAM_CONVERSATION_LIMITS.entries; index++) writeFileSync(path.join(crowded, `f${index}`), '');
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).coverage.conversations, 'unavailable');
 });

@@ -1,7 +1,7 @@
 // Read-only maintenance input capture. The host supplies the registered,
 // canonical soul directory; no model-provided locator chooses another root.
 import { createHash } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, opendirSync, openSync, readSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { computePackageRevisionFromEntries, readSoulPackageEntries } from './soul-package.mjs';
 import { kindOf } from './soul-profile.mjs';
@@ -87,7 +87,8 @@ export function dreamInputMetadata(inputs) {
 // host's store, other souls' sessions and `.soul-state/runs` are never read,
 // and the current routing is not consulted: the recorded origin decides.
 // Codex keeps `sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl` under its
-// CODEX_HOME, which a routed soul's tool home is.
+// CODEX_HOME, which a routed soul's tool home is. When a thread has more than
+// one rollout file, the newest one is read.
 const CONVERSATION_READERS = Object.freeze({
   codex: Object.freeze({ dir: 'sessions', depth: 3, matches: (name, sessionId) => name.startsWith('rollout-') && name.endsWith(`-${sessionId}.jsonl`) }),
 });
@@ -105,20 +106,34 @@ export function captureDreamConversation(soulDir, session) {
   try {
     const home = realpathSync(toolHomePath(soulDir, session.harness));
     if (home !== path.join(realpathSync(soulDir), path.relative(soulDir, toolHomePath(soulDir, session.harness)))) return unavailable;
-    // A bounded walk that never follows a link: directories to `depth`, then files.
-    const found = [];
-    let visited = 0;
-    const walk = (directory, depth) => {
-      for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        if (++visited > DREAM_CONVERSATION_LIMITS.entries) throw new Error('limit');
-        const file = path.join(directory, entry.name);
-        if (depth < reader.depth) { if (entry.isDirectory()) walk(file, depth + 1); }
-        else if (entry.isFile() && reader.matches(entry.name, session.sessionId)) found.push(file);
-      }
+    // Newest first, never following a link: Codex names day directories and
+    // rollout files by start time, so descending name order reaches the most
+    // recent session first and the walk stops at its first match. No budget
+    // spans the whole store, so a growing history cannot make a recorded
+    // session unreadable; each directory listing is bounded instead, and
+    // only a single directory over that bound reports `unavailable`.
+    const list = directory => {
+      const dir = opendirSync(directory);
+      const names = [];
+      try {
+        for (let entry; (entry = dir.readSync()) !== null;) {
+          if (names.length === DREAM_CONVERSATION_LIMITS.entries) throw new Error('limit');
+          names.push(entry);
+        }
+      } finally { dir.closeSync(); }
+      return names.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
     };
-    walk(path.join(home, reader.dir), 0);
-    if (found.length !== 1) return unavailable;
-    const file = found[0];
+    const walk = (directory, depth) => {
+      for (const entry of list(directory)) {
+        const file = path.join(directory, entry.name);
+        if (depth < reader.depth) {
+          if (entry.isDirectory()) { const match = walk(file, depth + 1); if (match) return match; }
+        } else if (entry.isFile() && reader.matches(entry.name, session.sessionId)) return file;
+      }
+      return null;
+    };
+    const file = walk(path.join(home, reader.dir), 0);
+    if (file === null) return unavailable;
     if (!lstatSync(file).isFile() || realpathSync(file) !== file) return unavailable;
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
     const { size } = fstatSync(fd);

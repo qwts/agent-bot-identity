@@ -269,11 +269,14 @@ session is read, only when the record says it lives in the soul's tool home
 not consulted. A session in the host's store, a missing or damaged record, a
 harness without a reader, `.soul-state/runs` and other souls' sessions are never
 read and report `conversations: unsupported`. Codex is the first reader: it
-looks under `.soul-state/tools/codex/sessions/` for exactly one
-`rollout-*-<session>.jsonl`, through a bounded walk (4096 entries, depth 3) that
-follows no link. A recorded soul-store session that is missing, ambiguous,
-linked, outside the tool home, binary or not UTF-8 reports `unavailable`; it
-never fails the run.
+looks under `.soul-state/tools/codex/sessions/` for
+`rollout-*-<session>.jsonl`, newest first by the date-named directories and
+file names, follows no link, and stops at the first match, so a thread with
+several rollout files is read from its newest. No budget spans the whole store,
+so a growing history never makes a recorded session unreadable; each directory
+listing is bounded to 4096 entries instead. A recorded soul-store session that
+is missing, linked, outside the tool home, binary or not UTF-8, or behind a
+single directory over that bound, reports `unavailable`; it never fails the run.
 
 The excerpt is the newest whole lines within 64 KiB, since the file is a live,
 append-only log, and its digest is of the delivered excerpt; `size` is the file
@@ -282,7 +285,9 @@ names the harness, session, digest, size, excerpt bytes and truncation, never
 the text. The prompt presents the excerpt as untrusted context for what to
 learn, not a source to report on: outcome items still name package sources only,
 so a conversation earns no processing credit. Format 1 metadata stays valid
-exactly as recorded. Memory sources remain `unsupported`.
+exactly as recorded. Memory sources remain `unsupported`. An older daemon
+refuses a journal holding a format-2 `inputs-prepared` event, so readers must be
+upgraded before opening a journal written with format 2.
 
 Inventory entries identify the source, revision/checksum or adapter cursor, and
 why it was selected. Source content remains untrusted data. Credentials, runtime
