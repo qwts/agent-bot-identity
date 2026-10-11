@@ -1,0 +1,1 @@
+- `agent-bot bootstrap` run by GeniusBar's agent-bot no longer fails with `runtime-install-failed` when the app's "Install command-line tools" wrote `~/.local/bin/agent-bot`: the app's exact wrapper is left in place as the CLI and bootstrap carries on with the hooks; any other file there is still refused (#968).

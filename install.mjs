@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './identity-format.mjs';
@@ -129,6 +129,25 @@ export function isManagedExecutable(path, stat, entrypoint, readlink = readlinkS
   return false;
 }
 
+// The host app's "Install command-line tools" (GeniusBar#41) writes
+// ~/.local/bin/agent-bot as a small wrapper file, not a symlink, that execs
+// the shim inside the app (#968). That file is the app's: it is left in place,
+// never replaced or removed. Only the exact text the app's
+// bridge/cli-tools.mjs writes counts, and only for the app that embeds this
+// runtime, so a checkout or Homebrew install still refuses it. The marker
+// carries the app's own name, so no host app is named here (#752).
+function hostAppCliToolText(app) {
+  const name = basename(app, '.app');
+  const shim = join(app, 'Contents', 'Resources', 'bin', 'agent-bot');
+  return `#!/bin/sh\n# ${name.toLowerCase()}-cli-tool: written by ${name}. "Uninstall command-line tools" removes it.\n`
+    + `exec '${shim.replaceAll("'", `'\\''`)}' "$@"\n`;
+}
+
+export function isHostAppCliTool(path, stat, app, read = readFileSync) {
+  if (!app || !stat?.isFile?.() || stat.size >= 4096) return false;
+  return read(path, 'utf8') === hostAppCliToolText(app);
+}
+
 export function inspectExecutableLink(path, stat, { readlink = readlinkSync, statFile = statSync } = {}) {
   if (!stat?.isSymbolicLink()) return null;
   const target = readlink(path);
@@ -155,12 +174,16 @@ export function installExecutable({
   exists = existsSync,
   mkdtemp = mkdtempSync,
   rename = renameSync,
+  read = readFileSync,
+  embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const paths = installationPaths(home);
   const desired = managedEntrypoint(entrypoint, exists);
   mkdir(paths.binDir, { recursive: true });
-  ensureExecutableMode(entrypoint, { stat: statFile, chmod });
   const stat = optionalLstat(paths.executable, lstat);
+  // The embedding app's wrapper runs this runtime; it stays the CLI.
+  if (isHostAppCliTool(paths.executable, stat, embeddingApp, read)) return paths.executable;
+  ensureExecutableMode(entrypoint, { stat: statFile, chmod });
   if (stat) {
     const link = inspectExecutableLink(paths.executable, stat, { readlink, statFile });
     if (link?.dangling) {
