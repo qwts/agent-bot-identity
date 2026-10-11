@@ -106,15 +106,25 @@ and denials still follow the runner's usual verdict rules.
 ## Coverage and limits
 
 Covered file tools include Claude Write, Edit, MultiEdit and NotebookEdit,
-Codex/Cursor Write and Edit, Copilot create/edit and normalized file equivalents,
+Codex/Cursor Write and Edit, `apply_patch`, Copilot create/edit and normalized file equivalents,
 and Devin Desktop's legacy `pre_write_code` path. For dialects exposing
 `pre-tool-use`, that event performs the built-in check; their overlapping
 `pre-file-write` adapter does not duplicate the report. Legacy dialects use
 `pre-file-write`. Unsupported or missing paths cannot be evaluated; in warn
 they allow, and in explicit deny they refuse recognized file tools.
 
+`apply_patch` (Codex sends the patch as `tool_input.command`, OpenCode as
+`args.patchText`) is checked file by file. Every `*** Add File:`,
+`*** Update File:`, `*** Delete File:` and `*** Move to:` path is resolved
+against the tool call's cwd and gets the same checks as a write path, so a
+patch is allowed only when all of its files are, and a move out of territory
+counts as an outside write. Warn logs one record per outside path. A soul's
+patch that cannot be parsed, or that names no file, is refused in every mode,
+`off` included, with a reason naming the parse failure: its files cannot be
+checked against the owner-state guards either.
+
 Apart from the credential and literal owner-state path guards above, shell
-commands, shell redirections, arbitrary patch commands, MCP tools, unknown
+commands, shell redirections, `patch` or `git apply` run from a shell, MCP tools, unknown
 tool names and reads are not covered. Shell write reporting is a follow-up;
 this change does not parse arbitrary commands. A script or obfuscated command
 can bypass the hook, and filesystem races remain possible. These cooperative

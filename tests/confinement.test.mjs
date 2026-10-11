@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { allowedRoots, checkWrite, confinementCheck, confinementCommand, confinementMode, confinementReport, setConfinementMode } from '../confinement.mjs';
+import { allowedRoots, applyPatchTargets, checkWrite, confinementCheck, confinementCommand, confinementMode, confinementReport, setConfinementMode } from '../confinement.mjs';
 import { registerSoulDir, showSoul, upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
@@ -382,4 +382,105 @@ test('invalid skill root keeps normal confinement and still protects default met
   await setConfinementMode(id, 'deny', { ...f.opts, gate: owner });
   assert.equal(confinementCheck(f.envelope(file), f.opts).decision, 'allow');
   assert.equal(confinementCheck(f.envelope(path.join(f.home, 'outside.md')), f.opts).decision, 'deny');
+});
+
+const patchOf = (...body) => ['*** Begin Patch', ...body, '*** End Patch', ''].join('\n');
+const patchEnvelope = (home, text, harness = 'codex') => normalizeEnvelope({ dialectKey: harness, event: 'pre-tool-use', payload: { cwd: home, tool_name: 'apply_patch', tool_input: { command: text } } });
+test('apply_patch targets come from every header kind, including the move destination', () => {
+  assert.deepEqual(applyPatchTargets(patchOf('*** Add File: a.txt', '+hello')), ['a.txt']);
+  assert.deepEqual(applyPatchTargets(patchOf('*** Delete File: b.txt')), ['b.txt']);
+  assert.deepEqual(applyPatchTargets(patchOf('*** Update File: c.txt', '@@', ' keep', '-old', '+new', '*** End of File')), ['c.txt']);
+  assert.deepEqual(applyPatchTargets(patchOf('*** Update File: d.txt', '*** Move to: e/d.txt', '@@', '-x', '+y')), ['d.txt', 'e/d.txt']);
+  assert.deepEqual(applyPatchTargets(patchOf('*** Add File: a', '+1', '*** Delete File: b', '*** Update File: a', '@@', '+2')), ['a', 'b']);
+  // Hunk content that looks like a header is content, as it is for Codex.
+  assert.deepEqual(applyPatchTargets(patchOf('*** Update File: f', '@@', ' *** Add File: /elsewhere', '+*** Delete File: /x')), ['f']);
+  assert.deepEqual(applyPatchTargets(`<<'EOF'\r\n${patchOf('*** Add File: g', '+1').replaceAll('\n', '\r\n')}EOF\r\n`), ['g']);
+  for (const malformed of [
+    undefined, '', 'rm -rf /', '*** Begin Patch\n*** Add File: a\n+x\n', '*** Add File: a\n+x\n*** End Patch',
+    patchOf(), patchOf(''), patchOf('*** Add File: '), patchOf('*** Add File: a', 'x'), patchOf('*** Delete File: a', '+x'),
+    patchOf('*** Move to: a'), patchOf('*** Add File: a', '*** Move to: b'), patchOf('*** Update File: a', '@@', '+x', '*** Move to: b'),
+    patchOf('*** Update File: a', '*** Move to: b', '*** Move to: c'), patchOf('*** Rename File: a'), patchOf('*** Update File: a', '*** End Patch', '*** Add File: b'),
+  ]) assert.throws(() => applyPatchTargets(malformed), /apply_patch/, JSON.stringify(malformed));
+});
+test('Codex apply_patch is confined like write and edit, path by path', async (t) => {
+  const { home, soul, opts, log } = fixture(t);
+  await setConfinementMode(id, 'deny', { ...opts, gate: owner });
+  const check = (text, cwd = home) => confinementCheck({ ...patchEnvelope(home, text), cwd }, opts);
+  const outside = path.join(home, 'outside.txt');
+  assert.equal(check(patchOf(`*** Add File: ${outside}`, '+x')).decision, 'deny');
+  assert.equal(check(patchOf(`*** Delete File: ${outside}`)).decision, 'deny');
+  assert.equal(check(patchOf(`*** Update File: ${outside}`, '@@', '+x')).decision, 'deny');
+  assert.equal(check(patchOf(`*** Add File: ${path.join(soul, 'new.txt')}`, '+x')).decision, 'allow');
+  // Relative paths resolve against the tool call's cwd.
+  assert.equal(check(patchOf('*** Add File: new.txt', '+x', '*** Update File: notes/a.md', '@@', '+y'), soul).decision, 'allow');
+  // One outside file in a multi-file patch refuses the whole patch.
+  const mixed = check(patchOf(`*** Add File: ${path.join(soul, 'ok.txt')}`, '+x', `*** Add File: ${outside}`, '+y'));
+  assert.equal(mixed.decision, 'deny'); assert.match(mixed.reason, /outside\.txt/);
+  // A move out of territory is a write outside it, though the source is inside.
+  assert.equal(check(patchOf('*** Update File: a.txt', `*** Move to: ${outside}`, '@@', '+x'), soul).decision, 'deny');
+  assert.equal(check(patchOf('*** Update File: a.txt', '*** Move to: b/a.txt', '@@', '+x'), soul).decision, 'allow');
+  // Traversal and a link planted inside the soul both resolve to the real target.
+  assert.equal(check(patchOf('*** Add File: ../../outside.txt', '+x'), soul).decision, 'deny');
+  assert.equal(check(patchOf(`*** Add File: ${soul}/../test.soulother/x`, '+x')).decision, 'deny');
+  mkdirSync(path.join(home, 'elsewhere'));
+  symlinkSync(path.join(home, 'elsewhere'), path.join(soul, 'link'));
+  assert.equal(check(patchOf('*** Add File: link/x.txt', '+x'), soul).decision, 'deny');
+  for (const [text, why] of [['not a patch', /does not start with/], [patchOf(), /empty apply_patch/], [patchOf('*** Add File: a', 'no plus'), /neither file content nor a file header/]]) {
+    const denied = check(text, soul);
+    assert.equal(denied.decision, 'deny', text); assert.match(denied.reason, why); assert.match(denied.reason, /cannot be checked/);
+  }
+  assert.equal(existsSync(log), false);
+});
+test('apply_patch in warn logs each outside path', (t) => {
+  const { home, soul, opts, log } = fixture(t);
+  const text = patchOf(`*** Add File: ${path.join(home, 'a')}`, '+x', `*** Update File: ${path.join(soul, 'in')}`, `*** Move to: ${path.join(home, 'b')}`, `*** Delete File: ${path.join(home, 'a')}`);
+  const result = confinementCheck(patchEnvelope(home, text), opts);
+  assert.equal(result.decision, 'allow');
+  const rows = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(rows.map((row) => row.path), [path.join(home, 'a'), path.join(home, 'b')]);
+  assert.ok(rows.every((row) => row.tool === 'apply_patch' && row.harness === 'codex'));
+});
+test('an unparseable or empty apply_patch is refused in every mode, but not outside a soul', async (t) => {
+  const { home, opts, log } = fixture(t);
+  const bad = ['garbage', patchOf(), patchOf('*** Update File: a', '@@', '+x', '*** Move to: b'), '*** Begin Patch\n*** Add File: a\n+x\n'];
+  for (const mode of ['warn', 'off', 'deny']) {
+    if (mode !== 'warn') await setConfinementMode(id, mode, { ...opts, gate: owner });
+    for (const text of bad) {
+      const result = confinementCheck(patchEnvelope(home, text), opts);
+      assert.equal(result.decision, 'deny', `${mode}: ${text}`); assert.match(result.reason, /apply_patch/);
+    }
+    const missing = normalizeEnvelope({ dialectKey: 'codex', event: 'pre-tool-use', payload: { cwd: home, tool_name: 'apply_patch', tool_input: {} } });
+    assert.match(confinementCheck(missing, opts).reason, /no patch text/);
+  }
+  assert.deepEqual(confinementCheck(patchEnvelope(home, 'garbage'), { ...opts, env: { ...opts.env, AGENT_BOT_ID: undefined } }), { decision: 'allow' });
+  assert.equal(existsSync(log), false);
+});
+test('apply_patch cannot reach owner state or key stores in any mode', async (t) => {
+  const { home, soul, opts } = fixture(t);
+  await setConfinementMode(id, 'off', { ...opts, gate: owner });
+  const check = (text) => confinementCheck({ ...patchEnvelope(home, text), cwd: soul }, opts);
+  assert.equal(check(patchOf('*** Add File: ok.txt', '+x')).decision, 'allow');
+  const override = check(patchOf('*** Add File: ok.txt', '+x', '*** Delete File: .soul-state/runtimes/overrides/codex.json'));
+  assert.equal(override.decision, 'deny'); assert.match(override.reason, /runtime override/);
+  const keys = check(patchOf('*** Update File: notes.md', '*** Move to: .soul-state/credentials/key', '@@', '+x'));
+  assert.equal(keys.decision, 'deny'); assert.match(keys.reason, /key store/);
+  assert.equal(check(patchOf('*** Add File: agent-binding.json', '+{}')).decision, 'allow', 'binding files follow the mode, as for write');
+});
+test('an OpenCode-shaped apply_patch (args.patchText) is read the same way', async (t) => {
+  const { home, soul, opts } = fixture(t);
+  await setConfinementMode(id, 'deny', { ...opts, gate: owner });
+  const envelope = (text) => normalizeEnvelope({ dialectKey: 'codex', event: 'pre-tool-use', payload: { cwd: soul, tool_name: 'apply_patch', args: { patchText: text } } });
+  assert.equal(confinementCheck(envelope(patchOf('*** Add File: x.txt', '+x')), opts).decision, 'allow');
+  assert.equal(confinementCheck(envelope(patchOf('*** Add File: ../../x.txt', '+x')), opts).decision, 'deny');
+  assert.equal(confinementCheck(envelope(undefined), opts).decision, 'deny');
+});
+test('apply_patch arriving on a pre-file-write-only dialect is parsed, not treated as pathless', async (t) => {
+  const { home, soul, opts } = fixture(t);
+  const legacy = (text) => normalizeEnvelope({ dialectKey: 'devin-desktop', event: 'pre-file-write', payload: { cwd: soul, tool_name: 'apply_patch', tool_input: { command: text } } });
+  await setConfinementMode(id, 'off', { ...opts, gate: owner });
+  assert.equal(confinementCheck(legacy(patchOf('*** Delete File: .soul-state/runtimes')), opts).decision, 'deny');
+  assert.match(confinementCheck(legacy('garbage'), opts).reason, /malformed apply_patch/);
+  await setConfinementMode(id, 'deny', { ...opts, gate: owner });
+  assert.equal(confinementCheck(legacy(patchOf('*** Add File: in.txt', '+x')), opts).decision, 'allow');
+  assert.equal(confinementCheck(legacy(patchOf('*** Add File: ../../x.txt', '+x')), opts).decision, 'deny');
 });

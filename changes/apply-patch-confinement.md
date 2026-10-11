@@ -1,0 +1,1 @@
+- Soul write confinement now checks `apply_patch`, which Codex uses for file edits and which was previously not checked at all. Every file the patch adds, updates, deletes or moves to must be inside the soul's territory. A soul's patch that can't be parsed, or that names no file, is refused in every mode with a reason naming the parse failure (#378).
