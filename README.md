@@ -622,8 +622,9 @@ projected to `settings.unmanagedAuthors`), and `keyd_team_id` /
 `keyd_identifier` (the specific Developer ID team and identifier that sign
 keyd, projected to `settings.keydTeamId` / `settings.keydIdentifier`), and
 `soul_coauthor_domain` (the domain of a soul's co-author email, ADR-0815; a
-lowercase domain name that is not a GitHub domain and accepts no mail,
-projected to `settings.soulCoauthorDomain`). Unknown fields are rejected under schema v1 instead of being
+lowercase domain name that is not a GitHub domain, projected to
+`settings.soulCoauthorDomain`; that it accepts no mail is the operator's
+precondition, not something agent-bot checks). Unknown fields are rejected under schema v1 instead of being
 silently ignored.
 
 ```bash
@@ -1548,7 +1549,10 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   GitHub domains (`github.com`, `users.noreply.github.com`, `ghe.com`, …)
   and anything that is not a lowercase domain name fail the config load. A
   credit in the default domain is still checked after an organization names
-  its own.
+  its own. agent-bot validates only the name: the operator must make sure
+  the domain accepts no mail (a `.invalid` name does by construction), or
+  anyone who can receive `<agent-id>@<domain>` could verify it on a GitHub
+  account and claim the soul's commits.
 - `settings.keydTeamId` and `settings.keydIdentifier` — the Developer ID Team
   ID and code-signing identifier a keyd binary must carry before agent-bot
   pins its presence key. The Team ID has no default; an organization profile

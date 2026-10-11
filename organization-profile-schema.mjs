@@ -137,9 +137,13 @@ function normalizeApiBase(value) {
 }
 
 // The domain of a soul's co-author email (ADR-0815). By default the reserved
-// `souls.agent-bot.invalid`; an organization may name its own, which must
-// accept no mail. A GitHub domain is refused: an address there implies an
-// account that could verify the email and claim the soul's commits.
+// `souls.agent-bot.invalid`; an organization may name its own. Only the
+// shape is validated here, and a GitHub domain is refused, because an address
+// there implies an account. Whether the domain accepts mail cannot be checked
+// offline: that it accepts none is the operator's precondition (ADR-0815),
+// since anyone who can receive mail at `<agent-id>@<domain>` could verify it
+// on a GitHub account and claim the soul's commits. A `.invalid` domain
+// (RFC 6761) meets it by construction.
 const DOMAIN_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const GITHUB_DOMAINS = ['github.com', 'githubusercontent.com', 'github.io', 'ghe.com'];
 export function isSoulCoauthorDomain(value) {
