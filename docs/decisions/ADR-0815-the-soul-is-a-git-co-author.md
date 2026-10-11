@@ -1,6 +1,6 @@
 # ADR-0815: The soul is a Git co-author; commits stay Verified
 
-**Status:** Accepted (2026-10-11, by the owner, on [#815](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106642014))
+**Status:** Accepted (2026-10-11, by the owner, relayed in chat)
 **Date:** 2026-10-11
 **Issue:** [qwts/agent-bot-identity#815](https://github.com/qwts/agent-bot-identity/issues/815)
 
@@ -59,11 +59,16 @@ request. The App holds no signing key of its own.
 
 ### The live proof
 
+The owner gave each decision in chat on 2026-10-11, and qwts-claude-agent
+recorded it on #815. The issue comments are that bot's record, not
+owner-authored statements, and are not verified owner statements in the sense
+of [ADR-0753](ADR-0753-owner-signed-statements.md).
+
 The owner first chose option A
-([#815](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106555348)):
+([#815 record](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106699592)):
 the soul as Git author, with commits still Verified, gated on a live proof.
-The proof was run on 2026-10-11
-([#815](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106633691)):
+An agent ran the proof on 2026-10-11
+([#815 record](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106700583)):
 three REST `git/commits` calls as `qwts-claude-agent[bot]` on `main`'s tree,
 left as dangling commits on no branch.
 
@@ -75,8 +80,8 @@ left as dangling commits on no branch.
 
 This matches the documentation: once a custom author is named, GitHub does not
 sign the commit. A soul author and Verified cannot both hold on any API path.
-The owner then replaced option A with the decision below
-([#815](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106642014)).
+The owner then replaced option A with the decision below, in chat
+([#815 record](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106700823)).
 
 ## Decision
 
@@ -147,7 +152,7 @@ authority.
 
 | # | Case | Must show |
 | --- | --- | --- |
-| 1 | **Live proof** of signing with a soul author. | **Done, 2026-10-11** ([#815](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106633691)): no author `valid`; a soul author, with or without a committer, `unsigned`. It decided this record. |
+| 1 | **Live proof** of signing with a soul author. | **Done, 2026-10-11** ([#815 record](https://github.com/qwts/agent-bot-identity/issues/815#issuecomment-6106700583)): no author `valid`; a soul author, with or without a committer, `unsigned`. It decided this record. |
 | 2 | Harness App creates, pushes and opens the PR. | Author is the harness App; committer and signer GitHub; Verified; the soul's co-author and execution trailers present; push and PR actor the harness App. |
 | 3 | Orchestrator App creates, pushes and opens the PR. | Same, with the orchestrator App in place of the harness App. |
 | 4 | Harness App creates the commit; orchestrator App updates the branch and opens the PR. | The commit keeps its author, trailers and verification; push and PR actor are the orchestrator App. |
