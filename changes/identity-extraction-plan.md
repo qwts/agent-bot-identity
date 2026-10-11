@@ -1,0 +1,1 @@
+- `docs/identity-extraction-plan.md` is the plan for moving identity to `qwts/agent-identity` (ADR-0645 step 8): preconditions, history, the pinned copy, CI, release and rollback, with the owner's open questions (#645).
