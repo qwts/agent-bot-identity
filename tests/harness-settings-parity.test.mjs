@@ -1,5 +1,5 @@
-// permissionMode and model parity between a directly opened harness and a daemon-run
-// turn (#379). A soul's declared mode is rendered into its home, which a
+// permissionMode, model and reasoning effort parity between a directly opened
+// harness and a daemon-run turn (#379). A soul's declared mode is rendered into its home, which a
 // direct open reads; the daemon resolves the same declaration through the
 // settings precedence (docs/soul-builder.md): the owner's pick, then the
 // repo, then the soul package. A tightening applies as declared; a loosening
@@ -235,6 +235,49 @@ for (const harness of ['claude', 'codex']) {
     assert.deepEqual(await modelTurn({ harness, cwd: repo, env, home }), { sent: 'repo-model', running: 'repo-model' });
     writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ ...JSON.parse(readFileSync(path.join(soulDir, 'soul.json'), 'utf8')), harness: { permissionMode: 'safe' } }));
     assert.deepEqual(await modelTurn({ harness, cwd: path.join(root, 'state'), env, home }), { sent: null, running: null });
+  });
+}
+
+// What a direct open reads: the reasoning effort rendered into the soul's native files.
+function directEffort(soulDir, harness) {
+  if (harness === 'claude') return JSON.parse(readFileSync(path.join(soulDir, '.claude/settings.json'), 'utf8')).effortLevel;
+  return readFileSync(path.join(soulDir, '.codex/config.toml'), 'utf8').match(/^model_reasoning_effort = "(.*)"$/m)[1];
+}
+
+// The effort a daemon turn applied: Claude's session `_meta`, Codex's
+// `reasoning_effort` option (sent only when advertised, so both values are).
+const EFFORT_OPTIONS = [{ id: 'reasoning_effort', name: 'Reasoning effort', type: 'select', currentValue: 'medium',
+  options: [{ name: 'high', value: 'high' }, { name: 'low', value: 'low' }] }];
+async function effortTurn({ harness, cwd, env, home }) {
+  const acpEnv = harness === 'codex' ? { FAKE_ACP_CONFIG_OPTIONS: JSON.stringify(EFFORT_OPTIONS) } : {};
+  const { observed } = await modelTurn({ harness, cwd, env, home, acpEnv, capture: true });
+  if (harness === 'claude') return observed.sessionMeta?.claudeCode?.options?.effort ?? null;
+  const sent = observed.configRequests.filter(({ configId }) => configId === 'reasoning_effort');
+  assert.ok(sent.length <= 1);
+  return sent[0]?.value ?? null;
+}
+
+for (const harness of ['claude', 'codex']) {
+  test(`${harness}: a declared reasoning effort applies the same way directly and under the daemon`, async (t) => {
+    const { root, env, home, soulDir } = fixture(t, 'safe', { reasoningEffort: 'high' });
+    // In the soul's home a direct open reads the rendering; the daemon applies the same effort.
+    assert.equal(directEffort(soulDir, harness), 'high');
+    assert.equal(packageReasoningEffort(soulDir, harness), 'high');
+    assert.deepEqual(resolveSoulReasoningEffort({ harness, cwd: soulDir, soulDir }), { effort: 'high', source: 'soul' });
+    assert.equal(await effortTurn({ harness, cwd: soulDir, env, home }), 'high');
+    // A repo's own native file outranks the package: a direct open in the
+    // repo reads it, and the daemon applies it.
+    const repo = path.join(root, 'repo');
+    if (harness === 'claude') {
+      mkdirSync(path.join(repo, '.claude'), { recursive: true });
+      writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ effortLevel: 'low' }));
+    } else {
+      mkdirSync(path.join(repo, '.codex'), { recursive: true });
+      writeFileSync(path.join(repo, '.codex/config.toml'), 'model_reasoning_effort = "low"\n');
+    }
+    assert.equal(directEffort(repo, harness), 'low');
+    assert.equal(repoReasoningEffort(repo, harness), 'low');
+    assert.equal(await effortTurn({ harness, cwd: repo, env, home }), 'low');
   });
 }
 
