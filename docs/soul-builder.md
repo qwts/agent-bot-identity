@@ -551,7 +551,7 @@ What ships today for `permissionMode` on a daemon-run turn
 A harness the owner opens directly in the soul's home reads the rendered
 files as they are: the same declared mode, without the daemon's check.
 `tests/harness-settings-parity.test.mjs` checks both paths for Claude and
-Codex. Under the daemon, Codex turns also stay in the ACP session mode
+Codex, for the mode, the model and the reasoning effort. Under the daemon, Codex turns also stay in the ACP session mode
 `workspace-write` (`sessionMode` in `acp-registry.mjs`) whatever the mode, so
 every Codex approval reaches the daemon.
 
