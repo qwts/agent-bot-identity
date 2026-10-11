@@ -26,7 +26,12 @@ a distinct execution identity intentionally.
 1. Keep the worktree's `agentBot.agentId` pin aligned with the active task.
 2. Bind provider transcript metadata through the runtime adapters; do not put
    private transcript content into Git commits or public GitHub fields.
-3. Preserve the `Agent-Identity:` trailer when amending or replaying commits.
+3. Preserve the `Agent-Identity:` trailer and the soul's co-author trailer
+   when amending or replaying commits. The hook writes both, from the
+   worktree's binding, in the message's final trailer block (ADR-0815):
+   `Co-authored-by: <census name> <agent_<uuid>@souls.agent-bot.invalid>`.
+   Never write another soul's co-author trailer: the hook and
+   `signed-commit` refuse a message that credits a different soul.
 4. Finalize or record the identity according to the command help after the
    task's durable artifacts exist.
 5. Resolve provenance through the local identity record, not by guessing from
@@ -98,6 +103,15 @@ Consumers must therefore:
    A commit that predates identity records, or whose records were made on
    another machine, may be genuinely unresolvable — say so rather than
    guessing from branch names.
+
+The soul's co-author trailer (ADR-0815) follows the same rules. A one-commit
+squash keeps it in the final block; a multi-commit squash leaves each
+commit's trailers in the body, above GitHub's own block, so the trailer
+parser misses it there too. `node soul-coauthor.mjs check <sha> <agent-id>`
+reports `trailer`, `body` or `absent`; for `body` and `absent`, the identity
+record is the authority. Rename changes the name on new commits only (the
+email is the Agent ID); a fork gets a new Agent ID and so a new email; a
+retired Agent ID is never reused, so its email credits no one else.
 
 Do not expose private identity records, transcript URLs, session tokens, or
 provider metadata in public issue or PR comments. Report only the Agent ID

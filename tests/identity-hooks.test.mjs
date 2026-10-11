@@ -16,7 +16,10 @@ import { fileURLToPath } from 'node:url';
 import {
   mintAgentIdentity,
   readAgentIdentity,
+  soulCoAuthorTrailer,
 } from '../agent-identity.mjs';
+import { displayName, recordSoulDisplayName, upsertIdentitySoul } from '../agent-population.mjs';
+import { soulTrailerStatus } from '../soul-coauthor.mjs';
 
 const root = mkdtempSync(path.join(tmpdir(), 'identity-hooks-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -58,6 +61,7 @@ function fixture(name) {
     ...process.env,
     AGENT_BOT_STATE_HOME: stateDir,
     AGENT_BOT_CONFIG: gateOnConfig,
+    AGENT_BOT_POPULATION_PATH: path.join(stateDir, 'population.json'),
     CODEX_THREAD_ID: `${name}-thread`,
   };
   return { repo, stateDir, identity, git, env };
@@ -85,9 +89,73 @@ test('custom message hooks are chained and identity adds exactly one opaque trai
   const body = readFileSync(message, 'utf8');
   assert.equal(body.match(/^Agent-Identity:/gm)?.length, 1);
   assert.match(body, new RegExp(`Agent-Identity: ${identity.id}$`, 'm'));
+  // No census row: the soul is credited by the handle its Agent ID derives.
+  assert.equal(body.match(/^Co-authored-by:/gm)?.length, 1);
+  assert.ok(body.includes(`Custom-Hook: ran\n${soulCoAuthorTrailer(identity.id, displayName(identity.id))}\nAgent-Identity: ${identity.id}\n`));
   assert.match(body, /^Custom-Hook: ran$/m);
   assert.match(body, /^Commit-Msg-Hook: ran$/m);
   assert.doesNotMatch(body, /thread|token|credential/i);
+});
+
+test('the soul co-author joins human co-authors and Agent-Identity in one final trailer block (ADR-0815)', () => {
+  const { repo, stateDir, identity, env } = fixture('coauthor');
+  upsertIdentitySoul(identity.id, `/spaces/${identity.id}`, { file: env.AGENT_BOT_POPULATION_PATH, stateDir });
+  recordSoulDisplayName(identity.id, 'Genius <the> one', { file: env.AGENT_BOT_POPULATION_PATH });
+  const message = path.join(repo, 'message.txt');
+  // A `---` line is prose here, not a patch divider: nothing after it is lost.
+  writeFileSync(message, 'subject\n\nbody\n---\nmore body\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n');
+  execFileSync(prepare, [message, 'message'], { cwd: repo, env });
+  const credit = `Co-authored-by: Genius the one <${identity.id}@souls.agent-bot.invalid>`;
+  assert.equal(readFileSync(message, 'utf8'), 'subject\n\nbody\n---\nmore body\n\n'
+    + `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n${credit}\nAgent-Identity: ${identity.id}\n`);
+  const body = readFileSync(message, 'utf8');
+  assert.equal(soulTrailerStatus(body, identity.id, { cwd: repo }), 'trailer');
+
+  // Rename: an amend keeps the credit it has; a new commit takes the new name.
+  // The email is the Agent ID, so it does not change.
+  recordSoulDisplayName(identity.id, 'Renamed', { file: env.AGENT_BOT_POPULATION_PATH });
+  execFileSync(prepare, [message, 'commit', 'HEAD'], { cwd: repo, env });
+  assert.equal(readFileSync(message, 'utf8'), body);
+  writeFileSync(message, 'next\n');
+  execFileSync(prepare, [message, 'message'], { cwd: repo, env });
+  assert.equal(readFileSync(message, 'utf8'),
+    `next\n\nCo-authored-by: Renamed <${identity.id}@souls.agent-bot.invalid>\nAgent-Identity: ${identity.id}\n`);
+});
+
+test('a message crediting another soul is refused; other co-authors are left alone (ADR-0815)', () => {
+  const { repo, identity, env } = fixture('coauthor-foreign');
+  const other = mintAgentIdentity({
+    appSlug: 'you-codex-agent', botUid: '308462948', harness: 'codex',
+    transcript: { provider: 'codex', id: 'coauthor-foreign-other' }, stateDir: env.AGENT_BOT_STATE_HOME,
+  });
+  const message = path.join(repo, 'message.txt');
+  const foreign = `steal\n\nCo-authored-by: Someone <${other.id}@souls.agent-bot.invalid>\n`;
+  writeFileSync(message, foreign);
+  assert.throws(
+    () => execFileSync(prepare, [message, 'message'], { cwd: repo, env, stdio: 'pipe' }),
+    (error) => error.status === 1 && /credits another soul as co-author/.test(String(error.stderr)),
+  );
+  assert.equal(readFileSync(message, 'utf8'), foreign);
+
+  const people = 'pair\n\nCo-authored-by: Ada <ada@example.com>\nCo-authored-by: Bot <1+bot[bot]@users.noreply.github.com>\n';
+  writeFileSync(message, people);
+  execFileSync(prepare, [message, 'message'], { cwd: repo, env });
+  assert.equal(readFileSync(message, 'utf8'), `${people}${soulCoAuthorTrailer(identity.id, displayName(identity.id))}\nAgent-Identity: ${identity.id}\n`);
+});
+
+test('a fork is a new soul with a new trailer email; a squash body is reported as such (ADR-0815)', () => {
+  const { repo, identity } = fixture('coauthor-status');
+  const fork = 'agent_33333333-3333-4333-8333-333333333333';
+  assert.notEqual(soulCoAuthorTrailer(identity.id, 'Same'), soulCoAuthorTrailer(fork, 'Same'));
+  assert.throws(() => soulCoAuthorTrailer(identity.id, '<>'), /display name/);
+  const credit = soulCoAuthorTrailer(identity.id, 'Genius');
+  // GitHub's multi-commit squash keeps each commit's trailers in the body
+  // and ends with its own co-author block.
+  const squash = `Title (#1)\n\n* one\n\n${credit}\nAgent-Identity: ${identity.id}\n\n---------\n\n`
+    + 'Co-authored-by: you-codex-agent[bot] <1+you-codex-agent[bot]@users.noreply.github.com>\n';
+  assert.equal(soulTrailerStatus(squash, identity.id, { cwd: repo }), 'body');
+  assert.equal(soulTrailerStatus(`one\n\n${credit}\n`, identity.id, { cwd: repo }), 'trailer');
+  assert.equal(soulTrailerStatus('one\n', identity.id, { cwd: repo }), 'absent');
 });
 
 test('both add-on gates off leaves the commit trailer hook inert', () => {
@@ -100,6 +168,7 @@ test('both add-on gates off leaves the commit trailer hook inert', () => {
   const { AGENT_BOT_CONFIG: _gateOn, ...gateOffEnv } = env;
   execFileSync(prepare, [message, 'message'], { cwd: repo, env: { ...gateOffEnv, HOME: home } });
   assert.doesNotMatch(readFileSync(message, 'utf8'), /^Agent-Identity:/m);
+  assert.doesNotMatch(readFileSync(message, 'utf8'), /^Co-authored-by:/im);
   assert.equal(git('config', '--get', 'commit.gpgsign'), 'false');
 });
 

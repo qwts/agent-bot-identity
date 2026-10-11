@@ -209,6 +209,7 @@
     "soul-asides.mjs": "soul",
     "soul-build.mjs": "soul",
     "soul-builder.mjs": "soul",
+    "soul-coauthor.mjs": "soul",
     "soul-comms.mjs": "soul",
     "soul-computer-use.mjs": "soul",
     "soul-credential-migration.mjs": "soul",

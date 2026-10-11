@@ -28,6 +28,10 @@ Why you'd want this:
 - **Transcript-bound Agent IDs.** Each conversation gets a private
   `agent_<uuid>` recorded on commits as an `Agent-Identity:` trailer, so you
   can resolve a commit back to the provider transcript that produced it.
+  The soul is credited next to it as
+  `Co-authored-by: <name> <agent_<uuid>@souls.agent-bot.invalid>`, while the
+  App stays the author and GitHub the signer, so commits stay Verified
+  ([ADR-0815](docs/decisions/ADR-0815-the-soul-is-a-git-co-author.md)).
   (Read one commit with `git show -s --format='%B' <sha> | grep '^Agent-Identity:'` — GitHub's
   squash merge appends its own co-author block, which pushes the trailer out
   of the final paragraph that git's `%(trailers:)` parser reads. The local
@@ -1834,7 +1838,9 @@ Each bot worktree gets a private `agent_<uuid>` stored under
 `AGENT_BOT_STATE_HOME`). Records name the credential provider; they never
 contain secrets.
 
-- `prepare-commit-msg` appends `Agent-Identity: <id>`
+- `prepare-commit-msg` adds the soul's `Co-authored-by:` trailer and
+  `Agent-Identity: <id>` to the message's final trailer block, next to any
+  human co-authors, and refuses a message that credits another soul
 - `post-commit` records `commit:<sha>` against the identity
 - `pre-commit` refuses bot-attributed commits with no resolvable Agent ID
 - neither `pre-commit` nor `pre-push` confines where an agent may commit or

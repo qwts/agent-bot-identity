@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { apiBase, githubHost, isGateEnabled, loadConfig } from './config.mjs';
+import { assertSoulCoAuthor, currentAgentId } from './agent-identity.mjs';
 import { mintForCaller } from './git-credential-bot.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
@@ -184,6 +185,14 @@ export async function runSignedCommit(options, {
   for (const sha of commits) {
     const parents = gitTrim(['rev-list', '--parents', '-n', '1', sha], cwd).split(/\s+/).slice(1);
     if (parents.length > 1) throw new Error(`${sha.slice(0, 8)} is a merge commit — rebase into linear history first`);
+  }
+  // The message is replayed verbatim, so the soul's co-author trailer
+  // survives. A commit made past the hook (--no-verify) may still not credit
+  // another soul (ADR-0815): checked before anything is created.
+  const soul = currentAgentId({ env, cwd });
+  for (const sha of commits) {
+    try { assertSoulCoAuthor(git(['log', '-1', '--format=%B', sha], { cwd }), soul); }
+    catch (error) { throw new Error(`${sha.slice(0, 8)}: ${error.message}. Nothing was written.`); }
   }
 
   const refName = `heads/${branch}`;

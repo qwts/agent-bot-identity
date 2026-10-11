@@ -107,3 +107,37 @@ test('dry-run previews a linear range without minting or network access', async 
   assert.match(output, /dry run — nothing was created or pushed/);
   assert.equal(git('status', '--porcelain'), '');
 });
+
+test('replay refuses a commit that credits another soul, before anything is created (ADR-0815)', async () => {
+  // A commit made past the hook (--no-verify) still may not credit a soul
+  // other than the one bound here; its own soul passes.
+  const bound = 'agent_11111111-1111-4111-8111-111111111111';
+  const other = 'agent_22222222-2222-4222-8222-222222222222';
+  const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-signed-soul-'));
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'commit.gpgsign', 'false');
+  git('config', 'core.hooksPath', '/dev/null');
+  writeFileSync(join(cwd, 'file.txt'), 'base\n');
+  git('add', 'file.txt');
+  git('commit', '-m', 'base');
+  git('remote', 'add', 'origin', 'https://github.com/acme/widgets.git');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  git('switch', '-c', 'feature');
+  writeFileSync(join(cwd, 'file.txt'), 'own\n');
+  git('commit', '-am', `own\n\nCo-authored-by: Bound <${bound}@souls.agent-bot.invalid>\nAgent-Identity: ${bound}`);
+  const run = (args) => runSignedCommit(parseSignedCommitArgs(args), {
+    cwd,
+    env: gateOnEnv({ AGENT_BOT_ID: bound, GH_AGENT_APP: 'acme-codex-agent' }),
+    stdout: { write: () => {} },
+    mintImpl: async () => { throw new Error('minted'); },
+    fetchImpl: async () => { throw new Error('fetched'); },
+  });
+  assert.equal((await run(['--dry-run'])).commits.length, 1);
+  writeFileSync(join(cwd, 'file.txt'), 'other\n');
+  git('commit', '-am', `other\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Other <${other}@SOULS.agent-bot.invalid>`);
+  await assert.rejects(run(['--dry-run']), new RegExp(`credits another soul as co-author \\(${other}\\).*Nothing was written`));
+});
