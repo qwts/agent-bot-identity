@@ -1,5 +1,9 @@
 # agent-bot-identity
 
+New here? Start with [Getting started](docs/getting-started.md): install
+agent-bot and agent-comms, give an agent its own GitHub bot, and have two
+agents message each other.
+
 Give every coding agent on your machine its **own GitHub identity** — so a
 worktree created by Codex commits and opens PRs as `you-codex-agent[bot]`, one
 created by Claude Code as `you-claude-agent[bot]`, and so on, while your own
