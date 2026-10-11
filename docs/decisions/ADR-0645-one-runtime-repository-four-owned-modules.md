@@ -159,10 +159,16 @@ Consequences of these rules:
   file, the modules that may import it (`importable_by`), its exact `exports`
   and a reason. An edge into that file from a named module is not a crossing;
   any other edge still is. The test checks that the file exports exactly the
-  listed names, so widening a contract is a reviewed map change. The one
-  contract is soul's read-only `soul-app-declarations.mjs`, through which
-  identity's in-process minters learn which soul declares an App (owner
-  decision on #645, 2026-10-09).
+  listed names, so widening a contract is a reviewed map change. The
+  contracts are:
+  - soul's read-only `soul-app-declarations.mjs`, through which identity's
+    in-process minters learn which soul declares an App (owner decision on
+    #645, 2026-10-09);
+  - identity's `daemon-client.mjs`, the daemon state file, health probe and
+    authenticated client that soul, host, cli and comms use to reach the
+    daemon (owner decision D3 on #645, 2026-10-11). It stays identity-owned,
+    not `shared`, because the client reads the daemon's bearer token and
+    signs binding proofs.
 
 ### 3. Authority and data ownership
 
