@@ -6,7 +6,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 
 | Intent | Command |
 |---|---|
-| Bootstrap from a fresh source checkout | `./agent-bot bootstrap --profile <path\|-> [--machine-only] [--with-gh-shim] [--json]` |
+| Bootstrap from a fresh source checkout | `./agent-bot bootstrap --repair --machine-only [--with-gh-shim] [--json]` (profile from the selected organization), or `--profile <path\|->` |
 | Inspect available commands | `agent-bot --help` |
 | Configure this checkout's bot identity | `agent-bot setup-worktree [app-slug]` |
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
@@ -47,8 +47,13 @@ below.
    is recovery; `daemon disable` unloads it):
 
    ```bash
-   ./agent-bot bootstrap --profile <path> --with-gh-shim --machine-only
+   ./agent-bot bootstrap --repair --machine-only --with-gh-shim
    ```
+
+   `--repair` fetches the profile from the organization selected in
+   `~/.config/agent-sop/config.toml`; with a profile file in hand, use
+   `--profile <path>` instead. Do not pre-fetch it with `gh api … > file`: a
+   failed fetch leaves an empty file.
 
    From a checkout that resolves a bot identity — any checkout in the agent's
    own account, or one with `GH_AGENT_APP` or a pin — the same source launcher

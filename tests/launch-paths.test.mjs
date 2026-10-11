@@ -30,7 +30,7 @@ const LAUNCH_PATHS = {
   'soul-env-export.mjs': [1, 'filtered: git under minimalChildEnv'],
   'sandbox-export.mjs': [1, 'filtered: /usr/bin/tar under minimalChildEnv'],
   'skill-workspace.mjs': [2, 'filtered: git with PATH only'],
-  'readiness.mjs': [2, 'filtered: zsh probe with HOME and a fixed PATH; git'],
+  'readiness.mjs': [3, 'filtered: zsh probe with HOME and a fixed PATH; git; caller context: doctor\'s gh auth status in the caller\'s session, through any gh shim'],
   // Harness-side: runs inside the harness, whose env the agent already holds.
   'muse-acp.mjs': [1, 'harness-side: muse inherits the adapter\'s turn env, already filtered, plus the provider grants it needs'],
   // Caller context: the caller already holds the env it passes.

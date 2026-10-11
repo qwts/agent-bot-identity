@@ -199,11 +199,20 @@ Newer Homebrew may require `brew trust qwts/agent-bot-identity` after the tap.
 
 Homebrew places `agent-bot` on PATH under the prefix. It does **not** write
 `~/.local/bin`, Git `core.hooksPath`, or shell startup files. Run machine
-wiring next:
+wiring next. With the organization selected in
+`~/.config/agent-sop/config.toml` (`[repos] org`), bootstrap fetches its
+profile itself (#975):
 
 ```bash
-agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
+agent-bot bootstrap --repair --machine-only
 ```
+
+That reads the selected organization's profile at its resolved commit, as
+described under `--repair` below; add `--with-gh-shim` for the managed gh
+shim. A profile you already hold still works with
+`agent-bot bootstrap --profile /path/to/organization-profile.json --machine-only`.
+Do not fetch it with `gh api … > file` first: a failed fetch leaves an empty
+file (`profile-file-empty`).
 
 If `~/.local/bin/agent-bot` points at a live foreign git checkout, preserve
 that symlink by moving it to an unused backup path before switching installs.
@@ -240,11 +249,15 @@ profile and shared-tooling procedure. Never search for or assume
 a local governance checkout; follow its canonical HTTPS guidance instead.
 
 From your own account, prepare machine state without binding your checkout to
-a bot:
+a bot. With the organization selected in `~/.config/agent-sop/config.toml`,
+bootstrap fetches the profile itself (#975):
 
 ```bash
-./agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
+./agent-bot bootstrap --repair --machine-only --with-gh-shim
 ```
+
+or, with a profile file you were given,
+`./agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only`.
 
 Then, from the agent's own macOS account (or any checkout with a stated bot
 identity — `GH_AGENT_APP` or a pin), bind it through the installed runtime:
@@ -276,6 +289,18 @@ no `Authorization` header and without the URL's userinfo or query, bounded at
 refused, timeout and HTTP status apart; any answer below 500 (a 401/403 is
 expected without a bearer) is reachable. It is advisory: a failed probe is a
 warning and never makes a ready machine not ready.
+
+`gh.login` runs `gh auth status --hostname github.com` (the `gh` on PATH, so a
+managed gh shim still decides whose login an agent context sees) and keeps only
+the host, the account name, the token's source and the outcome; the token,
+masked or not, is never printed. It tells two failures apart. gh keeps its
+token in the login Keychain, which a session without a GUI login (SSH) cannot
+read: gh then reports the token source `default` as invalid although the login
+works in the desktop terminal. That is `gh-login-unreadable`, a warning that
+points at the desktop session or a `GH_TOKEN`, with no `gh auth login` advice.
+A token gh did read and GitHub rejected is `gh-login-invalid`, a warning that
+names the account and says `gh auth login -h github.com`. gh missing or logged
+out is not applicable. Bootstrap's own report leaves gh alone.
 
 `credential.key_store` names, for each configured App, the key store kinds
 its records point to (`keychain`, `file`, `pass-cli`, `keyd`, from soul
@@ -1423,8 +1448,15 @@ It never guesses: no selection (`profile-selection-missing`), a selection,
 `org.json` or profile that cannot be read (`profile-selection-unreadable`), an
 account that resolves no active App (`profile-account-unresolved`), an
 `AGENT_BOT_CONFIG` naming a missing file (`profile-config-override`), or a
-conflicting config stop before any machine mutation. `--profile` remains the
-explicit override.
+conflicting config stop before any machine mutation. When the selection
+cannot be read and `gh auth status` shows GitHub rejected gh's token, the
+refusal is `profile-fetch-auth`, with `gh auth login` as the action; when gh
+only cannot read its Keychain token in this session (SSH), the refusal stays
+`profile-selection-unreadable` and its action says so instead. `--profile`
+remains the explicit override; a path that does not exist is
+`profile-file-missing`, and an empty file (what a failed `gh api … > file`
+leaves behind) is `profile-file-empty`, whose action names either gh
+failure.
 
 ```bash
 rm -rf ~/.config/agent-bot      # lost

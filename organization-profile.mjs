@@ -21,8 +21,12 @@ export function readOrganizationProfile({
   let raw;
   try {
     raw = read(sourcePath === '-' ? stdin : sourcePath, 'utf8');
-  } catch {
+  } catch (error) {
+    // A fetch that failed before it wrote anything (#975) is named as such.
+    if (error?.code === 'ENOENT') fail('profile-file-missing', 'organization profile file does not exist');
     fail('profile-read-failed', 'organization profile could not be read');
   }
+  // `gh api … > file` with an expired gh login leaves an empty file (#975).
+  if (typeof raw === 'string' && raw.trim() === '') fail('profile-file-empty', 'organization profile file is empty');
   return parseOrganizationProfile(raw);
 }

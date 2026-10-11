@@ -30,6 +30,9 @@ import {
   requireReadinessSchema,
   worktreePinOriginCheck,
   appRecordCheck,
+  ghLoginCheck,
+  parseGhAuthStatus,
+  probeGhLogin,
 } from '../readiness.mjs';
 
 const roots = [];
@@ -96,6 +99,8 @@ function machineDependencies(home, { shim = false, inspectCredentials } = {}) {
     // test runner's PATH. A test that exercises a probe passes its own.
     probeSecretStore: () => [],
     probeSessionContext: () => [],
+    // Never the host's gh login: a test that exercises it passes its own.
+    probeGh: () => ({ state: 'missing', host: 'github.com', account: null }),
     inspectCredentials: inspectCredentials ?? (async ({ slugs }) => slugs.map((slug, index) => ({
       slug,
       local: { status: 'ready', restored: [] },
@@ -2713,4 +2718,111 @@ test('doctor warns when the shell credential names differ from the daemon unit',
   assert.equal(malformed.status, 'warning');
   assert.equal(malformed.code, 'credential-names-invalid');
   assert.match(malformed.message, /this shell/);
+});
+
+// #975: a profile fetch over gh failed and nothing said why. gh's failures
+// differ: over SSH (no GUI or Keychain session) it cannot read its Keychain
+// token and reports the config's account with the source "default" as
+// invalid, while GitHub rejecting a token gh did read is a real expired login.
+const GH_TOKEN_SAMPLE = 'gho_0123456789abcdefABCDEF0123456789abcd';
+const GH_UNREADABLE = `github.com
+  X Failed to log in to github.com account example-owner (default)
+  - Active account: true
+  - The token in default is invalid.
+  - To re-authenticate, run: gh auth login -h github.com
+  - To forget about this account, run: gh auth logout -h github.com -u example-owner
+`;
+const GH_REJECTED = GH_UNREADABLE.replaceAll('default', 'keyring');
+const GH_OK = `github.com
+  ✓ Logged in to github.com account example-owner (keyring)
+  - Active account: true
+  - Git operations protocol: https
+  - Token: ${GH_TOKEN_SAMPLE}
+  - Token scopes: 'repo'
+
+  X Failed to log in to github.com account example-old (keyring)
+  - Active account: false
+`;
+
+test('gh auth status is reduced to the host, the account and the outcome (#975)', () => {
+  // A Keychain token this session cannot read is not a rejected token.
+  assert.deepEqual(parseGhAuthStatus(GH_UNREADABLE), { state: 'unreadable', host: 'github.com', account: 'example-owner' });
+  assert.deepEqual(parseGhAuthStatus(GH_REJECTED), { state: 'invalid', host: 'github.com', account: 'example-owner' });
+  for (const source of ['oauth_token', 'GH_TOKEN', 'GITHUB_TOKEN']) {
+    assert.equal(parseGhAuthStatus(GH_UNREADABLE.replaceAll('default', source)).state, 'invalid', source);
+  }
+  // The active account decides, not the first or a failed inactive one.
+  assert.deepEqual(parseGhAuthStatus(GH_OK), { state: 'ok', host: 'github.com', account: 'example-owner' });
+  assert.deepEqual(parseGhAuthStatus(GH_OK.replace('Active account: true', 'Active account: false')
+    .replace('example-old (keyring)\n  - Active account: false', 'example-old (keyring)\n  - Active account: true')),
+  { state: 'invalid', host: 'github.com', account: 'example-old' });
+  // Older gh prints one account with no active marker.
+  assert.deepEqual(parseGhAuthStatus('github.com\n  ✓ Logged in to github.com as example-owner (oauth_token)\n'),
+    { state: 'ok', host: 'github.com', account: 'example-owner' });
+  assert.equal(parseGhAuthStatus('You are not logged into any GitHub hosts. To log in, run: gh auth login\n').state, 'logged-out');
+  assert.equal(parseGhAuthStatus('ghe.example\n  X Failed to log in to ghe.example account x (keyring)\n  - Active account: true\n').state, 'unknown');
+  // Anything that is not a GitHub login is never repeated.
+  assert.equal(parseGhAuthStatus(GH_REJECTED.replaceAll('example-owner', `${GH_TOKEN_SAMPLE}$(id)`)).account, null);
+});
+
+test('the gh login probe runs gh auth status and never asks for the token (#975)', () => {
+  const calls = [];
+  const env = { HOME: '/home/x', PATH: '/usr/bin' };
+  const login = probeGhLogin({ env, spawn: (command, args, options) => {
+    calls.push([command, args, options.env, options.timeout > 0]);
+    return { status: 1, stdout: '', stderr: GH_REJECTED };
+  } });
+  assert.deepEqual(login, { state: 'invalid', host: 'github.com', account: 'example-owner' });
+  assert.deepEqual(calls, [['gh', ['auth', 'status', '--hostname', 'github.com'], env, true]]);
+  const missing = probeGhLogin({ spawn: () => ({ error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) }) });
+  assert.equal(missing.state, 'missing');
+  assert.equal(probeGhLogin({ spawn: () => ({ error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }) }).state, 'unknown');
+});
+
+test('doctor tells a rejected gh token from one this session cannot read, and never prints it (#975)', async () => {
+  const rejected = ghLoginCheck({ probe: () => parseGhAuthStatus(`${GH_REJECTED}  - Token: ${GH_TOKEN_SAMPLE}\n`) });
+  assert.equal(rejected.id, 'gh.login');
+  assert.equal(rejected.status, 'warning');
+  assert.equal(rejected.code, 'gh-login-invalid');
+  assert.match(rejected.message, /GitHub rejected gh's token for account example-owner/);
+  assert.equal(rejected.action, 'run: gh auth login -h github.com');
+  assert.doesNotMatch(JSON.stringify(rejected), /gho_/);
+
+  // Over SSH the Keychain token is unreadable: no `gh auth login` advice.
+  const unreadable = ghLoginCheck({ probe: () => parseGhAuthStatus(GH_UNREADABLE) });
+  assert.equal(unreadable.status, 'warning');
+  assert.equal(unreadable.code, 'gh-login-unreadable');
+  assert.match(unreadable.message, /cannot read its token for account example-owner .*no GUI or Keychain session/);
+  assert.doesNotMatch(`${unreadable.message} ${unreadable.action}`, /gh auth login|rejected|expired/);
+  assert.match(unreadable.action, /desktop session|GH_TOKEN/);
+
+  const ok = ghLoginCheck({ probe: () => parseGhAuthStatus(GH_OK) });
+  assert.equal(ok.status, 'ready');
+  assert.doesNotMatch(JSON.stringify(ok), /gho_/);
+  for (const state of ['missing', 'logged-out', 'unknown']) {
+    assert.equal(ghLoginCheck({ probe: () => ({ state, host: 'github.com', account: null }) }).status, 'not_applicable', state);
+  }
+  assert.equal(ghLoginCheck({ probe: () => { throw new Error(GH_TOKEN_SAMPLE); } }).status, 'not_applicable');
+
+  const home = tempRoot();
+  const seen = [];
+  const report = await collectReadiness({
+    ...machineDependencies(home),
+    scope: 'machine',
+    probeGh: ({ env }) => { seen.push(env.HOME); return parseGhAuthStatus(GH_REJECTED); },
+  });
+  assert.deepEqual(seen, [home]);
+  const check = report.machine.checks.find(({ id }) => id === 'gh.login');
+  assert.equal(check.status, 'warning');
+  assert.match(renderReadinessReport(report), /example-owner/);
+  assert.doesNotMatch(renderReadinessJson(report), /gho_/);
+
+  // Bootstrap's own report never reaches gh.
+  const bootstrapped = await collectReadiness({
+    ...machineDependencies(home),
+    command: 'bootstrap',
+    scope: 'machine',
+    probeGh: () => assert.fail('bootstrap probed gh'),
+  });
+  assert.equal(bootstrapped.machine.checks.some(({ id }) => id === 'gh.login'), false);
 });
