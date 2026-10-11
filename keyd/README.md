@@ -81,10 +81,12 @@ refuses them rather than adopt them:
   `<state>/keyd/presence.pub` disagreeing with the binary and asks the owner
   through the administrator dialog; approving re-pins it, declining refuses the
   action with `presence-pin-mismatch`.
-- `owner-pins` — keyd refuses the record, so `owner/pins-status` and
-  `owner/pins-attest` answer with an error rather than reporting an approved
-  key set. Removing the item returns it to "never approved", and the owner
-  records their keys again with `agent-bot owner enroll`.
+- `owner-pins` — keyd never reads the record. `owner/pins-status` answers
+  error `-32002` (untrusted) rather than an approved key set or "never
+  approved". `owner/pins-attest` treats it as no record: the owner's prompt
+  says it replaces a record keyd did not make, and approving records the key
+  set from generation 1 in an item keyd controls. Removing the item instead
+  returns it to "never approved".
 
 All three are ordinary login-keychain generic passwords under service
 `agent-bot.keyd`, removable with `security delete-generic-password`.
@@ -216,7 +218,8 @@ silent first pin, until the data-protection keychain replaces them.
 When nobody can be asked here (no GUI session, or no login password), keyd
 answers error `-32001`, and agent-bot falls back to its administrator dialog.
 A person's cancel, failure or timeout is error `-32000`, and agent-bot does
-not ask again.
+not ask again. A presence seed keyd does not control is error `-32002`
+(untrusted): nothing is signed, and agent-bot refuses without asking.
 
 ## The owner's statement keys
 

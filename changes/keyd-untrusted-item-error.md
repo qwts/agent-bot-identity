@@ -1,0 +1,1 @@
+- agent-bot-keyd reports a pin it does not control as its own error (`-32002`, `keyd-untrusted` in agent-bot) instead of a generic refusal: `owner/pins-status` answers it as untrusted rather than as recorded or missing, and `owner/pins-attest` treats such a record as none, replacing it only with the owner's approval (#753).

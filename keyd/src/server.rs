@@ -35,13 +35,17 @@ use crate::ids::{is_agent_id, is_app_slug};
 use crate::paths::Paths;
 use crate::pins;
 use crate::presence;
-use crate::store::{Credential, OwnerPins, Store};
+use crate::store::{Credential, OwnerPins, Store, StoreError};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const GRANT_META: &str = "agent-bot/grant";
 const MAX_LINE_BYTES: u64 = 1 << 20;
 /// JSON-RPC error code: nobody could be asked here (no GUI session).
 pub const PRESENCE_UNAVAILABLE: i64 = -32001;
+/// JSON-RPC error code: a pin keyd needs is a Keychain item keyd does not
+/// control (store.rs `StoreError::Untrusted`), so it was neither used nor
+/// read as absent (#753).
+pub const UNTRUSTED_ITEM: i64 = -32002;
 
 pub struct Keyd {
     pub store: Store,
@@ -330,10 +334,10 @@ impl Keyd {
             return failure(id, -32602, "the nonce is not 16 to 64 base64url characters");
         }
         let _one_prompt_at_a_time = self.owner_lock.lock().unwrap();
-        let outcome = self
-            .store
-            .presence_seed()
-            .map_err(Refusal::Declined)
+        let seed = self.store.presence_seed();
+        let untrusted = seed.as_ref().is_err_and(StoreError::is_untrusted);
+        let outcome = seed
+            .map_err(|error| Refusal::Declined(error.into()))
             .and_then(|seed| {
                 self.consent.ask(&presence::reason(action))?;
                 // Stamped at the owner's answer, not the request: the prompt
@@ -366,6 +370,7 @@ impl Keyd {
         match outcome {
             Ok(assertion) => reply(id, json!({ "assertion": assertion })),
             Err(Refusal::Unavailable(message)) => failure(id, PRESENCE_UNAVAILABLE, &message),
+            Err(Refusal::Declined(message)) if untrusted => failure(id, UNTRUSTED_ITEM, &message),
             Err(Refusal::Declined(message)) => failure(id, -32000, &message),
         }
     }
@@ -383,19 +388,33 @@ impl Keyd {
         };
         let digest = pins::digest(&keys);
         let _one_prompt_at_a_time = self.owner_lock.lock().unwrap();
-        let outcome = self
-            .store
-            .owner_pins()
-            .and_then(|last| {
+        // A record keyd does not control is no record, as `Store::pinned_key`
+        // reads the daemon key: the owner approves the whole set again, from
+        // generation 1, and keyd's write replaces the item with one it
+        // controls. Its value is never read, so it cannot set the generation.
+        let last = match self.store.owner_pins() {
+            Err(StoreError::Untrusted { .. }) => Ok((None, true)),
+            other => other.map(|last| (last, false)),
+        };
+        let mut untrusted = false;
+        let outcome = last
+            .and_then(|(last, replacing)| {
                 let generation = last.map_or(0, |record| record.generation);
                 let next = generation
                     .checked_add(1)
                     .ok_or("the owner key generation is exhausted")?;
-                Ok((self.store.presence_seed()?, next))
+                Ok((self.store.presence_seed()?, next, replacing))
             })
-            .map_err(Refusal::Declined)
-            .and_then(|(seed, generation)| {
-                self.consent.ask(&pins::reason(&keys))?;
+            .map_err(|error| {
+                untrusted = error.is_untrusted();
+                Refusal::Declined(error.into())
+            })
+            .and_then(|(seed, generation, replacing)| {
+                let mut reason = pins::reason(&keys);
+                if replacing {
+                    reason.push_str(pins::REPLACING_UNTRUSTED);
+                }
+                self.consent.ask(&reason)?;
                 let record = OwnerPins {
                     digest: digest.clone(),
                     generation,
@@ -406,10 +425,14 @@ impl Keyd {
                 Ok((
                     pins::sign(&seed, Some(&digest), generation, nonce, (self.now)()),
                     generation,
+                    replacing,
                 ))
             });
         let detail = match &outcome {
-            Ok((_, generation)) => format!("pins {digest} generation {generation}"),
+            Ok((_, generation, false)) => format!("pins {digest} generation {generation}"),
+            Ok((_, generation, true)) => format!(
+                "pins {digest} generation {generation}, replacing a record keyd did not make"
+            ),
             Err(Refusal::Unavailable(message) | Refusal::Declined(message)) => {
                 format!("pins {digest}: {message}")
             }
@@ -431,14 +454,17 @@ impl Keyd {
             now,
         );
         match outcome {
-            Ok((attestation, _)) => reply(id, json!({ "attestation": attestation })),
+            Ok((attestation, _, _)) => reply(id, json!({ "attestation": attestation })),
             Err(Refusal::Unavailable(message)) => failure(id, PRESENCE_UNAVAILABLE, &message),
+            Err(Refusal::Declined(message)) if untrusted => failure(id, UNTRUSTED_ITEM, &message),
             Err(Refusal::Declined(message)) => failure(id, -32000, &message),
         }
     }
 
     /// The key set the owner last approved, signed for agent-bot's nonce;
-    /// no prompt. Before any approval the digest is null at generation 0.
+    /// no prompt. Before any approval the digest is null at generation 0. A
+    /// record keyd does not control is neither: it answers `UNTRUSTED_ITEM`,
+    /// unsigned, until `owner/pins-attest` replaces it.
     /// It takes no `owner_lock`: the record is one Keychain item, written
     /// whole, so a status read during an approval sees either generation.
     fn owner_pins_status(&self, id: &Value, params: &Value, now: u64) -> Value {
@@ -457,7 +483,10 @@ impl Keyd {
         });
         match signed {
             Ok(attestation) => reply(id, json!({ "attestation": attestation })),
-            Err(message) => failure(id, -32000, &message),
+            Err(error @ StoreError::Untrusted { .. }) => {
+                failure(id, UNTRUSTED_ITEM, &error.to_string())
+            }
+            Err(error) => failure(id, -32000, &error.to_string()),
         }
     }
 
@@ -1845,6 +1874,90 @@ mod tests {
             pins_payload(&keyd, &status)["digest"],
             crate::pins::digest(&[])
         );
+    }
+
+    /// An owner key record keyd does not control is no record to
+    /// `owner/pins-attest`, as `Store::pinned_key` reads the daemon key, and
+    /// `owner/pins-status` answers `UNTRUSTED_ITEM` rather than reporting it
+    /// as approved or as never approved (#753).
+    #[test]
+    fn an_untrusted_owner_key_record_is_reported_and_replaced_only_with_approval() {
+        use crate::pins::tests::{pin, FP_A};
+        use crate::store::tests::UNTRUSTED_VALUE;
+        use crate::store::{Items, OWNER_PINS_ACCOUNT, PIN_SERVICE};
+        let items = Memory::default();
+        let consent = Arc::new(Consenting::new(false));
+        let mut keyd = keyd(true);
+        keyd.store = Store::new(Box::new(items.clone()));
+        keyd.consent = Box::new(Arc::clone(&consent));
+        let planted = [UNTRUSTED_VALUE, br#"{"digest":"aa","generation":9}"#].concat();
+        items
+            .write(PIN_SERVICE, OWNER_PINS_ACCOUNT, &planted)
+            .unwrap();
+        let nonce = "abcdefghijklmnopqrstuvwx";
+
+        let status = owner_pins(&keyd, "owner/pins-status", json!({ "nonce": nonce }));
+        assert_eq!(status["error"]["code"], UNTRUSTED_ITEM);
+        assert!(status.get("result").is_none(), "nothing is signed for it");
+
+        // Declined, the item is left as it was.
+        let one = json!([pin("yubikey", FP_A)]);
+        let attest = json!({ "pins": one, "nonce": nonce });
+        let declined = owner_pins(&keyd, "owner/pins-attest", attest.clone());
+        assert_eq!(declined["error"]["code"], -32000);
+        let asked = consent.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert!(
+            asked[0].ends_with(crate::pins::REPLACING_UNTRUSTED),
+            "{}",
+            asked[0]
+        );
+        assert_eq!(
+            items.0.lock().unwrap()[&(PIN_SERVICE.into(), OWNER_PINS_ACCOUNT.into())],
+            planted
+        );
+
+        // Approved, the set is recorded from generation 1: the planted value
+        // never sets the count.
+        keyd.consent = Box::new(Consenting::new(true));
+        let attested = owner_pins(&keyd, "owner/pins-attest", attest);
+        let payload = pins_payload(&keyd, &attested);
+        assert_eq!(payload["generation"], 1);
+        assert_eq!(
+            payload["digest"],
+            crate::pins::digest(&crate::pins::parse(&one).unwrap())
+        );
+        let status = owner_pins(&keyd, "owner/pins-status", json!({ "nonce": nonce }));
+        assert_eq!(pins_payload(&keyd, &status)["generation"], 1);
+    }
+
+    /// A presence seed keyd does not control is never signed with, and the
+    /// refusal says it is untrusted rather than unavailable or declined.
+    #[test]
+    fn an_untrusted_presence_seed_signs_nothing() {
+        use crate::pins::tests::{pin, FP_A};
+        use crate::store::tests::UNTRUSTED_VALUE;
+        use crate::store::{Items, PIN_SERVICE, PRESENCE_ACCOUNT};
+        let items = Memory::default();
+        let mut keyd = keyd(true);
+        keyd.store = Store::new(Box::new(items.clone()));
+        let consent = Arc::new(Consenting::new(true));
+        keyd.consent = Box::new(Arc::clone(&consent));
+        items
+            .write(PIN_SERVICE, PRESENCE_ACCOUNT, UNTRUSTED_VALUE)
+            .unwrap();
+        let nonce = "abcdefghijklmnopqrstuvwx";
+        let answer = presence(&keyd, json!({ "action": "soul comms off", "nonce": nonce }));
+        assert_eq!(answer["error"]["code"], UNTRUSTED_ITEM);
+        for method in ["owner/pins-status", "owner/pins-attest"] {
+            let answer = owner_pins(
+                &keyd,
+                method,
+                json!({ "pins": [pin("yubikey", FP_A)], "nonce": nonce }),
+            );
+            assert_eq!(answer["error"]["code"], UNTRUSTED_ITEM, "{method}");
+        }
+        assert!(consent.asked.lock().unwrap().is_empty(), "nobody is asked");
     }
 
     #[test]

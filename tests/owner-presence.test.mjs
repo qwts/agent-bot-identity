@@ -542,6 +542,9 @@ test('keydPresence tells "nobody can be asked" apart from "the owner said no"', 
     { code: 'owner-declined' });
   await assert.rejects(keydPresence('x', failing(Object.assign(new Error('agent-bot-keyd did not answer in time'), { code: 'keyd-timeout' }))),
     { code: 'owner-declined' });
+  // A presence seed keyd does not control is neither the owner's no nor nobody to ask (#753).
+  await assert.rejects(keydPresence('x', failing(Object.assign(new Error('not one agent-bot-keyd controls'), { code: 'keyd-untrusted', rpcCode: -32002 }))),
+    { code: 'keyd-untrusted', message: /does not control/ });
 });
 
 test('keydAttestPins asks keyd to record the whole key set and checks the record is that set', async (t) => {
@@ -579,6 +582,14 @@ test('keydAttestPins asks keyd to record the whole key set and checks the record
     { code: 'presence-unavailable', message: /cannot record owner keys/ });
   await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('the owner did not approve (-2)'), { code: 'keyd-refused', rpcCode: -32000 }))),
     { code: 'owner-declined' });
+  await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('not one agent-bot-keyd controls'), { code: 'keyd-untrusted', rpcCode: -32002 }))),
+    { code: 'keyd-untrusted' });
+});
+
+test('an untrusted keyd item refuses the owner action with its code, never falling back to the dialog', async () => {
+  const presence = () => { throw Object.assign(new Error('agent-bot-keyd refused an item it does not control'), { code: 'keyd-untrusted' }); };
+  await assert.rejects(presenceOrConsent(`soul comms ${ID} off`, { presence,
+    consent: () => assert.fail('an untrusted item never falls back'), summarize: (text) => text }), { code: 'keyd-untrusted' });
 });
 
 test('the gate asks keyd first and falls back to the administrator dialog only when keyd cannot ask', async () => {

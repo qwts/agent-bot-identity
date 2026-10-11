@@ -14,7 +14,7 @@ import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import {
   KEYD_GRANT_META, KEYD_PINNED_VERSION, appKeydAvailability, daemonGrantPublicKey, importAppIntoKeyd, importIntoKeyd, keydMcpServerEntry, keydPaths, keydPolicyRules,
-  keydRequest, keydStatus, mintViaKeyd, readKeydRecord, removeAppFromKeyd, signKeydGrant,
+  KEYD_UNTRUSTED_ITEM_RPC, keydRequest, keydStatus, mintViaKeyd, readKeydRecord, removeAppFromKeyd, signKeydGrant,
 } from '../keyd-client.mjs';
 import { installKeyd, uninstallKeyd } from '../keyd-supervisor.mjs';
 import { appConfig, mint } from '../mint-token.mjs';
@@ -141,14 +141,18 @@ test('keydRequest speaks newline-delimited JSON-RPC and reports keyd refusals an
       const message = JSON.parse(String(chunk).trim());
       const reply = message.method === 'owner/status'
         ? { jsonrpc: '2.0', id: message.id, result: { pinned: true, version: '0.1.0' } }
-        : { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'the owner did not approve' } };
+        : message.method === 'owner/pins-status'
+          ? { jsonrpc: '2.0', id: message.id, error: { code: -32002, message: 'the keychain item for owner-pins is not one agent-bot-keyd controls' } }
+          : { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'the owner did not approve' } };
       connection.end(`${JSON.stringify(reply)}\n`);
     });
   });
   await new Promise((resolve) => server.listen(socket, resolve));
   t.after(() => server.close());
   assert.deepEqual(await keydRequest(socket, 'owner/status'), { pinned: true, version: '0.1.0' });
-  await assert.rejects(keydRequest(socket, 'owner/import', {}), /the owner did not approve/);
+  await assert.rejects(keydRequest(socket, 'owner/import', {}), { code: 'keyd-refused', rpcCode: -32000, message: /the owner did not approve/ });
+  // An item keyd does not control is its own error, never a refusal or absence (#753).
+  await assert.rejects(keydRequest(socket, 'owner/pins-status', {}), { code: 'keyd-untrusted', rpcCode: KEYD_UNTRUSTED_ITEM_RPC });
   await assert.rejects(keydRequest(path.join(dir, 'missing'), 'owner/status'), { code: 'keyd-unavailable' });
 
   // A keyd that hangs up mid-answer settles the call instead of leaving it pending.

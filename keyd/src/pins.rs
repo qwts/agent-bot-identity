@@ -157,6 +157,11 @@ pub fn reason(pins: &[Pin]) -> String {
     )
 }
 
+/// Added to the prompt when the record being replaced is a Keychain item keyd
+/// does not control, so the owner knows the approval also repairs it.
+pub const REPLACING_UNTRUSTED: &str =
+    ". This replaces a record of your keys that agent-bot-keyd did not make";
+
 pub fn sign(
     seed: &[u8; 32],
     digest: Option<&str>,

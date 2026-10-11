@@ -85,11 +85,54 @@ pub const PRESENCE_ACCOUNT: &str = "presence-key";
 pub const OWNER_PINS_ACCOUNT: &str = "owner-pins";
 pub const APP_SERVICE: &str = "agent-bot.keyd.app";
 
-/// The marker on a store error meaning the item is there but is not one keyd
-/// controls (#753), as against a keychain that could not be read at all. A
-/// caller that can replace the item — `owner/pin` over the daemon key — may
-/// treat it as absent; a caller that cannot, fails on it.
-const UNTRUSTED_ITEM: &str = "not one agent-bot-keyd controls";
+/// Why a pin could not be read. `Untrusted` means the item is there but is not
+/// one keyd controls (#753), as against `Failed`, a keychain that could not be
+/// read or a value that does not parse. A caller that can replace the item —
+/// `owner/pin` over the daemon key, `owner/pins-attest` over the owner key
+/// record — may treat it as absent; a caller that cannot, fails on it and
+/// says which (server.rs `UNTRUSTED_ITEM`), so "untrusted" is never read as
+/// "absent" by mistake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreError {
+    Untrusted { account: String },
+    Failed(String),
+}
+
+impl StoreError {
+    pub fn is_untrusted(&self) -> bool {
+        matches!(self, Self::Untrusted { .. })
+    }
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Untrusted { account } => write!(
+                f,
+                "the keychain item for {account} is not one agent-bot-keyd controls: any process in this account can change it, so its value was refused"
+            ),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<String> for StoreError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+impl From<&str> for StoreError {
+    fn from(message: &str) -> Self {
+        Self::Failed(message.to_owned())
+    }
+}
+
+impl From<StoreError> for String {
+    fn from(error: StoreError) -> Self {
+        error.to_string()
+    }
+}
 
 pub fn item(agent_id: &str, app: &str) -> Result<(String, String), &'static str> {
     if !is_agent_id(agent_id) || !is_app_slug(app) {
@@ -110,7 +153,7 @@ pub fn app_item(app: &str) -> Result<(String, String), &'static str> {
 
 /// Raw generic-password access; everything above it is shared.
 pub trait Items: Send + Sync {
-    fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String>;
+    fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, StoreError>;
     fn write(&self, service: &str, account: &str, value: &[u8]) -> Result<(), String>;
     /// Atomically adds an absent item; false means it already exists unchanged.
     fn insert(&self, service: &str, account: &str, value: &[u8]) -> Result<bool, String>;
@@ -205,8 +248,8 @@ impl Store {
         // the item would be the one refusing to run.
         let value = match self.items.read(PIN_SERVICE, PIN_ACCOUNT) {
             Ok(value) => value,
-            Err(error) if error.contains(UNTRUSTED_ITEM) => None,
-            Err(error) => return Err(error),
+            Err(StoreError::Untrusted { .. }) => None,
+            Err(error) => return Err(error.into()),
         };
         let Some(value) = value else {
             return Ok(None);
@@ -225,17 +268,17 @@ impl Store {
     }
 
     /// keyd's presence signing seed, made and kept on first use.
-    pub fn presence_seed(&self) -> Result<[u8; 32], String> {
+    pub fn presence_seed(&self) -> Result<[u8; 32], StoreError> {
         if let Some(mut value) = self.items.read(PIN_SERVICE, PRESENCE_ACCOUNT)? {
             let decoded = STANDARD.decode(value.trim_ascii());
             value.fill(0);
             let mut raw = decoded.map_err(|_| "presence key is malformed".to_owned())?;
             let seed: Result<[u8; 32], _> = raw.as_slice().try_into();
             raw.fill(0);
-            return seed.map_err(|_| "presence key is malformed".to_owned());
+            return seed.map_err(|_| "presence key is malformed".into());
         }
         let mut seed = [0u8; 32];
-        getrandom::fill(&mut seed).map_err(|_| "no randomness for the presence key".to_owned())?;
+        getrandom::fill(&mut seed).map_err(|_| "no randomness for the presence key")?;
         let mut value = STANDARD.encode(seed).into_bytes();
         let written = self.items.write(PIN_SERVICE, PRESENCE_ACCOUNT, &value);
         value.fill(0);
@@ -245,7 +288,7 @@ impl Store {
 
     /// The digest and generation of the key set the owner last approved;
     /// None before the first approval.
-    pub fn owner_pins(&self) -> Result<Option<OwnerPins>, String> {
+    pub fn owner_pins(&self) -> Result<Option<OwnerPins>, StoreError> {
         let Some(value) = self.items.read(PIN_SERVICE, OWNER_PINS_ACCOUNT)? else {
             return Ok(None);
         };
@@ -261,7 +304,7 @@ impl Store {
                         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             })
             .map(Some)
-            .ok_or_else(|| "the owner key record is malformed".to_owned())
+            .ok_or_else(|| "the owner key record is malformed".into())
     }
 
     pub fn put_owner_pins(&self, record: &OwnerPins) -> Result<(), String> {
@@ -303,7 +346,7 @@ pub struct OwnerPins {
 /// can carry.
 #[cfg(target_os = "macos")]
 pub mod keychain {
-    use super::{Items, PIN_SERVICE, UNTRUSTED_ITEM};
+    use super::{Items, StoreError, PIN_SERVICE};
     use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::data::CFData;
@@ -747,12 +790,6 @@ pub mod keychain {
         service != PIN_SERVICE
     }
 
-    fn untrusted(account: &str) -> String {
-        format!(
-            "the keychain item for {account} is {UNTRUSTED_ITEM}: any process in this account can change it, so its value was refused"
-        )
-    }
-
     /// The login keychain, or (tests) a keychain file of its own.
     pub struct Keychain {
         path: Option<PathBuf>,
@@ -806,7 +843,7 @@ pub mod keychain {
     }
 
     impl Items for Keychain {
-        fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
+        fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, StoreError> {
             no_prompts()?;
             let keychain = self.open()?;
             let Some((password, item)) = self.find(&keychain, service, account)? else {
@@ -818,7 +855,9 @@ pub mod keychain {
             // An item from before the access list was locked, or one another
             // process planted. Either way keyd did not make it.
             if !recreatable(service) {
-                return Err(untrusted(account));
+                return Err(StoreError::Untrusted {
+                    account: account.to_owned(),
+                });
             }
             let value = password.to_vec();
             drop(password);
@@ -878,14 +917,27 @@ pub mod tests {
     #[derive(Clone, Default)]
     pub struct Memory(pub Arc<Mutex<MemoryItems>>);
 
+    /// A value under this prefix stands for an item keyd does not control,
+    /// so tests reach the refusal the keychain gives without a keychain.
+    pub const UNTRUSTED_VALUE: &[u8] = b"untrusted:";
+
     impl Items for Memory {
-        fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
-            Ok(self
+        fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, StoreError> {
+            let value = self
                 .0
                 .lock()
                 .unwrap()
                 .get(&(service.into(), account.into()))
-                .cloned())
+                .cloned();
+            if value
+                .as_deref()
+                .is_some_and(|v| v.starts_with(UNTRUSTED_VALUE))
+            {
+                return Err(StoreError::Untrusted {
+                    account: account.into(),
+                });
+            }
+            Ok(value)
         }
         fn write(&self, service: &str, account: &str, value: &[u8]) -> Result<(), String> {
             self.0
@@ -1055,6 +1107,31 @@ pub mod tests {
         exercise(&Store::new(Box::<Memory>::default()));
     }
 
+    /// A pin keyd does not control is told apart from one that is absent or
+    /// unreadable: the daemon key reads as unpinned, which `owner/pin` then
+    /// replaces, and the presence seed and owner key record answer
+    /// `StoreError::Untrusted`, never a value and never "none" (#753).
+    #[test]
+    fn an_untrusted_pin_is_typed_not_absent() {
+        let items = Memory::default();
+        let store = Store::new(Box::new(items.clone()));
+        for account in [PIN_ACCOUNT, PRESENCE_ACCOUNT, OWNER_PINS_ACCOUNT] {
+            items
+                .write(PIN_SERVICE, account, &[UNTRUSTED_VALUE, b"legacy"].concat())
+                .unwrap();
+        }
+        assert_eq!(store.pinned_key().unwrap(), None);
+        let untrusted = |account: &str| StoreError::Untrusted {
+            account: account.to_owned(),
+        };
+        assert_eq!(store.presence_seed(), Err(untrusted(PRESENCE_ACCOUNT)));
+        assert_eq!(store.owner_pins(), Err(untrusted(OWNER_PINS_ACCOUNT)));
+        assert!(store.owner_pins().unwrap_err().is_untrusted());
+        // A malformed record is a failure of another kind.
+        items.write(PIN_SERVICE, OWNER_PINS_ACCOUNT, b"{}").unwrap();
+        assert!(!store.owner_pins().unwrap_err().is_untrusted());
+    }
+
     #[test]
     fn simultaneous_create_only_writes_have_one_winner() {
         let items = Memory::default();
@@ -1210,13 +1287,17 @@ pub mod tests {
                     "{account} should be an item keyd did not make"
                 );
                 let refused = items.read(PIN_SERVICE, account);
-                assert!(refused.is_err(), "an untrusted {account} is not read");
-                assert!(
-                    refused
-                        .unwrap_err()
-                        .contains("not one agent-bot-keyd controls"),
-                    "and the refusal says why"
+                assert_eq!(
+                    refused,
+                    Err(StoreError::Untrusted {
+                        account: account.to_owned()
+                    }),
+                    "an untrusted {account} is not read, and the refusal says so by type"
                 );
+                assert!(refused
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not one agent-bot-keyd controls"));
             }
         });
     }

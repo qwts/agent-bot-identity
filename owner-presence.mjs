@@ -58,6 +58,14 @@ function unavailable(message) {
   return Object.assign(new Error(message), { code: 'presence-unavailable' });
 }
 
+// keyd refused because a pin it needs is a Keychain item it does not control
+// (#753). Not "nobody could be asked", so the gate never falls back to its
+// dialog on it, and not the owner's no: the item needs the owner's repair.
+function untrustedItem(error) {
+  return Object.assign(new Error(`agent-bot-keyd refused an item it does not control (${error.message})`),
+    { code: 'keyd-untrusted', cause: error });
+}
+
 function rawKey(text) {
   if (typeof text !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(text)) return null;
   return Buffer.from(text, 'base64').length === 32 ? text : null;
@@ -333,6 +341,7 @@ export async function keydPresence(action, {
     result = await request(keydPaths({ env, home }).ownerSocket, 'owner/presence', { action, nonce: sent }, { timeoutMs: OWNER_TIMEOUT_MS });
   } catch (error) {
     if (error.code === 'keyd-unavailable' || error.rpcCode === PRESENCE_UNAVAILABLE_RPC) throw unavailable(error.message);
+    if (error.code === 'keyd-untrusted') throw untrustedItem(error);
     throw Object.assign(new Error(`the owner did not approve (${error.message})`), { code: 'owner-declined' });
   }
   verifyPresence(result?.assertion, { key, action, nonce: sent, now: now() });
@@ -377,6 +386,7 @@ export async function keydAttestPins(pins, {
   } catch (error) {
     if (error.rpcCode === -32601) throw unavailable('this agent-bot-keyd cannot record owner keys; update it');
     if (error.code === 'keyd-unavailable' || error.rpcCode === PRESENCE_UNAVAILABLE_RPC) throw unavailable(error.message);
+    if (error.code === 'keyd-untrusted') throw untrustedItem(error);
     throw Object.assign(new Error(`the owner did not approve (${error.message})`), { code: 'owner-declined' });
   }
   const record = verifyPinsAttestation(result?.attestation, { key, nonce: sent, now: now() });
