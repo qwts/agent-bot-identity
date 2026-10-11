@@ -230,9 +230,10 @@ available to that soul through a supported reader. Execution facts from
 explicit unsupported coverage; they cannot be replaced by reading arbitrary
 host-wide harness stores or another soul's sessions.
 
-The first implementation supports definition and learned-skill sources only,
-verified against the soul revision and file digests. Memory-tool and conversation
-adapters report `unsupported` until implemented. A conversation reader must use
+The first implementation supported definition and learned-skill sources only,
+verified against the soul revision and file digests. Memory-tool adapters report
+`unsupported` until implemented; the conversation reader below covers the soul's
+own recorded session. A conversation reader must use
 the same verified store origin as its session; an unknown origin cannot be
 guessed from a current environment override. These are explicit partial coverage,
 not proof that every soul knowledge source was maintained.
@@ -258,6 +259,30 @@ excerpts are explicit. Selection cursors are revision-bound pagination only;
 they never assert successful processing or advance a maintenance checkpoint.
 The host must pass the registered canonical soul directory. This internal reader
 does not expose daemon controls or activate execution.
+
+### Conversation input
+
+Input format 2 adds the soul's own conversation (#603, owner decision 1). The
+daemon passes the soul's wake-session record for its harness, and only that
+session is read, only when the record says it lives in the soul's tool home
+(`store: soul`). The recorded origin decides; the current tool-home routing is
+not consulted. A session in the host's store, a missing or damaged record, a
+harness without a reader, `.soul-state/runs` and other souls' sessions are never
+read and report `conversations: unsupported`. Codex is the first reader: it
+looks under `.soul-state/tools/codex/sessions/` for exactly one
+`rollout-*-<session>.jsonl`, through a bounded walk (4096 entries, depth 3) that
+follows no link. A recorded soul-store session that is missing, ambiguous,
+linked, outside the tool home, binary or not UTF-8 reports `unavailable`; it
+never fails the run.
+
+The excerpt is the newest whole lines within 64 KiB, since the file is a live,
+append-only log, and its digest is of the delivered excerpt; `size` is the file
+size when read and `truncated` says older lines were left out. Durable metadata
+names the harness, session, digest, size, excerpt bytes and truncation, never
+the text. The prompt presents the excerpt as untrusted context for what to
+learn, not a source to report on: outcome items still name package sources only,
+so a conversation earns no processing credit. Format 1 metadata stays valid
+exactly as recorded. Memory sources remain `unsupported`.
 
 Inventory entries identify the source, revision/checksum or adapter cursor, and
 why it was selected. Source content remains untrusted data. Credentials, runtime

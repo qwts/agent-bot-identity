@@ -25,7 +25,7 @@ const posix = { skip: process.platform === 'win32' };
 const principal = { principal: 'principal_12345678-1234-4123-8123-123456789abc', secret: 'p'.repeat(64), brokerUid: process.getuid?.() + 1, mode: 'group' };
 const until = async check => { const end = Date.now() + 8_000; while (!check()) { assert.ok(Date.now() < end, 'fixture did not become ready'); await new Promise(resolve => setTimeout(resolve, 5)); } };
 
-function fixture(t, { scenario = null, configured = true, executorFor: customFactory = null } = {}) {
+function fixture(t, { scenario = null, configured = true, executorFor: customFactory = null, recordedSession } = {}) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'dream-service-'))), soul = path.join(root, 'fixture.soul'), directory = path.join(root, 'state', 'dream');
   mkdirSync(soul); mkdirSync(path.join(soul, '.soul-state'));
   const manifest = { formatVersion: 2, ignore: PACKAGE_IGNORE_LIST, name: 'Fixture', description: 'Dream fixture', displaySeed: 'dream-fixture', preferredHarnesses: ['codex'], revision: `sha256:${'0'.repeat(64)}`, parentRevision: null, template: false };
@@ -60,6 +60,7 @@ function fixture(t, { scenario = null, configured = true, executorFor: customFac
     lookupSoul: () => ({ directory: moved ? `${soul}-moved` : soul, harness: 'codex' }), isPaused: () => paused,
     now: () => new Date(at), approvals: async request => { approvals.push(request); return { decision: 'deny' }; },
     setIntervalImpl: (callback, ms) => { poll = callback; timers.push(ms); return 1; }, clearIntervalImpl: () => { poll = null; },
+    ...(recordedSession ? { recordedSession } : {}),
   };
   service = createDreamService(options);
   t.after(async () => { service.shutdown(); await service.idle(); rmSync(root, { recursive: true, force: true }); });
@@ -356,6 +357,35 @@ test('a failed stop observer cannot prevent the shared controller from cancellin
   const done = turns.run({ invocation: { agentId: ID } }, ({ signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })));
   const rejected = assert.rejects(done, { name: 'AbortError' });
   assert.equal(turns.stop(ID), true); await rejected; assert.deepEqual(turns.busy(), []);
+});
+
+test('dream input carries the soul\'s own recorded session, and a damaged record never fails the run (#603)', posix, async t => {
+  const THREAD = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b', seen = [], asked = [];
+  let record = () => ({ sessionId: THREAD, store: 'soul' });
+  const f = fixture(t, { recordedSession: (agentId, harness) => { asked.push([agentId, harness]); return record(); },
+    executorFor: () => async input => {
+      const captured = JSON.parse(input.message.split('\n\n').at(-1)); seen.push(captured);
+      input.appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk', content: { text: JSON.stringify({
+        schemaVersion: 1, runId: captured.runId, startingRevision: captured.revision, items: [] }) } });
+    } });
+  const day = path.join(f.soul, '.soul-state', 'tools', 'codex', 'sessions', '2026', '10', '10');
+  mkdirSync(day, { recursive: true });
+  writeFileSync(path.join(day, `rollout-2026-10-10T10-00-00-${THREAD}.jsonl`), '{"text":"CONVERSATION_CANARY"}\n');
+  f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
+  assert.deepEqual(asked, [[ID, 'codex']]);
+  assert.equal(seen[0].conversation.excerpt, '{"text":"CONVERSATION_CANARY"}\n');
+  assert.equal(seen[0].coverage.conversations, 'supported');
+  const prepared = () => f.service.history().records.flatMap(row => row.events).filter(event => event.kind === 'inputs-prepared').at(-1);
+  assert.equal(prepared().inputs.schemaVersion, 2);
+  assert.equal(prepared().inputs.conversation.sessionId, THREAD);
+  assert.equal(JSON.stringify(f.service.history()).includes('CONVERSATION_CANARY'), false, 'the excerpt never reaches the journal');
+  record = () => { throw Object.assign(new Error('damaged'), { code: 'wake-session-record-invalid' }); };
+  f.control('run-now'); await f.service.idle();
+  assert.deepEqual([seen[1].conversation, seen[1].coverage.conversations], [null, 'unsupported']);
+  assert.equal(f.service.status().registrations[0].lastRun.status, 'completed');
+  record = () => ({ sessionId: THREAD, store: 'host' });
+  f.control('run-now'); await f.service.idle();
+  assert.deepEqual([seen[2].conversation, seen[2].coverage.conversations], [null, 'unsupported'], 'the host store is never read');
 });
 
 test('durable selection rotates bounded pages across restart, wraps blocked items and resets on source change', posix, async t => {
