@@ -489,9 +489,14 @@ function profileFromRuntimeConfig(config) {
 // drifted from their snapshot (a harness mapping outside the embedded
 // roster, an `owner` other than the account owner the profile projects) are
 // not projections and are never overwritten.
+// Keys a profile never projects: local add-on choices (feature gates and the
+// executor policy, #259) that a machine keeps across profile advances (#980).
+export const LOCAL_RUNTIME_CONFIG_KEYS = Object.freeze(['features', 'executor']);
+
 export function isProjectedRuntimeConfig(config) {
   if (!config || typeof config !== 'object' || !Object.hasOwn(config, 'profile')) return false;
-  const { scope, features, ...unscoped } = config;
+  const { scope, ...rest } = config;
+  const unscoped = Object.fromEntries(Object.entries(rest).filter(([key]) => !LOCAL_RUNTIME_CONFIG_KEYS.includes(key)));
   try {
     return isDeepStrictEqual(organizationProfileToConfig(profileFromRuntimeConfig(unscoped)), unscoped);
   } catch {

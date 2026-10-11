@@ -22,6 +22,7 @@ import { installGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
   isProjectedRuntimeConfig,
+  LOCAL_RUNTIME_CONFIG_KEYS,
   organizationProfileToConfig,
   parseOrganizationProfile,
   readOrganizationProfile,
@@ -198,12 +199,11 @@ function narrowsRosterScope(current, next) {
   return isDeepStrictEqual(current, unscoped);
 }
 
-// Local add-on choices a profile never projects: feature gates and the
-// executor policy (#259). An advancing profile keeps them as they are (#980).
-const LOCAL_CONFIG_KEYS = ['features', 'executor'];
-
+// Local add-on choices a profile never projects (LOCAL_RUNTIME_CONFIG_KEYS:
+// feature gates and the executor policy). An advancing profile keeps them as
+// they are (#980).
 function withoutLocalKeys(config) {
-  return Object.fromEntries(Object.entries(config).filter(([key]) => !LOCAL_CONFIG_KEYS.includes(key)));
+  return Object.fromEntries(Object.entries(config).filter(([key]) => !LOCAL_RUNTIME_CONFIG_KEYS.includes(key)));
 }
 
 function sameProfileProjection(current, next) {
@@ -234,7 +234,7 @@ function configConflict(code, keys) {
 // kept as it is (or narrowed from none); removing or changing one is still
 // a conflict, and hand-written or edited configs are never overwritten.
 function advancesProjectedProfile(current, next) {
-  if (!next || !Object.hasOwn(next, 'profile') || !isProjectedRuntimeConfig(withoutLocalKeys(current))) return false;
+  if (!next || !Object.hasOwn(next, 'profile') || !isProjectedRuntimeConfig(current)) return false;
   if (current.scope === undefined) return true;
   return isDeepStrictEqual(current.scope, next.scope);
 }
@@ -271,7 +271,7 @@ function publishBootstrapConfig({
     const preserveApps = config.identityApps === undefined && installed.identityApps !== undefined;
     const { identityApps, ...policy } = installed;
     const current = preserveApps ? policy : installed;
-    if (isDeepStrictEqual(current, config) || (preserveLocalFeatures && isProjectedRuntimeConfig(withoutLocalKeys(current)) && sameProfileProjection(current, config))) {
+    if (isDeepStrictEqual(current, config) || (preserveLocalFeatures && isProjectedRuntimeConfig(current) && sameProfileProjection(current, config))) {
       return { config: installed, path: destination, updated: false };
     }
     // Adding a roster scope to an unscoped config projected from the same
@@ -296,7 +296,7 @@ function publishBootstrapConfig({
     // organization-profile edits. Preserve them while advancing the profile
     // projection; an explicit --config source carries its own choices.
     if (preserveLocalFeatures && advancingProfile) {
-      for (const key of LOCAL_CONFIG_KEYS) {
+      for (const key of LOCAL_RUNTIME_CONFIG_KEYS) {
         if (current[key] !== undefined) config = { ...config, [key]: current[key] };
       }
     }

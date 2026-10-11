@@ -1205,6 +1205,10 @@ test('a profile advance keeps local executor policy, and a conflict names its ke
   assert.deepEqual(advanced.features, features);
   assert.deepEqual(advanced.executor, executor);
   assert.equal(install(home, withSettings).updated, false);
+  // The shared predicate agrees: local keys never make a projection "edited".
+  assert.equal(isProjectedRuntimeConfig(advanced), true);
+  assert.equal(isProjectedRuntimeConfig({ ...advanced, features: { 'github-identity': false }, executor: { enabled: false } }), true);
+  assert.equal(isProjectedRuntimeConfig({ ...advanced, owner: 'example-hand-owner' }), false);
 
   // A scope change still refuses, naming the keys that differ.
   const scoped = tempHome();
