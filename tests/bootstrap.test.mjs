@@ -17,6 +17,7 @@ import {
   bootstrap,
   bootstrapConfigPath,
   configuredAppSlugs,
+  differingConfigKeys,
   installBootstrapConfig,
   installBootstrapProfile,
   main as bootstrapMain,
@@ -1171,4 +1172,91 @@ test('bootstrap names a missing or empty --profile file and gh\'s login behind a
   }
   const throwing = await failure(['--repair'], null, { repairProfile: selectionUnreadable, probeGh: () => { throw new Error('gh exploded'); } });
   assert.equal(throwing.code, 'profile-selection-unreadable');
+});
+
+// #980: a config projected from the same profile plus local `features` and a
+// local `executor` policy refused a profile that only added `settings`, with
+// empty evidence.
+test('a profile advance keeps local executor policy, and a conflict names its keys, never values (#980)', async () => {
+  const withSettings = organizationProfile({
+    settings: { unmanaged_authors: ['example-owner'], keyd_team_id: 'ABCDE12345' },
+  });
+  const install = (home, profile, scopeApps = []) => installBootstrapProfile({
+    sourcePath: '-', scopeApps, home, env: {}, read: () => JSON.stringify(profile),
+  });
+  const localEdits = (home, edit) => {
+    const config = loadConfig({ home, env: {} });
+    edit(config);
+    writeFileSync(bootstrapConfigPath(home), `${JSON.stringify(config, null, 2)}\n`);
+  };
+  const features = { 'github-identity': true, 'persona-accounts': false };
+  const executor = { enabled: true, policy: { allow: ['read'] } };
+
+  const home = tempHome();
+  install(home, organizationProfile());
+  localEdits(home, (config) => Object.assign(config, { features, executor }));
+  // The same profile again changes nothing and keeps both.
+  assert.equal(install(home, organizationProfile()).updated, false);
+  // A profile that only adds settings advances in place, keeping both.
+  assert.equal(install(home, withSettings).updated, true);
+  const advanced = loadConfig({ home, env: {} });
+  assert.deepEqual(advanced.settings.unmanagedAuthors, ['example-owner']);
+  assert.equal(advanced.settings.keydTeamId, 'ABCDE12345');
+  assert.deepEqual(advanced.features, features);
+  assert.deepEqual(advanced.executor, executor);
+  assert.equal(install(home, withSettings).updated, false);
+  // The shared predicate agrees: local keys never make a projection "edited".
+  assert.equal(isProjectedRuntimeConfig(advanced), true);
+  assert.equal(isProjectedRuntimeConfig({ ...advanced, features: { 'github-identity': false }, executor: { enabled: false } }), true);
+  assert.equal(isProjectedRuntimeConfig({ ...advanced, owner: 'example-hand-owner' }), false);
+
+  // A scope change still refuses, naming the keys that differ.
+  const scoped = tempHome();
+  install(scoped, organizationProfile(), ['example-codex-sol-agent']);
+  localEdits(scoped, (config) => Object.assign(config, { executor }));
+  assert.throws(() => install(scoped, withSettings, ['example-codex-agent']), (error) => {
+    assert.equal(error.code, 'profile-config-conflict');
+    assert.deepEqual(error.differingKeys, ['scope', 'settings']);
+    return true;
+  });
+
+  // A hand-set owner makes the config no longer a projection: it refuses,
+  // naming owner and settings, local keys aside.
+  const edited = tempHome();
+  install(edited, organizationProfile());
+  localEdits(edited, (config) => Object.assign(config, { features, executor, owner: 'example-hand-owner' }));
+  const before = readFileSync(bootstrapConfigPath(edited), 'utf8');
+  assert.throws(() => install(edited, withSettings), (error) => {
+    assert.equal(error.code, 'profile-config-conflict');
+    assert.deepEqual(error.differingKeys, ['owner', 'settings']);
+    return true;
+  });
+  assert.equal(readFileSync(bootstrapConfigPath(edited), 'utf8'), before);
+
+  // Bootstrap's report carries the names in its message and evidence, and no value.
+  const report = await bootstrap(parseBootstrapArgs(['--profile', '-', '--machine-only']), {
+    home: edited,
+    env: { HOME: edited },
+    installProfile: (options) => installBootstrapProfile({ ...options, read: () => JSON.stringify(withSettings) }),
+    gate: () => false,
+    installRuntime: () => assert.fail('a conflict stops every machine mutation'),
+    run: () => assert.fail('no worktree is bound'),
+    collect: ({ operationFailure, scope }) => ({
+      ...readyReport(scope),
+      ready: false,
+      machine: { status: 'not_ready', checks: [operationFailure.check], apps: [] },
+      first_actionable_failure: { ...operationFailure.check, check_id: operationFailure.check.id },
+    }),
+  });
+  const failure = report.first_actionable_failure;
+  assert.equal(failure.code, 'profile-config-conflict');
+  assert.match(failure.message, /\(differs in: owner, settings\)$/);
+  assert.deepEqual(failure.evidence, { differing_keys: ['owner', 'settings'] });
+  assert.doesNotMatch(JSON.stringify(report), /ABCDE12345|example-owner|example-hand-owner/);
+});
+
+test('differing config keys are names only, with odd names folded (#980)', () => {
+  assert.deepEqual(differingConfigKeys({ a: 1, b: { x: 1 }, c: 1 }, { a: 1, b: { x: 2 }, d: 1 }), ['b', 'c', 'd']);
+  assert.deepEqual(differingConfigKeys({ 'ghs_secret value': 1, '../x': 2 }, {}), ['(other)']);
+  assert.deepEqual(differingConfigKeys({ a: 1 }, { a: 1 }), []);
 });

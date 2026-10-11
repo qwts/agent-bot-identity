@@ -1,0 +1,1 @@
+- `bootstrap --profile` keeps a local `executor` policy, like local `features`, when it advances a projected profile, so a profile that only adds `settings` advances in place; a `profile-config-conflict` now names the top-level keys that differ (never their values) in its message and `differing_keys` evidence (#980).

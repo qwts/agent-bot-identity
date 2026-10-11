@@ -22,6 +22,7 @@ import { installGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
   isProjectedRuntimeConfig,
+  LOCAL_RUNTIME_CONFIG_KEYS,
   organizationProfileToConfig,
   parseOrganizationProfile,
   readOrganizationProfile,
@@ -198,10 +199,32 @@ function narrowsRosterScope(current, next) {
   return isDeepStrictEqual(current, unscoped);
 }
 
+// Local add-on choices a profile never projects (LOCAL_RUNTIME_CONFIG_KEYS:
+// feature gates and the executor policy). An advancing profile keeps them as
+// they are (#980).
+function withoutLocalKeys(config) {
+  return Object.fromEntries(Object.entries(config).filter(([key]) => !LOCAL_RUNTIME_CONFIG_KEYS.includes(key)));
+}
+
 function sameProfileProjection(current, next) {
-  const { features: _currentFeatures, ...currentProjection } = current;
-  const { features: _nextFeatures, ...nextProjection } = next;
-  return isDeepStrictEqual(currentProjection, nextProjection);
+  return isDeepStrictEqual(withoutLocalKeys(current), withoutLocalKeys(next));
+}
+
+// The top-level keys whose values differ, by name only: a conflict names what
+// blocks it without repeating any value (#980). A key that is not a plain
+// identifier is reported as `(other)`.
+const CONFIG_KEY_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
+export function differingConfigKeys(current, next) {
+  const keys = new Set([...Object.keys(current ?? {}), ...Object.keys(next ?? {})]);
+  const differing = [...keys].filter((key) => !isDeepStrictEqual(current?.[key], next?.[key]));
+  return [...new Set(differing.map((key) => (CONFIG_KEY_NAME.test(key) ? key : '(other)')))].sort();
+}
+
+function configConflict(code, keys) {
+  const error = new OrganizationProfileError(code, 'installed runtime config conflicts with the organization profile');
+  error.differingKeys = keys;
+  return error;
 }
 
 // A config that is purely the projection of an older published profile
@@ -260,20 +283,22 @@ function publishBootstrapConfig({
     const advancingProfile = advancesProjectedProfile(current, config);
     if (!narrowsRosterScope(current, config) && !advancingProfile) {
       if (conflictCode) {
-        throw new OrganizationProfileError(
-          conflictCode,
-          'installed runtime config conflicts with the organization profile',
-        );
+        throw configConflict(conflictCode, differingConfigKeys(
+          preserveLocalFeatures ? withoutLocalKeys(current) : current,
+          preserveLocalFeatures ? withoutLocalKeys(config) : config,
+        ));
       }
       throw new Error(
         `${destination} conflicts with ${sourceDescription}; move it aside or reconcile it explicitly`,
       );
     }
-    // Feature gates are local add-on choices, not organization-profile edits.
-    // Preserve them while advancing the profile projection; an explicit
-    // --config source carries its own gate choices.
-    if (preserveLocalFeatures && advancingProfile && current.features !== undefined) {
-      config = { ...config, features: current.features };
+    // Feature gates and the executor policy are local add-on choices, not
+    // organization-profile edits. Preserve them while advancing the profile
+    // projection; an explicit --config source carries its own choices.
+    if (preserveLocalFeatures && advancingProfile) {
+      for (const key of LOCAL_RUNTIME_CONFIG_KEYS) {
+        if (current[key] !== undefined) config = { ...config, [key]: current[key] };
+      }
     }
     if (preserveApps) config = { ...config, identityApps };
   }
@@ -570,11 +595,17 @@ export async function bootstrap(options, {
           : ghLogin?.state === 'unreadable'
             ? 'gh cannot read its token in this session (no GUI or Keychain session, such as SSH): run from the desktop terminal or set GH_TOKEN, '
             : '';
+        // Key names only, never values (#980).
+        const differingKeys = profileFailure.code === 'profile-config-conflict' && Array.isArray(error?.differingKeys)
+          ? error.differingKeys
+          : [];
         fail(
           'machine',
           'bootstrap.profile',
           profileFailure.code,
-          profileFailure.message,
+          differingKeys.length > 0
+            ? `${profileFailure.message} (differs in: ${differingKeys.join(', ')})`
+            : profileFailure.message,
           profileFailure.code === 'profile-runtime-incompatible'
             ? 'update agent-bot to a compatible runtime, then retry bootstrap'
             : profileFailure.code === 'profile-config-conflict'
@@ -594,6 +625,7 @@ export async function bootstrap(options, {
                           : profileFailure.code === 'profile-file-empty'
                             ? `${ghAction || 'check gh auth status, '}fetch the organization profile again, then retry bootstrap`
                     : 'obtain a complete compatible secret-free organization profile, then retry bootstrap',
+          differingKeys.length > 0 ? { differing_keys: differingKeys } : {},
         );
       } else {
         fail(

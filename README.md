@@ -625,11 +625,16 @@ defaults move. A config that is purely the projection of an older profile
 (it carries the profile snapshot and still matches it) is profile-owned and
 advances to the newly published one on the next bootstrap, keeping its
 scope, so a roster change never turns every bootstrapped machine and
-account into a conflict. A hand-written config without a snapshot, a config
-that drifted from its snapshot, or a scope the profile has since retired
-still fail closed
+account into a conflict. Local `features` and `executor` policy are not
+part of the projection: they are kept as they are when the profile
+advances, so a profile that only adds `settings` advances in place. A
+hand-written config without a snapshot, a config that drifted from its
+snapshot (a hand-set `owner`, say), or a scope the profile has since
+retired still fail closed
 (`profile-config-conflict`, `profile-app-retired`): reconcile or move the
-installed config aside, then retry.
+installed config aside, then retry. A conflict names the top-level keys
+that differ (`differs in: owner, settings`, and `differing_keys` in its
+evidence), never their values.
 
 Such an account usually has no login session, and launchd refuses to load a
 LaunchAgent into a session-less user domain (`Bootstrap failed: 5:
