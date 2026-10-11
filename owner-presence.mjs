@@ -185,6 +185,11 @@ function codesignVerify(bin, requirement) {
     { stdio: ['ignore', 'ignore', 'pipe'] });
 }
 
+// `agent-bot-keyd presence-key` exits with this when keyd's presence seed is a
+// Keychain item keyd does not control (keyd/src/main.rs EXIT_UNTRUSTED_ITEM,
+// #753): not "no keyd here", so the gate never falls back to its dialog on it.
+export const PRESENCE_KEY_UNTRUSTED = 3;
+
 function runPresenceKey(bin) {
   return execFileSync(bin, ['presence-key'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 });
 }
@@ -197,7 +202,8 @@ function runPresenceKey(bin) {
 // record, is put to the owner through the administrator dialog; refused, or with nobody to ask, this throws
 // `presence-pin-mismatch`, and approved it re-pins. A pin under a loosened
 // signer needs the owner's approval too and leaves a receipt; without it this
-// throws `keyd-signer-unverified` and pins nothing.
+// throws `keyd-signer-unverified` and pins nothing. A presence seed keyd does
+// not control (`presence-key` exits 3) throws `keyd-untrusted`.
 export function pinnedPresenceKey({
   env = process.env,
   home = env.HOME || homedir(),
@@ -244,7 +250,13 @@ export function pinnedPresenceKey({
     record_('approved');
   }
   let key;
-  try { key = rawKey(String(run(record.bin)).trim()); } catch { return null; }
+  try { key = rawKey(String(run(record.bin)).trim()); } catch (error) {
+    if (error?.status === PRESENCE_KEY_UNTRUSTED) {
+      throw Object.assign(new Error('agent-bot-keyd refused its presence key: the Keychain item is not one keyd controls, so any process in this account could have set it'),
+        { code: 'keyd-untrusted', cause: error });
+    }
+    return null;
+  }
   if (!key) return null;
   // keyd's key moved, or its cache went missing after a pin: a rotation the
   // owner asked for, or somebody else's doing. Only the owner can say which,

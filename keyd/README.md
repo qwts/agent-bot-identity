@@ -75,8 +75,10 @@ refuses them rather than adopt them:
   `pinned: false`, no grant verifies against the old value, and one
   `owner/pin` asks the owner and replaces the item with a locked one. Nothing
   has to be removed first.
-- `presence-key` — `agent-bot-keyd presence-key` fails, and owner actions fall
-  back to the administrator dialog. Removing the item lets keyd make a fresh
+- `presence-key` — `agent-bot-keyd presence-key` exits 3 and `owner/presence`
+  answers `-32002`. agent-bot refuses owner actions with `keyd-untrusted` and
+  does not fall back to the administrator dialog, since the seed is not "no
+  keyd here". Removing the item lets keyd make a fresh
   seed. That is a new presence key, so the next owner action finds the cache in
   `<state>/keyd/presence.pub` disagreeing with the binary and asks the owner
   through the administrator dialog; approving re-pins it, declining refuses the

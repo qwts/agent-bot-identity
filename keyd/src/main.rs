@@ -13,7 +13,8 @@
 //!       Prints the public half of keyd's presence key (made on first use),
 //!       which agent-bot pins from this code-signed binary before trusting
 //!       an `owner/presence` assertion (agent-bot-identity #416) or a record
-//!       of the owner's statement keys (#753).
+//!       of the owner's statement keys (#753). Exits 3 when the seed is a
+//!       Keychain item keyd does not control, 1 on any other failure.
 //!   agent-bot-keyd --version
 //!
 //! Keys live only in Keychain items keyd created, so their access lists
@@ -36,6 +37,11 @@ mod store;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
+
+/// The exit status for a pin that is a Keychain item keyd does not control
+/// (store.rs `StoreError::Untrusted`, #753), so agent-bot tells it apart from
+/// a keyd that could not answer (owner-presence.mjs PRESENCE_KEY_UNTRUSTED).
+const EXIT_UNTRUSTED_ITEM: u8 = 3;
 
 const USAGE: &str = "usage: agent-bot-keyd serve [--state-dir DIR] [--keychain FILE] | mcp [--state-dir DIR] | presence-key [--keychain FILE] | --version";
 
@@ -78,16 +84,28 @@ fn items(options: &Options) -> Box<dyn store::Items> {
     }
 }
 
+/// The line `presence-key` prints: the public half of the store's seed.
+fn presence_key_line(store: &store::Store) -> Result<String, store::StoreError> {
+    Ok(presence::public_key(&store.presence_seed()?))
+}
+
 #[cfg(target_os = "macos")]
-fn presence_key(options: &Options) -> Result<(), String> {
-    let seed = store::Store::new(items(options)).presence_seed()?;
-    println!("{}", presence::public_key(&seed));
+fn presence_key(options: &Options) -> Result<(), store::StoreError> {
+    println!("{}", presence_key_line(&store::Store::new(items(options)))?);
     Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
-fn presence_key(_: &Options) -> Result<(), String> {
+fn presence_key(_: &Options) -> Result<(), store::StoreError> {
     Err("agent-bot-keyd keeps a presence key only on macOS".into())
+}
+
+fn exit_status(error: &store::StoreError) -> u8 {
+    if error.is_untrusted() {
+        EXIT_UNTRUSTED_ITEM
+    } else {
+        1
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -123,24 +141,52 @@ fn main() -> ExitCode {
         println!("agent-bot-keyd {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
-    let result = parse(&args).and_then(|options| {
-        let state = match &options.state_dir {
-            Some(dir) => dir.clone(),
-            None => paths::state_dir().map_err(str::to_owned)?,
-        };
-        let paths = paths::Paths::under(&state);
-        match options.command.as_str() {
-            "serve" => serve(&options, &paths),
-            "mcp" => relay::run(&paths.socket),
-            "presence-key" => presence_key(&options),
-            _ => Err(USAGE.into()),
-        }
-    });
+    let result = parse(&args)
+        .map_err(store::StoreError::from)
+        .and_then(|options| {
+            let state = match &options.state_dir {
+                Some(dir) => dir.clone(),
+                None => paths::state_dir()?,
+            };
+            let paths = paths::Paths::under(&state);
+            match options.command.as_str() {
+                "serve" => serve(&options, &paths).map_err(store::StoreError::from),
+                "mcp" => relay::run(&paths.socket).map_err(store::StoreError::from),
+                "presence-key" => presence_key(&options),
+                _ => Err(USAGE.into()),
+            }
+        });
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("agent-bot-keyd: {message}");
-            ExitCode::FAILURE
+        Err(error) => {
+            eprintln!("agent-bot-keyd: {error}");
+            ExitCode::from(exit_status(&error))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use store::tests::{Memory, UNTRUSTED_VALUE};
+    use store::{Items, PIN_SERVICE, PRESENCE_ACCOUNT};
+
+    /// `presence-key` exits 3 for a seed keyd does not control, so agent-bot
+    /// refuses with `keyd-untrusted` instead of reading it as no keyd (#753).
+    #[test]
+    fn presence_key_exits_apart_for_an_untrusted_seed() {
+        let items = Memory::default();
+        let store = store::Store::new(Box::new(items.clone()));
+        let line = presence_key_line(&store).unwrap();
+        assert_eq!(line, presence::public_key(&store.presence_seed().unwrap()));
+        items
+            .write(PIN_SERVICE, PRESENCE_ACCOUNT, UNTRUSTED_VALUE)
+            .unwrap();
+        let error = presence_key_line(&store).unwrap_err();
+        assert_eq!(exit_status(&error), EXIT_UNTRUSTED_ITEM);
+        assert!(error
+            .to_string()
+            .contains("not one agent-bot-keyd controls"));
+        assert_eq!(exit_status(&"the keychain could not be read".into()), 1);
     }
 }

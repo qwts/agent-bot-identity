@@ -314,7 +314,10 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    binary reports, a planted presence seed included, is then pinned silently.
    As with keyd's Keychain lock (#873), the durable answer is the
    data-protection keychain under the signed host app.
-5. Any other failure along the way pins nothing and returns `null`, which
+5. `presence-key` exiting 3 means keyd's presence seed is a Keychain item
+   keyd does not control (#753): `pinnedPresenceKey` throws `keyd-untrusted`,
+   pins nothing, and the owner gate refuses without another prompt. Any other
+   failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
 The key is never taken from the socket, and never from the cache alone. A
@@ -384,7 +387,9 @@ Both go on `owner.sock` only; `soul.sock` refuses them. `nonce` is agent-bot's,
 owner key record) is a Keychain item it does not control (#753). agent-bot's
 `keydRequest` rejects it with code `keyd-untrusted`, apart from
 `keyd-refused`; `keydPresence` and `keydAttestPins` pass that code on, and
-the owner gate refuses on it without falling back to another prompt.
+the owner gate refuses on it without falling back to another prompt. The
+same seed read by `agent-bot-keyd presence-key` exits 3, which
+`pinnedPresenceKey` reports as `keyd-untrusted` too.
 
 ### Record format
 
