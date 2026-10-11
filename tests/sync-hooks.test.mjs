@@ -217,7 +217,8 @@ test('generated adapters exec the installed hook or run explicit uninstalled mod
       const command = entry.command ?? entry.bash ?? entry.hooks?.[0]?.command ?? '';
       assert.equal(command.includes('[ -x "$H" ] || exit 0'), false, `${row.key}/${event} still fails open`);
       assert.match(command, /\[ -x "\$H" \] && exec "\$H"/);
-      assert.match(command, /export AGENT_BOT_UNMANAGED_AUTHORS="\$\{AGENT_BOT_UNMANAGED_AUTHORS-ai9d\}"/);
+      // No compiled allowlist rides in the wrapper: only an operator's env reaches the fallback (#675).
+      assert.doesNotMatch(command, /export AGENT_BOT_UNMANAGED_AUTHORS|UNMANAGED_AUTHORS-|ai9d/);
       if (event === 'pre-command' || event === 'pre-commit' || event === 'pre-push') {
         assert.match(command, /uninstalledDecision/);
       }

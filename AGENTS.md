@@ -77,7 +77,7 @@ current harness:
    work from outside the tree. Committed hooks refuse human-attributed
    commits and GitHub writes unless the actor is in
    `AGENT_BOT_UNMANAGED_AUTHORS`, else `settings.unmanagedAuthors` in the
-   agent-bot config (default `ai9d` while neither is set, #675). Do not treat a
+   agent-bot config (nobody while neither is set, #675). Do not treat a
    missing installed `agent-hook` as no policy. Publishing as the bot still
    requires the durable journey.
 
