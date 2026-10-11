@@ -254,7 +254,7 @@ test('every consumer that mints or commits shares this resolver', async () => {
   // identity their own way. Import-level check, so a future consumer that
   // rolls its own chain shows up here rather than in production attribution.
   const sources = await Promise.all(
-    ['../setup-worktree.mjs', '../mint-token.mjs', '../ensure-private-key.mjs', '../agent-identity.mjs', '../cli/identity.mjs', '../worktree-token.mjs', '../signed-commit.mjs', '../agent-space-pack.mjs'].map(async (path) => ({
+    ['../setup-worktree.mjs', '../mint-token.mjs', '../ensure-private-key.mjs', '../cli/identity.mjs', '../worktree-token.mjs', '../signed-commit.mjs', '../agent-space-pack.mjs'].map(async (path) => ({
       path,
       text: await import('node:fs').then((fs) =>
         fs.readFileSync(new URL(path, import.meta.url), 'utf8'),
@@ -270,6 +270,12 @@ test('every consumer that mints or commits shares this resolver', async () => {
       assert.doesNotMatch(call, /worktree:/, `${path} no longer consults the directory`);
     }
   }
+  // agent-identity.mjs keeps the identity records; `agent-bot identity`
+  // (cli/identity.mjs, above) resolves the App for it. It reads only the
+  // Agent ID key names, from the identity-format contract (#645), so it must
+  // not resolve or detect an App on its own.
+  const records = (await import('node:fs')).readFileSync(new URL('../agent-identity.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(records, /resolveAgentSlug\(|detectHarness\(/, 'agent-identity.mjs does not resolve an App itself');
 });
 
 test('a session scratchpad is an ordinary directory: launcher and marker identities stand (#26 retired)', () => {

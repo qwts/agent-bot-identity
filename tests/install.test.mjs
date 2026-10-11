@@ -12,7 +12,7 @@ import {
   isHomebrewAgentBotPath, isManagedExecutable,
 } from '../install.mjs';
 import { installGhShim } from '../install-gh-shim.mjs';
-import { GIT_HOOK_NAMES } from '../git-hooks.mjs';
+import { GIT_HOOK_NAMES } from '../identity-format.mjs';
 
 const HAS_ZSH = spawnSync('zsh', ['-c', ':'], { stdio: 'ignore' }).status === 0;
 

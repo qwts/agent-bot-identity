@@ -48,11 +48,11 @@ import {
 } from './agent-jobs.mjs';
 import { populationFile, showSoul } from './agent-population.mjs';
 import { agentCommsAsSoul } from './comms-relay.mjs';
-import { isAgentId, validateAgentId } from './identity-format.mjs';
+import { AGENT_ID_KEYS, isAgentId, validateAgentId } from './identity-format.mjs';
 import { claimSend, recordThreadMessage } from './soul-threads.mjs';
 import { recordAside } from './soul-asides.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
-import { AGENT_ID_KEYS, readGitConfig } from './resolve-agent.mjs';
+import { readGitConfig } from './resolve-agent.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
 

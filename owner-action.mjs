@@ -18,7 +18,8 @@ import {
 import { verifyPrincipalOwner } from './owner-principal.mjs';
 import { attestedOwnerKeys } from './owner-presence.mjs';
 
-export { consentOwner, ownerCredentialRequired, soulMarkers } from './owner-gate.mjs';
+export { consentOwner, soulMarkers } from './owner-gate.mjs';
+export { ownerCredentialRequired } from './identity-format.mjs';
 export { verifyPrincipalOwner } from './owner-principal.mjs';
 export { keydPresenceWithoutDialog } from './owner-presence.mjs';
 
