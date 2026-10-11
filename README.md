@@ -199,11 +199,20 @@ Newer Homebrew may require `brew trust qwts/agent-bot-identity` after the tap.
 
 Homebrew places `agent-bot` on PATH under the prefix. It does **not** write
 `~/.local/bin`, Git `core.hooksPath`, or shell startup files. Run machine
-wiring next:
+wiring next. With the organization selected in
+`~/.config/agent-sop/config.toml` (`[repos] org`), bootstrap fetches its
+profile itself (#975):
 
 ```bash
-agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
+agent-bot bootstrap --repair --machine-only
 ```
+
+That reads the selected organization's profile at its resolved commit, as
+described under `--repair` below; add `--with-gh-shim` for the managed gh
+shim. A profile you already hold still works with
+`agent-bot bootstrap --profile /path/to/organization-profile.json --machine-only`.
+Do not fetch it with `gh api … > file` first: a failed fetch leaves an empty
+file (`profile-file-empty`).
 
 If `~/.local/bin/agent-bot` points at a live foreign git checkout, preserve
 that symlink by moving it to an unused backup path before switching installs.
@@ -240,11 +249,15 @@ profile and shared-tooling procedure. Never search for or assume
 a local governance checkout; follow its canonical HTTPS guidance instead.
 
 From your own account, prepare machine state without binding your checkout to
-a bot:
+a bot. With the organization selected in `~/.config/agent-sop/config.toml`,
+bootstrap fetches the profile itself (#975):
 
 ```bash
-./agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
+./agent-bot bootstrap --repair --machine-only --with-gh-shim
 ```
+
+or, with a profile file you were given,
+`./agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only`.
 
 Then, from the agent's own macOS account (or any checkout with a stated bot
 identity — `GH_AGENT_APP` or a pin), bind it through the installed runtime:

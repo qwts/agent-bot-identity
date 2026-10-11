@@ -120,7 +120,8 @@ test('skill delegates executable behavior to the stable runtime', () => {
   assert.doesNotMatch(main, /installed `agent-bot` CLI as the only runtime entrypoint/u);
   assert.match(main, /complete active identity roster/u);
   assert.match(operations, /install agent bot identities/u);
-  assert.match(operations, /\.\/agent-bot bootstrap --profile <path\\\|->/u);
+  assert.match(operations, /\.\/agent-bot bootstrap --repair --machine-only/u);
+  assert.match(operations, /--profile <path\\\|->/u);
   assert.match(operations, /agent-bot bootstrap --worktree-only/u);
   assert.match(operations, /qwts-agent-org\/blob\/main\/docs\/agent-bot-operations\.md/u);
   assert.match(operations, /agent-bot secret get/u);
