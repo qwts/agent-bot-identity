@@ -568,16 +568,21 @@ function runOpencode(event, { cwd, env, payload }) {
   });
 }
 
-test('opencode: the identity guard refuses the stated unbound bot and allows the delegate and the human', () => {
+// The bash call is scanned on pre-tool-use as well as pre-command, so the
+// guard holds even if an adapter only ever sends the generic event.
+test('opencode: the identity guard refuses the stated unbound bot on either event and allows the delegate and the human', () => {
   const { repo } = primaryCheckout();
   for (const command of ['git commit -m x', 'git push origin HEAD']) {
     const payload = { tool: 'bash', sessionID: 'ses_1', callID: 'c1', args: { command }, directory: repo };
     for (const event of ['pre-command', 'pre-tool-use']) {
-      if (event === 'pre-command') denied('opencode', runOpencode(event, { cwd: repo, env: baseEnv(STATED), payload }));
+      denied('opencode', runOpencode(event, { cwd: repo, env: baseEnv(STATED), payload }));
       allowed('opencode', runOpencode(event, { cwd: repo, env: baseEnv(DELEGATE), payload }));
       allowed('opencode', runOpencode(event, { cwd: repo, env: baseEnv(), payload }));
     }
   }
+  // Only the shell tool's command is scanned on the generic event.
+  const other = { tool: 'webfetch', sessionID: 's', callID: 'c', args: { command: 'git push' }, directory: repo };
+  allowed('opencode', runOpencode('pre-tool-use', { cwd: repo, env: baseEnv(STATED), payload: other }));
 });
 
 // bash's `workdir` is where OpenCode runs the command. Judging the push by
@@ -592,9 +597,11 @@ test('opencode: a bound session cannot reach an unbound checkout through bash wo
     { command: 'git commit --no-verify -m x', workdir: unbound.repo },
     { command: 'git push', workdir: join('..', unbound.repo.slice(root.length + 1)) },
   ]) {
-    const run = runOpencode('pre-command', { cwd: bound.repo, env: baseEnv(STATED), payload: payload(args) });
-    assert.equal(run.status, 2, `${JSON.stringify(args)}: ${run.stderr}`);
-    assert.match(run.stderr, new RegExp(`stated bot identity ${SLUG}`));
+    for (const event of ['pre-command', 'pre-tool-use']) {
+      const run = runOpencode(event, { cwd: bound.repo, env: baseEnv(STATED), payload: payload(args) });
+      assert.equal(run.status, 2, `${event} ${JSON.stringify(args)}: ${run.stderr}`);
+      assert.match(run.stderr, new RegExp(`stated bot identity ${SLUG}`));
+    }
   }
   // The bound checkout still publishes, with or without a workdir.
   for (const args of [{ command: 'git push origin HEAD' }, { command: 'git commit -m x', workdir: bound.repo }, { command: 'git commit -m x', workdir: '.' }]) {

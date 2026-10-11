@@ -28,6 +28,7 @@ import {
   envelopeEnv,
   isBlocking,
   normalizeEnvelope,
+  scansCommand,
 } from './hook-dialects.mjs';
 
 import { readBinding } from './agent-binding.mjs';
@@ -270,7 +271,7 @@ function targetGit(target, env) {
 
 export function unboundIdentityCheck(envelope, { env = process.env, cwd = process.cwd() } = {}) {
   const allow = { decision: 'allow' };
-  if (envelope.event !== 'pre-command' || !envelope.command) return allow;
+  if (!scansCommand(envelope) || !envelope.command) return allow;
   const command = envelope.command;
   const scan = scanGitPublish(command, { cwd, env });
   if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.opaqueExecution && !scan.skipsHooks) return allow;

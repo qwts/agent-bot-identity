@@ -11,6 +11,8 @@ import {
   envelopeEnv,
   isBlocking,
   nativeHookEntry,
+  confinementEvents,
+  scansCommand,
   normalizeEnvelope,
   supportsContext,
   vendorEvent,
@@ -328,6 +330,12 @@ test('opencode maps its plugin hooks onto the canonical events, and declares wha
   }
   assert.ok(new RegExp(vendorEvent('opencode', 'pre-command').matcher).test('bash'));
   assert.equal(new RegExp(vendorEvent('opencode', 'pre-command').matcher).test('bash_extra'), false);
+  // OpenCode loads `{plugin,plugins}/*.{ts,js}` under `.opencode/`; the docs
+  // name `plugins/`, and the generated plugin must sit where it is loaded.
+  const row = DIALECTS.find((candidate) => candidate.key === 'opencode');
+  assert.equal(row.pluginFile, '.opencode/plugins/agent-bot-soul.js');
+  assert.match(row.pluginFile, /^\.opencode\/plugins?\/[^/]+\.(?:ts|js)$/);
+  assert.equal(row.file, null, 'no config file for sync-hooks or the builder to write');
   // The adapter is a plugin, never a config entry another writer could emit.
   assert.throws(() => nativeHookEntry('opencode', 'pre-command', 'true'), /generated plugin/);
   assert.equal(supportsContext('opencode', 'session-start'), false);
@@ -427,6 +435,20 @@ test('opencode chat and bus payloads translate too', () => {
     payload: { event: { type: 'session.created', properties: { info: { id: 'ses_4', parentID: 'ses_3' } } } },
   });
   assert.equal(sdk.session_id, 'ses_4');
+});
+
+test('the opencode shell call is command-scanned on the generic event, and file tools confined on both', () => {
+  const env = (event, tool, harness = 'opencode') => ({ event, harness, tool_name: tool });
+  assert.equal(scansCommand(env('pre-command', 'bash')), true);
+  assert.equal(scansCommand(env('pre-tool-use', 'bash')), true);
+  assert.equal(scansCommand(env('pre-tool-use', 'write')), false);
+  assert.equal(scansCommand(env('post-tool-use', 'bash')), false);
+  // Other dialects keep scanning on pre-command only.
+  assert.equal(scansCommand(env('pre-tool-use', 'Bash', 'claude')), false);
+  assert.equal(scansCommand(env('pre-command', 'Bash', 'claude')), true);
+  assert.deepEqual(confinementEvents('opencode'), ['pre-tool-use', 'pre-file-write']);
+  assert.deepEqual(confinementEvents('claude'), ['pre-tool-use']);
+  assert.deepEqual(confinementEvents('devin-desktop'), ['pre-file-write']);
 });
 
 // The plugin reads the exit code, so a verdict must be unmistakable there:

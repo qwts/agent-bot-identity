@@ -288,10 +288,12 @@ export const DIALECTS = [
     verifiedOn: '2026-08-02',
   },
   {
-    // OpenCode has no hook config file. It loads every `.opencode/plugin/*.js`
-    // as a plugin module and awaits its hooks inside its own process, so the
-    // adapter is a generated plugin (#378, a later slice) rather than a JSON
-    // entry, and this row is the contract that plugin speaks. Checked against
+    // OpenCode has no hook config file. It loads every `{plugin,plugins}/*.{ts,js}`
+    // under `.opencode/` as a plugin module (config/plugin.ts) and awaits its
+    // hooks inside its own process, so the adapter is a generated plugin (#378,
+    // a later slice) rather than a JSON entry, and this row is the contract
+    // that plugin speaks. Both spellings load; `plugins/` is the one the docs
+    // name for a project, so `pluginFile` uses it. Checked against
     // OpenCode 1.18.34 (anomalyco/opencode@aec0b9a6): `Hooks` in
     // packages/plugin/src/index.ts, and the call sites in session/tools.ts,
     // session/prompt.ts and plugin/index.ts. Subagents run the same prompt
@@ -304,6 +306,7 @@ export const DIALECTS = [
     // is the whole translation, so a hook reads the same envelope as anywhere.
     key: 'opencode',
     file: null,
+    pluginFile: '.opencode/plugins/agent-bot-soul.js',
     format: 'opencode-plugin',
     events: {
       // From the `event` bus, which OpenCode fires without awaiting: right for
@@ -335,11 +338,19 @@ export const DIALECTS = [
     },
     // The prompt is the user's text parts, not one string.
     promptParts: ['parts'],
+    // The plugin sends a write as pre-tool-use and pre-file-write alike, and a
+    // generated adapter must not be the reason a write goes unchecked, so
+    // confinement checks a file tool on either event here.
+    confinementEvents: ['pre-tool-use', 'pre-file-write'],
+    // OpenCode's shell tool. Its call is command-scanned on pre-tool-use as
+    // well as pre-command, so the identity guard never rests on the plugin
+    // also sending the narrower event.
+    shellTool: 'bash',
     // bash runs in `args.workdir` resolved against the instance directory
     // (tool/shell.ts), not in `directory`. The identity guard places a
     // `git push` by the envelope's cwd, so cwd must be where the shell runs,
     // or a bound session could push from an unbound checkout unseen.
-    shellWorkdir: { tool: 'bash', keys: ['args', 'workdir'] },
+    shellWorkdir: ['args', 'workdir'],
     // The verdict is the exit code, and the plugin is what reads it: exit 2
     // is a deny with the reason on stderr; any other nonzero exit, a crash or
     // the plugin's own timeout is an error. The plugin throws on a deny, and
@@ -357,6 +368,8 @@ export const DIALECTS = [
     evidence: [
       'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/plugin/src/index.ts#L222-L281',
       'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/plugin/index.ts#L255-L297',
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/config/plugin.ts#L18-L29',
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/web/src/content/docs/plugins.mdx#L18-L23',
       'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/session/tools.ts#L103-L125',
       'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/session/prompt.ts#L999-L1009',
       'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/tool/shell.ts#L612-L614',
@@ -460,6 +473,23 @@ export function supportsContext(dialectKey, event) {
   return Boolean(dialect(dialectKey).contextChannel?.[event]);
 }
 
+// Is this the moment to scan a shell command? Always on pre-command; on
+// pre-tool-use too where the row names its shell tool, so a guard that reads
+// the command does not depend on an adapter also firing the narrower event.
+export function scansCommand(envelope) {
+  if (envelope.event === 'pre-command') return true;
+  const shell = dialect(envelope.harness).shellTool;
+  return envelope.event === 'pre-tool-use' && Boolean(shell) && envelope.tool_name === shell;
+}
+
+// The events confinement checks a file tool on. One by default, the generic
+// event where the dialect has it, so an adapter that fires both for one write
+// is checked once; a row may list both.
+export function confinementEvents(dialectKey) {
+  const row = dialect(dialectKey);
+  return row.confinementEvents ?? [vendorEvent(dialectKey, 'pre-tool-use') ? 'pre-tool-use' : 'pre-file-write'];
+}
+
 // The row's own words for why it cannot inject context, or null when it can.
 // Surfaced by `doctor` so a harness that silently lacks the channel is visible
 // in a readiness report instead of only in this file.
@@ -497,9 +527,8 @@ function textParts(payload, keys) {
 // that cannot be placed leaves the base, never a relative path. (OpenCode's
 // Windows cygpath translation is not modelled.)
 function shellCwd(row, payload, toolName, base) {
-  const spec = row.shellWorkdir;
-  if (!spec || toolName !== spec.tool) return base;
-  const workdir = dig(payload, spec.keys);
+  if (!row.shellWorkdir || toolName !== row.shellTool) return base;
+  const workdir = dig(payload, row.shellWorkdir);
   if (workdir === undefined) return base;
   if (isAbsolute(workdir)) return resolve(workdir);
   return base && isAbsolute(base) ? resolve(base, workdir) : base;
