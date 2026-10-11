@@ -43,7 +43,8 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { createGunzip, createGzip } from 'node:zlib';
-import { mintAgentIdentity, readAgentIdentity } from './agent-identity.mjs';
+import { mintAgentIdentity } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, showSoulByName, soulDirectory, upsertSoul } from './agent-population.mjs';
 import { appendAuditReceipt, isAgentId } from './identity-format.mjs';
@@ -700,7 +701,7 @@ export function planSoulImport(manifest, { fork = false, replace = false, name =
   const id = manifest.agentId;
   const existing = census(id, file);
   let identity = null;
-  try { identity = readAgentIdentity(id, { stateDir }); } catch { /* unknown here */ }
+  try { identity = identityOp('read', { id: id, stateDir }); } catch { /* unknown here */ }
   const { root } = soulsHome(options);
   const handle = text(manifest.name);
   const displayName = text(name) ?? text(manifest.displayName) ?? handle;
@@ -823,7 +824,7 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
     rmSync(journalStaging, { recursive: true, force: true });
   } else {
     let identity = null;
-    try { identity = readAgentIdentity(agentId, { stateDir }); } catch { /* unknown here: a moved life */ }
+    try { identity = identityOp('read', { id: agentId, stateDir }); } catch { /* unknown here: a moved life */ }
     if (identity?.status === 'retired') fail('import-id-retired', `${agentId} is retired here`, { action: 'add --fork to import it as a new soul' });
     if (!identity) mintAgentIdentity({ env, home, stateDir, now, appSlug: null, idFactory: () => agentId, harness: manifest.identity?.harness ?? null, parentId: manifest.identity?.parentId ?? null, useGithub: false });
     const local = path.join(stateDir, 'soul-revisions', agentId);
@@ -968,7 +969,7 @@ export async function soulEnvExportCommand(argv, { gate = ownerGate, readStdin =
     if (lstat(target)) fail('export-target-exists', `${target} already exists; choose another path`, { action: 'pick a file that does not exist yet' });
   }
   let identity = null;
-  try { identity = readAgentIdentity(soul.id, { stateDir }); } catch { /* no record: the manifest says so */ }
+  try { identity = identityOp('read', { id: soul.id, stateDir }); } catch { /* no record: the manifest says so */ }
   const planOptions = { agentId: soul.id, name: soul.name ?? null, displayName: soul.displayName ?? null, spacePath: soul.spacePath ?? null, identity, stateDir, interaction, env, home, now };
   const planned = planSoulExport(soulDir, planOptions);
   const emit = (result) => { write(json ? `${JSON.stringify(result)}\n` : formatExport(result)); return result; };

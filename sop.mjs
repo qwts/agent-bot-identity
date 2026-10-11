@@ -20,7 +20,8 @@ import { createHash } from 'node:crypto';
 import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, openSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
-import { currentAgentId } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { soulDirectory } from './agent-population.mjs';
@@ -30,6 +31,15 @@ import { assertOwnerAction } from './owner-action.mjs';
 import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { evaluateSopPolicy, parseSopPolicy } from './sop-policy.mjs';
+
+// The session's Agent ID: the environment first, so the common case starts
+// no process; only without one does identity's entry read the checkout pin
+// (#645, F6).
+function sessionAgentId({ env = process.env, cwd } = {}) {
+  const fromEnv = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID;
+  if (fromEnv) return validateAgentId(fromEnv);
+  return identityOp('current', { pinOnly: true }, cwd === undefined ? {} : { cwd });
+}
 
 const SCHEMA_VERSION = 1;
 const ORG_JSON_LIMIT = 1024 * 1024;
@@ -1098,7 +1108,7 @@ export function resolveSop(options = {}) {
   const env = options.env ?? process.env;
   let current = null;
   if (!options.soul) {
-    try { current = (options.currentAgentId ?? currentAgentId)({ env, cwd: options.cwd ?? process.cwd() }); }
+    try { current = (options.currentAgentId ?? sessionAgentId)({ env, cwd: options.cwd ?? process.cwd() }); }
     catch (error) { if (error.status !== 128) throw error; }
   }
   const identity = options.soul ?? current
