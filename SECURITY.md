@@ -28,11 +28,20 @@ supported; please confirm an issue against it or `main` before reporting.
 
 ## CI and outside pull requests
 
-Self-hosted runners run only for pushes to this repository, manual runs by
-maintainers, and pull requests whose branch lives in this repository. A pull
-request from a fork always runs on GitHub-hosted runners, receives no secrets,
-and no workflow uses `pull_request_target`. Workflows from outside
-contributors wait until a maintainer approves them.
+Self-hosted runners are meant only for pushes to this repository, manual runs
+by maintainers, and pull requests whose branch lives in this repository. A pull
+request from a fork runs on GitHub-hosted runners and receives no secrets, and
+no workflow uses `pull_request_target`. One gap remains: if the fork behind an
+open pull request is deleted, GitHub no longer marks the head as a fork, and a
+rerun takes the runner the repository variables name. The `Action Policy` job
+then refuses any actor not on its allow list before other jobs run or check
+out code.
+
+Approval for outside contributors' workflows is required repository
+configuration, not something the workflow files enforce: the owner turns on
+**Settings → Actions → General → Fork pull request workflows → Require
+approval for all external contributors**, and only then do those workflows
+wait for a maintainer.
 
 ## Scope
 
