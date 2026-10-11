@@ -16,6 +16,8 @@
 // runtime with `agent-bot daemon install` (#302). Its credential namespace
 // and vault (#676) are written into the unit the same way, so the daemon's
 // mint path reads them from its own launch environment, never a caller's.
+// So is its keyd signer (AGENT_BOT_KEYD_TEAM_ID / _IDENTIFIER, #865), so
+// the daemon's owner actions pin under the same policy as direct ones.
 
 import { execFileSync } from 'node:child_process';
 import {
@@ -30,6 +32,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import process from 'node:process';
 
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
+import { keydSignerEnvironment } from './config.mjs';
 import { daemonLogMaxBytes, daemonLogPath } from './daemon-log.mjs';
 import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './credential-names.mjs';
 
@@ -116,6 +119,7 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
   // Validated here, so a malformed name fails the install, not a later mint.
   credentialNamespace(env);
   credentialVault(env);
+  const keydSigner = keydSignerEnvironment(env);
   return {
     AGENT_BOT_DAEMON_STATE_PATH: daemonStateFile({ env, home }),
     ...(env.AGENT_BOT_DAEMON_LOG_MAX_BYTES !== undefined
@@ -125,6 +129,9 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
     // The host's credential names; unset keeps today's (#676).
     ...(env[NAMESPACE_VARIABLE] ? { [NAMESPACE_VARIABLE]: env[NAMESPACE_VARIABLE] } : {}),
     ...(env[VAULT_VARIABLE] ? { [VAULT_VARIABLE]: env[VAULT_VARIABLE] } : {}),
+    // The host's keyd signer, which wins over the config as it does for
+    // direct actions; unset leaves the daemon on the config (#865).
+    ...keydSigner,
     // A host's own npm, which installs soul harnesses (ADR-0276).
     ...(env.AGENT_BOT_NPM && isAbsolute(env.AGENT_BOT_NPM) ? { AGENT_BOT_NPM: env.AGENT_BOT_NPM } : {}),
     ...(env.AGENT_BOT_EXECUTOR === '1' ? { AGENT_BOT_EXECUTOR: '1' } : {}),

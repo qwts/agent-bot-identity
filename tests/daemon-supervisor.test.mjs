@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { keydSigner } from '../config.mjs';
 import {
   LAUNCHD_LABEL,
   SYSTEMD_UNIT,
@@ -325,6 +326,46 @@ test('a host credential namespace and vault are written into the daemon unit', (
   assert.equal('AGENT_BOT_CREDENTIAL_VAULT' in defaults, false);
   assert.throws(() => supervisorEnvironment({ env: { AGENT_BOT_CREDENTIAL_NAMESPACE: 'a/b' }, home: '/u' }), { code: 'usage' });
   assert.throws(() => supervisorEnvironment({ env: { AGENT_BOT_CREDENTIAL_VAULT: 'a"b' }, home: '/u' }), { code: 'usage' });
+});
+
+// #865: the host's keyd signer travels in the daemon's unit, so the
+// supervised daemon pins under the same policy as a direct action.
+test('a host keyd signer is written into the daemon unit on every platform', () => {
+  const env = { AGENT_BOT_KEYD_TEAM_ID: 'Z5DM34QS5U', AGENT_BOT_KEYD_IDENTIFIER: 'app.geniusbar.keyd' };
+  const environment = supervisorEnvironment({ env, home: '/u' });
+  assert.equal(environment.AGENT_BOT_KEYD_TEAM_ID, 'Z5DM34QS5U');
+  assert.equal(environment.AGENT_BOT_KEYD_IDENTIFIER, 'app.geniusbar.keyd');
+  // The daemon resolves the signer the installing host did, both fields.
+  assert.deepEqual(keydSigner({ env: environment, config: {} }), keydSigner({ env, config: {} }));
+  assert.deepEqual(keydSigner({ env: environment, config: {} }), { teamId: 'Z5DM34QS5U', identifier: 'app.geniusbar.keyd' });
+  const plist = renderLaunchdPlist({ executable: '/u/.local/bin/agent-bot', environment });
+  assert.match(plist, /<key>AGENT_BOT_KEYD_TEAM_ID<\/key>\s*<string>Z5DM34QS5U<\/string>/);
+  assert.match(plist, /<key>AGENT_BOT_KEYD_IDENTIFIER<\/key>\s*<string>app\.geniusbar\.keyd<\/string>/);
+  const unit = renderSystemdUnit({ executable: '/u/.local/bin/agent-bot', environment });
+  assert.match(unit, /^Environment=AGENT_BOT_KEYD_TEAM_ID=Z5DM34QS5U$/m);
+  assert.match(unit, /^Environment=AGENT_BOT_KEYD_IDENTIFIER=app\.geniusbar\.keyd$/m);
+  const task = renderScheduledTask({ programArguments: ['C:\\App\\node.exe', 'C:\\App\\agent-bot.mjs', 'daemon', 'run'], environment, label: 'app.geniusbar.agent-bot', logPath: 'C:\\Logs\\daemon.log', userId: 'DESK\\owner' });
+  assert.ok(task.includes('set &quot;AGENT_BOT_KEYD_TEAM_ID=Z5DM34QS5U&quot; &amp;&amp;'));
+  assert.ok(task.includes('set &quot;AGENT_BOT_KEYD_IDENTIFIER=app.geniusbar.keyd&quot; &amp;&amp;'));
+  // Trimmed like the direct path; unset or blank leaves the daemon on its config.
+  assert.equal(supervisorEnvironment({ env: { AGENT_BOT_KEYD_TEAM_ID: ' Z5DM34QS5U ' }, home: '/u' }).AGENT_BOT_KEYD_TEAM_ID, 'Z5DM34QS5U');
+  for (const unset of [{}, { AGENT_BOT_KEYD_TEAM_ID: '', AGENT_BOT_KEYD_IDENTIFIER: ' ' }]) {
+    const defaults = supervisorEnvironment({ env: unset, home: '/u' });
+    assert.equal('AGENT_BOT_KEYD_TEAM_ID' in defaults, false);
+    assert.equal('AGENT_BOT_KEYD_IDENTIFIER' in defaults, false);
+    assert.doesNotMatch(renderLaunchdPlist({ executable: '/u/.local/bin/agent-bot', environment: defaults }), /AGENT_BOT_KEYD_/);
+    assert.doesNotMatch(renderSystemdUnit({ executable: '/u/.local/bin/agent-bot', environment: defaults }), /AGENT_BOT_KEYD_/);
+  }
+  // Setting one leaves the other to the daemon's config.
+  const teamOnly = supervisorEnvironment({ env: { AGENT_BOT_KEYD_TEAM_ID: 'Z5DM34QS5U' }, home: '/u' });
+  assert.equal('AGENT_BOT_KEYD_IDENTIFIER' in teamOnly, false);
+  assert.deepEqual(keydSigner({ env: teamOnly, config: { settings: { keydIdentifier: 'org.keyd' } } }), { teamId: 'Z5DM34QS5U', identifier: 'org.keyd' });
+  // The explicit any-developer-id choice is carried as given; pinning under
+  // it still asks the owner (owner-presence.mjs).
+  assert.equal(supervisorEnvironment({ env: { AGENT_BOT_KEYD_TEAM_ID: 'any-developer-id' }, home: '/u' }).AGENT_BOT_KEYD_TEAM_ID, 'any-developer-id');
+  // A malformed value fails the install with the direct path's error.
+  assert.throws(() => supervisorEnvironment({ env: { AGENT_BOT_KEYD_TEAM_ID: 'abc' }, home: '/u' }), /invalid AGENT_BOT_KEYD_TEAM_ID/);
+  assert.throws(() => supervisorEnvironment({ env: { AGENT_BOT_KEYD_IDENTIFIER: 'keyd" or anchor apple' }, home: '/u' }), /invalid AGENT_BOT_KEYD_IDENTIFIER/);
 });
 
 test('an unsafe host label is a usage error', () => {
