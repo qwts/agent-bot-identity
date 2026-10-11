@@ -1,0 +1,1 @@
+- Dream maintenance can credit a harness memory file as processed, under the key `memory:<harness>/<path>`, only when the run cites a verified soul change to definition or skill content; the dream journal moves to version 10, so older daemons refuse it rather than misread a memory item (#903).

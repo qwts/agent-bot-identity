@@ -233,7 +233,8 @@ export function verifyDreamRevisionEvidence(request = {}) {
   if (parent.state === 'verified' && candidate.state === 'verified') {
     const left = inventory(parent.read), right = inventory(candidate.read);
     const changes = [...new Set([...left.keys(), ...right.keys()])].sort().filter(path => left.get(path) !== right.get(path))
-      .map(path => ({ path, change: !left.has(path) ? 'added' : !right.has(path) ? 'removed' : 'modified' }));
+      .map(path => ({ path, change: !left.has(path) ? 'added' : !right.has(path) ? 'removed' : 'modified',
+        type: (right.get(path) ?? left.get(path)) === 'directory' ? 'directory' : 'file' }));
     checked.changedCount = changes.length;
     checked.changedPaths = changes.slice(0, DREAM_EVIDENCE_LIMITS.changedPaths);
     if (event.kind === 'proposal') checked.journalDiffMatches = sameDiff(found.event.diff, changes);

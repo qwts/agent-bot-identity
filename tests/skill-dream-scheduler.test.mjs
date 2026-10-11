@@ -593,11 +593,11 @@ test('processing checkpoints and events refuse claims the verified outcome does 
   ]) {
     const value = copy(state); mutate(value); assert.throws(() => validateDreamState(value), { code: 'dream-state-invalid' });
   }
-  // A v8 state reads as v9 with no processing checkpoints, without a disk write.
+  // A v8 state reads as v10 with no processing checkpoints, without a disk write.
   const legacy = copy(state); delete legacy.processingCheckpoints; legacy.schemaVersion = 8;
   f.replace(legacy);
   const upgraded = createDreamScheduler(f.ports).status();
-  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [9, []]);
+  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [10, []]);
   assert.equal(f.state().schemaVersion, 8);
 });
 
@@ -900,11 +900,48 @@ test('v6 state upgrades its runs with null ownership, and stateless v6 events st
   assert.deepEqual(validateDreamState(legacy), legacy);
   f.replace(legacy);
   const upgraded = createDreamScheduler(f.ports).status();
-  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [9, null]);
+  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [10, null]);
   const started = copy(f.events.find(event => event.kind === 'started'));
   delete started.run.ownership;
   assert.deepEqual(validateDreamEvents([started]), [started]);
   assert.throws(() => validateDreamEvents([{ ...started, kind: 'ended', run: { ...started.run, status: 'interrupted', endedAt: started.at } }]),
     { code: 'dream-state-invalid' }, 'a v6-shaped run cannot settle as interrupted');
   f.calls[0].resolve(); await run.done;
+});
+
+test('a memory item verified by a cited soul change is processed under its memory key, from journal version 10 (#903)', async () => {
+  const { f, R1, sources } = processingFixture();
+  const base = sources(['AGENTS.md']), MEMORY = `sha256:${'e'.repeat(64)}`, key = 'memory:claude/projects/-p/memory/a.md';
+  const inputs = { ...base, schemaVersion: 3, conversation: null, coverage: { ...base.coverage, memory: 'supported' },
+    memory: { harness: 'claude', remaining: 0, nextCursor: null, items: [{ path: 'projects/-p/memory/a.md', digest: MEMORY, size: 1, excerptBytes: 1, truncated: false }] } };
+  const started = f.scheduler.runNow(A); await Promise.resolve();
+  const call = f.calls.at(-1); call.prepareInputs(inputs);
+  const reply = JSON.stringify({ schemaVersion: 1, runId: call.run.runId, startingRevision: inputs.revision,
+    items: [{ path: key, digest: MEMORY, outcome: 'completed', reason: 'consolidated', evidence: { revision: R1 } }] });
+  const verify = () => ({ verdict: 'not-verified', reasons: ['change-outside-delivered'], attribution: 'not-established',
+    checked: { event: { revision: R1, status: 'approved' }, changedPaths: [{ path: 'skills/notes/SKILL.md', change: 'added', type: 'file' }], changedCount: 1 } });
+  call.stageOutcome(interpretDreamReport({ run: call.run, inputs, reply, endedAt: new Date().toISOString(), verifyRevisionEvidence: verify }));
+  call.resolve(); await started.done;
+  const state = f.state();
+  assert.equal(state.schemaVersion, 10);
+  assert.deepEqual(state.processingCheckpoints[0].entries.map(entry => [entry.path, entry.digest, entry.artifactRevision]), [[key, MEMORY, R1]]);
+  assert.deepEqual(createDreamScheduler(f.ports).status().processingCheckpoints, state.processingCheckpoints);
+  // A version-9 state cannot hold a memory item, so an older daemon never misreads one.
+  const legacy = structuredClone(state); legacy.schemaVersion = 9;
+  assert.throws(() => validateDreamState(legacy));
+  // A package path cannot pose as memory, nor memory as an unknown harness.
+  for (const path of ['memory:codex/projects/-p/memory/a.md', 'memory:claude/../a.md']) {
+    const forged = structuredClone(state); forged.processingCheckpoints[0].entries[0].path = path;
+    assert.throws(() => validateDreamState(forged), path);
+  }
+});
+
+test('a version-9 journal reads as version 10 and keeps its processing checkpoints', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  await settle({ inputs: sources(['AGENTS.md']), items: [['AGENTS.md', { revision: R1 }]], verify: verifier(R1, ['AGENTS.md']) });
+  const state = f.state(), legacy = structuredClone(state); legacy.schemaVersion = 9;
+  f.replace(legacy);
+  const upgraded = createDreamScheduler(f.ports).status();
+  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [10, state.processingCheckpoints]);
+  assert.equal(f.state().schemaVersion, 9, 'read-only inspection does not migrate disk');
 });

@@ -21,6 +21,9 @@ const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex
 const eligible = entry => entry.mode !== '040000' && (['AGENTS.md', 'soul.md', 'SOUL.md'].includes(entry.path)
   || entry.path.startsWith('skills/') && kindOf(entry.path) === 'skill');
 
+// The package paths a dream run may read and a change may maintain.
+export const isDreamSourcePath = value => typeof value === 'string' && eligible({ path: value });
+
 // Durable preparation metadata contains identifiers and sizes, never excerpts.
 // It establishes what was captured, not that the harness received or reviewed it.
 export function validateDreamInputMetadata(value) {
@@ -269,6 +272,8 @@ const MEMORY_READERS = Object.freeze({
 });
 const segment = name => typeof name === 'string' && name.length > 0 && name.length <= 255 && name !== '.' && name !== '..'
   && !name.includes('/') && !name.includes('\0');
+// The characters a dream report path refuses (skill-dream-outcomes claim).
+const reportable = name => !/[\\\x00-\x1f\x7f]/.test(name);
 const memoryPath = (harness, value) => {
   const reader = MEMORY_READERS[harness];
   if (typeof value !== 'string' || value.length > 4096) return false;
@@ -276,6 +281,24 @@ const memoryPath = (harness, value) => {
   return parts.length === 4 && parts[0] === reader.dir && segment(parts[1]) && parts[2] === reader.sub
     && segment(parts[3]) && reader.matches(parts[3]);
 };
+
+// A memory item as a dream report names it (#903, owner decision 2026-10-11):
+// `memory:<harness>/<path in the tool home>`, never a package path, so a
+// report, outcome or processing checkpoint cannot mistake one for the other.
+export const memoryItemKey = (harness, value) => `memory:${harness}/${value}`;
+export function isMemoryItemKey(value) {
+  if (typeof value !== 'string' || !value.startsWith('memory:')) return false;
+  const slash = value.indexOf('/'), harness = value.slice('memory:'.length, slash);
+  return slash !== -1 && Object.hasOwn(MEMORY_READERS, harness) && memoryPath(harness, value.slice(slash + 1));
+}
+// Every item a run was delivered and may report on: package sources, then
+// (format 3) memory items under their report keys. Conversations are context.
+export function deliveredDreamItems(inputs) {
+  const memory = inputs.schemaVersion === 3 && inputs.memory !== null
+    ? inputs.memory.items.map(({ path, digest, truncated }) => ({ path: memoryItemKey(inputs.memory.harness, path), digest, truncated, memory: true }))
+    : [];
+  return [...inputs.sources.map(({ path, digest, truncated }) => ({ path, digest, truncated, memory: false })), ...memory];
+}
 
 // `unsupported`: the harness has no memory reader, or the soul's tool home
 // holds no memory store for it (its memory may live in the host's store,
@@ -313,18 +336,20 @@ export function captureDreamMemory(soulDir, harness, { cursor = null, afterDirec
     // Every project's memory directory, and every memory file in it, is
     // found before any is read. A link where a project, its memory directory
     // or a memory file would be refuses the whole store; other names are not
-    // memory and are ignored.
+    // memory and are ignored. So is a name a report could not cite (a
+    // backslash or control character), since a delivered item must be one
+    // a dream report can name.
     const files = [];
     for (const project of list(root).reverse()) {
       if (project.isSymbolicLink()) throw new Error('linked project');
-      if (!project.isDirectory()) continue;
+      if (!project.isDirectory() || !reportable(project.name)) continue;
       const projectDir = path.join(root, project.name);
       const entry = list(projectDir).find(item => item.name === reader.sub);
       if (!entry) continue;
       if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('unsafe memory directory');
       const memoryDir = path.join(projectDir, reader.sub);
       for (const item of list(memoryDir).reverse()) {
-        if (!reader.matches(item.name)) continue;
+        if (!reader.matches(item.name) || !reportable(item.name)) continue;
         if (!item.isFile()) throw new Error('unsafe memory file');
         const relative = `${reader.dir}/${project.name}/${reader.sub}/${item.name}`;
         if (!memoryPath(harness, relative)) throw new Error('unsafe memory name');

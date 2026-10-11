@@ -108,3 +108,37 @@ test('real revision evidence verifies a changed source without promoting the cla
   assert.equal(changed.verification.artifactRevision, proposal.revision); assert.equal(changed.verification.claim, 'agent-reported');
   assert.equal(unchanged.verification.evidence, 'not-verified'); assert.equal(result.processingCoverage, 'unverified');
 });
+
+test('a memory item is processed only by a verified soul change it cites, within definition and skill content (#903)', () => {
+  const MEMORY = `sha256:${'c'.repeat(64)}`, REVISION = `sha256:${'d'.repeat(64)}`, key = 'memory:claude/projects/-p/memory/a.md';
+  const memoryInputs = { ...inputs, schemaVersion: 3, conversation: null, coverage: { ...inputs.coverage, memory: 'supported' },
+    memory: { harness: 'claude', remaining: 0, nextCursor: null,
+      items: [{ path: 'projects/-p/memory/a.md', digest: MEMORY, size: 4, excerptBytes: 4, truncated: false }] } };
+  const memoryItem = evidence => ({ path: key, digest: MEMORY, outcome: 'completed', reason: 'consolidated', evidence });
+  const verdict = (reasons, changedPaths) => () => ({ schemaVersion: 1, verdict: reasons.length ? 'not-verified' : 'verified-change', reasons,
+    attribution: 'not-established', checked: { event: { revision: REVISION, status: null }, changedPaths, changedCount: changedPaths.length } });
+  const outcome = (evidence, verifyRevisionEvidence) => interpret(JSON.stringify(report([memoryItem(evidence)])), { inputs: memoryInputs, verifyRevisionEvidence });
+  // A change that lands outside the delivered package sources still credits it.
+  let result = outcome({ revision: REVISION }, verdict(['change-outside-delivered'], [{ path: 'skills/notes/SKILL.md', change: 'added', type: 'file' }]));
+  assert.deepEqual([result.items[0].verification.evidence, result.items[0].verification.artifactRevision, result.unreported], ['verified-change', REVISION, 1]);
+  assert.equal(validateDreamOutcome(result, { runId: run.runId, inputs: memoryInputs }), result);
+  assert.equal(outcome({ revision: REVISION }, verdict([], [{ path: 'AGENTS.md', change: 'modified', type: 'file' }])).items[0].verification.evidence, 'verified-change');
+  // Not a change to definition or skill content, any other failed check, or no change at all: no credit.
+  for (const [reasons, changed] of [[['change-outside-delivered'], [{ path: 'policy.json', change: 'modified', type: 'file' }]],
+    [['change-outside-delivered', 'parent-not-start'], [{ path: 'AGENTS.md', change: 'modified', type: 'file' }]], [['author-not-soul'], [{ path: 'AGENTS.md', change: 'modified', type: 'file' }]],
+    [['no-change'], []], [['change-outside-delivered'], [{ path: 'skills/notes/empty', change: 'added', type: 'directory' }]]]) {
+    const failed = outcome({ revision: REVISION }, verdict(reasons, changed));
+    assert.deepEqual([failed.items[0].verification.evidence, failed.items[0].verification.reason], ['not-verified', 'artifact-not-verified'], reasons.join());
+  }
+  // Its digest is identity only; nothing else processes it.
+  assert.equal(outcome({ digest: MEMORY }).items[0].verification.evidence, 'source-identity');
+  assert.equal(outcome(null).items[0].verification.evidence, 'agent-reported');
+  // A memory item never delivered, or with another digest, invalidates the report.
+  for (const forged of [{ ...memoryItem(null), path: 'memory:claude/projects/-q/memory/a.md' }, { ...memoryItem(null), digest: DIGEST },
+    { ...memoryItem(null), path: 'memory:codex/projects/-p/memory/a.md' }]) {
+    assert.equal(interpret(JSON.stringify(report([forged])), { inputs: memoryInputs }).report.status, 'invalid');
+  }
+  // Format 1 and 2 inputs have no memory to report on.
+  assert.equal(interpret(JSON.stringify(report([memoryItem(null)]))).report.status, 'invalid');
+  assert.equal(interpret(JSON.stringify(report([])), { inputs: memoryInputs }).unreported, 2, 'memory items count as delivered');
+});
