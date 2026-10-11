@@ -154,6 +154,18 @@ test('the hook writes the trailer in the organization domain when the profile na
     `org domain\n\nCo-authored-by: ${displayName(identity.id)} <${identity.id}@souls.example.org>\nAgent-Identity: ${identity.id}\n`);
 });
 
+test('an unreadable census fails the commit instead of guessing the soul name (ADR-0815)', () => {
+  const { repo, env } = fixture('coauthor-census-broken');
+  writeFileSync(env.AGENT_BOT_POPULATION_PATH, '{ not json');
+  const message = path.join(repo, 'message.txt');
+  writeFileSync(message, 'census\n');
+  assert.throws(
+    () => execFileSync(prepare, [message, 'message'], { cwd: repo, env, stdio: 'pipe' }),
+    (error) => error.status === 1 && /cannot read the census/.test(String(error.stderr)),
+  );
+  assert.equal(readFileSync(message, 'utf8'), 'census\n');
+});
+
 test('a fork is a new soul with a new trailer email; a squash body is reported as such (ADR-0815)', () => {
   const { repo, identity } = fixture('coauthor-status');
   const fork = 'agent_33333333-3333-4333-8333-333333333333';

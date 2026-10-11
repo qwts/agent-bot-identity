@@ -22,15 +22,17 @@ import { displayName, populationFile, showSoul, soulDirectory, soulShownName } f
 // The census name at commit time (#429): the launch or join name, else the
 // soul.json name, else the generated handle. A soul with no census row (an
 // identity minted before the census knew it) is credited by its handle,
-// which is derived from the Agent ID and so names no one else.
-export function soulCoAuthorName(id, { env = process.env, stderr = process.stderr } = {}) {
+// which is derived from the Agent ID and so names no one else. A census that
+// cannot be read fails the commit: its row may exist, and a guessed name
+// would be an unverifiable credit.
+export function soulCoAuthorName(id, { env = process.env } = {}) {
   const file = populationFile({ env });
   let soul;
   try {
     soul = showSoul(id, { file });
   } catch (error) {
-    if (!/^no population record/.test(error.message)) stderr.write(`agent-bot: census unreadable (${error.message}); crediting ${id} by its handle\n`);
-    return displayName(id);
+    if (/^no population record/.test(error.message)) return displayName(id);
+    throw new Error(`cannot read the census for the soul's co-author name: ${error.message}`);
   }
   let directory = null;
   try { directory = soulDirectory(id, { file, env, readOnly: true }); } catch { /* no soul folder */ }
@@ -58,7 +60,7 @@ function creditsIn(lines, id, domains) {
 // credits this soul keeps that line, so an amend after a rename does not add
 // a second credit; the new name appears on new commits only. The trailer is
 // written in the organization's domain when its profile names one.
-export function prepareSoulTrailers(messageFile, id, { cwd = process.cwd(), env = process.env, stderr = process.stderr } = {}) {
+export function prepareSoulTrailers(messageFile, id, { cwd = process.cwd(), env = process.env } = {}) {
   validateAgentId(id);
   const domains = soulCoAuthorDomains(loadConfig({ env }));
   const message = readFileSync(messageFile, 'utf8');
@@ -66,7 +68,7 @@ export function prepareSoulTrailers(messageFile, id, { cwd = process.cwd(), env 
   // As for Agent-Identity since ENG-0081, a credit already anywhere in the
   // message is not repeated (a hook re-run, an amend).
   const trailers = [];
-  if (!soulCoAuthorCredits(message, domains).includes(id)) trailers.push(soulCoAuthorTrailer(id, soulCoAuthorName(id, { env, stderr }), domains[0]));
+  if (!soulCoAuthorCredits(message, domains).includes(id)) trailers.push(soulCoAuthorTrailer(id, soulCoAuthorName(id, { env }), domains[0]));
   if (!message.split('\n').includes(`Agent-Identity: ${id}`)) trailers.push(`Agent-Identity: ${id}`);
   if (trailers.length === 0) return;
   git([

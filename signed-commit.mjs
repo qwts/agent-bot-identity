@@ -150,6 +150,22 @@ export async function runSignedCommit(options, {
   if (branch === 'HEAD') throw new Error('detached HEAD — pass --branch <name>');
 
   let defaultBranch = localDefaultBranch(cwd);
+  // The message is replayed verbatim, so the soul's co-author trailer
+  // survives. A commit made past the hook (--no-verify) may still not credit
+  // another soul (ADR-0815). The local range is checked before a token is
+  // minted, and the final range again once the remote default is known.
+  const soul = currentAgentId({ env, cwd });
+  const soulDomains = soulCoAuthorDomains(config);
+  const assertSoulCredits = (range) => {
+    for (const sha of gitTrim(['rev-list', range], cwd).split('\n').filter(Boolean)) {
+      try { assertSoulCoAuthor(git(['log', '-1', '--format=%B', sha], { cwd }), soul, soulDomains); }
+      catch (error) { throw new Error(`${sha.slice(0, 8)}: ${error.message}. Nothing was written.`); }
+    }
+  };
+  const localBase = options.base
+    ? tryGit(['rev-parse', options.base], cwd)
+    : tryGit(['merge-base', `origin/${defaultBranch}`, 'HEAD'], cwd) ?? tryGit(['merge-base', defaultBranch, 'HEAD'], cwd);
+  if (localBase) assertSoulCredits(`${localBase}..HEAD`);
   let api = null;
   if (!options.dryRun) {
     // Publishing needs a stated bot identity: --app, GH_AGENT_APP, the pin,
@@ -186,15 +202,7 @@ export async function runSignedCommit(options, {
     const parents = gitTrim(['rev-list', '--parents', '-n', '1', sha], cwd).split(/\s+/).slice(1);
     if (parents.length > 1) throw new Error(`${sha.slice(0, 8)} is a merge commit — rebase into linear history first`);
   }
-  // The message is replayed verbatim, so the soul's co-author trailer
-  // survives. A commit made past the hook (--no-verify) may still not credit
-  // another soul (ADR-0815): checked before anything is created.
-  const soul = currentAgentId({ env, cwd });
-  const soulDomains = soulCoAuthorDomains(config);
-  for (const sha of commits) {
-    try { assertSoulCoAuthor(git(['log', '-1', '--format=%B', sha], { cwd }), soul, soulDomains); }
-    catch (error) { throw new Error(`${sha.slice(0, 8)}: ${error.message}. Nothing was written.`); }
-  }
+  assertSoulCredits(`${base}..${head}`);
 
   const refName = `heads/${branch}`;
   const refPath = encodeRefPath(refName);
