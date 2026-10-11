@@ -1,0 +1,1 @@
+- ADR-0815 records the owner's decision that a soul, not the harness or orchestrator App, is the Git author of its commits, and what that means for signed commits: GitHub documents that an API commit with a custom author is not signed, so a live Verified proof commit comes before any rollout (#815).
