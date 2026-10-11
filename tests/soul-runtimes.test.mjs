@@ -406,6 +406,7 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   const gone = { ...bumped, node: [next] };
   const refused = inspectSoulRuntimes(f.dir, { ...f.options, catalog: gone }).runtimes[0];
   assert.deepEqual([refused.version, refused.status, refused.code, refused.action], [NODE.version, 'unsupported', 'runtime-install-failed', `update agent-bot to a release whose catalog pins node ${NODE.version}`]);
+  assert.deepEqual([refused.path, refused.bin, refused.verification], [null, null, null], 'the old directory on disk is not offered as usable');
   assert.match(refused.reason, /is pinned for this soul in \.soul-state\/runtime-pins\.json, and this agent-bot's catalog no longer has it/);
   const goneError = await installSoulRuntimes(f.dir, { ...f.options, catalog: gone, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
   assert.deepEqual([goneError?.code, goneError?.action], ['runtime-install-failed', refused.action]);
@@ -488,6 +489,18 @@ test('the pins file records what each runtime installed as; reinstall and a newe
     const blocked = await installSoulRuntimes(f.dir, { ...f.options, only: 'node', catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
     assert.deepEqual([blocked?.code, blocked?.action], ['runtime-install-failed', 'fix or delete .soul-state/runtime-pins.json']);
     assert.equal(readFileSync(pinsPath, 'utf8'), contents);
+  }
+  // A link or a FIFO in its place is refused without following or blocking on it.
+  if (process.platform !== 'win32') {
+    const outside = path.join(f.home, 'outside-pins.json');
+    writeFileSync(outside, JSON.stringify({ schemaVersion: 1, runtimes: {}, harnesses: {} }));
+    rmSync(pinsPath);
+    symlinkSync(outside, pinsPath);
+    assert.match(readRuntimePins(f.dir).problem, /is not a small regular JSON file/);
+    rmSync(pinsPath);
+    assert.equal(spawnSync('mkfifo', [pinsPath]).status, 0);
+    assert.match(readRuntimePins(f.dir).problem, /is not a small regular JSON file/);
+    rmSync(pinsPath);
   }
 });
 
@@ -756,6 +769,16 @@ test('daemon turns refuse unavailable declarations before harness creation, incl
   // directory survive deletion of the executable.
   rmSync(path.join(f.runtimes, 'node', NODE.version, 'bin', 'node'));
   await assert.rejects(coldTurnExecutor({ executorFor: factory })({ invocation: request, message: 'continue', env: {} }), refused('runtime-install-failed', 'node'));
+  assert.equal(created, 1);
+  // The pins file refuses at the launch boundary too: malformed, or naming a version this catalog dropped.
+  put(path.join(f.runtimes, 'node', NODE.version, 'bin', 'node'), '#!/bin/sh\n');
+  const pinsPath = path.join(f.dir, '.soul-state', 'runtime-pins.json');
+  writeFileSync(pinsPath, 'not json');
+  assert.throws(() => factory(request), (e) => refused('runtime-install-failed', '.soul-state/runtime-pins.json')(e) && e.action === 'fix or delete .soul-state/runtime-pins.json');
+  writeFileSync(pinsPath, JSON.stringify({ schemaVersion: 1, runtimes: { node: { version: '24.0.1', catalogRelease: null } }, harnesses: {} }));
+  assert.throws(() => factory(request), (e) => refused('runtime-install-failed', 'node')(e) && e.action === 'update agent-bot to a release whose catalog pins node 24.0.1');
+  await assert.rejects(coldTurnExecutor({ executorFor: factory })({ invocation: request, message: 'continue', env: {} }), refused('runtime-install-failed', 'node'));
+  rmSync(pinsPath);
   assert.equal(created, 1);
   f.writeManifest((m) => { m.runtimes.node = '999'; });
   assert.throws(() => factory(request), refused('runtime-unsupported-platform', 'node'));

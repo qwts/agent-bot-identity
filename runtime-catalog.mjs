@@ -118,8 +118,9 @@ const canonical = (value) => {
 /**
  * The catalog release (#617, owner decision "Pin per install"): the SHA-256
  * of `{ version, catalog }` in canonical JSON. Any change to a pin, URL,
- * digest or the schema version changes it; key order does not. Install
- * stamps and `.soul-state/runtime-pins.json` record it beside the exact
+ * digest or the schema version changes it; key order does not. Runtime
+ * install stamps (`archive`, `uv-python`) and `.soul-state/runtime-pins.json`
+ * record it beside the exact
  * version as provenance; nothing checks or enforces it, since the version
  * alone selects the catalog's own verified pin.
  */

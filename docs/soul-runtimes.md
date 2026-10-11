@@ -77,7 +77,8 @@ version can still reinstall it from a verified source (#617, "Pin per
 install"); `catalogPin(name, version)` finds a pin by exact version. An exact
 version the catalog does not pin is unsupported unless the soul declares its
 own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1, and
-`catalogReleaseHash()` is the SHA-256 of the catalog in canonical JSON.
+`catalogReleaseHash()` is the SHA-256 of `{ version: RUNTIME_CATALOG_VERSION,
+catalog }` in canonical JSON (sorted keys, no whitespace).
 
 ### Pins
 

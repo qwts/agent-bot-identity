@@ -17,7 +17,7 @@
 import { minimalChildEnv } from './child-env.mjs';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { accessSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -274,13 +274,19 @@ export function downloadCacheDir({ env = process.env, home = env.HOME ?? homedir
   return path.join(base, 'downloads');
 }
 
+// Soul-writable files (soul.json, receipts, the pins file) are opened once,
+// never through a link and never blocking on a FIFO, and checked on that
+// descriptor, so a swap after the check cannot redirect or stall the read.
 function readJson(file, limit = 64 * 1024) {
+  let fd;
+  try { fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)); }
+  catch { return null; }
   try {
-    const stat = lstatSync(file);
+    const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > limit) return null;
-    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    const parsed = JSON.parse(readFileSync(fd, 'utf8'));
     return object(parsed) ? parsed : null;
-  } catch { return null; }
+  } catch { return null; } finally { closeSync(fd); }
 }
 
 export function readSoulManifest(soulDir) {
@@ -580,7 +586,8 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     // Only a Python receipt can lack its digest; a soul that requires
     // integrity reinstalls it rather than run it (#617).
     const unverified = usable && !stamp.sha256;
-    const installed = usable && !(unverified && required);
+    // A row already refused (a dropped pin, an uncovered platform) never reports its old directory as usable.
+    const installed = usable && !(unverified && required) && !row.status;
     const last = lastInstall(path.join(root, row.name));
     const entry = { name: row.name, declared: row.declared, requiredBy: row.requiredBy, version: row.version, source: row.source,
       status: row.status ?? (installed ? 'installed' : 'missing'),
