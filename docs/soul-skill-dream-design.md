@@ -276,7 +276,7 @@ several rollout files is read from its newest. The store root itself is checked 
 link there, or a root resolving outside the tool home, is never walked. No budget spans the whole store,
 so a growing history never makes a recorded session unreadable; each directory
 listing is bounded to 4096 entries instead. A recorded soul-store session that
-is missing, linked, outside the tool home, binary or not UTF-8, or behind a
+is missing, linked or hardlinked, outside the tool home, binary or not UTF-8, or behind a
 single directory over that bound, reports `unavailable`; it never fails the run.
 
 The excerpt is the newest whole lines within 64 KiB, since the file is a live,

@@ -216,6 +216,8 @@ test('only the recorded session in the soul store is read; anything else is unsu
   writeFileSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), '{"secret":true}\n');
   rmSync(f.file); symlinkSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), f.file);
   assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a linked file is never followed');
+  rmSync(f.file); linkSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), f.file);
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a hardlinked file from another store is refused');
   rmSync(path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions'), { recursive: true });
   mkdirSync(path.join(outside, '2026', '10', '10'), { recursive: true });
   writeFileSync(path.join(outside, '2026', '10', '10', `rollout-x-${THREAD}.jsonl`), '{"secret":true}\n');

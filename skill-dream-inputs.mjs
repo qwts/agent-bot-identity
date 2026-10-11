@@ -138,10 +138,13 @@ export function captureDreamConversation(soulDir, session) {
     if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || realpathSync(root) !== root) return unavailable;
     const file = walk(root, 0);
     if (file === null) return unavailable;
-    if (!lstatSync(file).isFile() || realpathSync(file) !== file) return unavailable;
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // As the package reader does: no hardlink (another store's file can share
+    // the inode), and the opened descriptor must be the file that was checked.
+    const checked = lstatSync(file);
+    if (!checked.isFile() || checked.nlink !== 1 || realpathSync(file) !== file) return unavailable;
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = fstatSync(fd), { size } = info;
-    if (!info.isFile()) return unavailable;
+    if (!info.isFile() || info.nlink !== 1 || info.dev !== checked.dev || info.ino !== checked.ino) return unavailable;
     // The whole file, not only the delivered tail, must be text: one
     // streaming pass in excerpt-sized chunks, so memory stays bounded
     // however long the session grows.
