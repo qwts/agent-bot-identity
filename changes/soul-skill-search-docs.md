@@ -1,0 +1,1 @@
+- The soul skills guide documents `agent-bot soul skill search`: the `settings.skillSearchAdapter` host setting, the plain no-adapter failure, and how `local-text` cites the soul revision, file path, digest and line (#902).
