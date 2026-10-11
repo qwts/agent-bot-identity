@@ -451,6 +451,13 @@ function tomlServerNames(target, content) {
   return [...names].sort();
 }
 
+// An entry is ours only when it is exactly the server we render, field for
+// field; one with extra fields (env, permissions, etc.) belongs to its author.
+function sameServer(entry, own) {
+  return Boolean(entry) && typeof entry === 'object' && Object.keys(entry).length === Object.keys(own).length
+    && Object.keys(own).every(key => JSON.stringify(entry[key]) === JSON.stringify(own[key]));
+}
+
 function renderMcp(target, authored) {
   if (authored === undefined || authored === null) {
     return target.format === 'toml' ? Buffer.from(tomlMerge(target, Buffer.alloc(0)))
@@ -460,8 +467,7 @@ function renderMcp(target, authored) {
   const { _comment: _authored, ...rest } = authoredObject(target, authored);
   const servers = { ...(rest[target.key] ?? {}) };
   const own = mcpServer(target.style);
-  const same = (entry) => entry && Object.keys(entry).length === Object.keys(own).length
-    && Object.keys(own).every(key => JSON.stringify(entry[key]) === JSON.stringify(own[key]));
+  const same = (entry) => sameServer(entry, own);
   if (Object.hasOwn(servers, MCP_SERVER_NAME) && !same(servers[MCP_SERVER_NAME])) {
     throw new Error(`${target.path} already declares a custom ${MCP_SERVER_NAME} MCP server; rename it before building`);
   }
@@ -620,9 +626,15 @@ export function soulHookCommand(dialectKey, event) {
     // The runner keeps the hook's stdin through fd 3: a shell without job
     // control gives an async command /dev/null first, and dash then reads
     // `0<&0` as that /dev/null, so the payload must come from a saved copy.
-    // The watchdog holds no stdio, so a leftover sleep never keeps Qwen
-    // waiting on the pipes.
-    return `${prefix}exec 3<&0; ${run} <&3 3<&- & p=$!; (sleep ${QWEN_RUNNER_DEADLINE_SECONDS}; kill $p) </dev/null >/dev/null 2>&1 3<&- & w=$!; exec 3<&-; wait $p; s=$?; kill $w 2>/dev/null; `
+    // The watchdog holds no stdio, so it never keeps Qwen (which waits for
+    // every copy of the pipes to close) waiting. At the deadline it SIGKILLs
+    // the runner, which cannot be ignored; the runner's own hooks hold its
+    // pipes, not Qwen's, so the entry then exits 2 well inside Qwen's 60 s.
+    // On every other path the watchdog is stopped, and its trap stops its
+    // timer, so no `sleep` outlives the entry.
+    return `${prefix}exec 3<&0; ${run} <&3 3<&- & p=$!; exec 3<&-; `
+      + `(trap 'kill $z 2>/dev/null; exit 0' TERM; sleep ${QWEN_RUNNER_DEADLINE_SECONDS} & z=$!; wait $z; kill -KILL $p) </dev/null >/dev/null 2>&1 & w=$!; `
+      + 'wait $p; s=$?; kill $w 2>/dev/null; wait $w 2>/dev/null; '
       + `[ $s -eq 0 ] || [ $s -eq 2 ] || { echo "agent-bot soul ${event} hooks failed closed (runner exit $s)" >&2; exit 2; }; exit $s # ${SOUL_HOOK_MARKER}`;
   }
   return `${prefix}AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event ${event} --dialect ${dialectKey} # ${SOUL_HOOK_MARKER}`;
@@ -680,14 +692,18 @@ function renderHookTarget(target, base, events, { fromOutput }) {
 
 // With comms off, a hook file that is also an MCP file (Qwen's settings) is
 // rendered from the last build's bytes, so our own reach entry is dropped from
-// them first; the soul's own servers stay.
+// them first: the current `agent-reach` and, as `renderMcp` migrates it, the
+// former `agent-bot` one, each only when marked and exactly as we render it.
+// The soul's own servers stay.
 function withoutOwnMcp(path, bytes) {
   const target = MCP_TARGETS.find((candidate) => candidate.path === path);
   if (!bytes || !target || target.format === 'toml') return bytes;
   const { _comment, ...rest } = authoredObject(target, bytes);
   const servers = { ...(rest[target.key] ?? {}) };
-  if (_comment !== MARKER || JSON.stringify(servers[MCP_SERVER_NAME]) !== JSON.stringify(mcpServer(target.style))) return bytes;
-  delete servers[MCP_SERVER_NAME];
+  const own = mcpServer(target.style);
+  const ours = [MCP_SERVER_NAME, LEGACY_MCP_SERVER_NAME].filter((name) => sameServer(servers[name], own));
+  if (_comment !== MARKER || !ours.length) return bytes;
+  for (const name of ours) delete servers[name];
   if (Object.keys(servers).length) rest[target.key] = servers;
   else delete rest[target.key];
   return Buffer.from(`${JSON.stringify({ _comment, ...rest }, null, 2)}\n`);

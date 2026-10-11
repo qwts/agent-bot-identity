@@ -108,7 +108,7 @@ function reseal(root) {
 }
 
 // The guard entry Qwen's settings always carry (#378).
-const QWEN_GUARDS = { PreToolUse: [{ hooks: [{ type: 'command', command: soulHookCommand('qwen', 'pre-tool-use'), timeout: 60 }] }] };
+const QWEN_GUARDS = { PreToolUse: [{ hooks: [{ type: 'command', command: soulHookCommand('qwen', 'pre-tool-use'), timeout: 60, shell: 'bash' }] }] };
 
 const cliRun = (root, ...args) => spawnSync(process.execPath, [cli, 'soul', 'build', ...args, ...(root ? [root] : [])],
   { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: root } });

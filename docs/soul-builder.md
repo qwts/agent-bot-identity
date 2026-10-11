@@ -820,16 +820,27 @@ adapter, so the file always carries one `PreToolUse` entry on `pre-tool-use`
 (`QWEN_GUARD_EVENTS`), hooks declared or not: that is where the runner's
 identity guard scans `run_shell_command` and confinement checks
 `write_file`, `edit` and `notebook_edit`. With comms off the file stays for
-that entry, and only the builder's own `agent-reach` server is dropped from
-it.
+that entry, and only the builder's own server is dropped from it:
+`agent-reach`, or a marked file's former `agent-bot` entry, each only when it
+is exactly the one the builder renders.
 
 Qwen fails open: a hook that crashes, exits with anything but 0 or 2, or
 outlives its 60 s timeout lets the call proceed. So on a blocking event the
-entry does not `exec` the runner. It runs it with the hook's stdin, kills it
-after 50 s (`QWEN_RUNNER_DEADLINE_SECONDS`), and exits 2 with a reason for
-any status but 0 and 2. A missing `agent-bot` exits 2 as everywhere. A
-non-blocking event runs the runner as the other harnesses do and never
-denies. No live Qwen session was run.
+entry does not `exec` the runner. It runs it with the hook's stdin,
+SIGKILLs it after 50 s (`QWEN_RUNNER_DEADLINE_SECONDS`), and exits 2 with a
+reason for any status but 0 and 2. The watchdog holds none of Qwen's pipes
+and is stopped, timer included, when the runner finishes, so nothing it
+starts outlives the entry. The runner's own hooks hold the runner's pipes,
+not Qwen's, and the runner already stops a slow hook on its own clock. A
+missing `agent-bot` exits 2 as everywhere. A non-blocking event runs the
+runner as the other harnesses do and never denies.
+
+Every entry sets `shell: "bash"`, so Qwen runs it in bash rather than its
+configured shell, which is `cmd.exe` or PowerShell on an ordinary Windows
+install. On Windows that needs a `bash` on PATH (Git for Windows). Without
+one, Qwen cannot start the entry and, failing open, runs the call unguarded.
+That gap is Qwen's, and no command can close it. No live Qwen session was
+run.
 
 ### Who owns what
 

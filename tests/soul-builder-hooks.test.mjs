@@ -300,7 +300,7 @@ test('soul build --check --json and the plain summary name unsupported hooks', (
 // Qwen Code (#378): its settings file always carries the runner's guards on
 // pre-tool-use, and a blocking entry denies whatever happens to the runner.
 const qwenHooks = (output) => json(output, '.qwen/settings.json').hooks;
-const qwenEntry = (event, matcher) => ({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: soulHookCommand('qwen', event), timeout: 60 }] });
+const qwenEntry = (event, matcher) => ({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: soulHookCommand('qwen', event), timeout: 60, shell: 'bash' }] });
 
 test('Qwen settings carry the guard entry always, beside the declared hooks and the MCP entry', () => {
   const output = buildHarnessFiles(hooked());
@@ -332,6 +332,16 @@ test('turning comms off keeps the Qwen guard and the soul\'s own servers, and dr
   assert.deepEqual(off.mcpServers, { git: { command: 'uvx' } });
   assert.deepEqual(off.model, own.model);
   assert.deepEqual(off.hooks, { Stop: own.hooks.Stop, PreToolUse: [qwenEntry('pre-tool-use')] });
+  // A marked file from before the rename carries the exact entry as `agent-bot`:
+  // comms off drops it too, while an author's `agent-bot` with its own fields stays.
+  const reach = json(on, '.qwen/settings.json').mcpServers['agent-reach'];
+  const legacy = (server) => new Map([['.qwen/settings.json', Buffer.from(JSON.stringify({ _comment: MARKER, ...own, mcpServers: { git: own.mcpServers.git, 'agent-bot': server } }))]]);
+  const migrated = json(buildHarnessFiles(base({ comms: false }), { authored: legacy(reach) }), '.qwen/settings.json');
+  assert.deepEqual(migrated.mcpServers, { git: { command: 'uvx' } });
+  assert.deepEqual(migrated.hooks, { Stop: own.hooks.Stop, PreToolUse: [qwenEntry('pre-tool-use')] });
+  const custom = { ...reach, env: { KEEP: '1' } };
+  const kept = json(buildHarnessFiles(base({ comms: false }), { authored: legacy(custom) }), '.qwen/settings.json');
+  assert.deepEqual(kept.mcpServers, { git: { command: 'uvx' }, 'agent-bot': custom });
 });
 
 test('a Qwen entry runs the soul hook through the real runner and denies on a crash, an overrun or a missing runner', (t) => {
@@ -342,7 +352,11 @@ test('a Qwen entry runs the soul hook through the real runner and denies on a cr
   spawnSync('git', ['init', '--quiet', soul]);
   put(root, 'bin/agent-bot', `#!/bin/sh\n[ "$1" = agent-hook ] && shift\nexec "${process.execPath}" "${runner}" "$@"\n`, 0o755);
   put(root, 'crash/agent-bot', '#!/bin/sh\necho boom >&2\nexit 1\n', 0o755);
-  put(root, 'hang/agent-bot', '#!/bin/sh\nexec sleep 30\n', 0o755);
+  // A hung runner that ignores SIGTERM too (SIG_IGN survives the exec).
+  put(root, 'hang/agent-bot', "#!/bin/sh\ntrap '' TERM\nexec /bin/sleep 30\n", 0o755);
+  // The watchdog's timer, recorded so the test can see it never outlives the entry.
+  const timers = join(root, 'timers');
+  put(root, 'bin/sleep', `#!/bin/sh\necho $$ >> "${timers}"\nexec /bin/sleep "$@"\n`, 0o755);
   const command = qwenHooks(buildHarnessFiles(hooked())).PreToolUse[1].hooks[0].command;
   const env = (bin) => ({ PATH: `${join(root, bin)}:/usr/bin:/bin`, HOME: root, AGENT_BOT_CONFINEMENT: 'off' });
   const payload = (cmd) => JSON.stringify({ session_id: 'q', cwd: soul, hook_event_name: 'PreToolUse', tool_name: 'run_shell_command', tool_input: { command: cmd } });
@@ -358,14 +372,26 @@ test('a Qwen entry runs the soul hook through the real runner and denies on a cr
     assert.equal(denied.stdout, '');
     const allowed = run('git status', 'bin');
     assert.equal(allowed.status, 0, `${shell}: ${allowed.stderr}`);
+    // Each run's timer was stopped with it, not left asleep for the deadline
+    // (ksh's `sleep` is a builtin of the watchdog itself, so it has no timer file).
+    if (!shell.endsWith('ksh')) {
+      const pids = readFileSync(timers, 'utf8').trim().split('\n').map(Number);
+      assert.equal(pids.length, 2, shell);
+      const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      for (let i = 0; i < 50 && pids.some(alive); i += 1) spawnSync('/bin/sleep', ['0.02']);
+      assert.deepEqual(pids.filter(alive), [], `${shell}: the watchdog's sleep outlived the entry`);
+      rmSync(timers);
+    }
     const crashed = run('ls', 'crash');
     assert.equal(crashed.status, 2, shell);
     assert.match(crashed.stderr, /pre-command hooks failed closed \(runner exit 1\)/);
     // The watchdog (shortened here) kills a runner that would outlive Qwen's clock.
     const started = Date.now();
-    const hung = run('ls', 'hang', command.replace('sleep 50;', 'sleep 1;'));
+    const short = command.replace('sleep 50 &', 'sleep 1 &');
+    assert.notEqual(short, command);
+    const hung = run('ls', 'hang', short);
     assert.equal(hung.status, 2, shell);
-    assert.match(hung.stderr, /failed closed/);
+    assert.match(hung.stderr, /failed closed \(runner exit (137|265)\)/);
     assert.ok(Date.now() - started < 10000, `${shell}: the watchdog's sleep must not hold the pipes open`);
     const missing = run('ls', 'nowhere');
     assert.equal(missing.status, 2, shell);
