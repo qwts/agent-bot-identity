@@ -55,39 +55,34 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding as lookupRegistryBinding, readBinding, readBindToken } from './agent-binding.mjs';
+import {
+  assertAuthorized, assertPrivateGitDir, assignAgentApp, bindAgentLineage, boundRepository,
+  childBindingPath, consumeBindToken, createBindingRegistry, createIdentityAppJobs,
+  createInboxTaker, ensureAgentIdentity, extractToken, grantTarget, identityAppFailure,
+  identityAppOperation, inboxError, KEYD_TOOL_NAMES, keydRequest, listIdentityApps,
+  loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding, mint, mintAgentIdentity,
+  mintViaKeyd, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity, readBinding,
+  readBindToken, readKeydRecord, resolvePrincipal, signKeydGrant, signSoulToken, validAppSlug,
+  validateApprovalScope, vouchPublicKeyPem, vouchStateDir
+} from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
 import { createSoulHistory } from './soul-history.mjs';
 import { ensureSoulSpace, soulSpacePath } from './soul-memory.mjs';
 import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulApp, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
 import { spawnSoulTemplate } from './soul-templates.mjs';
-import {
-  assignAgentApp,
-  bindAgentLineage,
-  ensureAgentIdentity,
-  mintAgentIdentity,
-  readAgentIdentity,
-} from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { createInteractionService } from './agent-interaction.mjs';
-import { mint } from './mint-token.mjs';
-import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
 import { OWNER_DECIDER, createProposal, decideProposal, listProposals, operationDigest, recoverInteractionStore } from './agent-jobs.mjs';
-import { boundRepository, createInboxTaker, inboxError } from './inbox-take.mjs';
 import { createGrantLedger } from './delegation-grants.mjs';
 import { createGrantActor } from './grant-github.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
-import { assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 import { appendAuditReceipt, isComputerUse, validateAgentId } from './identity-format.mjs';
-import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
 import {
   confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, ownerChallengeMessage, keydPresenceWithoutDialog, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner,
 } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
-import { loadOrCreateVouchKey, signSoulToken, vouchPublicKeyPem, vouchStateDir } from './vouch.mjs';
-import { PROOF_HEADER, parseBindingProof } from './binding-proof.mjs';
 import {
   daemonClient, daemonStateFile, LOOPBACK_HOSTS, probeDaemonHealth as probeHealth,
   readDaemonState as readStateFile, SCHEMA_VERSION,
@@ -102,9 +97,7 @@ export { daemonStatus, joinLaunchedSoul, leaveLaunchedSoul, soulEnvironment, use
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
 import { resolveSoulMode } from './soul-mode.mjs';
-import { createIdentityAppJobs, identityAppOperation, identityAppFailure, listIdentityApps } from './identity-apps.mjs';
 import { identityAppSouls } from './identity-app-souls.mjs';
-import { validAppSlug } from './identity-app-store.mjs';
 import { runtimeProfileInfo } from './organization-profile.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
@@ -129,7 +122,6 @@ import { acpExecutorFor, composeTurnEnv, createWakePlane, createTurnRegistry } f
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
 import { createCommsRelay, senderAddress } from './comms-relay.mjs';
-import { extractToken } from './owner-statement.mjs';
 import { recordDeliveredAside } from './soul-asides.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 import { migratePreGateConfig } from './config-migration.mjs';

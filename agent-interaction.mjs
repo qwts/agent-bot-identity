@@ -26,7 +26,7 @@
 // digest — delivered by a principal holding the reserved 'approve' operation
 // — resumes it. A conversational "yes" has no pathway to authorize anything.
 
-import { validateApprovalScope } from './session-approvals.mjs';
+import { assertAuthorized, validateApprovalScope } from './identity-host.mjs';
 import { homedir } from 'node:os';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -62,9 +62,6 @@ import {
   validateSessionId,
   writeInvocationPayload,
 } from './agent-jobs.mjs';
-import {
-  assertAuthorized,
-} from './agent-principals.mjs';
 import { appendAuditReceipt, classifyRisk, validateAgentId, validateTransport } from './identity-format.mjs';
 import { assertSoulUnpaused, listSouls, populationFile, showSoul } from './agent-population.mjs';
 import { readAsides } from './soul-asides.mjs';

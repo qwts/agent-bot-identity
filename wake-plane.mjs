@@ -15,7 +15,7 @@ import { getInvocation, getSession, listInvocations, readEvents, TERMINAL_STATUS
 import { createColdWaker } from './cold-wake.mjs';
 import { reachMcpServerEntry, reachPolicyRules } from './daemon-mcp.mjs';
 import { HARNESS_SESSION_EVENT, UPDATE_EVENT, validateHarnessBinding } from './executor-contract.mjs';
-import { keydMcpServerEntry, keydPolicyRules } from './keyd-client.mjs';
+import { keydMcpServerEntry, keydPolicyRules } from './identity-host.mjs';
 import { NEVER_ROUTED } from './soul-tool-homes.mjs';
 import { createWakeDispatcher } from './wake-dispatch.mjs';
 import { composeTurnEnv } from './turn-env.mjs';

@@ -1,0 +1,1 @@
+- Host code now loads identity through one entry, `identity-host.mjs`, and a test keeps host from importing any other identity file. Behavior is unchanged (#645).

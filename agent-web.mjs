@@ -30,7 +30,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { getPrincipal, listPrincipals, principalsFile } from './agent-principals.mjs';
+import { getPrincipal, listPrincipals, principalsFile } from './identity-host.mjs';
 import { daemonStateFile, daemonStatus } from './agent-daemon.mjs';
 
 export const UI_CSRF_HEADER = 'x-agent-bot-ui';

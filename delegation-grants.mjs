@@ -40,7 +40,7 @@ import {
   validateProposalId,
 } from './agent-jobs.mjs';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
-import { keydPresence } from './owner-presence.mjs';
+import { keydPresence } from './identity-host.mjs';
 
 // The named operations (owner decision on #108). Each is an account write
 // that is not an approval.

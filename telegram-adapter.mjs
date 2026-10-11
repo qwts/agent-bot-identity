@@ -48,11 +48,12 @@ import { pathToFileURL } from 'node:url';
 import { daemonStatus } from './agent-daemon.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { MAX_MESSAGE_BYTES } from './agent-interaction.mjs';
-import { principalsFile, resolvePrincipal } from './agent-principals.mjs';
+import {
+  BUILTIN_SECRET_PROVIDERS, createSecretProviderRegistry, getSecret, principalsFile,
+  resolvePrincipal
+} from './identity-host.mjs';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { loadConfig } from './config.mjs';
-import { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
-import { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
 
 const SCHEMA_VERSION = 1;
 export const TELEGRAM_TRANSPORT = 'telegram';

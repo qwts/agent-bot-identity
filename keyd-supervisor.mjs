@@ -13,8 +13,10 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { renderLaunchdPlist, supervisorSkipLoad } from './daemon-supervisor.mjs';
-import { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydPaths, keydStatus, keydVersionAction, readKeydRecord } from './keyd-client.mjs';
-import { vouchStateDir } from './vouch.mjs';
+import {
+  KEYD_LABEL, KEYD_LABEL_VARIABLE, keydPaths, keydStatus, keydVersionAction, readKeydRecord,
+  vouchStateDir
+} from './identity-host.mjs';
 
 export function keydLabel(env = process.env) {
   const label = env[KEYD_LABEL_VARIABLE];

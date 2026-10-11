@@ -52,9 +52,7 @@ import { AGENT_ID_KEYS, isAgentId, validateAgentId } from './identity-format.mjs
 import { claimSend, recordThreadMessage } from './soul-threads.mjs';
 import { recordAside } from './soul-asides.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
-import { readGitConfig } from './resolve-agent.mjs';
-import { readBinding } from './agent-binding.mjs';
-import { PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
+import { PROOF_HEADER, readBinding, readGitConfig, signBindingProof } from './identity-host.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 

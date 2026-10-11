@@ -26,10 +26,9 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { readBinding, readBindToken } from './agent-binding.mjs';
+import { readBinding, readBindToken, resolveAgentSlug } from './identity-host.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
