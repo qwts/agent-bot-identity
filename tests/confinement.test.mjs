@@ -484,3 +484,22 @@ test('apply_patch arriving on a pre-file-write-only dialect is parsed, not treat
   assert.equal(confinementCheck(legacy(patchOf('*** Add File: in.txt', '+x')), opts).decision, 'allow');
   assert.equal(confinementCheck(legacy(patchOf('*** Add File: ../../x.txt', '+x')), opts).decision, 'deny');
 });
+// OpenCode's plugin may send a write as pre-tool-use or pre-file-write (#378):
+// write, edit and apply_patch are confined path by path on either event.
+test('OpenCode write, edit and apply_patch are confined on whichever event they arrive', async (t) => {
+  const { home, soul, opts } = fixture(t);
+  await setConfinementMode(id, 'deny', { ...opts, gate: owner });
+  const opencode = (event, tool, args) => normalizeEnvelope({ dialectKey: 'opencode', event, payload: { tool, sessionID: 's', callID: 'c', args, directory: soul } });
+  for (const event of ['pre-tool-use', 'pre-file-write']) {
+    for (const tool of ['write', 'edit']) {
+      assert.equal(confinementCheck(opencode(event, tool, { filePath: path.join(home, 'outside.txt') }), opts).decision, 'deny', `${event} ${tool}`);
+      assert.equal(confinementCheck(opencode(event, tool, { filePath: '../../outside.txt' }), opts).decision, 'deny', `${event} ${tool} relative`);
+      assert.equal(confinementCheck(opencode(event, tool, { filePath: 'in.txt' }), opts).decision, 'allow', `${event} ${tool} inside`);
+    }
+    assert.equal(confinementCheck(opencode(event, 'apply_patch', { patchText: patchOf('*** Add File: ../../x.txt', '+x') }), opts).decision, 'deny', event);
+    assert.equal(confinementCheck(opencode(event, 'apply_patch', { patchText: patchOf('*** Add File: x.txt', '+x') }), opts).decision, 'allow', event);
+    assert.equal(confinementCheck(opencode(event, 'apply_patch', { patchText: 'garbage' }), opts).decision, 'deny', event);
+  }
+  // Reads and the shell are not file writes on either event.
+  assert.equal(confinementCheck(opencode('pre-tool-use', 'read', { filePath: path.join(home, 'outside.txt') }), opts).decision, 'allow');
+});

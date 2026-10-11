@@ -119,7 +119,7 @@ Your script gets these, so a five-line `sh` hook never parses JSON:
 | Variable | Notes |
 |---|---|
 | `AGENT_HOOK_EVENT` | canonical event name |
-| `AGENT_HOOK_HARNESS` | `claude`, `codex`, `cursor`, `copilot`, `devin-desktop`, `git` |
+| `AGENT_HOOK_HARNESS` | `claude`, `codex`, `cursor`, `copilot`, `devin-desktop`, `opencode`, `git` |
 | `AGENT_HOOK_BLOCKING` | `1` when a denial will actually stop the action |
 | `AGENT_HOOK_SESSION_ID` | normalized across `session_id` / `conversation_id` / `trajectory_id` |
 | `AGENT_HOOK_CWD` | |

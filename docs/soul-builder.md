@@ -745,7 +745,8 @@ uses for the lifecycle adapters.
 | Codex | `.codex/hooks.json` | Hooks need `[features] hooks = true`, which the user-level policy `sync-hooks` writes |
 | Cursor | `.cursor/hooks.json` | `version: 1`; blocking events carry `failClosed: true` |
 | Copilot CLI | `.github/hooks/agent-bot-soul.json` | A dedicated file; other `.github/hooks/*.json` files stay the soul's |
-| Gemini CLI, OpenCode, Muse, Kiro | None | No dialect row yet (OpenCode hooks are JS plugins); every hook is listed under `unsupported.hooks` |
+| OpenCode | None yet | Hooks are a JS plugin, not a config file. The `opencode` dialect row and its translation in `agent-hook` are in place, checked against OpenCode 1.18.34; the generated `.opencode/plugins/agent-bot-soul.js` that calls them is the next slice, so until then every hook is listed under `unsupported.hooks` |
+| Gemini CLI, Muse, Kiro | None | No dialect row yet; every hook is listed under `unsupported.hooks` |
 
 Cursor's and Copilot's project hook files, like their `hook-dialects.mjs` rows,
 assume the harness tolerates the leading `_comment` marker key; Cursor's row is

@@ -10,6 +10,9 @@ import {
   encodeDecision,
   envelopeEnv,
   isBlocking,
+  nativeHookEntry,
+  confinementEvents,
+  scansCommand,
   normalizeEnvelope,
   supportsContext,
   vendorEvent,
@@ -228,6 +231,7 @@ test('doctor exposes declared gaps, unverified rows, and stale evidence', () => 
   assert.equal(current.find((row) => row.key === 'claude').covered, 8);
   assert.equal(current.find((row) => row.key === 'devin-desktop').covered, 5);
   assert.equal(current.find((row) => row.key === 'cursor').status, 'unverified');
+  assert.equal(current.find((row) => row.key === 'opencode').covered, 6);
   assert.equal(current.some((row) => row.stale), false);
 
   // Context is reported next to event coverage, because a dialect can wire every
@@ -237,7 +241,7 @@ test('doctor exposes declared gaps, unverified rows, and stale evidence', () => 
   assert.deepEqual(current.find((row) => row.key === 'cursor').contextEvents, []);
   assert.match(current.find((row) => row.key === 'cursor').contextNote, /no context field/);
 
-  const stale = hookCoverage(new Date('2027-01-01T00:00:00Z'));
+  const stale = hookCoverage(new Date('2027-04-01T00:00:00Z'));
   assert.equal(stale.every((row) => row.stale), true);
 });
 
@@ -301,4 +305,162 @@ test('a dialect with no context channel declares the gap rather than dropping th
   // say something standing instead of answering about an action.
   assert.equal(supportsContext('claude', 'pre-command'), false);
   assert.equal(encodeContext({ dialectKey: 'claude', event: 'pre-command', contexts: ['x'] }), null);
+});
+
+// --- OpenCode (#378) -----------------------------------------------------------------
+
+// The payload is the plugin hook's own input and output, merged, plus the
+// plugin's directory — the shapes in packages/plugin/src/index.ts at
+// OpenCode 1.18.34 (anomalyco/opencode@aec0b9a6).
+const OPENCODE_DIR = '/work/soul';
+
+test('opencode maps its plugin hooks onto the canonical events, and declares what it cannot', () => {
+  assert.deepEqual(vendorEvent('opencode', 'pre-tool-use'), { event: 'tool.execute.before', matcher: null });
+  assert.deepEqual(vendorEvent('opencode', 'pre-command'), { event: 'tool.execute.before', matcher: '^bash$' });
+  assert.deepEqual(
+    vendorEvent('opencode', 'pre-file-write'),
+    { event: 'tool.execute.before', matcher: '^(write|edit|apply_patch)$' },
+  );
+  assert.deepEqual(vendorEvent('opencode', 'post-tool-use'), { event: 'tool.execute.after', matcher: null });
+  assert.deepEqual(vendorEvent('opencode', 'prompt-submit'), { event: 'chat.message', matcher: null });
+  assert.deepEqual(vendorEvent('opencode', 'session-start'), { event: 'event', matcher: '^session\\.created$' });
+  // Neither session.deleted nor session.idle is the end of a session.
+  for (const event of ['session-end', 'agent-stop', 'spawn', 'pre-commit', 'pre-push']) {
+    assert.equal(vendorEvent('opencode', event), null, event);
+  }
+  assert.ok(new RegExp(vendorEvent('opencode', 'pre-command').matcher).test('bash'));
+  assert.equal(new RegExp(vendorEvent('opencode', 'pre-command').matcher).test('bash_extra'), false);
+  // OpenCode loads `{plugin,plugins}/*.{ts,js}` under `.opencode/`; the docs
+  // name `plugins/`, and the generated plugin must sit where it is loaded.
+  const row = DIALECTS.find((candidate) => candidate.key === 'opencode');
+  assert.equal(row.pluginFile, '.opencode/plugins/agent-bot-soul.js');
+  assert.match(row.pluginFile, /^\.opencode\/plugins?\/[^/]+\.(?:ts|js)$/);
+  assert.equal(row.file, null, 'no config file for sync-hooks or the builder to write');
+  // The adapter is a plugin, never a config entry another writer could emit.
+  assert.throws(() => nativeHookEntry('opencode', 'pre-command', 'true'), /generated plugin/);
+  assert.equal(supportsContext('opencode', 'session-start'), false);
+});
+
+test('opencode tool payloads translate into the common envelope', () => {
+  const bash = normalizeEnvelope({
+    dialectKey: 'opencode', event: 'pre-command',
+    payload: { tool: 'bash', sessionID: 'ses_1', callID: 'call_1', args: { command: 'git push', description: 'd' }, directory: OPENCODE_DIR },
+  });
+  assert.equal(bash.harness, 'opencode');
+  assert.equal(bash.vendor_event, 'tool.execute.before');
+  assert.equal(bash.session_id, 'ses_1');
+  assert.equal(bash.tool_name, 'bash');
+  assert.equal(bash.command, 'git push');
+  assert.equal(bash.cwd, OPENCODE_DIR);
+  assert.equal(bash.file_path, null);
+  assert.equal(bash.blocking, true);
+  assert.equal(bash.raw.callID, 'call_1');
+
+  const write = normalizeEnvelope({
+    dialectKey: 'opencode', event: 'pre-tool-use',
+    payload: { tool: 'write', sessionID: 'ses_1', callID: 'c', args: { filePath: '/work/soul/a.txt', content: 'x' }, directory: OPENCODE_DIR },
+  });
+  assert.equal(write.file_path, '/work/soul/a.txt');
+  assert.equal(write.command, null);
+  assert.equal(envelopeEnv(write).AGENT_HOOK_TOOL_PATH, '/work/soul/a.txt');
+
+  // after carries the args on input and the result on output.
+  const after = normalizeEnvelope({
+    dialectKey: 'opencode', event: 'post-tool-use',
+    payload: { tool: 'edit', sessionID: 'ses_1', callID: 'c', args: { filePath: 'b.txt' }, title: 't', output: 'ok', metadata: {} },
+  });
+  assert.equal(after.file_path, 'b.txt');
+  assert.equal(after.blocking, false);
+
+  // Another harness's keys are not this row's: a declared list replaces them.
+  const foreign = normalizeEnvelope({
+    dialectKey: 'opencode', event: 'pre-command',
+    payload: { tool_name: 'Bash', session_id: 's', tool_input: { command: 'git push' }, cwd: '/elsewhere' },
+  });
+  assert.deepEqual(
+    [foreign.tool_name, foreign.session_id, foreign.command, foreign.cwd],
+    [null, null, null, null],
+  );
+});
+
+test('opencode bash runs where its workdir says, resolved the way OpenCode resolves it', () => {
+  const cwd = (args, directory = OPENCODE_DIR, tool = 'bash') => normalizeEnvelope({
+    dialectKey: 'opencode', event: 'pre-command', payload: { tool, args, directory },
+  }).cwd;
+  assert.equal(cwd({ command: 'ls', workdir: '/other/repo' }), '/other/repo');
+  assert.equal(cwd({ command: 'ls', workdir: '/other/repo/../x' }), '/other/x');
+  assert.equal(cwd({ command: 'ls', workdir: 'sub/dir' }), '/work/soul/sub/dir');
+  assert.equal(cwd({ command: 'ls', workdir: '../sibling' }), '/work/sibling');
+  assert.equal(cwd({ command: 'ls' }), OPENCODE_DIR);
+  assert.equal(cwd({ command: 'ls', workdir: '' }), OPENCODE_DIR);
+  // A relative workdir with no absolute base cannot be placed: never a relative cwd.
+  assert.equal(cwd({ command: 'ls', workdir: 'sub' }, null), null);
+  assert.equal(cwd({ command: 'ls', workdir: 'sub' }, 'rel'), 'rel');
+  // Only the shell tool has a workdir; a file tool's path resolves from directory.
+  assert.equal(cwd({ filePath: 'a', workdir: '/other' }, OPENCODE_DIR, 'write'), OPENCODE_DIR);
+});
+
+test('opencode chat and bus payloads translate too', () => {
+  const chat = normalizeEnvelope({
+    dialectKey: 'opencode', event: 'prompt-submit',
+    payload: {
+      sessionID: 'ses_2', agent: 'build', model: { providerID: 'anthropic', modelID: 'claude-x' }, messageID: 'm',
+      message: { id: 'm', role: 'user' },
+      parts: [
+        { type: 'text', text: 'fix the bug' },
+        { type: 'file', url: 'file:///a' },
+        { type: 'text', text: 'Called the Read tool', synthetic: true },
+        { type: 'text', text: 'and add a test' },
+      ],
+      directory: OPENCODE_DIR,
+    },
+  });
+  assert.equal(chat.vendor_event, 'chat.message');
+  assert.equal(chat.session_id, 'ses_2');
+  assert.equal(chat.model, 'claude-x');
+  assert.equal(chat.prompt, 'fix the bug\nand add a test');
+  assert.equal(chat.blocking, true);
+  assert.equal(normalizeEnvelope({ dialectKey: 'opencode', event: 'prompt-submit', payload: { parts: 'x' } }).prompt, null);
+
+  const created = normalizeEnvelope({
+    dialectKey: 'opencode', event: 'session-start',
+    payload: { event: { id: 'e', type: 'session.created', properties: { sessionID: 'ses_3', info: { id: 'ses_3' } } }, directory: OPENCODE_DIR },
+  });
+  assert.equal(created.session_id, 'ses_3');
+  assert.equal(created.cwd, OPENCODE_DIR);
+  assert.equal(created.blocking, false);
+  // The SDK's own type carries the id only on info.
+  const sdk = normalizeEnvelope({
+    dialectKey: 'opencode', event: 'session-start',
+    payload: { event: { type: 'session.created', properties: { info: { id: 'ses_4', parentID: 'ses_3' } } } },
+  });
+  assert.equal(sdk.session_id, 'ses_4');
+});
+
+test('the opencode shell call is command-scanned on the generic event, and file tools confined on both', () => {
+  const env = (event, tool, harness = 'opencode') => ({ event, harness, tool_name: tool });
+  assert.equal(scansCommand(env('pre-command', 'bash')), true);
+  assert.equal(scansCommand(env('pre-tool-use', 'bash')), true);
+  assert.equal(scansCommand(env('pre-tool-use', 'write')), false);
+  assert.equal(scansCommand(env('post-tool-use', 'bash')), false);
+  // Other dialects keep scanning on pre-command only.
+  assert.equal(scansCommand(env('pre-tool-use', 'Bash', 'claude')), false);
+  assert.equal(scansCommand(env('pre-command', 'Bash', 'claude')), true);
+  assert.deepEqual(confinementEvents('opencode'), ['pre-tool-use', 'pre-file-write']);
+  assert.deepEqual(confinementEvents('claude'), ['pre-tool-use']);
+  assert.deepEqual(confinementEvents('devin-desktop'), ['pre-file-write']);
+});
+
+// The plugin reads the exit code, so a verdict must be unmistakable there:
+// a deny is exit 2 with the reason on stderr, and OpenCode has no ask.
+test('opencode answers in exit codes, and an ask on a blocking event closes', () => {
+  assert.deepEqual(
+    encodeDecision({ dialectKey: 'opencode', event: 'pre-tool-use', decision: 'deny', reason: 'no' }),
+    { stdout: '', stderr: 'no', exitCode: 2 },
+  );
+  for (const event of ['pre-tool-use', 'pre-command', 'pre-file-write', 'prompt-submit']) {
+    assert.equal(encodeDecision({ dialectKey: 'opencode', event, decision: 'ask', reason: 'r' }).exitCode, 2, event);
+  }
+  assert.equal(encodeDecision({ dialectKey: 'opencode', event: 'post-tool-use', decision: 'ask' }).exitCode, 0);
+  assert.equal(budgetMs('opencode', 'pre-command', 10000), 10000);
 });

@@ -12,7 +12,7 @@ import { populationFile, showSoul, soulDirectory } from './agent-population.mjs'
 import { revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
 import { readBinding } from './agent-binding.mjs';
-import { supportsContext, vendorEvent } from './hook-dialects.mjs';
+import { confinementEvents, supportsContext, vendorEvent } from './hook-dialects.mjs';
 import { vouchKeyPath, vouchStateDir } from './vouch.mjs';
 import { skillLibraryRoot } from './skill-library-paths.mjs';
 
@@ -319,8 +319,9 @@ export function confinementCheck(envelope, opts = {}) {
   const allow = { decision: 'allow' };
   const preTool = vendorEvent(envelope.harness, 'pre-tool-use');
   // The generated adapters may invoke both events for the same file tool.
-  // Prefer the generic event, and use the file event for legacy dialects.
-  if (envelope.event !== (preTool ? 'pre-tool-use' : 'pre-file-write')) return allow;
+  // Prefer the generic event, and use the file event for legacy dialects; a
+  // row that cannot promise which one arrives is checked on both.
+  if (!confinementEvents(envelope.harness).includes(envelope.event)) return allow;
   // Recognized on whichever event was selected, so a dialect that only routes
   // apply_patch through pre-file-write is parsed the same way.
   const patch = PATCH_TOOL.test(envelope.tool_name ?? '');

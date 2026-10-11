@@ -185,7 +185,8 @@ test('end to end: the delegate and an ordinary human shell still commit and push
 
 test('every generated pre-command dialect refuses the stated unbound bot and allows the delegate and the human', () => {
   const { repo } = primaryCheckout();
-  const dialects = DIALECTS.filter((row) => row.key !== 'git' && vendorEvent(row.key, 'pre-command'));
+  // Rows with a generated config file; OpenCode's plugin has its own test below.
+  const dialects = DIALECTS.filter((row) => row.file && vendorEvent(row.key, 'pre-command'));
   assert.ok(dialects.length >= 5);
   for (const { key } of dialects) {
     const payload = {
@@ -557,4 +558,77 @@ test('opaque execution is refused only for a stated bot that is not bound', () =
     assert.equal(run(bound.repo, command, STATED).decision, 'allow', command);
     assert.equal(run(u, command, STATED).decision, 'deny', command);
   }
+});
+
+// OpenCode (#378) has no config file to render: its plugin starts the runner
+// with the hook payload on stdin, so the runner is driven here the same way.
+function runOpencode(event, { cwd, env, payload }) {
+  return spawnSync(process.execPath, [join(ROOT, 'agent-hook.mjs'), '--dialect', 'opencode', '--event', event], {
+    cwd, env: { ...env, AGENT_BOT_HOOKS_DIR: join(ROOT, 'agent-hooks') }, input: JSON.stringify(payload), encoding: 'utf8',
+  });
+}
+
+// The bash call is scanned on pre-tool-use as well as pre-command, so the
+// guard holds even if an adapter only ever sends the generic event.
+test('opencode: the identity guard refuses the stated unbound bot on either event and allows the delegate and the human', () => {
+  const { repo } = primaryCheckout();
+  for (const command of ['git commit -m x', 'git push origin HEAD']) {
+    const payload = { tool: 'bash', sessionID: 'ses_1', callID: 'c1', args: { command }, directory: repo };
+    for (const event of ['pre-command', 'pre-tool-use']) {
+      denied('opencode', runOpencode(event, { cwd: repo, env: baseEnv(STATED), payload }));
+      allowed('opencode', runOpencode(event, { cwd: repo, env: baseEnv(DELEGATE), payload }));
+      allowed('opencode', runOpencode(event, { cwd: repo, env: baseEnv(), payload }));
+    }
+  }
+  // Only the shell tool's command is scanned on the generic event.
+  const other = { tool: 'webfetch', sessionID: 's', callID: 'c', args: { command: 'git push' }, directory: repo };
+  allowed('opencode', runOpencode('pre-tool-use', { cwd: repo, env: baseEnv(STATED), payload: other }));
+});
+
+// bash's `workdir` is where OpenCode runs the command. Judging the push by
+// the instance directory instead would let a bound session publish from an
+// unbound checkout as the human.
+test('opencode: a bound session cannot reach an unbound checkout through bash workdir', () => {
+  const unbound = primaryCheckout();
+  const bound = primaryCheckout(`${SLUG}[bot]`);
+  const payload = (args) => ({ tool: 'bash', sessionID: 's', callID: 'c', args, directory: bound.repo });
+  for (const args of [
+    { command: 'git push origin HEAD', workdir: unbound.repo },
+    { command: 'git commit --no-verify -m x', workdir: unbound.repo },
+    { command: 'git push', workdir: join('..', unbound.repo.slice(root.length + 1)) },
+  ]) {
+    for (const event of ['pre-command', 'pre-tool-use']) {
+      const run = runOpencode(event, { cwd: bound.repo, env: baseEnv(STATED), payload: payload(args) });
+      assert.equal(run.status, 2, `${event} ${JSON.stringify(args)}: ${run.stderr}`);
+      assert.match(run.stderr, new RegExp(`stated bot identity ${SLUG}`));
+    }
+  }
+  // The bound checkout still publishes, with or without a workdir.
+  for (const args of [{ command: 'git push origin HEAD' }, { command: 'git commit -m x', workdir: bound.repo }, { command: 'git commit -m x', workdir: '.' }]) {
+    const run = runOpencode('pre-command', { cwd: bound.repo, env: baseEnv(STATED), payload: payload(args) });
+    assert.equal(run.status, 0, `${JSON.stringify(args)}: ${run.stderr}`);
+  }
+});
+
+// #774: the built-in checks run whatever the project's own hook layout is.
+test('opencode: the built-in guard runs with no project hooks, and a broken hook denies a blocking event', () => {
+  const { repo } = primaryCheckout();
+  const empty = join(root, 'opencode-no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const payload = { tool: 'bash', sessionID: 's', callID: 'c', args: { command: 'git push' }, directory: repo };
+  const verdict = runHooks({ dialectKey: 'opencode', event: 'pre-command', dir: empty, env: baseEnv(STATED), payload });
+  assert.equal(verdict.decision, 'deny');
+  assert.match(verdict.reason, /^identity: /);
+
+  const broken = join(root, 'opencode-broken-hooks');
+  mkdirSync(join(broken, 'pre-tool-use'), { recursive: true });
+  writeFileSync(join(broken, 'pre-tool-use', '10-garbled'), '#!/bin/sh\necho "agent-hook: {not json"\nexit 0\n');
+  chmodSync(join(broken, 'pre-tool-use', '10-garbled'), 0o755);
+  const garbled = { tool: 'read', sessionID: 's', callID: 'c', args: { filePath: join(repo, 'README.md') }, directory: repo };
+  assert.equal(runHooks({ dialectKey: 'opencode', event: 'pre-tool-use', dir: broken, env: baseEnv(), payload: garbled }).decision, 'deny');
+  const run = spawnSync(process.execPath, [join(ROOT, 'agent-hook.mjs'), '--dialect', 'opencode', '--event', 'pre-tool-use'], {
+    cwd: repo, env: { ...baseEnv(), AGENT_BOT_HOOKS_DIR: broken }, input: JSON.stringify(garbled), encoding: 'utf8',
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /unparseable/);
 });
