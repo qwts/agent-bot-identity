@@ -28,10 +28,6 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import {
-  finalizeAgentIdentity,
-  retireAgentIdentity,
-} from './agent-identity.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { isAgentId, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
@@ -423,6 +419,13 @@ export function updateSoulStatus(
   status,
   { file = populationFile(), now = () => new Date() } = {},
 ) {
+  return writeSoulStatus(id, status, { file, now }).written;
+}
+
+// Sets one soul's census status and returns the row it replaced with the one
+// it wrote (both null when the census has no row for the soul). `guard` sees
+// the existing row first and may throw to refuse the write.
+function writeSoulStatus(id, status, { file, now, guard = null }) {
   const target = agentId(id);
   const nextStatus = printableText('status', status, { max: 80 });
   ensurePrivateDirectory(path.dirname(file));
@@ -432,7 +435,8 @@ export function updateSoulStatus(
       throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     }
     const existing = current.souls[target];
-    if (!existing) return null;
+    if (!existing) return { previous: null, written: null };
+    guard?.(existing);
     const candidate = normalizeSoul({
       ...existing,
       status: nextStatus,
@@ -440,8 +444,49 @@ export function updateSoulStatus(
     });
     const souls = { ...current.souls, [target]: candidate };
     writeDocument(file, souls);
-    return candidate;
+    return { previous: existing, written: candidate };
   });
+}
+
+// Puts back the census status writeSoulStatus set, after the identity write
+// that was to follow it failed. Only soul's own row is touched, and only
+// while it still has the status this step wrote. A row someone changed
+// since is left as it is.
+function restoreSoulStatus(id, { previous, written }, { file }) {
+  if (!previous || !written) return;
+  const target = agentId(id);
+  withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    const row = current.souls[target];
+    if (!row || row.status !== written.status) return;
+    const restored = normalizeSoul({
+      ...row,
+      status: previous.status,
+      ...(row.lastSeen === written.lastSeen ? { lastSeen: previous.lastSeen } : {}),
+    });
+    writeDocument(file, { ...current.souls, [target]: restored });
+  });
+}
+
+// One lifecycle change across both stores, in the owner's order (#645, F6;
+// revert option 1): soul's census row first, identity's record last. If the
+// identity write fails, soul puts its own row back; identity never undoes a
+// write on a caller's say-so, so no caller can hand it a record to restore.
+// The caller holds the soul lifecycle lock around both.
+function censusThenIdentity(id, status, { file, now, guard = null }, identityWrite) {
+  const census = writeSoulStatus(id, status, { file, now, guard });
+  let identity;
+  try {
+    identity = identityWrite();
+  } catch (error) {
+    try {
+      restoreSoulStatus(id, census, { file });
+    } catch {
+      throw new Error('census rollback failed after identity lifecycle write failure', { cause: error });
+    }
+    throw error;
+  }
+  return { identity, soul: census.written };
 }
 
 // A sighting (#109): a live session re-established on a soul's existing
@@ -544,19 +589,26 @@ export function finalizeIdentityWithPopulation(
   } = {},
 ) {
   const target = agentId(id);
-  return withSoulLifecycleLock(target, stateDir, () => finalizeAgentIdentity(target, {
-    transcriptSha256,
-    stateDir,
+  return withSoulLifecycleLock(target, stateDir, () => censusThenIdentity(target, 'finalized', {
+    file,
     now,
-    // mutateIdentity restores the provenance record if this synchronized
-    // census write fails, so the CLI cannot report failure after partial state.
-    onFinalized: (identity) => updateSoulStatus(identity.id, identity.status, { file, now }),
-  }));
+    // A census tombstone is never rewritten to finalized, not even for the
+    // moment before the identity write refuses a retired soul.
+    guard: (row) => {
+      if (row.status === 'retired') throw new Error(`Agent ID ${target} is retired and cannot be finalized`);
+    },
+  }, () => identityOp('finalize', {
+    id: target,
+    ...(transcriptSha256 == null ? {} : { transcriptSha256 }),
+    stateDir,
+    now: now().toISOString(),
+  })).identity);
 }
 
 // Retire a soul in BOTH stores under the shared lifecycle lock, mirroring
-// finalizeIdentityWithPopulation: the authoritative identity record is marked
-// retired (with rollback if the census write fails), so a stale worktree pin
+// finalizeIdentityWithPopulation: the census row and then the authoritative
+// identity record are marked retired (the census row is put back if the
+// identity write fails), so a stale worktree pin
 // or transcript match can never resurrect the soul through setup (issue #46).
 // A soul may outlive its identity record (pruned state dir); retirement then
 // falls back to the census tombstone alone.
@@ -577,17 +629,9 @@ export function retireIdentityWithPopulation(
       const soul = updateSoulStatus(target, 'retired', { file, now });
       return { identity: null, soul };
     }
-    let soul = null;
-    const identity = retireAgentIdentity(target, {
-      stateDir,
-      now,
-      // mutateIdentity restores the provenance record if this synchronized
-      // census write fails, exactly like the finalize path.
-      onRetired: (record) => {
-        soul = updateSoulStatus(record.id, record.status, { file, now });
-      },
-    });
-    return { identity, soul };
+    // The census tombstone first, then the identity record, as finalize does.
+    return censusThenIdentity(target, 'retired', { file, now },
+      () => identityOp('retire', { id: target, stateDir, now: now().toISOString() }));
   });
 }
 
