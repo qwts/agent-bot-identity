@@ -150,6 +150,43 @@ test('each old identity path is only a re-export shim of its moved file', () => 
   }
 });
 
+
+// Non-.mjs assets (#645, F14; owner decision of 2026-10-11): keyd, the
+// identity script, the inbox worker config and the git hooks are identity's;
+// soul's hook adapter is soul's. A path ending in "/" covers a directory, and
+// the longest matching entry wins.
+function assetOwner(file) {
+  const match = Object.keys(MAP.assets ?? {})
+    .filter((key) => (key.endsWith('/') ? file.startsWith(key) : file === key))
+    .sort((a, b) => b.length - a.length)[0];
+  return match === undefined ? undefined : MAP.assets[match];
+}
+
+function trackedFiles(...paths) {
+  return execFileSync('git', ['ls-files', '-z', '--', ...paths], { cwd: ROOT, encoding: 'utf8' })
+    .split('\0').filter(Boolean);
+}
+
+test('every identity asset is a tracked path owned by a known module', () => {
+  for (const [key, owner] of Object.entries(MAP.assets ?? {})) {
+    assert.ok(Object.hasOwn(MAP.modules, owner), `${key}: unknown module ${owner}`);
+    assert.ok(trackedFiles(key.endsWith('/') ? key.slice(0, -1) : key).length > 0, `${key}: no tracked file`);
+  }
+  for (const file of trackedFiles('hooks', 'keyd')) {
+    assert.ok(assetOwner(file), `${file}: not assigned in assets`);
+  }
+});
+
+test("identity's git hooks reach soul only through soul's hook adapter", () => {
+  const soulFiles = Object.entries(MAP.files).filter(([, owner]) => owner === 'soul').map(([file]) => file);
+  const reached = [];
+  for (const hook of trackedFiles('hooks').filter((file) => assetOwner(file) === 'identity')) {
+    const source = readFileSync(new URL(`../${hook}`, import.meta.url), 'utf8');
+    for (const file of soulFiles) if (source.includes(`../${file}`)) reached.push(`${hook} -> ${file}`);
+  }
+  assert.deepEqual(reached, [], 'run soul steps through hooks/soul-hook');
+});
+
 // A contract is a narrow, reviewed exception to may_import: its surface is
 // exactly the exports the map lists, so widening it is a map change too.
 test('each contract exports exactly the names the map lists', () => {

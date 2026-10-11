@@ -5,7 +5,6 @@
 # Hook failures never block git checkout; chained user hooks still run.
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-SETUP="$HOOK_DIR/../setup-worktree.mjs"
 # A previous HEAD of all zeros means git just created this checkout (git
 # worktree add, clone): any pin in it was copied from the source checkout's
 # config.worktree, never set up here (#648).
@@ -14,9 +13,8 @@ case "$1" in
   '' | *[!0]*) ;;
   *) NEW_WORKTREE=--new-worktree ;;
 esac
-if [ -f "$SETUP" ] && command -v node >/dev/null 2>&1; then
-  node "$SETUP" --from-hook $NEW_WORKTREE || true
-fi
+# Soul's setup step, through soul's hook adapter (#645, F14).
+"$HOOK_DIR/soul-hook" setup $NEW_WORKTREE || true
 
 # Preserve the hooks path that setup displaced. With none configured,
 # chain-hook falls back to the repository's common hooks directory.

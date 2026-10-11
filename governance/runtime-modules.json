@@ -276,6 +276,13 @@
     "wake-webhook.mjs": "comms",
     "worktree-token.mjs": "identity"
   },
+  "assets": {
+    "hooks/": "identity",
+    "hooks/soul-hook": "soul",
+    "keyd/": "identity",
+    "scripts/ensure-identity.sh": "identity",
+    "wrangler.toml": "identity"
+  },
   "shims": {
     "git-publish-scan.mjs": "identity/git-publish-scan.mjs",
     "owner-text.mjs": "identity/owner-text.mjs",
