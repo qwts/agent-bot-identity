@@ -295,9 +295,42 @@ names the harness, session, digest, size, excerpt bytes and truncation, never
 the text. The prompt presents the excerpt as untrusted context for what to
 learn, not a source to report on: outcome items still name package sources only,
 so a conversation earns no processing credit. Format 1 metadata stays valid
-exactly as recorded. Memory sources remain `unsupported`. An older daemon
+exactly as recorded. Format 2 never reads memory; format 3 below does. An older daemon
 refuses a journal holding a format-2 `inputs-prepared` event, so readers must be
 upgraded before opening a journal written with format 2.
+
+### Memory input
+
+Input format 3 (#903, owner decision 2026-10-11) adds the soul's harness memory.
+The daemon always passes the soul's harness, so every run it prepares uses format
+3. Only memory files the harness keeps inside the soul's own tool home are read,
+with the same containment as the conversation reader: the tool home must resolve
+inside the soul, each directory is pinned while it is listed, and a file must be
+a regular, single-link file whose only name is its path, reached through no link,
+and whose whole content is NUL-free UTF-8. The Agent Space, the host's harness
+store and other souls are never read. Claude is the first reader:
+`.soul-state/tools/claude/projects/<project>/memory/*.md`. Other names there
+are not memory and are ignored.
+
+`coverage.memory` is `unsupported` for a harness without a reader or a tool home
+with no `projects/` store (the soul's memory may then live in the host's store,
+which is never read), `unavailable` when a project, memory directory or memory file
+is a link or not what its place requires, a delivered file is hardlinked, binary
+or not UTF-8, or a directory listing is over 4096 entries, and `supported` otherwise. Unavailable
+memory never fails the run. A memory item is identified by its path in the tool
+home and the digest of the whole file. Items are delivered in path order, at
+most 64 of them, 64 KiB of each from its start and 256 KiB in all; `truncated`
+marks a cut item and `remaining` counts files not delivered. Durable metadata
+names the harness, paths, digests, sizes, excerpt bytes, truncation and
+`remaining`, never the text. Formats 1 and 2 stay valid exactly as recorded, with
+memory `unsupported`. An older daemon refuses a journal holding a format-3
+`inputs-prepared` event, so readers must be upgraded before opening a journal
+written with format 3.
+
+The prompt presents memory as untrusted context for what to learn, not a source
+to report on; outcome items still name package sources only, so a memory earns
+no processing credit yet. Age never makes a memory stale or disposable. Crediting
+a memory item as processed will require a verified soul change that cites it.
 
 Inventory entries identify the source, revision/checksum or adapter cursor, and
 why it was selected. Source content remains untrusted data. Credentials, runtime

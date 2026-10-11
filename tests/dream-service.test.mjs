@@ -25,7 +25,7 @@ const posix = { skip: process.platform === 'win32' };
 const principal = { principal: 'principal_12345678-1234-4123-8123-123456789abc', secret: 'p'.repeat(64), brokerUid: process.getuid?.() + 1, mode: 'group' };
 const until = async check => { const end = Date.now() + 8_000; while (!check()) { assert.ok(Date.now() < end, 'fixture did not become ready'); await new Promise(resolve => setTimeout(resolve, 5)); } };
 
-function fixture(t, { scenario = null, configured = true, executorFor: customFactory = null, recordedSession } = {}) {
+function fixture(t, { scenario = null, configured = true, executorFor: customFactory = null, recordedSession, harness = 'codex' } = {}) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'dream-service-'))), soul = path.join(root, 'fixture.soul'), directory = path.join(root, 'state', 'dream');
   mkdirSync(soul); mkdirSync(path.join(soul, '.soul-state'));
   const manifest = { formatVersion: 2, ignore: PACKAGE_IGNORE_LIST, name: 'Fixture', description: 'Dream fixture', displaySeed: 'dream-fixture', preferredHarnesses: ['codex'], revision: `sha256:${'0'.repeat(64)}`, parentRevision: null, template: false };
@@ -57,7 +57,7 @@ function fixture(t, { scenario = null, configured = true, executorFor: customFac
     },
   });
   const options = { directory, turns, executorFor: configured ? customFactory ?? factory : null,
-    lookupSoul: () => ({ directory: moved ? `${soul}-moved` : soul, harness: 'codex' }), isPaused: () => paused,
+    lookupSoul: () => ({ directory: moved ? `${soul}-moved` : soul, harness }), isPaused: () => paused,
     now: () => new Date(at), approvals: async request => { approvals.push(request); return { decision: 'deny' }; },
     setIntervalImpl: (callback, ms) => { poll = callback; timers.push(ms); return 1; }, clearIntervalImpl: () => { poll = null; },
     ...(recordedSession ? { recordedSession } : {}),
@@ -376,7 +376,8 @@ test('dream input carries the soul\'s own recorded session, and a damaged record
   assert.equal(seen[0].conversation.excerpt, '{"text":"CONVERSATION_CANARY"}\n');
   assert.equal(seen[0].coverage.conversations, 'supported');
   const prepared = () => f.service.history().records.flatMap(row => row.events).filter(event => event.kind === 'inputs-prepared').at(-1);
-  assert.equal(prepared().inputs.schemaVersion, 2);
+  assert.equal(prepared().inputs.schemaVersion, 3);
+  assert.deepEqual([prepared().inputs.coverage.memory, prepared().inputs.memory], ['unsupported', null], 'codex has no memory reader');
   assert.equal(prepared().inputs.conversation.sessionId, THREAD);
   assert.equal(JSON.stringify(f.service.history()).includes('CONVERSATION_CANARY'), false, 'the excerpt never reaches the journal');
   record = () => { throw Object.assign(new Error('damaged'), { code: 'wake-session-record-invalid' }); };
@@ -472,4 +473,24 @@ test('notices survive restart in the journal, stay deduplicated and are acknowle
   t.after(async () => { reopened.shutdown(); await reopened.idle(); });
   assert.deepEqual(reopened.status().noticeLedgers[0].notices, [acked.notice], 'notices are durable scheduler state');
   assert.throws(() => reopened.control(dreamControlRequest('ack-notice', { agentId: ID, noticeId: `ntc_${'0'.repeat(24)}` })), { code: 'dream-notice-not-found' });
+});
+
+test('dream input carries the soul\'s harness memory from its own tool home, never its text in the journal (#903)', posix, async t => {
+  const seen = [];
+  const f = fixture(t, { harness: 'claude', executorFor: () => async input => {
+    const captured = JSON.parse(input.message.split('\n\n').at(-1)); seen.push({ captured, message: input.message });
+    input.appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk', content: { text: JSON.stringify({
+      schemaVersion: 1, runId: captured.runId, startingRevision: captured.revision, items: [] }) } });
+  } });
+  const memory = path.join(f.soul, '.soul-state', 'tools', 'claude', 'projects', '-work', 'memory');
+  mkdirSync(memory, { recursive: true });
+  writeFileSync(path.join(memory, 'MEMORY.md'), 'MEMORY_CANARY\n');
+  f.control('register', { schedule: 'PT1H' }); f.control('run-now'); await f.service.idle();
+  const prepared = f.service.history().records.flatMap(row => row.events).filter(event => event.kind === 'inputs-prepared').at(-1);
+  assert.equal(prepared.inputs.schemaVersion, 3);
+  assert.match(seen[0].message, /no memory is stale or disposable because of its age/);
+  assert.equal(JSON.stringify(f.service.history()).includes('MEMORY_CANARY'), false, 'the excerpt never reaches the journal');
+  assert.equal(prepared.inputs.coverage.memory, 'supported');
+  assert.equal(seen[0].captured.memory.items[0].excerpt, 'MEMORY_CANARY\n');
+  assert.equal(prepared.inputs.memory.items[0].path, 'projects/-work/memory/MEMORY.md');
 });

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { computePackageRevision, computePackageRevisionFromEntries, readSoulPackageEntries, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
-import { captureDreamConversation, captureDreamInputs, dreamInputMetadata, dreamInputMetadataDigest, validateDreamInputMetadata, DREAM_CONVERSATION_LIMITS, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
+import { captureDreamConversation, captureDreamInputs, captureDreamMemory, DREAM_MEMORY_LIMITS, dreamInputMetadata, dreamInputMetadataDigest, validateDreamInputMetadata, DREAM_CONVERSATION_LIMITS, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
 
 const HASH = `sha256:${'0'.repeat(64)}`;
 function fixture(t, formatVersion = 2) {
@@ -301,4 +301,135 @@ test('a growing session store never makes the recorded session unavailable, whic
   mkdirSync(crowded, { recursive: true });
   for (let index = 0; index <= DREAM_CONVERSATION_LIMITS.entries; index++) writeFileSync(path.join(crowded, `f${index}`), '');
   assert.equal(captureDreamInputs(f.root, { session: f.session }).coverage.conversations, 'unavailable');
+});
+
+// The soul's harness memory (#903, input format 3).
+function memoryFixture(t) {
+  const f = fixture(t);
+  const home = path.join(f.root, '.soul-state', 'tools', 'claude');
+  const projects = path.join(home, 'projects');
+  const remember = (relative, text) => { const file = path.join(projects, relative); mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, text); return file; };
+  return { ...f, home, projects, remember };
+}
+const sha = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+
+test('harness memory in the soul\'s tool home is delivered as format 3, identified by path and whole-file digest', t => {
+  const f = memoryFixture(t);
+  f.remember('-work-a/memory/MEMORY.md', '- [Prefers short replies](short.md)\n');
+  f.remember('-work-a/memory/short.md', 'MEMORY_CANARY: the owner prefers short replies\n');
+  f.remember('-work-a-b/memory/notes.md', 'b\n');
+  f.remember('-work-a/memory/notes.txt', 'not memory');
+  f.remember('-work-a/session.jsonl', '{}\n');
+  mkdirSync(path.join(f.projects, '-empty'), { recursive: true });
+  const captured = captureDreamInputs(f.root, { memory: { harness: 'claude' } });
+  assert.equal(captured.schemaVersion, 3);
+  assert.deepEqual([captured.coverage.memory, captured.coverage.conversations, captured.conversation], ['supported', 'unsupported', null]);
+  assert.deepEqual(captured.memory.items.map(item => item.path),
+    ['projects/-work-a-b/memory/notes.md', 'projects/-work-a/memory/MEMORY.md', 'projects/-work-a/memory/short.md'], 'path order');
+  const short = captured.memory.items[2];
+  assert.equal(short.excerpt, 'MEMORY_CANARY: the owner prefers short replies\n');
+  assert.equal(short.digest, sha(readFileSync(path.join(f.projects, '-work-a/memory/short.md'))));
+  assert.deepEqual([captured.memory.remaining, captured.revision], [0, captureDreamInputs(f.root).revision], 'the tool home is not package content');
+  const metadata = dreamInputMetadata(captured);
+  assert.equal(JSON.stringify(metadata).includes('MEMORY_CANARY'), false, 'durable metadata never holds memory text');
+  assert.deepEqual(metadata.memory.items[2], { path: short.path, digest: short.digest, size: short.size, excerptBytes: short.excerptBytes, truncated: false });
+  assert.equal(dreamInputMetadataDigest(structuredClone(metadata)), dreamInputMetadataDigest(metadata));
+  for (const mutate of [
+    value => { value.memory.items[0].excerpt = 'SECRET_CANARY'; },
+    value => { value.memory.items[0].path = 'projects/../memory/x.md'; },
+    value => { value.memory.items[0].path = 'projects/..'.concat('/memory/x.md'); },
+    value => { value.memory.items[0].path = '/projects/a/memory/x.md'; },
+    value => { value.memory.items[0].path = 'projects/a/memory/x.txt'; },
+    value => { value.memory.items[0].path = 'space/a/memory/x.md'; },
+    value => { value.memory.items.push(value.memory.items[0]); },
+    value => { value.memory.items.reverse(); },
+    value => { value.memory.items[0].truncated = true; },
+    value => { value.memory.items[0].excerptBytes = DREAM_MEMORY_LIMITS.excerptBytes + 1; },
+    value => { value.memory.harness = 'codex'; },
+    value => { value.memory.remaining = -1; },
+    value => { value.coverage.memory = 'unavailable'; },
+    value => { value.memory = null; },
+    value => { delete value.memory; },
+    value => { value.schemaVersion = 2; },
+  ]) {
+    const value = structuredClone(metadata); mutate(value);
+    assert.throws(() => validateDreamInputMetadata(value), { code: 'dream-input-metadata-invalid' });
+  }
+  // Formats 1 and 2 stay exactly as before: no memory key, always unsupported.
+  for (const legacy of [dreamInputMetadata(captureDreamInputs(f.root)), dreamInputMetadata(captureDreamInputs(f.root, { session: null }))]) {
+    assert.equal(Object.hasOwn(legacy, 'memory'), false);
+    assert.throws(() => validateDreamInputMetadata({ ...legacy, memory: null }), { code: 'dream-input-metadata-invalid' });
+    assert.throws(() => validateDreamInputMetadata({ ...legacy, coverage: { ...legacy.coverage, memory: 'supported' } }), { code: 'dream-input-metadata-invalid' });
+  }
+});
+
+test('memory coverage is unsupported without a reader or store, and unavailable for anything unsafe', t => {
+  const f = memoryFixture(t);
+  const coverage = harness => captureDreamInputs(f.root, { memory: { harness } }).coverage.memory;
+  assert.deepEqual([coverage('codex'), coverage(undefined), coverage('claude')], ['unsupported', 'unsupported', 'unsupported'], 'no reader, or no store in the tool home');
+  mkdirSync(f.projects, { recursive: true });
+  assert.deepEqual(captureDreamMemory(f.root, 'claude'), { coverage: 'supported', memory: { harness: 'claude', items: [], remaining: 0 } });
+  const file = f.remember('-p/memory/a.md', 'mine\n');
+  assert.equal(coverage('claude'), 'supported');
+  const outside = mkdtempSync(path.join(tmpdir(), 'dream-memory-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(path.join(outside, 'secret.md'), 'SECRET\n');
+  mkdirSync(path.join(outside, 'memory'));
+  writeFileSync(path.join(outside, 'memory', 'secret.md'), 'SECRET\n');
+  const unsafe = [
+    ['a linked memory file', () => symlinkSync(path.join(outside, 'secret.md'), path.join(f.projects, '-p/memory/b.md')), () => rmSync(path.join(f.projects, '-p/memory/b.md'))],
+    ['a hardlinked memory file', () => linkSync(path.join(outside, 'secret.md'), path.join(f.projects, '-p/memory/b.md')), () => rmSync(path.join(f.projects, '-p/memory/b.md'))],
+    ['a linked project', () => symlinkSync(outside, path.join(f.projects, '-q')), () => rmSync(path.join(f.projects, '-q'))],
+    ['a linked memory directory', () => { mkdirSync(path.join(f.projects, '-q')); symlinkSync(path.join(outside, 'memory'), path.join(f.projects, '-q/memory')); }, () => rmSync(path.join(f.projects, '-q'), { recursive: true })],
+    ['a directory named like a memory file', () => mkdirSync(path.join(f.projects, '-p/memory/c.md')), () => rmSync(path.join(f.projects, '-p/memory/c.md'), { recursive: true })],
+    ['binary memory', () => writeFileSync(file, Buffer.from([0x61, 0x00, 0x0a])), () => writeFileSync(file, 'mine\n')],
+    ['invalid UTF-8', () => writeFileSync(file, Buffer.from([0x61, 0xff, 0x0a])), () => writeFileSync(file, 'mine\n')],
+  ];
+  for (const [name, make, undo] of unsafe) {
+    make();
+    assert.equal(coverage('claude'), 'unavailable', name);
+    undo();
+    assert.equal(coverage('claude'), 'supported', `${name} undone`);
+  }
+  // A linked store root or tool home is never followed.
+  renameSync(f.projects, path.join(outside, 'projects'));
+  symlinkSync(path.join(outside, 'projects'), f.projects);
+  assert.equal(coverage('claude'), 'unavailable', 'a linked projects directory');
+  rmSync(f.projects); renameSync(path.join(outside, 'projects'), f.projects);
+  renameSync(f.home, path.join(outside, 'claude'));
+  symlinkSync(path.join(outside, 'claude'), f.home);
+  assert.equal(coverage('claude'), 'unavailable', 'a tool home outside the soul');
+  rmSync(f.home); renameSync(path.join(outside, 'claude'), f.home);
+  // A memory directory swapped for a link after it was checked is refused.
+  const directory = path.join(realpathSync(f.root), '.soul-state', 'tools', 'claude', 'projects', '-p', 'memory');
+  let swapped = false;
+  const result = captureDreamMemory(f.root, 'claude', { afterDirectoryOpen: opened => {
+    if (opened !== directory || swapped) return;
+    swapped = true; renameSync(directory, `${directory}.real`); symlinkSync(`${directory}.real`, directory);
+  } });
+  assert.deepEqual([swapped, result.coverage], [true, 'unavailable']);
+  rmSync(directory); renameSync(`${directory}.real`, directory);
+  // A listing past the bound is unavailable rather than partial.
+  for (let index = 0; index <= DREAM_MEMORY_LIMITS.entries; index++) writeFileSync(path.join(f.projects, '-p/memory', `n${index}.txt`), '');
+  assert.equal(coverage('claude'), 'unavailable');
+});
+
+test('memory is delivered within item and byte limits, with truncation and the rest counted', t => {
+  const f = memoryFixture(t);
+  const count = DREAM_MEMORY_LIMITS.items + 3;
+  for (let index = 0; index < count; index++) f.remember(`-p/memory/m${String(index).padStart(3, '0')}.md`, `note ${index}\n`);
+  let { memory } = captureDreamInputs(f.root, { memory: { harness: 'claude' } });
+  assert.deepEqual([memory.items.length, memory.remaining], [DREAM_MEMORY_LIMITS.items, 3]);
+  assert.equal(memory.items[0].path, 'projects/-p/memory/m000.md');
+  rmSync(path.join(f.projects, '-p'), { recursive: true });
+  // A long memory is cut at a character boundary; its digest is still of the whole file.
+  const long = Buffer.from('é'.repeat(DREAM_MEMORY_LIMITS.excerptBytes));
+  f.remember('-p/memory/a.md', long);
+  for (let index = 0; index < 4; index++) f.remember(`-p/memory/b${index}.md`, Buffer.alloc(DREAM_MEMORY_LIMITS.excerptBytes, 0x62));
+  ({ memory } = captureDreamInputs(f.root, { memory: { harness: 'claude' } }));
+  const [first] = memory.items;
+  assert.deepEqual([first.truncated, first.size, first.excerptBytes, first.digest], [true, long.length, DREAM_MEMORY_LIMITS.excerptBytes, sha(long)]);
+  assert.equal(memory.items.reduce((sum, item) => sum + item.excerptBytes, 0), DREAM_MEMORY_LIMITS.bytes);
+  assert.deepEqual([memory.items.length, memory.remaining], [4, 1], 'the byte budget stops delivery and counts the rest');
+  assert.ok(dreamInputMetadata(captureDreamInputs(f.root, { memory: { harness: 'claude' } })));
 });
