@@ -15,7 +15,6 @@
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AGENT_HOOK="${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}"
-SETUP="$HOOK_DIR/../setup-worktree.mjs"
 # shellcheck source=hooks/agent-context
 . "$HOOK_DIR/agent-context"
 
@@ -33,7 +32,7 @@ if agent_bot_agent_context; then
       fi
       if [ -z "$ID" ] || ! node "$IDENTITY_TOOL" show "$ID" >/dev/null 2>&1; then
         echo "agent-bot guard: bot identity has no resolvable Agent-Identity." >&2
-        echo "Run: node $SETUP, then retry." >&2
+        echo "Run: $("$HOOK_DIR/soul-hook" setup-command), then retry." >&2
         exit 1
       fi
       ;;

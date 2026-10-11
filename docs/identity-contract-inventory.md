@@ -317,8 +317,9 @@ All of these are public.
   - `worktree-token.mjs` and `resolve-agent.mjs` from
     `hooks/agent-context:45` and `:59`.
 
-  The hooks also run `setup-worktree.mjs` (soul) and `config.mjs` (shared),
-  so they are not identity-only. These paths have to keep working after the
+  The hooks also run `config.mjs` (shared). Since F14 they reach soul's
+  steps (`setup-worktree.mjs` and `soul-coauthor.mjs`) only through soul's
+  hook adapter, `hooks/soul-hook`. These paths have to keep working after the
   move, as ADR-0645 step 9 says old paths do.
 - **`gh` shim:** its marker line (`gh-shim.mjs:1`) and the script it installs.
 - **Service label:** `app.geniusbar.keyd` and its Homebrew and Linux
@@ -456,7 +457,16 @@ how each one is done, and §9 puts them in order.
   Identity may not import soul (ADR-0645). The owner chose to keep these three
   in cli and to revisit them after F8 settles the owner-prompt design.
   The policy and the baseline don't change.
-- **F14. Assign the non-`.mjs` identity assets.** The extraction plan has to
+- **F14. Assign the non-`.mjs` identity assets.** *Done (2026-10-11, owner
+  answer):*
+  - The module map's `assets` assigns `keyd/`,
+    `scripts/ensure-identity.sh`, `wrangler.toml` and `hooks/` to identity,
+    and soul's hook adapter `hooks/soul-hook` to soul.
+  - The identity hooks run soul's setup and co-author steps only through
+    that adapter.
+  - A module-boundaries test checks both.
+
+  The extraction plan has to
   cover `keyd/`, `hooks/*`, `scripts/ensure-identity.sh`, `wrangler.toml`
   and the 120 test files that import identity, including history, CI and
   release. The hooks run soul and shared files too (§6), so they need an

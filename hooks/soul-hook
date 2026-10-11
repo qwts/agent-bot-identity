@@ -1,0 +1,33 @@
+#!/bin/sh
+# Soul's hook adapter (#645, F14; owner decision of 2026-10-11). The git
+# hooks in this directory are identity's. The soul steps they run go through
+# this one adapter instead of naming soul's files themselves:
+#
+#   soul-hook setup [--new-worktree]    set up this checkout's soul (post-checkout)
+#   soul-hook coauthor <msgfile> <id>   write the soul's co-author trailers
+#   soul-hook setup-command             print the setup command, for messages
+#
+# Each step runs exactly as the hooks ran it before.
+
+SOUL_HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SETUP="$SOUL_HOOK_DIR/../setup-worktree.mjs"
+COAUTHOR="$SOUL_HOOK_DIR/../soul-coauthor.mjs"
+
+case "$1" in
+  setup)
+    shift
+    [ -f "$SETUP" ] && command -v node >/dev/null 2>&1 || exit 0
+    exec node "$SETUP" --from-hook "$@"
+    ;;
+  coauthor)
+    shift
+    exec node "$COAUTHOR" prepare "$@"
+    ;;
+  setup-command)
+    printf 'node %s\n' "$SETUP"
+    ;;
+  *)
+    echo "soul-hook: unknown step: $1" >&2
+    exit 2
+    ;;
+esac
