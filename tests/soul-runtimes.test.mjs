@@ -152,9 +152,11 @@ test('the catalog pins versions per supported major with an https URL and a 64-h
       }
     }
   }
-  assert.deepEqual(RUNTIME_CATALOG.node.map((pin) => pin.version.split('.')[0]), ['22', '24']);
-  assert.deepEqual(RUNTIME_CATALOG.python.map((pin) => pin.version.split('.').slice(0, 2).join('.')), ['3.12', '3.13']);
-  assert.ok(new Set(Object.values(RUNTIME_CATALOG).flat().flatMap((pin) => Object.values(pin.sources ?? {}).map((s) => s.sha256))).size === 30, 'thirty distinct digests');
+  // Superseded pins may be kept, so check the supported lines and that no two sources share a digest.
+  assert.deepEqual([...new Set(RUNTIME_CATALOG.node.map((pin) => pin.version.split('.')[0]))].sort(), ['22', '24']);
+  assert.deepEqual([...new Set(RUNTIME_CATALOG.python.map((pin) => pin.version.split('.').slice(0, 2).join('.')))].sort(), ['3.12', '3.13']);
+  const digests = Object.values(RUNTIME_CATALOG).flat().flatMap((pin) => Object.values(pin.sources).map((s) => s.sha256));
+  assert.equal(new Set(digests).size, digests.length, 'every source has its own digest');
   assert.equal(hostPlatform({ platform: 'darwin', arch: 'arm64' }), 'darwin-arm64');
   assert.equal(hostPlatform({ platform: 'freebsd', arch: 'x64' }), null);
   assert.equal(hostPlatform({ platform: 'win32', arch: 'x64' }), 'win32-x64');
