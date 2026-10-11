@@ -126,7 +126,9 @@ Agent-Identity: agent_<uuid>
 - **Add-on off:** like `Agent-Identity`, the trailer is written only while
   the GitHub identity add-on is on.
 
-A trailer is message text, so it does not affect GitHub's signature.
+A trailer is part of the commit message, so it is part of the commit object
+and the signature covers it. It is not custom author or committer
+information, so adding it does not stop GitHub from signing the commit.
 
 ### 3. Rename, fork and retire
 
