@@ -158,7 +158,13 @@ other service at verify time, as the runtime must not depend on reaching
 GitHub. *Since "keyd signs pins" (#753):* offline verification checks the
 signature only. A host without keyd, such as one pinned from the profile,
 can check a statement's signature but cannot treat it as approval, since
-nothing there vouches for its pins.
+nothing there vouches for its pins. *As built (#753), the owner having chosen
+the organization profile as the source, failing closed:* the profile
+declares the keys as `settings.owner_keys` (name, store, alg, fingerprint).
+Where it does, a reader accepts a pinned key only if the profile lists it and
+keyd vouches for the pins; an unlisted pin is refused (`pins-unlisted`) and
+never answers through the signed path. Installing pins from the profile is
+not built: the profile carries no public key to install.
 
 ### 4. The challenge fallback
 

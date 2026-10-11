@@ -432,7 +432,9 @@ once per request, with the pins it has just read: it takes the presence key
 with `pinnedPresenceKeyWithoutDialog` (never the administrator dialog), sends
 `owner/pins-status` with a fresh nonce (no prompt; a 10 s timeout), verifies
 the answer with `verifyPinsAttestation`, and compares `digest` with
-`pinSetDigest` of those pins. It answers `{ attested: true, generation }`
+`pinSetDigest` of those pins. Where the organization profile declares the
+owner's keys, every one of those pins must also be listed there (more keys
+may be listed than a host pins). It answers `{ attested: true, generation }`
 only then. Anything else is `{ attested: false, code, reason }`, never a
 throw:
 
@@ -444,6 +446,7 @@ throw:
 | `pins-invalid` | `-32000` (a record keyd cannot read), or an answer that does not verify |
 | `pins-mismatch` | keyd's record is of another key set, or of none (`digest: null`) |
 | `pins-stale` | keyd's record is of an older generation than one this process has seen |
+| `pins-unlisted` | the organization profile declares owner keys (`settings.ownerKeys`) and a pin, matched by fingerprint, store and alg, is not among them; or the config holding that declaration cannot be read |
 
 On any of these the reader trusts no pin and does what it did before the
 pins were vouched for: `owner verify` answers `owner-pins-unprotected`, and
@@ -464,6 +467,15 @@ detected, not prevented, until the data-protection keychain under the
 signed host app holds the record. A daemon that saw a newer generation keeps
 refusing an older one until it restarts, for example after the owner removes
 keyd's `owner-pins` item and the record starts again at 1.
+
+**The organization's list.** `settings.ownerKeys` is read from the runtime
+config, which anything running as the owner can write, a soul included. A
+soul that deletes the setting turns the reader back to keyd's vouching
+alone, as before the profile declared keys. That loosens what the
+organization asked for, but adds no key: every pin must still be one the
+owner approved through keyd with Touch ID. Holding the declaration where a
+soul cannot change it needs keyd to record it with the pins, which is not
+built.
 
 ## App-level keys (#110)
 

@@ -40,6 +40,7 @@ import {
   OrganizationProfileError,
   PROFILE_HARNESSES,
   isSoulCoauthorDomain,
+  ownerKeysProblem,
   profileStatusForSlug,
   runtimeProfileInfo,
 } from './organization-profile-schema.mjs';
@@ -347,6 +348,18 @@ export function skillSearchAdapterSetting(config = loadConfig()) {
   return value;
 }
 
+// The owner statement keys this organization accepts (#753), as
+// `{ name, store, alg, fingerprint }`, or null when it declares none. The
+// profile validates them; a hand-written config is held to the same rule,
+// and a malformed list fails the config load.
+export function ownerKeysSetting(config = loadConfig()) {
+  const value = settingsSection(config).ownerKeys;
+  if (value === undefined) return null;
+  const problem = ownerKeysProblem(value);
+  if (problem) throw new Error(`invalid settings.ownerKeys: ${problem}`);
+  return value;
+}
+
 function validateSettings(config) {
   const settings = settingsSection(config);
   validateOwner(config);
@@ -356,6 +369,7 @@ function validateSettings(config) {
   if (settings.unmanagedAuthors !== undefined) unmanagedAuthorsSetting(config);
   soulCoauthorDomainSetting(config);
   skillSearchAdapterSetting(config);
+  ownerKeysSetting(config);
   keydSignerSetting(config);
   rosterScope(config);
   validateFeatures(config);

@@ -624,7 +624,10 @@ keyd, projected to `settings.keydTeamId` / `settings.keydIdentifier`), and
 `soul_coauthor_domain` (the domain of a soul's co-author email, ADR-0815; a
 lowercase domain name that is not a GitHub domain, projected to
 `settings.soulCoauthorDomain`; that it accepts no mail is the operator's
-precondition, not something agent-bot checks). Unknown fields are rejected under schema v1 instead of being
+precondition, not something agent-bot checks), and `owner_keys` (1 to 4
+owner statement keys as `{ name, store, alg, fingerprint }`, projected to
+`settings.ownerKeys`; where set, a host accepts only listed keys, see
+[owner statements](docs/owner-statements.md)). Unknown fields are rejected under schema v1 instead of being
 silently ignored.
 
 ```bash
@@ -1557,6 +1560,12 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   uses (#902). `local-text` searches the soul's own definition and skill
   files at its declared revision; unset, search reports that no adapter is
   configured. Any other value fails the config load. No service is set up.
+- `settings.ownerKeys` — the owner statement keys the organization accepts
+  (#753), each `{ name, store, alg, fingerprint }`, at most four. Where set,
+  `owner verify`, the owner gate's signed challenge and the daemon's decision
+  routes accept a pinned key only if it is listed here and agent-bot-keyd
+  vouches for the pins; any unlisted pin is `pins-unlisted` and the signed
+  path is not used. A malformed list fails the config load.
 - `settings.keydTeamId` and `settings.keydIdentifier` — the Developer ID Team
   ID and code-signing identifier a keyd binary must carry before agent-bot
   pins its presence key. The Team ID has no default; an organization profile
