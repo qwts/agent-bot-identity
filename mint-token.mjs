@@ -287,8 +287,9 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
   return { token: grant.token, expires_at: grant.expires_at, installation_id: Number(installationId) };
 }
 
-// The command line lives in cli/mint-token.mjs; output formatting is a cli
-// concern (#645). Run directly, this file only points there and mints nothing.
+// The command line lives in cli/mint-token.mjs, with its output format in
+// cli/mint-output.mjs (#645). Run directly, this file only points there and
+// mints nothing.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   console.error('mint-token: run agent-bot mint-token');
   process.exit(1);
