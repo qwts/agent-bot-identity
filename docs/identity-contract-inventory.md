@@ -77,16 +77,27 @@ the scanner the boundary test uses, run over `governance/runtime-modules.json`:
 
 The boundary test's `baseline` is empty, so none of the 192 edges breaks an
 import rule today. They block the extraction for a different reason: owner
-answer 2 says no identity imports remain outside `identity/`. ADR-0645
+answer 2 says no imports of identity internals remain outside `identity/`. Three
+sanctioned contracts remain importable, and none of them is an internal:
+
+- the shared identity-format file (F1, D2);
+- the shared daemon contract (F5, D3);
+- one published identity entry, the route handler plus the binding registry,
+  which only host imports (F9, D5).
+
+ADR-0645
 counted 147 edges from 72 files into 24 identity files at `0aae907`.
 
 The full caller list is in the appendix.
 
 ## 1. Modules
 
-The extracted repository exports no JavaScript module to soul, host or cli
-(answer 2). So the stability of each file below is the stability of its
-*current* exports. "Disposition" says where its outside callers should go,
+After the extraction, soul and cli import no identity module, and host imports
+only the one published identity entry (D5). Everything else they need comes
+through the shared contract files (D2, D3), the daemon routes, or identity's
+entry files run as child processes (D4). So the stability of each file below
+is the stability of its *current* exports, and none of these files is itself
+the host entry. "Disposition" says where its outside callers should go,
 and the F numbers point to the follow-ups in §7.
 
 | File | What it is | Stability | Outside callers | Disposition |
@@ -198,7 +209,8 @@ identity semantics:
 | `POST /v0/keyd/grant` | binding | `:1002` | **public** | keyd relay (`keyd/src/relay.rs:22`; the same in GeniusBar's snapshot) |
 | `POST /v0/inbox/take` | binding | `:930` | internal | `daemon-client.mjs:222` |
 | `POST /v0/grants/request`, `/spend` | binding | `:969`, `:984` | internal | `daemon-client.mjs:227`, `:230` |
-| `GET /v0/identity/apps`, `/jobs/{id}` | bearer | `:555` | internal | none outside this repository; GeniusBar uses the CLI |
+| `GET /v0/identity/apps` | bearer | `:555` | internal | none outside this repository; GeniusBar uses the CLI |
+| `GET /v0/identity/apps/jobs/{id}` | bearer | `:555` | internal | as above |
 | `POST /v0/identity/apps/{action}` | owner | `:555` | internal | as above |
 
 Two routes straddle identity and soul (F9):
@@ -228,7 +240,7 @@ defaults to `~/.local/state`, unless stated otherwise.
 | `agent-bot/daemon.json`: daemon port, bearer, `schemaVersion` 1 | `daemon-client.mjs:30` | `daemon-status.mjs` (comms), behind `agent-bot daemon status`, which GeniusBar runs |
 | `agent-bot/vouch-key.pem` | `vouch.mjs:31` | `comms-client.mjs:582` loads it to pair its public half (F11) |
 | `agent-bot/principals.json` | `agent-principals.mjs:159` (`AGENT_BOT_PRINCIPALS_PATH`) | `agent-web.mjs`, `telegram-adapter.mjs` |
-| `agent-bot/interaction/audit.jsonl` | `agent-principals.mjs:256` | GeniusBar through `audit list --json` |
+| `agent-bot/interaction/audit.jsonl`, or `$AGENT_BOT_INTERACTION_HOME/audit.jsonl` when that is set | `agent-principals.mjs:255`, `:256`, `state-paths.mjs:20`, `:21` | GeniusBar through `audit list --json` |
 | `agent-bot/keyd/` (`keyd.sock`, `owner.sock`, `keyd.json`, `audit.jsonl`, `presence.pub`, `presence.signer`) | `keyd-client.mjs:59`, `owner-presence.mjs:76`, `:82`, `:180` | keyd; GeniusBar keyd `paths.rs` |
 | `agent-bot/owner/keys.json`: owner statement keys | `owner-statement.mjs:76` | `owner-action.mjs` (soul) |
 | `agent-bot/agent-identities/identity-apps/<slug>…` (`.operation.lock`, `doctor.json`) | `identity-app-store.mjs:15`, `:55`, `:67` | `doctor.mjs` |
@@ -251,6 +263,7 @@ sets or reads the same variable.
 | `CLAUDE_SESSION_ID`, `CODEX_THREAD_ID`, `CURSOR_CONVERSATION_ID` | `agent-identity.mjs:77` to `:86` | public (set by the harnesses) | |
 | `AGENT_BOT_STATE_HOME`, `QWTS_AGENT_STATE_HOME` | `state-paths.mjs:12` (shared) | public | |
 | `AGENT_BOT_PRINCIPALS_PATH` | `agent-principals.mjs:155` | public | |
+| `AGENT_BOT_INTERACTION_HOME` | `state-paths.mjs:21` (shared); identity's audit receipts use it through `auditFile` (`agent-principals.mjs:255`, `:256`) | public | Replaces `$XDG_STATE_HOME/agent-bot/interaction`, the XDG fallback, as the directory for `audit.jsonl` |
 | `AGENT_BOT_DAEMON_STATE_PATH` | `daemon-client.mjs:31` | public | |
 | `AGENT_BOT_CONFIG` | `identity-app-store.mjs:39`, `ensure-private-key.mjs:382` | public | `config.mjs` (shared) |
 | `AGENT_BOT_CREDENTIAL_NAMESPACE`, `AGENT_BOT_CREDENTIAL_VAULT` | `credential-names.mjs:34`, `:35` | public | `daemon-supervisor.mjs:37`, `readiness.mjs:37` |
@@ -476,7 +489,9 @@ mechanical moves; steps 6 to 10 change how a module reaches identity.
 10. **F13 (D4):** the CLI facade runs the identity entry files.
 11. **F14:** assign the remaining assets.
 
-After step 11, the boundary has no identity imports outside identity. The
+After step 11, nothing outside identity imports identity internals. What
+remains is the three sanctioned contracts: the shared format file, the shared
+daemon contract and host's one identity entry. The
 reviewed contract (ADR-0645 step 7) and the extraction plan (step 8) follow.
 
 ## Appendix: every import of an identity file from outside identity
