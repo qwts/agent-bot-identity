@@ -16,7 +16,8 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { validateAgentId, withLock } from './agent-identity.mjs';
+import { validateAgentId } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 
 export function webhookDir({ env = process.env, home = homedir() } = {}) {
   const base = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');

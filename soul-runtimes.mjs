@@ -27,7 +27,7 @@ import { promisify } from 'node:util';
 import { ACP_SPAWN_REGISTRY, windowsExecutable } from './acp-registry.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
-import { withLock } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { PROVIDER_NAMES, RUNTIME_NAMES, SHA256_HEX, catalogPin, catalogReleaseHash, harnessInstallSource, isExactVersion, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, versionMatches, uvToolRequirements } from './runtime-catalog.mjs';
 

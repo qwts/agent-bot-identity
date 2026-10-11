@@ -21,7 +21,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { validateAgentId, withLock } from './agent-identity.mjs';
+import { validateAgentId } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { interactionHome } from './state-paths.mjs';
 

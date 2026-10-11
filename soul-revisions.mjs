@@ -9,7 +9,8 @@ import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:pat
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
-import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, validateAgentId, withLock } from './agent-identity.mjs';
+import { currentAgentId, readAgentIdentity, recordAgentPackageRevision, validateAgentId } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { appendSoulRevision, registeredSoulDir } from './soul-history.mjs';
 import { soulSpacePath } from './soul-memory.mjs';
