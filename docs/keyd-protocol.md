@@ -468,6 +468,15 @@ signed host app holds the record. A daemon that saw a newer generation keeps
 refusing an older one until it restarts, for example after the owner removes
 keyd's `owner-pins` item and the record starts again at 1.
 
+**The organization's list.** `settings.ownerKeys` is read from the runtime
+config, which anything running as the owner can write, a soul included. A
+soul that deletes the setting turns the reader back to keyd's vouching
+alone, as before the profile declared keys. That loosens what the
+organization asked for, but adds no key: every pin must still be one the
+owner approved through keyd with Touch ID. Holding the declaration where a
+soul cannot change it needs keyd to record it with the pins, which is not
+built.
+
 ## App-level keys (#110)
 
 The owner chose (#110, 2026-10-09) to let keyd hold **App-level keys**: one
