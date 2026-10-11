@@ -2,9 +2,12 @@
 // change is not evidence that a model reviewed a source or that this run caused it.
 import { createHash } from 'node:crypto';
 import { canonicalJson } from './soul-package.mjs';
-import { validateDreamInputMetadata } from './skill-dream-inputs.mjs';
+import { DREAM_INPUT_LIMITS, DREAM_MEMORY_LIMITS, deliveredDreamItems, isDreamSourcePath, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
 
-export const DREAM_OUTCOME_LIMITS = Object.freeze({ bytes: 256 * 1024, textBytes: 64 * 1024, references: 4, items: 100 });
+// `items` bounds what one report names; `total` what a run can be delivered
+// (package sources and, from input format 3, memory items).
+export const DREAM_OUTCOME_LIMITS = Object.freeze({ bytes: 256 * 1024, textBytes: 64 * 1024, references: 4, items: 100,
+  total: DREAM_INPUT_LIMITS.entries + DREAM_MEMORY_LIMITS.items });
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const CODE = /^[a-z][a-z0-9-]{0,63}$/;
@@ -57,12 +60,12 @@ export function validateDreamOutcome(value, { runId = null, inputs = null } = {}
   if (!exact(value, ['schemaVersion', 'runId', 'startingRevision', 'report', 'items', 'unreported', 'processingCoverage'])
     || ![1, 2].includes(value.schemaVersion) || !uuid(value.runId) || !hash(value.startingRevision) || value.processingCoverage !== 'unverified'
     || runId !== null && value.runId !== runId || !Array.isArray(value.items) || value.items.length > DREAM_OUTCOME_LIMITS.items
-    || !Number.isSafeInteger(value.unreported) || value.unreported < 0 || value.unreported + value.items.length > DREAM_OUTCOME_LIMITS.items) invalid();
+    || !Number.isSafeInteger(value.unreported) || value.unreported < 0 || value.unreported + value.items.length > DREAM_OUTCOME_LIMITS.total) invalid();
   if (inputs) {
     validateDreamInputMetadata(inputs);
-    if (value.startingRevision !== inputs.revision || value.unreported + value.items.length !== inputs.sources.length) invalid();
+    if (value.startingRevision !== inputs.revision || value.unreported + value.items.length !== deliveredDreamItems(inputs).length) invalid();
   }
-  const report = value.report, seen = new Set(), sources = inputs ? new Map(inputs.sources.map(source => [source.path, source])) : null;
+  const report = value.report, seen = new Set(), sources = inputs ? new Map(deliveredDreamItems(inputs).map(item => [item.path, item])) : null;
   const field = value.schemaVersion === 1 ? 'text' : 'preview';
   if (!exact(report, ['status', 'code', field, 'textTruncated']) || !statuses.includes(report.status) || typeof report.textTruncated !== 'boolean') invalid();
   if (report.status === 'structured') {
@@ -105,14 +108,15 @@ export function interpretDreamReport({ reply = '', replyTruncated = false, run, 
   validateDreamInputMetadata(inputs);
   if (!uuid(run?.runId) || typeof reply !== 'string' || typeof replyTruncated !== 'boolean') invalid();
   const base = { schemaVersion: 1, runId: run.runId, startingRevision: inputs.revision, processingCoverage: 'unverified' };
-  const fallback = (status, code) => validateDreamOutcome({ ...base, report: { status, code, ...textPrefix(reply) }, items: [], unreported: inputs.sources.length });
+  const delivered = deliveredDreamItems(inputs);
+  const fallback = (status, code) => validateDreamOutcome({ ...base, report: { status, code, ...textPrefix(reply) }, items: [], unreported: delivered.length });
   if (executionFailed) return fallback('execution-failed', 'execution-failed');
   if (replyTruncated) return fallback('truncated', 'report-truncated');
   if (Buffer.byteLength(reply) > DREAM_OUTCOME_LIMITS.bytes) return fallback('oversized', 'report-limit');
   let report;
   try { report = JSON.parse(reply); }
   catch { return fallback('unstructured', 'no-structured-report'); }
-  const sources = new Map(inputs.sources.map(source => [source.path, source])), seen = new Set();
+  const sources = new Map(delivered.map(item => [item.path, item])), seen = new Set();
   try {
     if (!exact(report, ['schemaVersion', 'runId', 'startingRevision', 'items']) || report.schemaVersion !== 1
       || report.runId !== run.runId || report.startingRevision !== inputs.revision
@@ -145,13 +149,24 @@ export function interpretDreamReport({ reply = '', replyTruncated = false, run, 
       const result = checked.get(key);
       verification.evidence = 'not-verified';
       verification.reason = !checked.has(key) ? 'evidence-limit' : result === null ? 'evidence-unavailable' : 'artifact-not-verified';
-      if (result?.verdict === 'verified-change' && result.attribution === 'not-established'
-        && hash(result.checked?.event?.revision) && [null, 'pending', 'approved', 'rejected', 'uncertain'].includes(result.checked.event.status)
-        && Array.isArray(result.checked?.changedPaths) && result.checked.changedPaths.some(change => change.path === item.path)) {
+      // A package source is processed by a verified change to that source.
+      // A memory item (#903) is processed by a verified soul change its item
+      // cites: the same checks, except that the change may land outside the
+      // delivered package sources, as long as every changed path is
+      // definition or skill content. Age or deletion never processes one.
+      const memory = sources.get(item.path).memory;
+      const event = result?.attribution === 'not-established' && hash(result.checked?.event?.revision)
+        && [null, 'pending', 'approved', 'rejected', 'uncertain'].includes(result.checked.event.status) && Array.isArray(result.checked?.changedPaths);
+      const verifiedMemory = memory && event && (result.verdict === 'verified-change'
+        || Array.isArray(result.reasons) && result.reasons.length === 1 && result.reasons[0] === 'change-outside-delivered')
+        && result.checked.changedCount > 0 && result.checked.changedCount === result.checked.changedPaths.length
+        && result.checked.changedPaths.every(change => isDreamSourcePath(change.path));
+      if (verifiedMemory || !memory && event && result.verdict === 'verified-change'
+        && result.checked.changedPaths.some(change => change.path === item.path)) {
         verification.evidence = 'verified-change'; verification.reason = null;
         verification.artifactRevision = result.checked.event.revision;
         verification.proposalStatus = result.checked.event.status;
-      } else if (result?.verdict === 'verified-change') {
+      } else if (!memory && result?.verdict === 'verified-change') {
         verification.reason = 'artifact-does-not-change-source';
       }
     }
@@ -159,6 +174,6 @@ export function interpretDreamReport({ reply = '', replyTruncated = false, run, 
   });
   try {
     return validateDreamOutcome({ ...base, report: { status: 'structured', code: null, text: null, textTruncated: false },
-      items, unreported: inputs.sources.length - items.length }, { runId: run.runId, inputs });
+      items, unreported: delivered.length - items.length }, { runId: run.runId, inputs });
   } catch { return fallback('invalid', 'report-limit'); }
 }

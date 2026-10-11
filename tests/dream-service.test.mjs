@@ -307,7 +307,7 @@ test('startup quarantines unsettled durable work and controls cannot erase that 
   const [notice] = again.status().noticeLedgers.find(ledger => ledger.agentId === ID).notices;
   assert.deepEqual([notice.kind, notice.detail, notice.occurrences], ['recovery', 'recovery-required', 1], 'a later startup does not renotify');
   assert.equal(again.control(dreamControlRequest('ack-notice', { agentId: ID, noticeId: notice.id })).notice.state, 'acknowledged');
-  assert.equal(again.status().schemaVersion, 9);
+  assert.equal(again.status().schemaVersion, 10);
 });
 
 test('a restarted daemon terminates its predecessor\'s owned agent group and settles the run as interrupted (#603)', posix, async t => {

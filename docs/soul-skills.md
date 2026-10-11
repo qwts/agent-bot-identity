@@ -747,6 +747,7 @@ implemented; see [Implemented scheduling core](soul-skill-dream-design.md#implem
 Dream reads the soul's own conversation (#887) and keeps a processing checkpoint
 that credits only `verified-change` evidence (#886); other coverage stays
 `unverified`. Dream also reads the soul's harness memory from its tool home (#903);
-memory items earn no processing credit yet. Search adapters are tracked on #902.
+a memory item is processed only by a verified soul change it cites. Search
+adapters are tracked on #902.
 
 Learning receipts enumerate retained source paths, byte hashes and modes. Relearning refuses extra or changed provenance material, including material beside an otherwise valid receipt. Read-only learning history reports malformed receipts as `invalid-receipt` and continues; recording still refuses an invalid current candidate receipt. Default prepared paths may traverse an alias of the soul root, but staging leaves and internal state directories must remain real directories.

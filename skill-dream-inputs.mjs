@@ -21,6 +21,9 @@ const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex
 const eligible = entry => entry.mode !== '040000' && (['AGENTS.md', 'soul.md', 'SOUL.md'].includes(entry.path)
   || entry.path.startsWith('skills/') && kindOf(entry.path) === 'skill');
 
+// The package paths a dream run may read and a change may maintain.
+export const isDreamSourcePath = value => typeof value === 'string' && eligible({ path: value });
+
 // Durable preparation metadata contains identifiers and sizes, never excerpts.
 // It establishes what was captured, not that the harness received or reviewed it.
 export function validateDreamInputMetadata(value) {
@@ -276,6 +279,24 @@ const memoryPath = (harness, value) => {
   return parts.length === 4 && parts[0] === reader.dir && segment(parts[1]) && parts[2] === reader.sub
     && segment(parts[3]) && reader.matches(parts[3]);
 };
+
+// A memory item as a dream report names it (#903, owner decision 2026-10-11):
+// `memory:<harness>/<path in the tool home>`, never a package path, so a
+// report, outcome or processing checkpoint cannot mistake one for the other.
+export const memoryItemKey = (harness, value) => `memory:${harness}/${value}`;
+export function isMemoryItemKey(value) {
+  if (typeof value !== 'string' || !value.startsWith('memory:')) return false;
+  const slash = value.indexOf('/'), harness = value.slice('memory:'.length, slash);
+  return slash !== -1 && Object.hasOwn(MEMORY_READERS, harness) && memoryPath(harness, value.slice(slash + 1));
+}
+// Every item a run was delivered and may report on: package sources, then
+// (format 3) memory items under their report keys. Conversations are context.
+export function deliveredDreamItems(inputs) {
+  const memory = inputs.schemaVersion === 3 && inputs.memory !== null
+    ? inputs.memory.items.map(({ path, digest, truncated }) => ({ path: memoryItemKey(inputs.memory.harness, path), digest, truncated, memory: true }))
+    : [];
+  return [...inputs.sources.map(({ path, digest, truncated }) => ({ path, digest, truncated, memory: false })), ...memory];
+}
 
 // `unsupported`: the harness has no memory reader, or the soul's tool home
 // holds no memory store for it (its memory may live in the host's store,

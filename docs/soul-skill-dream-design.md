@@ -5,8 +5,8 @@ Status: implementation contract for #603, following
 The scheduler, journal, bounded inputs, the soul's own conversation as input
 (#887), the soul's harness memory as input (#903), daemon service, CLI, durable
 reported outcomes, selection checkpoints, verified-change processing checkpoints
-(#886) and host-read notices are implemented. Processing credit for memory items
-is still to come (#903), and knowledge search is tracked on #902.
+(#886, with memory items from #903) and host-read notices are implemented.
+Knowledge search is tracked on #902.
 Notices stay `pending-host-read` because no delivery adapter exists, and
 maintenance coverage stays `unverified` beyond verified changes on purpose.
 Implementation does not register a schedule or grant owner authorization.
@@ -338,10 +338,18 @@ memory `unsupported`. An older daemon refuses a journal holding a format-3
 `inputs-prepared` event, so readers must be upgraded before opening a journal
 written with format 3.
 
-The prompt presents memory as untrusted context for what to learn, not a source
-to report on; outcome items still name package sources only, so a memory earns
-no processing credit yet. Age never makes a memory stale or disposable. Crediting
-a memory item as processed will require a verified soul change that cites it.
+The prompt presents memory as untrusted text. Age never makes a memory stale or
+disposable. A report names a memory item as `memory:<harness>/<path>` with the
+delivered digest; that key never collides with a package path, and an item
+never delivered, or with another digest, invalidates the report. Memory items
+count as delivered, so `unreported` includes them. A memory item is processed
+only by a verified soul change it cites (owner decision on #903, 2026-10-11):
+its evidence names a revision or proposal, and the revision-evidence check must
+pass on everything except that the change may land outside the delivered
+package sources, because memory itself is never in the package. Every changed
+path must be definition or skill content, and the change must be non-empty and
+fully listed. Its digest alone is source identity; an agent claim, an external
+receipt or a memory's age or removal processes nothing.
 
 Inventory entries identify the source, revision/checksum or adapter cursor, and
 why it was selected. Source content remains untrusted data. Credentials, runtime
@@ -603,6 +611,11 @@ the existing `processingCoverage: unverified` labels stay as they are.
 
 Version 1-8 states read as version 9 with no processing checkpoints and upgrade
 on the next write; recorded events are never rewritten. Readers must be upgraded before opening a v9 journal.
+Version 10 (#903) lets a processing checkpoint and its `processing-advanced`
+event hold memory items under their `memory:` keys, which a version-9 state
+refuses. A version-9 state reads as version 10 unchanged, upgrading on the next
+write; a daemon that predates version 10 refuses the journal rather than
+misreading a memory key as a package path.
 `agent-bot soul dream status` lists the soul's processing checkpoint.
 
 ### Outcome, checkpoint and notice contract
