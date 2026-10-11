@@ -26,7 +26,7 @@
 
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -34,6 +34,7 @@ import { appendAuditReceipt } from './agent-principals.mjs';
 import { ANY_DEVELOPER_ID, DEFAULT_KEYD_IDENTIFIER, keydSigner } from './config.mjs';
 import { keydPaths, keydRequest, readKeydRecord } from './keyd-client.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';
+import { ed25519KeyLine, parseSshPublicKey, sshFingerprint } from './owner-statement.mjs';
 
 export const PRESENCE_AUDIENCE = 'agent-bot-owner';
 export const PRESENCE_UNAVAILABLE_RPC = -32001;
@@ -102,21 +103,73 @@ function signerUnverified(error) {
     { code: 'keyd-signer-unverified', cause: error });
 }
 
-// The cache and the binary disagree, so one of the two was replaced. Neither
-// value may answer for the owner on its own. The owner can settle it through
-// the administrator dialog, which a soul cannot answer; without that answer the
-// mismatch stands and nothing is re-pinned (#753).
-function approveRepinnedKey() {
+// A presence key as `SHA256:` and unpadded base64, the form `ssh-keygen -l`
+// prints and keyd's owner key prompt shows, so the owner can compare keys.
+export function presenceKeyFingerprint(raw) {
+  return sshFingerprint(parseSshPublicKey(ed25519KeyLine(raw)).blob);
+}
+
+// The cache and the binary disagree, or the cache is gone while a pin is on
+// record, so something was replaced or removed. Neither value may answer for
+// the owner on its own. The owner can settle it through the administrator
+// dialog, which a soul cannot answer, and the dialog names both keys; without
+// that answer nothing is re-pinned (#753).
+function approveRepinnedKey({ cached, key }) {
+  const was = cached ? `the pinned key ${presenceKeyFingerprint(cached)}` : 'a pinned key whose record is missing or damaged';
   requireOwnerApproval({
-    prompt: "agent-bot's record of the keyd presence key does not match the code-signed keyd binary. Re-pin it to the key that binary reports now? Approve only if you asked for this — after updating the host app, or after removing keyd's presence key.",
+    prompt: `agent-bot's record of the keyd presence key does not match the code-signed keyd binary. Re-pin from ${was} to ${presenceKeyFingerprint(key)}, the key that binary reports now? Approve only if you asked for this — after updating the host app, or after removing keyd's presence key.`,
     outcome: 'the keyd presence key was not re-pinned',
   });
 }
 
-function pinMismatch(file, cause) {
+function pinMismatch(file, cached, cause) {
+  const what = cached
+    ? `the keyd presence key in ${file} does not match the code-signed keyd binary`
+    : `${file} is missing or damaged although a keyd presence key was pinned before`;
   return Object.assign(new Error(
-    `the pinned keyd presence key does not match the code-signed keyd binary and the owner did not re-pin it; remove ${file} to pin again`),
+    `${what}, and the owner did not re-pin it; run the owner command again from the Mac and approve the re-pin`),
   { code: 'presence-pin-mismatch', cause });
+}
+
+// What one record says about an earlier pin. Only a file that is not there
+// at all (ENOENT) says "never"; one that cannot be checked, a symlink, a
+// directory or any other non-regular file says "pinned before", so a record
+// made unreadable fails closed rather than open (#753).
+function recordState(file) {
+  let info;
+  try { info = lstatSync(file); } catch (error) { return error?.code === 'ENOENT' ? 'absent' : 'pinned'; }
+  return info.isFile() && !info.isSymbolicLink() ? 'file' : 'pinned';
+}
+
+// keyd's own receipts (keyd/src/audit.rs). An `owner/presence` or
+// `owner/pins-attest` call is made only under a pinned presence key, so one on
+// record means a key was pinned here before. An audit that cannot be read
+// counts as one that says so.
+function keydUsedPresence(file) {
+  const state = recordState(file);
+  if (state !== 'file') return state === 'pinned';
+  let text;
+  try { text = readFileSync(file, 'utf8'); } catch { return true; }
+  return /"operation":\s*"owner\/(?:presence|pins-attest)"/.test(text);
+}
+
+// Whether a presence key was pinned here before, when the cache is missing or
+// does not parse. Removing `presence.pub` must not turn the next key the
+// binary reports, possibly a planted seed, into a silent first pin (#753).
+// A cache that is there but does not parse, a `presence.signer` (written with
+// every pin since #594), or a presence call in keyd's audit each means the
+// owner is asked; only all three absent means a first pin.
+//
+// All three sit in `<state>/keyd`, which confinement.mjs denies a soul's tool
+// calls by path, not by any OS boundary. A process running as the owner can
+// still remove every one of them and get a silent first pin: this makes a
+// partial removal or a damaged record visible, it does not prevent a whole
+// one. As with keyd's Keychain lock (store.rs), the durable answer is the
+// data-protection keychain under the signed host app.
+function pinnedBefore({ env, home, file, signerFile }) {
+  if (recordState(file) !== 'absent') return true;
+  if (recordState(signerFile) !== 'absent') return true;
+  return keydUsedPresence(path.join(keydPaths({ env, home }).dir, 'audit.jsonl'));
 }
 
 function codesignVerify(bin, requirement) {
@@ -132,8 +185,8 @@ function runPresenceKey(bin) {
 // no signed keyd is installed or no keyd Team ID is configured. Derived from
 // the binary on every call: `presence.pub` is a cache of the last pin, never
 // the pin, because a file in this account is one a soul can write (#753). A
-// binary that disagrees with the cache is put to the owner through the
-// administrator dialog; refused, or with nobody to ask, this throws
+// binary that disagrees with the cache, or a cache missing while a pin is on
+// record, is put to the owner through the administrator dialog; refused, or with nobody to ask, this throws
 // `presence-pin-mismatch`, and approved it re-pins. A pin under a loosened
 // signer needs the owner's approval too and leaves a receipt; without it this
 // throws `keyd-signer-unverified` and pins nothing.
@@ -185,17 +238,20 @@ export function pinnedPresenceKey({
   let key;
   try { key = rawKey(String(run(record.bin)).trim()); } catch { return null; }
   if (!key) return null;
-  if (cached && cached !== key) {
-    // keyd's key moved: a rotation the owner asked for, or somebody else's
-    // doing. Only the owner can say which, and the answer is receipted either
-    // way. Approved, the write below re-pins to what the binary reports.
-    const detail = 'the pinned presence key does not match the code-signed keyd binary';
+  // keyd's key moved, or its cache went missing after a pin: a rotation the
+  // owner asked for, or somebody else's doing. Only the owner can say which,
+  // and the answer is receipted either way. Approved, the write below re-pins
+  // to what the binary reports.
+  const moved = cached ? cached !== key : pinnedBefore({ env, home, file, signerFile });
+  if (moved) {
+    const detail = cached ? 'the pinned presence key does not match the code-signed keyd binary'
+      : 'the presence key cache is missing or damaged although a key was pinned before';
     const record_ = (decision) => receipt({ event: 'keyd-signer', operation: 'repin-presence-key', decision, detail }, { env, home });
     try {
       approveRepin({ cached, key });
     } catch (error) {
       try { record_('refused'); } catch { /* the refusal stands without its receipt */ }
-      throw pinMismatch(file, error);
+      throw pinMismatch(file, cached, error);
     }
     record_('approved');
   }
@@ -281,6 +337,22 @@ export async function keydPresence(action, {
   }
   verifyPresence(result?.assertion, { key, action, nonce: sent, now: now() });
   return { method: 'presence', via: 'agent-bot-keyd' };
+}
+
+// For a caller with nobody at a dialog to answer — the daemon, or a command a
+// soul runs (#753): keyd's own prompt only. A pin that would need the owner's
+// administrator dialog, a loosened signer or a key to re-pin, is refused here
+// instead of raising it, and the owner gate refuses the action with that code.
+function noAdministratorDialog() {
+  throw new Error('this caller cannot raise the administrator dialog, so the owner was not asked');
+}
+
+export function pinnedPresenceKeyWithoutDialog(options = {}) {
+  return pinnedPresenceKey({ ...options, approve: noAdministratorDialog, approveRepin: noAdministratorDialog });
+}
+
+export function keydPresenceWithoutDialog(action, options = {}) {
+  return keydPresence(action, { ...options, pinned: pinnedPresenceKeyWithoutDialog });
 }
 
 // Asks the owner through keyd to trust exactly `pins` as their statement keys

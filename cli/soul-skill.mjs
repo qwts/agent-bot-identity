@@ -11,7 +11,7 @@ import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../s
 import { assertUninstallCurrent, stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
 import { soulSkillStatus } from '../skill-status.mjs';
 import { loadGlobalSkill, loadSkill, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
-import { assertOwnerAction, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
+import { assertOwnerAction, keydPresenceWithoutDialog, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
 
 export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT [--json]
@@ -141,9 +141,10 @@ function updateMain(args, json, { stdout, stderr, ...options }) {
 }
 // A soul's own global load or unload reaches the owner the way the daemon's
 // loosening does (agent-daemon.mjs): keyd's Touch ID or login password only,
-// no signed challenge and no administrator dialog, since the soul runs it.
+// no signed challenge and no administrator dialog, since the soul runs it —
+// not even to re-pin keyd's presence key (#753).
 const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot-keyd could not ask, and a soul\'s global skill change has no administrator-dialog fallback'), { code: 'presence-unavailable' }); };
-const askOwnerForSoul = (action, { env, presence }) => presenceOrConsent(action, { env, presence, allowChallenge: false, consent: noLooseningDialog });
+const askOwnerForSoul = (action, { env, presence = keydPresenceWithoutDialog }) => presenceOrConsent(action, { env, presence, allowChallenge: false, consent: noLooseningDialog });
 // load/unload (#603) place an installed skill in one of the soul's own
 // worktrees and take it out again. The package is unchanged, so there is no
 // revision; a soul may do this only for itself. --global reaches every

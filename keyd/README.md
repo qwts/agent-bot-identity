@@ -206,9 +206,12 @@ agent-bot derives the public half by running the code-signed binary,
 stands up a socket of its own therefore cannot answer for the owner. It runs
 the binary on every owner action, treating `<state>/keyd/presence.pub` as a
 cache of the last pin: that file is one a soul can write, so it may record a
-pin but never stand in for one. When the two disagree the owner settles it
-through the administrator dialog, and only a refusal leaves the action refused
-(#753).
+pin but never stand in for one. When the two disagree, or the cache is gone
+while a pin is on record, the owner settles it through the administrator
+dialog, which names both keys by fingerprint, and only a refusal leaves the
+action refused (#753). That is detection, not prevention: a process running
+as the owner can remove every record of the pin in `<state>/keyd` and get a
+silent first pin, until the data-protection keychain replaces them.
 
 When nobody can be asked here (no GUI session, or no login password), keyd
 answers error `-32001`, and agent-bot falls back to its administrator dialog.
