@@ -102,11 +102,12 @@ pin on its own (#617, owner decision "the new pins file"):
   exact version. uv is recorded when python or a uv tool needs it. A failure
   to record is `runtime-install-failed` naming the pins file, with the action
   to retry the install (after fixing or deleting a malformed file).
-- An entry that still matches what is installed (its version, and whether it
-  came from the catalog) is never changed, even when the catalog release moved.
-  An entry is added when none exists, and replaced when the declaration no
-  longer allows its version or moved it between the catalog and its own
-  `sources` (the revision changed it). Inspection never writes the file, so
+- An entry changes only when the installed version, or its catalog-versus-
+  package provenance per the receipt, changes; otherwise it keeps its original
+  `catalogRelease`, even after a reinstall from a newer catalog whose stamp
+  names that newer release. An entry is added when none exists. A revision
+  that moves a version into `sources` with the same bytes keeps the catalog
+  install, so its entry stays as it was. Inspection never writes the file, so
   a soul installed before #617 has none until its next install.
 - Resolution reuses a recorded version the declaration still allows, from the
   catalog's own pin for it, instead of the newest pin. Removing

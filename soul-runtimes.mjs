@@ -349,9 +349,11 @@ function recordRuntimePins(soulDir, inspect, release) {
       next[area][row.name] = { version: row.version, catalogRelease };
       changed = true;
     };
-    // Provenance follows the install receipt, so the pin and the stamp agree even
-    // when a revision moves a version between the catalog and the same bytes in
-    // its own sources; a stamp from before #617 has none and takes the source's.
+    // A new or changed entry takes its provenance from the install receipt
+    // (catalog release or null), so a revision that moves the same bytes into
+    // its own sources is not mislabelled; a stamp from before #617 has none and
+    // takes the source's. An unchanged entry keeps its original release, even
+    // if a reinstall stamped a newer one.
     const provenance = (row) => {
       const stamp = row.path ? readStamp(row.path) : null;
       if (stamp && Object.hasOwn(stamp, 'catalogRelease')) return stamp.catalogRelease;
