@@ -142,7 +142,8 @@ test('the presence contract constants keyd and agent-bot share', () => {
 test('the keyd signer comes from the environment, then the config; the Team ID has no default (#594)', (t) => {
   const { dir } = home(t);
   const env = { HOME: dir };
-  assert.deepEqual(keydSigner({ env }), { teamId: null, identifier: 'agent-bot-keyd' });
+  // The config is read from `home`, never the account running the tests.
+  assert.deepEqual(keydSigner({ env, home: dir }), { teamId: null, identifier: 'agent-bot-keyd' });
   const config = join(dir, 'config.json');
   writeFileSync(config, JSON.stringify({ settings: { keydTeamId: 'ABCDE12345', keydIdentifier: 'org.example.keyd' } }));
   const configured = { ...env, AGENT_BOT_CONFIG: config };
@@ -150,7 +151,7 @@ test('the keyd signer comes from the environment, then the config; the Team ID h
   assert.deepEqual(keydSigner({ env: { ...configured, AGENT_BOT_KEYD_TEAM_ID: 'ZZZZZ99999' } }),
     { teamId: 'ZZZZZ99999', identifier: 'org.example.keyd' });
   // Empty means unset, never "any Developer ID".
-  assert.deepEqual(keydSigner({ env: { ...env, AGENT_BOT_KEYD_TEAM_ID: '', AGENT_BOT_KEYD_IDENTIFIER: ' ' } }),
+  assert.deepEqual(keydSigner({ env: { ...env, AGENT_BOT_KEYD_TEAM_ID: '', AGENT_BOT_KEYD_IDENTIFIER: ' ' }, home: dir }),
     { teamId: null, identifier: 'agent-bot-keyd' });
   assert.equal(developerIdRequirement(keydSigner({ env: configured })), 'anchor apple generic and identifier "org.example.keyd"'
     + ' and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "ABCDE12345"');
