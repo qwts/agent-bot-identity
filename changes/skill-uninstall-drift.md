@@ -1,0 +1,1 @@
+- `agent-bot soul skill uninstall` now reports `drift`: the files added, changed or removed since install (including mode-only changes), or that the skill has no install record, so local edits are surfaced before the skill is archived or trashed (#603).

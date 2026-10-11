@@ -8,7 +8,7 @@ import { checkSoulSkillSource, proposeSoulSkillCandidate } from '../skill-source
 import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
-import { stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
+import { assertUninstallCurrent, stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
 import { soulSkillStatus } from '../skill-status.mjs';
 import { loadGlobalSkill, loadSkill, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
@@ -40,7 +40,8 @@ document and supported inline instruction links. Public GitHub tree URLs preserv
 the selected directory at one resolved commit. Neither executes content.
 install copies the library's editable copy into the soul's skills/<name>/ with
 a file-hash record; uninstall archives it to archive/skills/<name>/ in the soul,
-or with --trash (owner only) moves it to the OS trash. The owner's install or
+or with --trash (owner only) moves it to the OS trash, and reports as drift
+any files changed since install. The owner's install or
 uninstall applies as an owner-approved revision edit; a soul's is a proposal
 under its revision policy.
 load copies an installed skill into one of the soul's worktrees at the
@@ -218,7 +219,7 @@ async function installMain(verb, args, json, { stdout, stderr, markers = soulMar
   }
   if (!target || target.startsWith('--') || !agentId) { stderr.write(USAGE); return 2; }
   const trash = flags.has('--trash');
-  let staging;
+  let staging, stale;
   try {
     const owner = markers({ env: options.env, cwd: options.cwd }).length === 0;
     if (trash && !owner) throw Object.assign(new Error('soul skill uninstall --trash is owner only; a soul can archive instead'), { code: 'owner-credential-required' });
@@ -229,7 +230,18 @@ async function installMain(verb, args, json, { stdout, stderr, markers = soulMar
     const stage = verb === 'install' ? stageSkillInstall(target, agentId, options) : stageSkillUninstall(target, agentId, options);
     staging = stage.staging;
     const reason = verb === 'install' ? `Install skill ${stage.name}` : `Archive skill ${stage.name}${trash ? ' before moving it to the trash' : ''}`;
-    const gate = assertUser ?? ((action, context) => revisionOwnerGate(action, { ...context, presence: options.presence, env: options.env, cwd: options.cwd }));
+    const ownerGate = assertUser ?? ((action, context) => revisionOwnerGate(action, { ...context, presence: options.presence, env: options.env, cwd: options.cwd }));
+    // An owner uninstall applies at once: after the gate, recheck that the
+    // live skill is still the staged copy, so an edit made meanwhile is not lost.
+    const gate = verb === 'uninstall'
+      ? async (action, context) => {
+        const granted = await ownerGate(action, context);
+        // The revision command reports any gate failure as a missing owner
+        // credential, so keep this refusal to report it as itself.
+        try { assertUninstallCurrent(stage, agentId, options); } catch (error) { stale = error; throw error; }
+        return granted;
+      }
+      : ownerGate;
     let result;
     if (trash) {
       // Archive first (a recorded revision), then trash, then record the
@@ -248,7 +260,8 @@ async function installMain(verb, args, json, { stdout, stderr, markers = soulMar
     }
     stdout.write(report(result, json));
     return result.outcome === 'rejected' ? 1 : 0;
-  } catch (error) {
+  } catch (caught) {
+    const error = stale ?? caught;
     const failure = { code: error.code ?? `skill-${verb}-failed`, message: error.message };
     if (json) stdout.write(`${JSON.stringify({ error: failure })}\n`);
     else stderr.write(`agent-bot soul skill: ${failure.code}: ${failure.message}\n`);
