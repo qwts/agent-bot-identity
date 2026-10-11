@@ -504,8 +504,11 @@ themselves counted as processed. A later verified run replaces a path's entry,
 entries are ordered newest first, and the checkpoint stays within 8 KiB by
 dropping the oldest entries and counting them in `evicted`. The full list for
 each run is kept in the append-only `processing-advanced` event, published in
-the same transaction as the outcome and selection checkpoint and validated
-against that outcome. The checkpoint only reports; selection is unchanged and
+the same transaction as the outcome and selection checkpoint, which it
+requires. The event carries the run's prepared input metadata, bound by digest
+to the selection checkpoint's input receipt, and the outcome is validated
+against those delivered sources, so no path that was never delivered can be
+credited. The checkpoint only reports; selection is unchanged and
 the existing `processingCoverage: unverified` labels stay as they are.
 
 Version 1-8 states read as version 9 with no processing checkpoints and upgrade

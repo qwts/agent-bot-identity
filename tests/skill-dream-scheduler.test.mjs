@@ -513,6 +513,21 @@ test('a processing checkpoint stays within its byte budget and counts what it ev
   assert.deepEqual(validateDreamState(f.state()), f.state());
 });
 
+test('a near-limit path that fits the checkpoint alone is kept, measured at the real eviction count', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  const generation = f.state().registrations[0].generation;
+  const size = file => Buffer.byteLength(JSON.stringify({ schemaVersion: 1, agentId: A, generation, coverage: 'verified-change-only', evicted: 0,
+    entries: [{ path: file, digest: `sha256:${'0'.repeat(64)}`, artifactRevision: R1, runId: '00000000-0000-4000-8000-000000000000', journalRevision: f.state().revision + 3 }] }));
+  let n = 1;
+  while (size(`skills/demo/references/${'é'.repeat(n + 1)}.md`) <= DREAM_PROCESSING_BYTES) n++;
+  const file = `skills/demo/references/${'é'.repeat(n)}.md`;
+  assert.ok(DREAM_PROCESSING_BYTES - size(file) < String(Number.MAX_SAFE_INTEGER).length - 1, 'a sentinel count would not fit');
+  await settle({ inputs: sources([file]), items: [[file, { revision: R1 }]], verify: verifier(R1, [file]) });
+  const checkpoint = f.state().processingCheckpoints[0];
+  assert.deepEqual([checkpoint.entries.map(entry => entry.path), checkpoint.evicted], [[file], 0]);
+  assert.ok(Buffer.byteLength(JSON.stringify(checkpoint)) <= DREAM_PROCESSING_BYTES);
+});
+
 test('processing checkpoints and events refuse claims the verified outcome does not back', async () => {
   const { f, R1, sources, verifier, settle } = processingFixture();
   const inputs = sources(['AGENTS.md', 'skills/demo/SKILL.md']);
@@ -525,8 +540,22 @@ test('processing checkpoints and events refuse claims the verified outcome does 
     events => { events.find(event => event.kind === 'processing-advanced').processed = []; },
     events => { events.find(event => event.kind === 'processing-advanced').checkpoint.entries.push({ ...unbacked, runId: events[0].run.runId, journalRevision: state.revision }); },
     events => { events.find(event => event.kind === 'processing-advanced').checkpoint.coverage = 'verified'; },
+    // A processing event needs the same run's selection checkpoint, which binds its inputs.
+    events => { events.splice(events.findIndex(event => event.kind === 'selection-advanced'), 1); },
+    events => { events.find(event => event.kind === 'processing-advanced').inputs.sources.pop(); },
+    events => { delete events.find(event => event.kind === 'processing-advanced').inputs; },
   ]) {
     const events = copy(tail); mutate(events); assert.throws(() => validateDreamEvents(events, { state }), { code: 'dream-state-invalid' });
+  }
+  // A forged outcome that credits a path never delivered to the run is refused,
+  // even with its receipt digest recomputed and the event list made consistent.
+  {
+    const events = copy(tail), recorded = events.find(event => event.kind === 'outcome-recorded');
+    const advanced = events.find(event => event.kind === 'processing-advanced');
+    const forged = copy(recorded.outcome.items[0]); forged.claim.path = 'skills/other/SKILL.md';
+    recorded.outcome.items[1] = forged; recorded.receipt.digest = dreamOutcomeDigest(recorded.outcome);
+    advanced.processed.push({ path: forged.claim.path, digest: forged.claim.digest, artifactRevision: forged.verification.artifactRevision });
+    assert.throws(() => validateDreamEvents(events), { code: 'dream-state-invalid' });
   }
   for (const mutate of [
     value => { value.processingCheckpoints[0].entries[0].path = '../secret'; },

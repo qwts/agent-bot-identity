@@ -290,12 +290,21 @@ export function validateDreamEvents(events, { state = null } = {}) {
     if (event?.kind === 'processing-advanced') {
       // Every processed source must be a `verified-change` item of the same
       // transaction's structured outcome, and every such item must be listed.
-      keys(event, ['kind', 'at', 'run', 'checkpoint', 'processed']);
+      // The event carries the run's prepared input metadata, bound by digest
+      // to the input receipt in the same transaction's selection checkpoint,
+      // so the outcome is checked against the sources actually delivered: a
+      // forged item for a path never delivered earns no credit.
+      keys(event, ['kind', 'at', 'run', 'checkpoint', 'processed', 'inputs']);
       if (!date(event.at)) invalid();
       runRecord(event.run, true, version(event.run)); processingCheckpoint(event.checkpoint);
       if (!Array.isArray(event.processed) || event.processed.length < 1 || event.processed.length > 100) invalid();
       event.processed.forEach(source => processedSource(source));
+      try { validateDreamInputMetadata(event.inputs); } catch { invalid(); }
+      const selection = events.find(row => row.kind === 'selection-advanced' && isDeepStrictEqual(row.run, event.run))?.checkpoint;
       const outcome = events.find(row => row.kind === 'outcome-recorded' && isDeepStrictEqual(row.run, event.run))?.outcome;
+      if (!selection || selection.inputReceipt.digest !== dreamInputMetadataDigest(event.inputs)
+        || selection.sourceRevision !== event.inputs.revision) invalid();
+      try { validateDreamOutcome(outcome, { runId: event.run.runId, inputs: event.inputs }); } catch { invalid(); }
       const verified = verifiedSources(outcome);
       const current = event.checkpoint.entries.filter(entry => entry.runId === event.run.runId);
       if (event.run.status !== 'completed' || event.run.cancelRequestedAt !== null || outcome?.report?.status !== 'structured'
@@ -565,13 +574,16 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
               entries: [...processed.map(source => ({ ...source, runId: run.runId, journalRevision })),
                 ...(prior?.entries ?? []).filter(item => !fresh.has(item.path))].sort(processingOrder) };
             // A path too long to fit the budget even alone is evicted first,
-            // so it cannot push out every older entry.
-            const alone = item => Buffer.byteLength(JSON.stringify({ ...next, evicted: Number.MAX_SAFE_INTEGER, entries: [item] })) > DREAM_PROCESSING_BYTES;
+            // so it cannot push out every older entry. It is measured at the
+            // largest count this pass can reach, not an arbitrary sentinel,
+            // so an entry that fits is kept.
+            const most = next.evicted + next.entries.length;
+            const alone = item => Buffer.byteLength(JSON.stringify({ ...next, evicted: most, entries: [item] })) > DREAM_PROCESSING_BYTES;
             next.evicted += next.entries.filter(alone).length; next.entries = next.entries.filter(item => !alone(item));
             while (next.entries.length && Buffer.byteLength(JSON.stringify(next)) > DREAM_PROCESSING_BYTES) { next.entries.pop(); next.evicted++; }
             current.processingCheckpoints = current.processingCheckpoints.filter(item => item.agentId !== agentId);
             current.processingCheckpoints.push(next);
-            events.push({ kind: 'processing-advanced', at: endedAt, run: result, checkpoint: next, processed });
+            events.push({ kind: 'processing-advanced', at: endedAt, run: result, checkpoint: next, processed, inputs: structuredClone(entry.inputs) });
           }
         }
         noticeRun(current, events, result, entry);
