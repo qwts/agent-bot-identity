@@ -173,12 +173,15 @@ above.
   the same value encoding), through `SecKeychainItemCreateFromContent` with an
   access whose every entry names keyd's own designated requirement: its Team
   ID and identifier for a signed build. `security`, `node` and every script
-  get the system's allow/deny prompt instead of a silent read, and keyd turns
-  keychain prompts off, so they fail instead. Another process cannot widen an
-  item's access list either. keyd never returns a key, over any channel.
-  Leaving an item to the framework's default access is not enough, and keyd
-  used to: that default trusts *any* application to write the value, so any
-  process in the owner's account could replace a key with no prompt (#753).
+  get the system's allow/deny prompt instead of a silent read. keyd turns
+  keychain prompts off in its own process, so a call it is not entitled to
+  fails instead of waiting on a dialog nobody is watching; that is a
+  process-wide flag and changes nothing for any other process. Another process
+  cannot widen an item's access list either. keyd never returns a key, over
+  any channel. Leaving an item to the framework's default access is not
+  enough, and keyd used to: that default trusts *any* application to write
+  the value, so any process in the owner's account could replace a key with no
+  prompt (#753).
   keyd now checks an item's access list on every read; an App key it does not
   control is re-made from its own value under the lock, and anything under
   service `agent-bot.keyd` — the daemon grant key, the presence seed, the

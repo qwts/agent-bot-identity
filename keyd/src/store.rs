@@ -85,6 +85,12 @@ pub const PRESENCE_ACCOUNT: &str = "presence-key";
 pub const OWNER_PINS_ACCOUNT: &str = "owner-pins";
 pub const APP_SERVICE: &str = "agent-bot.keyd.app";
 
+/// The marker on a store error meaning the item is there but is not one keyd
+/// controls (#753), as against a keychain that could not be read at all. A
+/// caller that can replace the item — `owner/pin` over the daemon key — may
+/// treat it as absent; a caller that cannot, fails on it.
+const UNTRUSTED_ITEM: &str = "not one agent-bot-keyd controls";
+
 pub fn item(agent_id: &str, app: &str) -> Result<(String, String), &'static str> {
     if !is_agent_id(agent_id) || !is_app_slug(app) {
         return Err("invalid soul or App");
@@ -192,7 +198,17 @@ impl Store {
     }
 
     pub fn pinned_key(&self) -> Result<Option<[u8; 32]>, String> {
-        let Some(value) = self.items.read(PIN_SERVICE, PIN_ACCOUNT)? else {
+        // An item keyd does not control is no pin at all: nothing verifies
+        // against it, `owner/status` reports the daemon as unpinned, and
+        // `owner/pin` still asks the owner and writes over it. Reading it as an
+        // error instead would wedge the upgrade — the one call that could fix
+        // the item would be the one refusing to run.
+        let value = match self.items.read(PIN_SERVICE, PIN_ACCOUNT) {
+            Ok(value) => value,
+            Err(error) if error.contains(UNTRUSTED_ITEM) => None,
+            Err(error) => return Err(error),
+        };
+        let Some(value) = value else {
             return Ok(None);
         };
         let raw = STANDARD
@@ -276,14 +292,18 @@ pub struct OwnerPins {
 ///
 /// What an access list still cannot do: the legacy file keychain does not gate
 /// every operation on one, so a process in this account can still blank or
-/// delete an item it cannot read. It cannot read one, and it cannot widen the
-/// access list, so what keyd loses to that is availability, not secrecy — and
-/// a value keyd cannot vouch for is refused rather than used. The durable
-/// answer is the data-protection keychain under a keychain-access-groups
-/// entitlement, which only the signed GeniusBar build can carry.
+/// delete an item it cannot read, which makes an overwrite detectable rather
+/// than impossible. The check does not prove keyd made the item either — any
+/// process can build an access naming keyd's code, so one that deletes an item
+/// can plant a replacement this cannot tell from keyd's own. What it does
+/// close is reading a value and widening an access list, so what keyd loses is
+/// availability, not secrecy, and a value keyd cannot vouch for is refused
+/// rather than used. The durable answer is the data-protection keychain under a
+/// keychain-access-groups entitlement, which only the signed GeniusBar build
+/// can carry.
 #[cfg(target_os = "macos")]
 pub mod keychain {
-    use super::{Items, PIN_SERVICE};
+    use super::{Items, PIN_SERVICE, UNTRUSTED_ITEM};
     use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::data::CFData;
@@ -298,9 +318,7 @@ pub mod keychain {
         SecKeychainRef,
     };
     use security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed;
-    use security_framework_sys::keychain_item::{
-        SecKeychainItemFreeContent, SecKeychainItemModifyAttributesAndData,
-    };
+    use security_framework_sys::keychain_item::SecKeychainItemModifyAttributesAndData;
     use std::ffi::c_void;
     use std::path::PathBuf;
     use std::sync::OnceLock;
@@ -367,13 +385,6 @@ pub mod keychain {
             item: *mut SecKeychainItemRef,
         ) -> i32;
         fn SecKeychainItemCopyAccess(item: SecKeychainItemRef, access: *mut SecAccessRef) -> i32;
-        fn SecKeychainItemCopyContent(
-            item: SecKeychainItemRef,
-            class: *mut u32,
-            attributes: *mut *mut SecKeychainAttributeList,
-            length: *mut u32,
-            data: *mut *mut c_void,
-        ) -> i32;
         // The rights the default access has no entry for at all, so nothing
         // governs them and any process in this account may exercise them.
         static kSecACLAuthorizationDelete: CFStringRef;
@@ -664,39 +675,20 @@ pub mod keychain {
         }
     }
 
-    /// Replaces an item's value in place, keeping its access list. The
-    /// attribute list has to be the one `SecKeychainItemCopyContent` returns: a
-    /// write that carries none is the write any process in this account can
-    /// make, and keyd does not use it.
+    /// Replaces an item's value in place, keeping its access list. Only an
+    /// item `access_is_keyd_only` has vouched for reaches here; `replace` is
+    /// what decides that, and it re-makes anything else instead.
     fn modify(item: &SecKeychainItem, value: &[u8]) -> Result<(), i32> {
-        let raw = item.as_concrete_TypeRef();
-        let mut attributes: *mut SecKeychainAttributeList = std::ptr::null_mut();
-        let mut length: u32 = 0;
-        let mut data: *mut c_void = std::ptr::null_mut();
-        // SAFETY: a live item and valid out-pointers.
-        let copied = unsafe {
-            SecKeychainItemCopyContent(
-                raw,
-                std::ptr::null_mut(),
-                &mut attributes,
-                &mut length,
-                &mut data,
-            )
-        };
-        if copied != 0 {
-            return Err(copied);
-        }
-        // SAFETY: a live item, the attribute list just copied, and our bytes.
+        // SAFETY: a live item and our own bytes. A NULL attribute list leaves
+        // the item's attributes, and so its access list, as they are.
         let status = unsafe {
             SecKeychainItemModifyAttributesAndData(
-                raw,
-                attributes,
+                item.as_concrete_TypeRef(),
+                std::ptr::null(),
                 value.len() as u32,
                 value.as_ptr() as *const c_void,
             )
         };
-        // SAFETY: releases what the copy allocated.
-        unsafe { SecKeychainItemFreeContent(attributes, data) };
         if status == 0 {
             Ok(())
         } else {
@@ -751,7 +743,7 @@ pub mod keychain {
 
     fn untrusted(account: &str) -> String {
         format!(
-            "the keychain item for {account} is not one agent-bot-keyd controls: any process in this account can change it, so its value was refused"
+            "the keychain item for {account} is {UNTRUSTED_ITEM}: any process in this account can change it, so its value was refused"
         )
     }
 
@@ -791,9 +783,9 @@ pub mod keychain {
         }
 
         /// Whether the item at `service`/`account` is one keyd controls, which
-        /// is what the access-list test asserts.
+        /// is what the access-list tests assert.
         #[cfg(test)]
-        pub(super) fn trusts_only_keyd(
+        pub(crate) fn trusts_only_keyd(
             &self,
             service: &str,
             account: &str,
@@ -1100,7 +1092,7 @@ pub mod tests {
     /// Mac without it never touches a keychain, so it can never put a
     /// keychain prompt in front of them.
     #[cfg(target_os = "macos")]
-    fn keychain_tests_enabled() -> bool {
+    pub(crate) fn keychain_tests_enabled() -> bool {
         let enabled = std::env::var("KEYD_KEYCHAIN_TESTS").as_deref() == Ok("1");
         if !enabled {
             eprintln!("skipped: set KEYD_KEYCHAIN_TESTS=1 to run keychain tests");
@@ -1114,7 +1106,7 @@ pub mod tests {
     /// `body` panics, since a keychain left in the search list is a dialog
     /// waiting for a password nobody owes it.
     #[cfg(target_os = "macos")]
-    fn with_temporary_keychain(body: impl FnOnce(&std::path::Path)) {
+    pub(crate) fn with_temporary_keychain(body: impl FnOnce(&std::path::Path)) {
         use security_framework::os::macos::keychain::CreateOptions;
         let dir = crate::paths::tests::short_temp_dir("kc");
         let path = dir.join("keyd-test.keychain-db");

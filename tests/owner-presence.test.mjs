@@ -277,21 +277,46 @@ test('the presence key comes from the signed binary every time, and the pin file
 
 // A file in this account is one a soul can write, so a cache that disagrees
 // with the binary means one of the two was replaced. Neither value may answer
-// for the owner, and the disagreement is left where it can be seen (#753).
-test('a pin that disagrees with the signed binary is refused, not used and not replaced', (t) => {
+// for the owner on its own, so the owner is asked; refused, the disagreement
+// is left where it can be seen (#753).
+test('a pin the owner will not re-pin is refused, not used and not replaced', (t) => {
   const { env } = home(t);
   const key = presenceKey();
   const file = presencePinPath({ env });
   writeFileSync(file, `${presenceKey().raw}\n`, { mode: 0o644 });
   const planted = readFileSync(file, 'utf8');
   const receipts = [];
+  const asked = [];
   const seams = { env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
-    run: () => `${key.raw}\n`, receipt: (entry) => receipts.push(entry) };
+    run: () => `${key.raw}\n`, receipt: (entry) => receipts.push(entry),
+    approveRepin: (detail) => { asked.push(detail); throw new Error('owner approval was cancelled'); } };
   assert.throws(() => pinnedPresenceKey(seams), { code: 'presence-pin-mismatch' });
   assert.equal(readFileSync(file, 'utf8'), planted);
+  assert.deepEqual(asked, [{ cached: planted.trim(), key: key.raw }], 'the owner is shown both keys');
   assert.deepEqual(receipts.map(({ event, operation, decision }) => [event, operation, decision]),
-    [['keyd-signer', 'pin-presence-key', 'refused']]);
+    [['keyd-signer', 'repin-presence-key', 'refused']]);
   assert.match(receipts[0].detail, /does not match the code-signed keyd binary/);
+});
+
+// A rotation the owner did ask for — an updated GeniusBar, or a presence key
+// removed on purpose — is one approval away from working again, rather than
+// file surgery (#753).
+test('a pin the owner approves is re-pinned from the signed binary', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const file = presencePinPath({ env });
+  writeFileSync(file, `${presenceKey().raw}\n`, { mode: 0o600 });
+  const receipts = [];
+  const seams = { env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
+    run: () => `${key.raw}\n`, receipt: (entry) => receipts.push(entry), approveRepin: () => {} };
+  assert.equal(pinnedPresenceKey(seams), key.raw);
+  assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`, 're-pinned to what the binary reports');
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(receipts.map(({ operation, decision }) => [operation, decision]),
+    [['repin-presence-key', 'approved']]);
+  // And having re-pinned, the next call asks nobody.
+  assert.equal(pinnedPresenceKey({ ...seams, approveRepin: () => assert.fail('not asked twice') }), key.raw);
+  assert.equal(receipts.length, 1);
 });
 
 test('a pin mismatch refuses the owner action with its code, never falling back to the dialog', async (t) => {
@@ -300,7 +325,8 @@ test('a pin mismatch refuses the owner action with its code, never falling back 
   writeFileSync(presencePinPath({ env }), `${presenceKey().raw}\n`, { mode: 0o600 });
   const presence = (summary, options) => keydPresence(summary, { ...options,
     pinned: () => pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
-      run: () => `${key.raw}\n`, receipt: () => {} }) });
+      run: () => `${key.raw}\n`, receipt: () => {},
+      approveRepin: () => { throw new Error('owner approval was cancelled'); } }) });
   await assert.rejects(presenceOrConsent(`soul comms ${ID} off`, { env, presence,
     consent: () => assert.fail('a refusal never falls back'), summarize: (text) => text }), { code: 'presence-pin-mismatch' });
 });

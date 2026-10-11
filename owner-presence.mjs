@@ -103,12 +103,20 @@ function signerUnverified(error) {
 }
 
 // The cache and the binary disagree, so one of the two was replaced. Neither
-// value may answer for the owner, and this is not a fallback: the
-// administrator dialog would ask about an action whose key is in question.
-function pinMismatch(file) {
+// value may answer for the owner on its own. The owner can settle it through
+// the administrator dialog, which a soul cannot answer; without that answer the
+// mismatch stands and nothing is re-pinned (#753).
+function approveRepinnedKey() {
+  requireOwnerApproval({
+    prompt: "agent-bot's record of the keyd presence key does not match the code-signed keyd binary. Re-pin it to the key that binary reports now? Approve only if you asked for this — after updating the host app, or after removing keyd's presence key.",
+    outcome: 'the keyd presence key was not re-pinned',
+  });
+}
+
+function pinMismatch(file, cause) {
   return Object.assign(new Error(
-    `the pinned keyd presence key does not match the code-signed keyd binary; remove ${file} and pin again`),
-  { code: 'presence-pin-mismatch' });
+    `the pinned keyd presence key does not match the code-signed keyd binary and the owner did not re-pin it; remove ${file} to pin again`),
+  { code: 'presence-pin-mismatch', cause });
 }
 
 function codesignVerify(bin, requirement) {
@@ -124,9 +132,11 @@ function runPresenceKey(bin) {
 // no signed keyd is installed or no keyd Team ID is configured. Derived from
 // the binary on every call: `presence.pub` is a cache of the last pin, never
 // the pin, because a file in this account is one a soul can write (#753). A
-// binary that disagrees with the cache throws `presence-pin-mismatch`. A pin
-// under a loosened signer needs the owner's approval and leaves a receipt;
-// without it this throws `keyd-signer-unverified` and pins nothing.
+// binary that disagrees with the cache is put to the owner through the
+// administrator dialog; refused, or with nobody to ask, this throws
+// `presence-pin-mismatch`, and approved it re-pins. A pin under a loosened
+// signer needs the owner's approval too and leaves a receipt; without it this
+// throws `keyd-signer-unverified` and pins nothing.
 export function pinnedPresenceKey({
   env = process.env,
   home = env.HOME || homedir(),
@@ -135,6 +145,7 @@ export function pinnedPresenceKey({
   run = runPresenceKey,
   signer = keydSigner,
   approve = approveSigner,
+  approveRepin = approveRepinnedKey,
   receipt = appendAuditReceipt,
 } = {}) {
   const file = presencePinPath({ env, home });
@@ -171,11 +182,18 @@ export function pinnedPresenceKey({
   try { key = rawKey(String(run(record.bin)).trim()); } catch { return null; }
   if (!key) return null;
   if (cached && cached !== key) {
+    // keyd's key moved: a rotation the owner asked for, or somebody else's
+    // doing. Only the owner can say which, and the answer is receipted either
+    // way. Approved, the write below re-pins to what the binary reports.
     const detail = 'the pinned presence key does not match the code-signed keyd binary';
+    const record_ = (decision) => receipt({ event: 'keyd-signer', operation: 'repin-presence-key', decision, detail }, { env, home });
     try {
-      receipt({ event: 'keyd-signer', operation: 'pin-presence-key', decision: 'refused', detail }, { env, home });
-    } catch { /* the refusal stands without its receipt */ }
-    throw pinMismatch(file);
+      approveRepin({ cached, key });
+    } catch (error) {
+      try { record_('refused'); } catch { /* the refusal stands without its receipt */ }
+      throw pinMismatch(file, error);
+    }
+    record_('approved');
   }
   writeFileSync(file, `${key}\n`, { mode: 0o600 });
   // `mode` only applies when the file is created; a corrupt pin being

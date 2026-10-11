@@ -1548,6 +1548,69 @@ mod tests {
         assert_eq!(declined.store.pinned_key().unwrap(), None);
     }
 
+    /// A daemon key pinned before keyd locked its Keychain items is no pin at
+    /// all: both status calls report the daemon unpinned rather than failing,
+    /// and `owner/pin` still asks the owner and replaces the item with one keyd
+    /// controls (#753). An error here instead would wedge the upgrade, since
+    /// `owner/pin` is the one call that can fix the item.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn owner_pin_upgrades_a_legacy_pin() {
+        use crate::store::tests::{keychain_tests_enabled, with_temporary_keychain};
+        use crate::store::{keychain, PIN_ACCOUNT, PIN_SERVICE};
+        use security_framework::os::macos::keychain::SecKeychain;
+        if !keychain_tests_enabled() {
+            return;
+        }
+        with_temporary_keychain(|path| {
+            // The framework's default access, which is what keyd used to make
+            // items with: an item keyd did not create.
+            let legacy = STANDARD.encode([7u8; 32]);
+            SecKeychain::open(path)
+                .unwrap()
+                .add_generic_password(PIN_SERVICE, PIN_ACCOUNT, legacy.as_bytes())
+                .unwrap();
+
+            let consent = Arc::new(Consenting::new(true));
+            let mut keyd = keyd(true);
+            keyd.consent = Box::new(Arc::clone(&consent));
+            keyd.store = Store::new(Box::new(keychain::Keychain::at(path.to_path_buf())));
+
+            // Untrusted reads as unpinned, and the legacy value is never used.
+            assert_eq!(keyd.store.pinned_key().unwrap(), None);
+            assert_eq!(
+                owner(&keyd, "owner/status", json!({}))["result"]["pinned"],
+                json!(false)
+            );
+            assert_eq!(
+                owner(&keyd, "owner/app-status", json!({ "app": "app-1" }))["result"]["pinned"],
+                json!(false)
+            );
+
+            // owner/pin asks the owner, and its write replaces the item.
+            let pinned = signing_key().verifying_key().to_bytes();
+            assert_eq!(
+                owner(&keyd, "owner/pin", json!({ "daemonKey": daemon_key() }))["result"],
+                json!({ "pinned": true })
+            );
+            assert_eq!(consent.asked.lock().unwrap().len(), 1, "the owner is asked");
+            assert_eq!(keyd.store.pinned_key().unwrap(), Some(pinned));
+
+            // What replaces it is an item keyd controls, so the same key is now
+            // a pin and needs no second consent.
+            let items = keychain::Keychain::at(path.to_path_buf());
+            assert!(
+                items.trusts_only_keyd(PIN_SERVICE, PIN_ACCOUNT).unwrap(),
+                "the upgraded item names only keyd"
+            );
+            assert_eq!(
+                owner(&keyd, "owner/pin", json!({ "daemonKey": daemon_key() }))["result"],
+                json!({ "pinned": false })
+            );
+            assert_eq!(consent.asked.lock().unwrap().len(), 1, "no second prompt");
+        });
+    }
+
     /// keyd-protocol.md: `items` holds 1 to 64 keys, otherwise the whole
     /// import is refused before the owner is asked, for either kind.
     #[test]
