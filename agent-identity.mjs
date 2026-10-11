@@ -30,9 +30,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } from './config.mjs';
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
+import { isAgentId, validateAgentId } from './identity-format.mjs';
+
+// The Agent ID format lives in the identity-format contract (#645, F1). These
+// re-exports keep identity's existing importers working until they move to it.
+export { isAgentId, validateAgentId };
 
 const SCHEMA_VERSION = 1;
-const ID_PATTERN = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 
 function optionalText(name, value, { max = 512 } = {}) {
@@ -47,17 +51,6 @@ function requiredText(name, value, options) {
   const text = optionalText(name, value, options);
   if (text === null) throw new Error(`${name} is required`);
   return text;
-}
-
-export function isAgentId(id) {
-  return typeof id === 'string' && ID_PATTERN.test(id);
-}
-
-export function validateAgentId(id) {
-  if (!isAgentId(id)) {
-    throw new Error(`invalid Agent ID: ${JSON.stringify(id)}`);
-  }
-  return id;
 }
 
 // ADR-0815: a soul is credited as a Git co-author whose email is its Agent
@@ -395,7 +388,7 @@ function findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub = tru
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const id = name.slice(0, -5);
-    if (!ID_PATTERN.test(id)) continue;
+    if (!isAgentId(id)) continue;
     let record;
     try {
       record = readAgentIdentity(id, { stateDir });

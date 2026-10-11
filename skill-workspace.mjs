@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import path from 'node:path';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { withLock } from './file-lock.mjs';
 import { soulDirectory } from './agent-population.mjs';

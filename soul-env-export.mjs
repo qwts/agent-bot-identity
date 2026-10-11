@@ -46,7 +46,7 @@ import { createGunzip, createGzip } from 'node:zlib';
 import { isAgentId, mintAgentIdentity, readAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, showSoulByName, soulDirectory, upsertSoul } from './agent-population.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { initSoulSpace } from './agent-space.mjs';
 import { minimalChildEnv } from './child-env.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';

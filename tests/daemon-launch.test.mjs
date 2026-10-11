@@ -622,7 +622,7 @@ test('launch persists the selected model after census recording and before the f
   const { recordLaunchSettings } = await import('../agent-daemon.mjs');
   const { populationFile, upsertSoul, showSoul } = await import('../agent-population.mjs');
   const { soulModel, setSoulModel } = await import('../soul-model.mjs');
-  const { auditFile } = await import('../agent-principals.mjs');
+  const { auditFile } = await import('../identity-format.mjs');
   const f = fixture(t);
   const env = { HOME: f.root, XDG_STATE_HOME: path.join(f.root, 'state'), AGENT_BOT_INTERACTION_HOME: path.join(f.root, 'interaction') };
   const options = { env, home: f.root, config: {}, now: () => new Date('2026-10-05T00:00:00.000Z') };

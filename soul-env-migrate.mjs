@@ -23,7 +23,7 @@ import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { readAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { isVersionName, npmHarnessRoot, writeNpmInstallStamp } from './soul-home.mjs';
 import { SPACE_STEP_ID, migrateSpaceIntoSoul, verifySpaceTree } from './soul-memory.mjs';

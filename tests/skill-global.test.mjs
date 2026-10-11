@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { globalRecordPath, globalSkillTarget, loadGlobalSkill, unloadGlobalSkill } from '../skill-workspace.mjs';

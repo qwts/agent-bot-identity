@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer, daemonClient, daemonStateFile } from '../agent-daemon.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { createTurnRegistry } from '../wake-plane.mjs';
 import { DREAM_USAGE, parseDreamArgs, soulDreamCommand } from '../cli/soul-dream.mjs';
 import { main as soulSkillMain } from '../cli/soul-skill.mjs';

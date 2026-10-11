@@ -4,7 +4,7 @@
 // remove, the soul markers for sign, and owner-key audit receipts.
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { appendAuditReceipt } from '../agent-principals.mjs';
+import { appendAuditReceipt } from '../identity-format.mjs';
 import { soulMarkers } from '../owner-action.mjs';
 import { attestedOwnerKeys, keydAttestPins } from '../owner-presence.mjs';
 import { ownerCommand } from '../owner-statement.mjs';

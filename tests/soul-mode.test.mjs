@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { SOUL_MODES, readSoulModes, setSoulMode, soulMode, soulModeCommand, soulModeFile } from '../soul-mode.mjs';
 import { coldWakeFile } from '../cold-wake-settings.mjs';
 import { populationFile, upsertSoul, withRoles, listSouls } from '../agent-population.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { assertOwnerAction, ownerActionSummary } from '../owner-action.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 

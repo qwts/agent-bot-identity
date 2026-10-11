@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { withPermissionReceipts } from '../agent-daemon.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { createContractExecutor } from '../executor-contract.mjs';
 import { coldTurnExecutor } from '../wake-plane.mjs';
 

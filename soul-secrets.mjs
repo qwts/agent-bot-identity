@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { credentialStores, defaultCredentialStore, deleteSoulSecret, readSoulSecret, writeSoulSecret } from './soul-credentials.mjs';
 import { declaredProviders, secretNameOrThrow, secretSetCommand } from './soul-providers.mjs';

@@ -14,7 +14,7 @@ import process from 'node:process';
 import { validateAgentId } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { listSouls, populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { loadConfig } from './config.mjs';
 import { appStoreTarget, legacyAppFolderStatus, migrateAppMetadata, readManagedAppCredential } from './identity-app-store.mjs';
 import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault, itemTitle, managedAppItem, soulAppItem, soulSecretItem } from './credential-names.mjs';

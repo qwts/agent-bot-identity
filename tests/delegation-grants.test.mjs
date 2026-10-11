@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { getProposal, operationDigest } from '../agent-jobs.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { GRANT_OPERATIONS, createGrantLedger, grantOperation, grantPresenceAction } from '../delegation-grants.mjs';
 import { actionDigest, keydPresence } from '../owner-presence.mjs';
 

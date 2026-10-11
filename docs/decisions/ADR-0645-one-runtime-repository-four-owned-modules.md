@@ -164,6 +164,9 @@ Consequences of these rules:
   - soul's read-only `soul-app-declarations.mjs`, through which identity's
     in-process minters learn which soul declares an App (owner decision on
     #645, 2026-10-09);
+  - identity's `identity-format.mjs`, the Agent ID, principal and transport
+    formats and the audit receipt writer (answer 2 and owner decision D2 on
+    #645). It imports only node built-ins and the shared `state-paths.mjs`;
   - identity's `daemon-client.mjs`, the daemon state file, health probe and
     authenticated client that soul, host, cli and comms use to reach the
     daemon (owner decision D3 on #645, 2026-10-11). It stays identity-owned,

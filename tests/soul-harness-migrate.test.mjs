@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { planSoulClean } from '../soul-env-clean.mjs';
 import { HARNESSES_STEP_ID, migrateHarnessesIntoRuntimes, soulEnvMigrateCommand } from '../soul-env-migrate.mjs';

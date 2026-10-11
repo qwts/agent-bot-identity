@@ -23,7 +23,7 @@ import { readBinding } from './agent-binding.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { currentAgentId, readAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 
 // Harness detection alone still leaves an unpinned owner as a delegate.
 // Broken identity markers count too: they must never enable local key reads.

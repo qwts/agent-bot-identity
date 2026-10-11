@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { createComputerUseActivity } from '../computer-use-activity.mjs';
 import { createDaemonServer, daemonStateFile, daemonStatus, withPermissionReceipts } from '../agent-daemon.mjs';
 import { createContractExecutor } from '../executor-contract.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 
 const AGENT = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER = 'agent_22222222-2222-4222-8222-222222222222';

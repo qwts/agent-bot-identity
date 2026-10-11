@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAgentIdentity } from '../agent-identity.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { listSouls, locateSoulDir, recordSoulDisplayName, showSoul } from '../agent-population.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';

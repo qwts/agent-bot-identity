@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSoulModels, recordSoulModels, setSoulModel, soulModel, soulModelCommand, soulModelFile } from '../soul-model.mjs';
 import { populationFile, upsertSoul, withRoles, listSouls } from '../agent-population.mjs';
-import { appendAuditReceipt, auditFile } from '../agent-principals.mjs';
+import { appendAuditReceipt, auditFile } from '../identity-format.mjs';
 import { assertOwnerAction } from '../owner-action.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 

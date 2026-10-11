@@ -143,6 +143,7 @@
     "harness-auth.mjs": "soul",
     "hook-dialects.mjs": "harness",
     "identity-app-store.mjs": "identity",
+    "identity-format.mjs": "identity",
     "identity-app-souls.mjs": "soul",
     "identity-apps.mjs": "identity",
     "inbox-probe.mjs": "identity",
@@ -285,6 +286,7 @@
     "detect-harness.mjs": "Reads its harness vocabulary from organization-profile-schema (PROFILE_HARNESSES); one of the duplicated harness key tables.",
     "file-lock.mjs": "Directory locks with stale-lock reclaim (withLock, reclaimStaleLock), moved from agent-identity.mjs so soul, comms and host guard their state files without importing identity (#645, decision D1). Node built-ins only; reads no credential.",
     "identity-app-souls.mjs": "The census and soul.json declarations identity-apps.mjs needs, passed in as its `souls` port by cli/identity-apps.mjs and the daemon (#645); identity never reads them itself.",
+    "identity-format.mjs": "Identity's format contract (#645, F1 and F4, owner decision D2): the Agent ID, principal and transport formats and the audit receipt writer, so soul, host, cli and comms need no identity internals for them. It imports only node built-ins and the shared state-paths.mjs, so it can be kept byte-identical with identity's copy after the extraction (ADR-0645, answer 2).",
     "metrics.mjs": "Host: records harness sessions from the session-start hook and is read by the daemon; the `metrics` command in cli composes it. Keeps the composition roots acyclic (cli may import host, never the reverse).",
     "organization-profile-schema.mjs": "The profile schema, validator and runtime-config projection. config.json embeds a validated profile snapshot, so config (shared) and detect-harness (harness) read it here; organization-profile (org) keeps external acquisition and re-exports this.",
     "runtime-catalog.mjs": "Reviewed pin catalogue bundled with each release (ADR-0322 decision 8); stays in soul, never sourced from harness-docs.",
@@ -318,6 +320,23 @@
         "readDaemonState"
       ],
       "reason": "Owner answers on #645 (answer 2, 2026-10-09; decision D3, 2026-10-11): daemon-client.mjs is the one sanctioned way soul, host, cli and comms reach the daemon, and daemon.json keeps its format. Listed with its exact exports so widening it is a reviewed map change."
+    },
+    "identity-format.mjs": {
+      "importable_by": [
+        "soul",
+        "host",
+        "cli",
+        "comms"
+      ],
+      "exports": [
+        "appendAuditReceipt",
+        "auditFile",
+        "isAgentId",
+        "validateAgentId",
+        "validatePrincipalId",
+        "validateTransport"
+      ],
+      "reason": "Owner answers on #645 (answer 2, 2026-10-09; decision D2, 2026-10-11): pure identity format helpers and the shared audit receipt writer, which appends the same audit.jsonl lines in-process so receipts work while the daemon is down. Later F1 slices add the remaining format helpers here."
     },
     "soul-app-declarations.mjs": {
       "importable_by": [

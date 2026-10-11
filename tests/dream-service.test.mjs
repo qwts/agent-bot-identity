@@ -15,7 +15,7 @@ import { computePackageRevision, PACKAGE_IGNORE_LIST } from '../soul-package.mjs
 import { upsertSoul } from '../agent-population.mjs';
 import { assertOwnerAction, ownerCredentialRequired, verifyPrincipalOwner } from '../owner-action.mjs';
 import { PROOF_HEADER } from '../binding-proof.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { UPDATE_EVENT } from '../executor-contract.mjs';
 import { createProcessOwnershipPort } from '../process-ownership.mjs';
 import { spawn } from 'node:child_process';

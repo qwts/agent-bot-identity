@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { upsertSoul, showSoul } from '../agent-population.mjs';
 import { createDaemonServer, daemonClient } from '../agent-daemon.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { loadConfig } from '../config.mjs';
 import {

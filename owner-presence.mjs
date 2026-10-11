@@ -30,7 +30,7 @@ import { chmodSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { ANY_DEVELOPER_ID, DEFAULT_KEYD_IDENTIFIER, keydSigner } from './config.mjs';
 import { keydPaths, keydRequest, readKeydRecord } from './keyd-client.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';

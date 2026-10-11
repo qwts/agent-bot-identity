@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { readAgentIdentity, validateAgentId } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import {

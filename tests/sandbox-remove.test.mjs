@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, w
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { recordSoulSighting, setSoulSandbox, upsertSoul } from '../agent-population.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { sandboxCommand, sandboxRemovalInventory } from '../sandbox.mjs';
 import { runSandboxRemoval } from '../sandbox-remove.mjs';
 import { incomingRoot } from '../sandbox-export.mjs';

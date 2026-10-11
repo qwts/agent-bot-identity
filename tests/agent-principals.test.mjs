@@ -7,10 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  appendAuditReceipt,
   applyAuthorizationChanges,
   assertAuthorized,
-  auditFile,
   authorizeSouls,
   bindTransport,
   enrollPrincipal,
@@ -23,6 +21,7 @@ import {
   setDefaultSoul,
   setOperations,
 } from '../agent-principals.mjs';
+import { appendAuditReceipt, auditFile } from '../identity-format.mjs';
 
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const SOUL_A = 'agent_11111111-1111-4111-8111-111111111111';
