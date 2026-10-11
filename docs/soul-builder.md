@@ -58,9 +58,11 @@ A native consumer receives no duplicate configuration folder.
 
 "None yet" and "Unsupported" describe adapters in this slice, not a claim
 that a harness lacks the capability. "Won't do" cells are closed for now by
-owner decision on #378 (2026-10-11), because the upstream format they would
-target is missing, replaced or experimental (see [Won't do for now](#wont-do-for-now));
-they are revisited only when that upstream changes. Either way, subagents and
+owner decision on #378 (2026-10-11) (see [Won't do for now](#wont-do-for-now)).
+Cursor, Kiro and Gemini CLI cells wait on an upstream format that is missing,
+replaced or experimental, and are revisited when that upstream changes. Muse cells
+wait on a verified definition adapter in this repo, which needs no upstream
+change. Either way, subagents and
 commands without adapters are explicitly listed under `unsupported` in the
 build report. A "Shared" cell
 is a file another harness's adapter writes that this harness's docs say it reads
@@ -879,18 +881,20 @@ close that gap.
 
 ## Won't do for now
 
-By owner decision on #378 (2026-10-11), these stay unsupported until the
-upstream harness changes. The build report keeps listing every declaration
-they would carry, by name, under that harness's `unsupported` (`subagents`,
-`commands`, `settings`, `permissions`, `hooks`), so nothing is dropped in
-silence:
+By owner decision on #378 (2026-10-11), these stay unsupported. The Cursor,
+Kiro and Gemini CLI rows wait on an upstream change. The Muse row waits on a
+verified Muse definition adapter in this repo. The build report lists the
+declarations of the kinds it tracks by name under that harness's
+`unsupported`: `subagents`, `commands`, `settings`, `permissions` and `hooks`.
+Instructions, skills and MCP get no `unsupported` entry, so for Muse the
+table below is the record that they are not rendered:
 
 | Harness | Primitive | Why |
 | --- | --- | --- |
 | Cursor | Commands | Cursor replaced commands with skills: its commands page now redirects to [migrating commands to skills](https://cursor.com/help/customization/skills#how-do-i-migrate-commands-to-skills), so there is no current command format to write. Cursor already reads the shared skills. |
 | Kiro | Commands | [Prompts](https://kiro.dev/docs/cli/chat/manage-prompts/) live in `.kiro/prompts/`, but their file name and metadata format is not documented. |
 | Gemini CLI | Subagents | [`.gemini/agents/*.md`](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md) is switched on only by `experimental.enableAgents`, so it is not a stable format. |
-| Muse | Everything but launch | This repo has no verified Muse definition adapter, so it renders no instructions, skills, MCP, subagents, commands, settings or hooks for Muse. Muse keeps its ACP launch row. |
+| Muse | Everything but launch | This repo has no verified Muse definition adapter, so it writes no Muse-specific files: no Muse path for instructions, skills, MCP, subagents, commands, settings or hooks. Muse's report can still list `instructions` and `skills` under `rendered`, because those flags count the build's shared output; that is not evidence Muse reads it. Muse keeps its ACP launch row. |
 
 ## Follow-ups
 
