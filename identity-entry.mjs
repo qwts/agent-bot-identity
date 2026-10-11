@@ -17,8 +17,8 @@
 // in-process. Retire and finalize take no callback: a caller that keeps a
 // second store in step writes its own store first and this record last
 // (owner decision on #645, revert option 1), so identity never restores a
-// record a caller hands it. Initialize-app and record-package-revision are
-// not here.
+// record a caller hands it; initialize-app works the same way.
+// Record-package-revision stays in-process and is not here.
 
 import path from 'node:path';
 import process from 'node:process';
@@ -31,6 +31,7 @@ import {
   ensureAgentIdentity,
   finalizeAgentIdentity,
   identityFieldsFromEnv,
+  initializeAgentApp,
   mintAgentIdentity,
   readAgentIdentity,
   recordAgentEvidence,
@@ -161,6 +162,12 @@ export const IDENTITY_OPS = Object.freeze({
       ...(transcriptSha256 === undefined ? {} : { transcriptSha256 }),
       ...stateDirOption(stateDir), ...nowOption(now),
     });
+  },
+  // Fills absent App metadata on a soul being joined. The caller has
+  // already recorded the App in the census and puts that back if this fails.
+  'initialize-app'(input) {
+    const { id, appSlug, stateDir, now } = only(input, ['id', 'appSlug', 'stateDir', 'now']);
+    return initializeAgentApp(text('id', id), text('appSlug', appSlug), { ...stateDirOption(stateDir), ...nowOption(now) });
   },
   'mint-bind-token'(input) {
     const { gitDir, worktree, agentId, now } = only(input, ['gitDir', 'worktree', 'agentId', 'now']);

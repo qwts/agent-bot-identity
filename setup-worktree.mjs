@@ -9,13 +9,10 @@ import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { resolveAgentSlug, pinnedSlug } from './resolve-agent.mjs';
 import { AGENT_ID_KEYS } from './identity-format.mjs';
-import { mintBindToken, readBinding } from './agent-binding.mjs';
+import { readBinding } from './agent-binding.mjs';
 import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
-import {
-  discoverTranscript,
-} from './agent-identity.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { readAppMetadata, writeAppMetadata } from './identity-app-store.mjs';
@@ -65,7 +62,7 @@ function sessionIdentity() {
   const id = fromEnv ?? binding?.agentId;
   let identity = id ? identityOp('read', { id }) : null;
   if (!identity) {
-    const transcript = discoverTranscript();
+    const transcript = identityOp('discover-transcript');
     if (!transcript) return null;
     // One child reads every candidate; the first unreadable one fails the
     // lookup, as reading them one by one did.
@@ -84,7 +81,8 @@ function sessionIdentity() {
 
 export function prepareWorktreeBinding(options) {
   if (readBinding({ env: {}, gitDir: options.gitDir })) return 'binding reused';
-  mintBindToken(options);
+  const { gitDir, worktree, agentId } = options;
+  identityOp('mint-bind-token', { gitDir, worktree, agentId });
   return 'bind token minted';
 }
 
