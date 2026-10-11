@@ -20,6 +20,10 @@ const SECONDS = Math.floor(NOW / 1000);
 const NONCE = 'abcdefghijklmnopqrstuvwx';
 const SCOPE = { repo: 'qwts/agent-bot-identity', number: 753 };
 const HAS_SSH_KEYGEN = spawnSync('ssh-keygen', ['-?'], { stdio: 'ignore' }).error === undefined;
+// keyd's answer about the owner pins (#753), standing in for
+// owner-presence.mjs's attestedOwnerKeys: vouched for, or not.
+const vouched = async () => ({ attested: true, generation: 1 });
+const unvouched = async () => ({ attested: false, code: 'pins-mismatch', reason: 'the owner keys on file are not the ones the owner approved through agent-bot-keyd' });
 
 function home(t) {
   const dir = mkdtempSync(join(tmpdir(), 'owner-statement-'));
@@ -245,7 +249,7 @@ test('the challenge gate reaches the terminal reply flow only after unavailable 
   const proof = await assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: now, challengeHost: () => 'remote-host',
     presence: async () => { asked += 1; throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
-    signedChallenges: true, challengePrompt: async (challenges) => {
+    attestPins: vouched, challengePrompt: async (challenges) => {
       promptCount += 1;
       const summary = challenges[0].payload.text;
       assert.equal(summary, ownerActionSummary(action, { env: ctx.env }));
@@ -265,9 +269,9 @@ test('the challenge gate reaches the terminal reply flow only after unavailable 
 
 // The pin file is writable by anything running as the owner (#753): a soul
 // that clears its markers can pin a software-made "security key" and sign
-// its own challenge. Until pins are integrity-protected the terminal gate
-// never reads them, and keyd or the administrator dialog decides.
-test('by default the owner gate ignores a forged pin and its signed reply, and asks the dialog', async (t) => {
+// its own challenge. The terminal gate trusts the pins only when keyd vouches
+// for them on this request; otherwise keyd or the administrator dialog decides.
+test('the owner gate ignores a forged pin keyd does not vouch for, and asks the dialog', async (t) => {
   const ctx = command(t);
   const forged = securityKey();
   writeOwnerKeys([pinFor(forged, { name: 'forged' })], { env: ctx.env });
@@ -280,14 +284,19 @@ test('by default the owner gate ignores a forged pin and its signed reply, and a
   const options = {
     env: ctx.env, cwd: ctx.dir, markers: () => [],
     presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
-    challengePrompt: async (challenges) => sign(challenges),
+    attestPins: unvouched, challengePrompt: () => assert.fail('pins keyd does not vouch for raise no challenge'),
     fallbackConsent: async (asked) => { dialog.push(asked); return { method: 'consent' }; },
   };
   assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
   assert.deepEqual(await presenceOrConsent(action, options), { method: 'consent' });
-  assert.deepEqual(dialog, [action, action]);
-  // Turned on, the same forgery would answer: the guard is what stops it.
-  assert.equal((await assertOwnerAction(action, { ...options, signedChallenges: true })).method, 'statement');
+  // With no keyd here at all (the default attester, a scratch HOME), the same.
+  const { attestPins: _, ...noKeyd } = options;
+  assert.deepEqual(await assertOwnerAction(action, noKeyd), { method: 'consent' });
+  // An attester that throws is no vouching either.
+  assert.deepEqual(await assertOwnerAction(action, { ...options, attestPins: async () => { throw new Error('keyd crashed'); } }), { method: 'consent' });
+  assert.deepEqual(dialog, [action, action, action, action]);
+  // Vouched for, the same signature would answer: keyd's record is what stops it.
+  assert.equal((await assertOwnerAction(action, { ...options, attestPins: vouched, challengePrompt: async (challenges) => sign(challenges) })).method, 'statement');
   // A pin file that cannot be read never blocks the dialog either.
   writeFileSync(ownerKeysPath({ env: ctx.env }), '{ not json');
   assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
@@ -305,7 +314,7 @@ test('the owner-action presence wrapper checks presence once before the challeng
   const options = {
     env: ctx.env, cwd: ctx.dir, markers: () => [], challengeNow: () => NOW, challengeHost: () => 'remote-host',
     presence: async () => { presenceCalls += 1; throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
-    signedChallenges: true, challengePrompt: async ([challenge]) => {
+    attestPins: vouched, challengePrompt: async ([challenge]) => {
       challengeCalls += 1;
       if (signedReply) return signedReply;
       const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
@@ -332,7 +341,7 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
   const unavailable = async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); };
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    signedChallenges: true, challengePrompt: async (challenges) => {
+    attestPins: vouched, challengePrompt: async (challenges) => {
       const altered = { ...challenges[0].payload, text: 'different action' };
       const segment = encodePayload(altered);
       return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
@@ -343,7 +352,7 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
 
   const disabled = await assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable, allowChallenge: false,
-    signedChallenges: true, challengePrompt: () => assert.fail('enrollment and removal never use the signed fallback'),
+    attestPins: vouched, challengePrompt: () => assert.fail('enrollment and removal never use the signed fallback'),
     fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
   });
   assert.deepEqual(disabled, { method: 'consent' });
@@ -351,7 +360,7 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
 
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: async () => { throw Object.assign(new Error('declined'), { code: 'owner-declined' }); },
-    signedChallenges: true, challengePrompt: () => assert.fail('owner-declined is final'),
+    attestPins: vouched, challengePrompt: () => assert.fail('owner-declined is final'),
     fallbackConsent: () => assert.fail('owner-declined never reaches consent'),
   }), { code: 'owner-declined' });
 });
@@ -362,7 +371,7 @@ test('hosts with no enrolled owner keys retain the existing administrator fallba
   const proof = await assertOwnerAction('owner action without enrolled pins', {
     env: ctx.env, cwd: ctx.dir, markers: () => [],
     presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
-    signedChallenges: true, challengePrompt: () => assert.fail('an empty pin store does not produce a challenge'),
+    attestPins: vouched, challengePrompt: () => assert.fail('an empty pin store does not produce a challenge'),
     fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
   });
   assert.deepEqual(proof, { method: 'consent' });
@@ -379,7 +388,7 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
   writeOwnerKeys([pinFor(keydKey(), { store: 'keyd', name: 'local-keyd' })], { env: ctx.env });
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    signedChallenges: true, challengePrompt: () => assert.fail('keyd pins are not supported by this CLI challenge flow'),
+    attestPins: vouched, challengePrompt: () => assert.fail('keyd pins are not supported by this CLI challenge flow'),
     fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
   }), { code: 'owner-unreachable' });
   assert.equal(fallback, 0, 'any enrolled key disables administrator fallback');
@@ -388,7 +397,7 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
   writeOwnerKeys([pin], { env: ctx.env });
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    signedChallenges: true, challengePrompt: async ([challenge]) => {
+    attestPins: vouched, challengePrompt: async ([challenge]) => {
       // Removing the key while the owner signs must invalidate the pending reply.
       writeOwnerKeys([], { env: ctx.env });
       const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
@@ -403,7 +412,7 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
   writeOwnerKeys([pin], { env: ctx.env });
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable,
-    signedChallenges: true, challengePrompt: async ([challenge]) => {
+    attestPins: vouched, challengePrompt: async ([challenge]) => {
       writeOwnerKeys([replacement], { env: ctx.env });
       const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
       const segment = encodePayload(payload);
@@ -412,6 +421,26 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
     fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
   }), { code: 'owner-unreachable' });
   assert.equal(fallback, 0, 'a replacement key cannot inherit an old challenge');
+
+  // keyd stops vouching while the owner signs: the reply goes unused and the
+  // dialog asks, once; keyd was asked about the pins as they were re-read.
+  writeOwnerKeys([pin], { env: ctx.env });
+  const asked = [];
+  let prompts = 0;
+  const flipping = async (pins) => { asked.push(pins); return asked.length === 1 ? vouched() : unvouched(); };
+  const proof = await assertOwnerAction(action, {
+    env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable, attestPins: flipping,
+    challengePrompt: async ([challenge]) => {
+      prompts += 1;
+      const payload = { ...challenge.payload, iat: challenge.payload.iat + 1 };
+      const segment = encodePayload(payload);
+      return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
+    },
+    fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
+  });
+  assert.deepEqual(proof, { method: 'consent' });
+  assert.deepEqual([prompts, fallback], [1, 1]);
+  assert.deepEqual(asked, [[pin], [pin]]);
 });
 
 test('owner challenge prompt refuses noninteractive input and has a finite wait', async () => {
@@ -591,15 +620,29 @@ test('verify reads a token, a file or stdin and answers in JSON', async (t) => {
   const block = armorStatement(skToken(key));
   const file = join(ctx.dir, 'comment.md');
   writeFileSync(file, `See below.\n${block}`);
-  // A valid signature against unprotected pins is reported, never approval (#753).
+  // A valid signature against pins keyd does not vouch for is reported, never
+  // approval (#753), with keyd's reason.
   const result = await ctx.run(['verify', file, '--repo', SCOPE.repo, '--issue', '753', '--json']);
   assert.deepEqual([result.ok, result.code, result.signature], [false, 'owner-pins-unprotected', 'valid']);
   const printed = JSON.parse(ctx.out.at(-1));
   assert.equal(printed.text, 'Ship the owner sign slice.');
-  assert.match(printed.message, /not integrity-protected.*do not act on this statement/);
-  // Once pins are protected, the same check is the owner's approval.
-  const protectedResult = await ownerCommand(['verify', file, '--repo', SCOPE.repo, '--issue', '753'], {
-    env: ctx.env, home: ctx.dir, now: () => NOW, write: (text) => ctx.out.push(text), pinsProtected: true });
+  assert.match(printed.message, /does not vouch for the owner pins.*do not act on this statement/);
+  assert.equal(printed.pins.code, 'presence-unavailable');
+  const run = (argv, attestPins) => ownerCommand(argv, {
+    env: ctx.env, home: ctx.dir, now: () => NOW, write: (text) => ctx.out.push(text), attestPins });
+  const asked = [];
+  const mismatch = await run(['verify', file, '--repo', SCOPE.repo, '--issue', '753'], async (pins) => { asked.push(pins); return unvouched(); });
+  assert.deepEqual([mismatch.ok, mismatch.pins.code], [false, 'pins-mismatch']);
+  assert.match(ctx.out.at(-1), /^NOT owner approval: .*\(the owner keys on file are not the ones the owner approved/);
+  // keyd is asked about exactly the pins the signature was checked against.
+  assert.deepEqual(asked, [readOwnerKeys({ env: ctx.env })]);
+  // An attester that fails, or answers anything but `attested: true`, is not approval.
+  for (const attestPins of [async () => { throw Object.assign(new Error('keyd crashed'), { code: 'keyd-unavailable' }); },
+    async () => ({ attested: 'yes' }), async () => null]) {
+    assert.equal((await run(['verify', file, '--repo', SCOPE.repo, '--issue', '753', '--json'], attestPins)).code, 'owner-pins-unprotected');
+  }
+  // When keyd vouches for the pins, the same check is the owner's approval.
+  const protectedResult = await run(['verify', file, '--repo', SCOPE.repo, '--issue', '753'], vouched);
   assert.equal(protectedResult.ok, true);
   assert.match(ctx.out.at(-1), /^verified owner statement \(key yubikey\)/);
   const stdin = await ownerCommand(['verify', '-'], { env: ctx.env, home: ctx.dir, now: () => NOW, write: () => {}, readStdin: () => block });
@@ -629,10 +672,11 @@ test('the agent-bot owner command verifies offline and exits non-zero on a refus
   writeOwnerKeys([pinFor(key)], { env });
   const token = skToken(key, { iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 });
   const cli = (args) => spawnSync(process.execPath, [CLI, 'owner', ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir } });
-  // A valid signature exits 1 until pins are integrity-protected (#753).
+  // A valid signature exits 1 where keyd does not vouch for the pins (#753):
+  // here there is no keyd at all.
   const valid = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '753']);
   assert.equal(valid.status, 1, valid.stderr);
-  assert.match(valid.stdout, /^NOT owner approval: the owner pins on this host are not integrity-protected/);
+  assert.match(valid.stdout, /^NOT owner approval: agent-bot-keyd does not vouch for the owner pins on this host.*\(agent-bot-keyd is not set up here/);
   assert.match(valid.stdout, /\nsignature valid for owner statement \(key yubikey\)/);
   assert.doesNotMatch(valid.stdout, /^verified owner/m);
   const json = cli(['verify', token, '--repo', SCOPE.repo, '--issue', '753', '--json']);

@@ -224,12 +224,13 @@ A phone store (passkey) can be added later on the same interface.
 
 ### 6. How agents treat a verified statement
 
-> **While pins are unprotected (#753):** the owner pin file is writable by
-> anything running as the owner, a soul included, so `agent-bot owner verify`
-> never accepts a statement yet. A valid signature answers
-> `owner-pins-unprotected` (exit 1, "NOT owner approval"). Until pins are
-> integrity-protected, no statement is approval: agents ask the owner
-> directly.
+> **Pins count only as keyd vouches for them (#753):** the owner pin file is
+> writable by anything running as the owner, a soul included, so `agent-bot
+> owner verify` accepts a statement only when keyd's signed record of the
+> owner keys (`owner/pins-status`) matches the pins on that call. Otherwise a
+> valid signature answers `owner-pins-unprotected` (exit 1, "NOT owner
+> approval"), no statement is approval, and agents ask the owner directly.
+> See [Readers](../keyd-protocol.md#readers).
 
 An agent treats a statement as owner approval only when all of these hold:
 

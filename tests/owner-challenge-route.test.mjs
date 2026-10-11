@@ -2,10 +2,10 @@
 // 4, #753): where presence is unavailable and an SSH security key is pinned,
 // the daemon issues challenges, records them, and accepts each signed reply
 // once, for that decision only. A software SSH key, which a soul in the
-// owner's account could read, never answers a decision route. The daemon
-// keeps all of this off by default (`signedChallengeRoutes`) until owner
-// pins are integrity-protected; these tests turn it on through
-// decisionOwnerGate with a ledger, and check the default stays on the dialog.
+// owner's account could read, never answers a decision route. The pins count
+// only on a request where keyd vouches for them (`attest`); most tests here
+// stand in a keyd that does, and the last ones check that without it the
+// route stays on the dialog.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -28,6 +28,10 @@ const OPERATION = { permission: { toolName: 'Bash', input: { command: 'git push'
 const HAS_SSH_KEYGEN = spawnSync('ssh-keygen', ['-?'], { stdio: 'ignore' }).error === undefined;
 const NO_KEYGEN = !HAS_SSH_KEYGEN && 'ssh-keygen is not installed';
 const roots = [];
+// keyd's answer about the owner pins (#753), standing in for
+// owner-presence.mjs's attestedOwnerKeys.
+const vouched = async () => ({ attested: true, generation: 1 });
+const unvouched = async () => ({ attested: false, code: 'keyd-untrusted', reason: 'not a record keyd controls' });
 
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
@@ -104,7 +108,7 @@ async function challengesFrom(hook, action, summary = 'approve Bash for the soul
 
 test('a ledger hook is silent without pins or with only software keys, and unreachable with only keyd pins', { skip: NO_KEYGEN }, async () => {
   const { env } = scratch();
-  const ledger = createChallengeLedger({ env });
+  const ledger = createChallengeLedger({ attest: vouched, env });
   assert.equal(await ledger.hook({ request: 'p1' })('approve x', { summary: 'approve x' }), null);
   const line = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOmoHG3qbkHRhjuhLC3xq3DwBX6nqEKXz6WnSZAvXx9M';
   writeOwnerKeys([{
@@ -128,7 +132,7 @@ test('a signed reply answers its own challenge once, for that request and action
   const owner = ownerKey(root, env);
   const { pin } = owner;
   writeOwnerKeys([pin], { env });
-  const ledger = createChallengeLedger({ env });
+  const ledger = createChallengeLedger({ attest: vouched, env });
   const action = 'approve Bash for soul once: push';
 
   const [challenge] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
@@ -159,7 +163,7 @@ test('a failed reply spends the challenge, and a fresh challenge replaces an old
   const owner = ownerKey(root, env);
   const { pin } = owner;
   writeOwnerKeys([pin], { env });
-  const ledger = createChallengeLedger({ env });
+  const ledger = createChallengeLedger({ attest: vouched, env });
   const action = 'approve Bash for soul once: push';
 
   const [first] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
@@ -186,7 +190,7 @@ test('a reply is checked against the pins as they are now, and challenges expire
   const { pin } = owner;
   writeOwnerKeys([pin], { env });
   let clock = Date.now();
-  const ledger = createChallengeLedger({ env, now: () => clock });
+  const ledger = createChallengeLedger({ attest: vouched, env, now: () => clock });
   const action = 'approve Bash for soul once: push';
 
   const [challenge] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
@@ -203,16 +207,39 @@ test('a reply is checked against the pins as they are now, and challenges expire
   assert.equal(await code(ledger.hook({ request: 'p1', statement: lateToken })(action, { summary: 'x' })), 'statement-scope-mismatch');
 });
 
+test('the ledger asks keyd about the pins it read, on each request, and keeps the dialog when keyd stops vouching', async () => {
+  const { root, env } = scratch();
+  const owner = ownerKey(root, env);
+  writeOwnerKeys([owner.pin], { env });
+  const asked = [];
+  let answer = { attested: true, generation: 2 };
+  const ledger = createChallengeLedger({ env, attest: async (pins) => { asked.push(pins); return answer; } });
+  const action = 'approve Bash for soul once: push';
+  const [challenge] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
+  assert.deepEqual(asked, [[owner.pin]]);
+  // keyd no longer vouches when the reply comes: the reply is spent unused
+  // and the dialog decides.
+  answer = { attested: false, code: 'pins-stale', reason: 'older record' };
+  assert.equal(await ledger.hook({ request: 'p1', statement: signed(challenge.payload, owner) })(action, { summary: 'x' }), null);
+  assert.equal(asked.length, 2);
+  assert.equal(ledger.size, 0);
+  // Nor does a new request raise a challenge, and an attester that throws is
+  // no vouching either.
+  assert.equal(await ledger.hook({ request: 'p2' })(action, { summary: 'x' }), null);
+  const failing = createChallengeLedger({ env, attest: async () => { throw new Error('keyd crashed'); } });
+  assert.equal(await failing.hook({ request: 'p3' })(action, { summary: 'x' }), null);
+});
+
 test('the ledger holds a bounded number of pending decisions', async () => {
   const { root, env } = scratch();
   writeOwnerKeys([ownerKey(root, env).pin], { env });
-  const ledger = createChallengeLedger({ env, limit: 3 });
+  const ledger = createChallengeLedger({ attest: vouched, env, limit: 3 });
   for (const request of ['p1', 'p2', 'p3', 'p4']) await challengesFrom(ledger.hook({ request }), 'approve x');
   assert.equal(ledger.size, 3);
 });
 
 // keyd cannot ask, and the dialog refuses unless a test lets it answer.
-async function daemonFor(env, { challenges = createChallengeLedger({ env }), dialog = async () => { throw new Error('the dialog was reached'); } } = {}) {
+async function daemonFor(env, { challenges = createChallengeLedger({ attest: vouched, env }), dialog = async () => { throw new Error('the dialog was reached'); } } = {}) {
   const ownerGate = decisionOwnerGate({
     env, challenges,
     presence: async () => { throw Object.assign(new Error('keyd is not running'), { code: 'presence-unavailable' }); },
@@ -354,15 +381,20 @@ test('a soul holding the daemon token and a software key cannot approve its own 
   }
 });
 
-// The default: no ledger. A pin the soul wrote into the pin file itself, a
-// security key made in software, signs a reply; the route never reads it
-// and asks the dialog.
-test('with signed challenges off, a decision route asks only keyd or the dialog', async () => {
+// A pin the soul wrote into the pin file itself, a security key made in
+// software, signs a reply. With no ledger, with a keyd that does not vouch
+// for the pins, or with no keyd at all (the default attester in a scratch
+// HOME), the route never trusts it and asks the dialog.
+for (const [label, challenges] of [
+  ['no ledger', () => null],
+  ['pins keyd does not vouch for', (env) => createChallengeLedger({ env, attest: unvouched })],
+  ['no keyd to vouch', (env) => createChallengeLedger({ env })],
+]) test(`with ${label}, a decision route asks only keyd or the dialog`, async () => {
   const { root, env } = scratch();
   const forged = ownerKey(root, env, 'forged');
   writeOwnerKeys([forged.pin], { env });
   const asked = [];
-  const { server, call, close } = await daemonFor(env, { challenges: null, dialog: async (action) => { asked.push(action); return { method: 'consent' }; } });
+  const { server, call, close } = await daemonFor(env, { challenges: challenges(env), dialog: async (action) => { asked.push(action); return { method: 'consent' }; } });
   try {
     const waiting = server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
     const [row] = (await (await call('/v0/approvals')).json()).proposals;
@@ -390,7 +422,7 @@ test('a malformed pin file never blocks a decision: the dialog asks', async () =
     writeFileSync(file, '{ not json', { mode: 0o600 });
     const asked = [];
     const { server, call, close } = await daemonFor(env, {
-      challenges: challenges && createChallengeLedger({ env }),
+      challenges: challenges && createChallengeLedger({ attest: vouched, env }),
       dialog: async (action) => { asked.push(action); return { method: 'consent' }; },
     });
     try {

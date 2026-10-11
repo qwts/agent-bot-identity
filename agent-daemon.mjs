@@ -415,12 +415,10 @@ export function createDaemonServer({
   // Deciding a soul's tool request asks for the owner's presence (#438):
   // (action, { principal, request, statement }) => proof, throwing when the
   // owner does not confirm. Tests pass a fake; the default asks keyd, then
-  // the dialog. Signed challenges on the decision routes (#753) stay off
-  // until owner pins are integrity-protected: today a soul running as the
-  // owner can write the pin file and pin a key it made itself. Leave
-  // `signedChallengeRoutes` false until then.
-  signedChallengeRoutes = false,
-  ownerGate = decisionOwnerGate({ env, challenges: signedChallengeRoutes ? createChallengeLedger({ env }) : null }),
+  // the dialog. A signed challenge (#753) answers a decision route only on a
+  // request where keyd vouches for the owner pin file, which a soul running
+  // as the owner could otherwise write; the ledger asks keyd each time.
+  ownerGate = decisionOwnerGate({ env, challenges: createChallengeLedger({ env }) }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),

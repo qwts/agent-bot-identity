@@ -6,7 +6,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from '../agent-principals.mjs';
 import { soulMarkers } from '../owner-action.mjs';
-import { keydAttestPins } from '../owner-presence.mjs';
+import { attestedOwnerKeys, keydAttestPins } from '../owner-presence.mjs';
 import { ownerCommand } from '../owner-statement.mjs';
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -14,6 +14,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // Enrolment and removal change the trust roots: keyd shows the owner
     // the whole new key set and records it, or nothing changes (#753).
     attest: (pins, options) => keydAttestPins(pins, options),
+    // verify counts a signature as the owner's only when keyd vouches, for
+    // this call, that the pins read are the set the owner approved (#753).
+    attestPins: (pins, options) => attestedOwnerKeys(pins, options),
     markers: ({ env, cwd }) => soulMarkers({ env, cwd }),
     receipt: (fields, options) => appendAuditReceipt(fields, options),
   }).then((result) => {

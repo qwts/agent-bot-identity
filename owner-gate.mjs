@@ -20,7 +20,8 @@
 //      a same-account process can stand up a socket that passes custody
 //      checks and answers ok; or
 //    - an SSH-signed reply to the one-time CLI challenge (`owner-action.mjs`,
-//      #753) when presence is unavailable and a local SSH pin is enrolled.
+//      #753) when presence is unavailable and a local SSH pin is enrolled
+//      that agent-bot-keyd vouches for on this request.
 //      This is a user-mediated terminal path, not a daemon decision route; or
 //    - the macOS authorization dialog (owner-approval.mjs, #204), which needs
 //      a person to authenticate as an administrator. It remains the fallback

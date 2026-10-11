@@ -16,6 +16,7 @@ import {
   verifyOwnerChallenge,
 } from './owner-statement.mjs';
 import { verifyPrincipalOwner } from './owner-principal.mjs';
+import { attestedOwnerKeys } from './owner-presence.mjs';
 
 export { consentOwner, ownerCredentialRequired, soulMarkers } from './owner-gate.mjs';
 export { verifyPrincipalOwner } from './owner-principal.mjs';
@@ -23,16 +24,24 @@ export { keydPresenceWithoutDialog } from './owner-presence.mjs';
 
 export const populationSouls = (env = process.env) => () => listSouls({ file: populationFile({ env }) });
 
+// Whether keyd vouches, on this request, for exactly the owner pins just read
+// (#753). An attester that fails is no vouching: the caller keeps the dialog.
+async function vouchedFor(attest, keys, env) {
+  try { return (await attest(keys, { env }))?.attested === true; } catch { return false; }
+}
+
 function sharedGateOptions(options) {
   const env = options.env ?? process.env;
   const list = populationSouls(env);
-  // The terminal's signed-challenge fallback (#822) trusts the owner pin
+  // The terminal's signed-challenge fallback (#822) reads the owner pin
   // file, which anything running as the owner can write: a soul could pin a
-  // software-made "security key" and sign its own challenge. It stays off
-  // until pins are integrity-protected (#753); only `signedChallenges: true`
-  // turns it on, and nothing does yet. Without it the gate asks keyd, then
-  // the administrator dialog, and never reads the pins.
-  const allowChallenge = options.signedChallenges === true && options.allowChallenge !== false;
+  // software-made "security key" and sign its own challenge. So the pins
+  // count only when keyd vouches for them, on this request (#753): when
+  // presence is unavailable, keyd is asked once more for its signed record of
+  // the owner keys, and any doubt (no keyd, another key set, an untrusted or
+  // older record) leaves the gate on the administrator dialog, as before.
+  const allowChallenge = options.allowChallenge !== false;
+  const attest = options.attestPins ?? attestedOwnerKeys;
   return {
     ...options,
     env,
@@ -43,8 +52,12 @@ function sharedGateOptions(options) {
     // behind the daemon's own default-off guard), so it never prompts on the
     // daemon's terminal.
     challenge: typeof options.challenge === 'function' ? options.challenge : allowChallenge ? async (pendingAction, { summary }) => {
-      const keys = readOwnerKeys({ env });
+      // A pin file that cannot be read, or that keyd does not vouch for, is
+      // no pins: the dialog asks.
+      let keys;
+      try { keys = readOwnerKeys({ env }); } catch { return null; }
       if (keys.length === 0) return null;
+      if (!await vouchedFor(attest, keys, env)) return null;
       const sshKeys = keys.filter((pin) => pin.store === 'ssh');
       if (sshKeys.length === 0) {
         throw statementError('owner-unreachable', 'owner pins exist, but this CLI challenge flow can use only enrolled SSH keys; nothing was changed');
@@ -58,7 +71,10 @@ function sharedGateOptions(options) {
       // Pin changes made while the owner is signing take effect immediately.
       // A reply is checked against the current store, never the stale snapshot
       // that was used to create the prompt.
-      const currentKeys = readOwnerKeys({ env });
+      // keyd is asked again, with a new nonce, for the pins as they are now.
+      let currentKeys;
+      try { currentKeys = readOwnerKeys({ env }); } catch { return null; }
+      if (!await vouchedFor(attest, currentKeys, env)) return null;
       const stillPinned = currentKeys.some((pin) => pin.store === 'ssh'
         && challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint));
       if (!stillPinned) {
@@ -102,11 +118,10 @@ export function ownerActionSummary(action, options = {}) {
 // names its `request` (a proposal ID); other daemon callers pass none and
 // keep the default gate. A route never answers through a terminal prompt.
 // Without `challenges` it asks keyd, then the administrator dialog, and
-// reads no owner pins: the pin file is writable by anything running as the
-// owner, a soul included, so nothing in it may stand in for the owner until
-// pins are integrity-protected. With a ledger from createChallengeLedger,
-// a security-key pin may answer instead; the daemon passes one only when
-// its default-off `signedChallengeRoutes` guard is on.
+// reads no owner pins. With a ledger from createChallengeLedger, which the
+// daemon always passes, a security-key pin may answer instead, but only on a
+// request where keyd vouches for the pin file (#753): the file is writable by
+// anything running as the owner, a soul included.
 export function decisionOwnerGate({ env = process.env, challenges = null, ...gateOptions } = {}) {
   return (action, { principal = null, request = null, statement = null } = {}) => {
     const route = request === null ? {}
@@ -116,8 +131,10 @@ export function decisionOwnerGate({ env = process.env, challenges = null, ...gat
 }
 
 // Signed challenges for the daemon's decision routes (ADR-0753 section 4,
-// #753), off until owner pins are integrity-protected (see
-// decisionOwnerGate). Where presence is unavailable and a security-key owner pin exists,
+// #753). The owner pins count only on a request where keyd's signed record of
+// the owner keys matches them (`attest`, owner-presence.mjs's
+// attestedOwnerKeys); otherwise the route keeps the dialog, as with no pins.
+// Where presence is unavailable and a security-key owner pin exists,
 // a decision without a reply is refused with `owner-challenge-required` and
 // the unsigned challenges, which the gate records here. The owner signs one
 // with `owner sign --challenge` wherever the key is, and the caller repeats
@@ -130,7 +147,7 @@ export function decisionOwnerGate({ env = process.env, challenges = null, ...gat
 // memory: a restart drops them.
 const securityKeyPin = (pin) => pin.store === 'ssh' && pin.softwareKey !== true && /^sk-/.test(pin.publicKey);
 
-export function createChallengeLedger({ env = process.env, now = Date.now, host = localHost, limit = 64 } = {}) {
+export function createChallengeLedger({ env = process.env, now = Date.now, host = localHost, limit = 64, attest = attestedOwnerKeys } = {}) {
   const pending = new Map();
   const prune = () => {
     const seconds = Math.floor(now() / 1000);
@@ -148,6 +165,12 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
         // A pin file that cannot be read never blocks a decision: the dialog asks.
         try { keys = readOwnerKeys({ env }); } catch { return null; }
         if (keys.length === 0) return null;
+        // Pins keyd does not vouch for on this request are no pins: the dialog
+        // asks, and a reply to a pending challenge is spent unused.
+        if (!await vouchedFor(attest, keys, env)) {
+          if (statement !== null && statement !== undefined && statement !== '') pending.delete(request);
+          return null;
+        }
         const securityKeys = keys.filter(securityKeyPin);
         if (securityKeys.length === 0) {
           // Software SSH keys alone fall back to the dialog, as with no pins.
@@ -170,9 +193,9 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
         if (!entry || entry.action !== action) {
           throw statementError('statement-scope-mismatch', 'no owner challenge is pending for this decision; repeat it without a statement for a new one');
         }
-        // Checked against the pins as they are now, not when the challenge was made.
-        let currentKeys;
-        try { currentKeys = readOwnerKeys({ env }).filter(securityKeyPin); } catch { currentKeys = []; }
+        // Checked against the pins as they are now, read and vouched for by
+        // keyd on this request, not when the challenge was made.
+        const currentKeys = securityKeys;
         if (!currentKeys.some((pin) => entry.challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint))) {
           throw statementError('owner-unreachable', 'the challenged owner key is no longer enrolled; nothing was changed');
         }
