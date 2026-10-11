@@ -1,0 +1,1 @@
+- `agent-bot soul build` renders soul hooks into Qwen Code's `.qwen/settings.json`, always with the runner's identity and confinement guards, and a runner that crashes, exits oddly or overruns denies the call instead of Qwen letting it through (#378).

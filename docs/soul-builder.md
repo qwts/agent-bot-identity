@@ -54,7 +54,7 @@ A native consumer receives no duplicate configuration folder.
 | Devin CLI | Claude-compatible consumer | Shared Claude skills; `.devin/` only for agents | Shared `.mcp.json` | `.devin/agents/<name>.md` | Shared `.claude/commands/<name>.md` (imported as skills) | Shared `.claude/settings.json` |
 | Muse | Won't do: no verified definition adapter | Won't do | Won't do | Won't do | Won't do | Won't do |
 | Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | `.kiro/settings/mcp.json` | `.kiro/agents/<name>.md` | Won't do: format undocumented upstream | Unsupported |
-| Qwen Code | Native `AGENTS.md` | `.qwen/skills/<name>/` (marked files only) | `.qwen/settings.json` | `.qwen/agents/<name>.md` | `.qwen/commands/<name>.md` | Unsupported |
+| Qwen Code | Native `AGENTS.md` | `.qwen/skills/<name>/` (marked files only) | `.qwen/settings.json` | `.qwen/agents/<name>.md` | `.qwen/commands/<name>.md` | `.qwen/settings.json` `hooks` |
 
 "None yet" and "Unsupported" describe adapters in this slice, not a claim
 that a harness lacks the capability. "Won't do" cells are closed for now by
@@ -234,9 +234,8 @@ Adapter evidence (official docs read 2026-10-07):
   timeout) lets the call proceed. The `qwen` row in `hook-dialects.mjs` and
   its translation in `agent-hook` speak this dialect; the runner scans
   `run_shell_command` on `pre-tool-use` and judges a push by the command's
-  `directory`. Rendering soul hooks and the runner's guards into the soul's
-  `.qwen/settings.json` is a later slice, so hooks stay unsupported for Qwen
-  in the build report until then.
+  `directory`. The builder renders soul hooks and the runner's guards into
+  the soul's `.qwen/settings.json`; see [Qwen Code](#qwen-code).
 
 **Unverified:** Cursor and Kiro were not run (both CLIs need a sign-in), so
 whether they tolerate the leading `_comment` marker key in `.cursor/mcp.json` and
@@ -766,6 +765,7 @@ uses for the lifecycle adapters.
 | Codex | `.codex/hooks.json` | Hooks need `[features] hooks = true`, which the user-level policy `sync-hooks` writes |
 | Cursor | `.cursor/hooks.json` | `version: 1`; blocking events carry `failClosed: true` |
 | Copilot CLI | `.github/hooks/agent-bot-soul.json` | A dedicated file; other `.github/hooks/*.json` files stay the soul's |
+| Qwen Code | `.qwen/settings.json` `hooks` | Shares the file with the MCP entry; always carries the runner's guards; see [Qwen Code](#qwen-code) below |
 | OpenCode | `.opencode/plugins/agent-bot-soul.js` | A generated plugin, rendered for every soul; see [OpenCode](#opencode) below. `session-end` and `agent-stop` have no OpenCode event and are listed under `unsupported.hooks` |
 | Gemini CLI, Kiro | None | No dialect row yet; every hook is listed under `unsupported.hooks` |
 | Muse | None | Won't do: no adapter (see [Won't do for now](#wont-do-for-now)); every hook is listed under `unsupported.hooks` |
@@ -810,6 +810,26 @@ overwrites or removes it; other files in `.opencode/plugins/` are never
 touched. `agent-bot doctor` reports the plugin in each active soul as
 `hooks.opencode_plugin`: missing, out of date, or replaced by an unmarked file
 is a warning, because OpenCode sessions there run without the guards.
+
+### Qwen Code
+
+Qwen Code's entries go in the `hooks` key of the soul's `.qwen/settings.json`,
+beside the MCP entry and every key the soul declared there, in the `qwen`
+row's Claude-shaped form. Like OpenCode, Qwen has no user-level lifecycle
+adapter, so the file always carries one `PreToolUse` entry on `pre-tool-use`
+(`QWEN_GUARD_EVENTS`), hooks declared or not: that is where the runner's
+identity guard scans `run_shell_command` and confinement checks
+`write_file`, `edit` and `notebook_edit`. With comms off the file stays for
+that entry, and only the builder's own `agent-reach` server is dropped from
+it.
+
+Qwen fails open: a hook that crashes, exits with anything but 0 or 2, or
+outlives its 60 s timeout lets the call proceed. So on a blocking event the
+entry does not `exec` the runner. It runs it with the hook's stdin, kills it
+after 50 s (`QWEN_RUNNER_DEADLINE_SECONDS`), and exits 2 with a reason for
+any status but 0 and 2. A missing `agent-bot` exits 2 as everywhere. A
+non-blocking event runs the runner as the other harnesses do and never
+denies. No live Qwen session was run.
 
 ### Who owns what
 

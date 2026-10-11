@@ -90,7 +90,9 @@ test('the rendered command is portable, marked, and never spoofs a lifecycle ent
       const command = soulHookCommand(dialect, event);
       assert.ok(command.endsWith(`# ${SOUL_HOOK_MARKER}`));
       assert.ok(command.includes(`B=agent-bot;`));
-      assert.ok(command.includes(`exec "$B" agent-hook --event ${event} --dialect ${dialect}`));
+      // A blocking Qwen entry waits on the runner under a watchdog (#378).
+      const watched = dialect === 'qwen' && SOUL_HOOK_EVENTS.includes(event) && ['prompt-submit', 'pre-tool-use', 'pre-command', 'pre-file-write', 'agent-stop'].includes(event);
+      assert.ok(command.includes(`${watched ? '' : 'exec '}"$B" agent-hook --event ${event} --dialect ${dialect}`), `${dialect} ${event}`);
       assert.ok(command.includes('AGENT_BOT_HOOKS_DIR="$D/hooks"'));
       // sync-hooks recognizes its own entries by these strings; ours carry neither.
       assert.equal(command.includes(MANAGED_MARKER), false);
@@ -129,7 +131,7 @@ test('the report lists every hook as rendered or unsupported, per harness', () =
   const output = buildHarnessFiles(hooked());
   const report = harnessReport(output, { hooks: declaredHooks(hooked()) });
   // OpenCode delivers both through its generated plugin (#378).
-  for (const harness of ['claude', 'devin', 'codex', 'cursor', 'copilot', 'opencode']) {
+  for (const harness of ['claude', 'devin', 'codex', 'cursor', 'copilot', 'opencode', 'qwen']) {
     assert.deepEqual(report[harness].hooks, { received: NAMES, rendered: NAMES }, harness);
     assert.deepEqual(report[harness].unsupported.hooks, [], harness);
     assert.ok(report[harness].rendered.includes('hooks'), harness);
@@ -143,6 +145,7 @@ test('the report lists every hook as rendered or unsupported, per harness', () =
   assert.ok(report.cursor.files.includes('.cursor/hooks.json'));
   assert.ok(report.copilot.files.includes('.github/hooks/agent-bot-soul.json'));
   assert.ok(report.devin.files.includes('.claude/settings.json'), 'Devin CLI reads Claude settings');
+  assert.ok(report.qwen.files.includes('.qwen/settings.json'));
   // No hooks declared: nothing is rendered and nothing is reported.
   const none = harnessReport(buildHarnessFiles(base()), {});
   assert.ok(Object.values(none).every((entry) => entry.hooks.received.length === 0 && entry.unsupported.hooks.length === 0));
@@ -292,4 +295,82 @@ test('soul build --check --json and the plain summary name unsupported hooks', (
   assert.match(plain.stdout, /^gemini: instructions, mcp \(unsupported: hooks pre-command\/50-no-force-push, session-start\/10-hello\.sh\)$/m);
   assert.match(plain.stdout, /^claude: instructions, mcp, hooks$/m);
   assert.equal(run('--check').status, 0);
+});
+
+// Qwen Code (#378): its settings file always carries the runner's guards on
+// pre-tool-use, and a blocking entry denies whatever happens to the runner.
+const qwenHooks = (output) => json(output, '.qwen/settings.json').hooks;
+const qwenEntry = (event, matcher) => ({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: soulHookCommand('qwen', event), timeout: 60 }] });
+
+test('Qwen settings carry the guard entry always, beside the declared hooks and the MCP entry', () => {
+  const output = buildHarnessFiles(hooked());
+  const settings = json(output, '.qwen/settings.json');
+  assert.deepEqual(Object.keys(settings), ['_comment', 'mcpServers', 'hooks']);
+  assert.deepEqual(settings.hooks, {
+    SessionStart: [qwenEntry('session-start')],
+    PreToolUse: [qwenEntry('pre-tool-use'), qwenEntry('pre-command', 'run_shell_command')],
+  });
+  // No hooks declared, comms on or off: the guard is still there.
+  for (const extra of [undefined, { comms: false }]) {
+    const plain = buildHarnessFiles(base(extra));
+    assert.deepEqual(qwenHooks(plain), { PreToolUse: [qwenEntry('pre-tool-use')] }, JSON.stringify(extra));
+    const report = harnessReport(plain, { comms: extra?.comms !== false, hooks: [] }).qwen;
+    assert.deepEqual([report.hooks, report.unsupported.hooks], [{ received: [], rendered: [] }, []]);
+    assert.ok(report.files.includes('.qwen/settings.json'));
+  }
+  // A rebuild over its own output is byte-identical.
+  const again = buildHarnessFiles(hooked(), { authored: output });
+  assert.ok(again.get('.qwen/settings.json').equals(output.get('.qwen/settings.json')));
+});
+
+test('turning comms off keeps the Qwen guard and the soul\'s own servers, and drops only our reach entry', () => {
+  const own = { model: { name: 'qwen3' }, mcpServers: { git: { command: 'uvx' } }, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'mine' }] }] } };
+  const authored = new Map([['.qwen/settings.json', Buffer.from(JSON.stringify(own))]]);
+  const on = buildHarnessFiles(base(), { authored });
+  assert.deepEqual(Object.keys(json(on, '.qwen/settings.json').mcpServers), ['git', 'agent-reach']);
+  const off = json(buildHarnessFiles(base({ comms: false }), { authored: on }), '.qwen/settings.json');
+  assert.deepEqual(off.mcpServers, { git: { command: 'uvx' } });
+  assert.deepEqual(off.model, own.model);
+  assert.deepEqual(off.hooks, { Stop: own.hooks.Stop, PreToolUse: [qwenEntry('pre-tool-use')] });
+});
+
+test('a Qwen entry runs the soul hook through the real runner and denies on a crash, an overrun or a missing runner', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'soul-qwen-run-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const soul = join(root, 'soul');
+  put(soul, 'hooks/pre-command/50-no-force-push', DENY, 0o755);
+  spawnSync('git', ['init', '--quiet', soul]);
+  put(root, 'bin/agent-bot', `#!/bin/sh\n[ "$1" = agent-hook ] && shift\nexec "${process.execPath}" "${runner}" "$@"\n`, 0o755);
+  put(root, 'crash/agent-bot', '#!/bin/sh\necho boom >&2\nexit 1\n', 0o755);
+  put(root, 'hang/agent-bot', '#!/bin/sh\nexec sleep 30\n', 0o755);
+  const command = qwenHooks(buildHarnessFiles(hooked())).PreToolUse[1].hooks[0].command;
+  const env = (bin) => ({ PATH: `${join(root, bin)}:/usr/bin:/bin`, HOME: root, AGENT_BOT_CONFINEMENT: 'off' });
+  const payload = (cmd) => JSON.stringify({ session_id: 'q', cwd: soul, hook_event_name: 'PreToolUse', tool_name: 'run_shell_command', tool_input: { command: cmd } });
+  const shells = ['/bin/sh', ...(existsSync('/bin/bash') ? ['/bin/bash'] : [])];
+  for (const shell of shells) {
+    const run = (cmd, bin, text = command) => spawnSync(shell, ['-c', text], { input: payload(cmd), encoding: 'utf8', env: env(bin), cwd: soul });
+    // The runner reads the payload on stdin, so the soul hook sees the command.
+    const denied = run('git push --force', 'bin');
+    assert.equal(denied.status, 2, `${shell}: ${denied.stderr}`);
+    assert.match(denied.stderr, /no force pushes/);
+    assert.equal(denied.stdout, '');
+    const allowed = run('git status', 'bin');
+    assert.equal(allowed.status, 0, `${shell}: ${allowed.stderr}`);
+    const crashed = run('ls', 'crash');
+    assert.equal(crashed.status, 2, shell);
+    assert.match(crashed.stderr, /pre-command hooks failed closed \(runner exit 1\)/);
+    // The watchdog (shortened here) kills a runner that would outlive Qwen's clock.
+    const started = Date.now();
+    const hung = run('ls', 'hang', command.replace('sleep 50;', 'sleep 1;'));
+    assert.equal(hung.status, 2, shell);
+    assert.match(hung.stderr, /failed closed/);
+    assert.ok(Date.now() - started < 10000, `${shell}: the watchdog's sleep must not hold the pipes open`);
+    const missing = run('ls', 'nowhere');
+    assert.equal(missing.status, 2, shell);
+    assert.match(missing.stderr, /agent-bot is not on PATH/);
+  }
+  // A non-blocking event never denies.
+  const start = soulHookCommand('qwen', 'session-start');
+  assert.ok(start.includes('exec "$B" agent-hook --event session-start --dialect qwen'));
+  assert.equal(spawnSync('/bin/sh', ['-c', start], { input: '{}', encoding: 'utf8', env: env('nowhere') }).status, 0);
 });

@@ -544,8 +544,20 @@ export const HOOK_TARGETS = Object.freeze([
   Object.freeze({ harness: 'codex', dialect: 'codex', path: '.codex/hooks.json' }),
   Object.freeze({ harness: 'cursor', dialect: 'cursor', path: '.cursor/hooks.json' }),
   Object.freeze({ harness: 'copilot', dialect: 'copilot', path: '.github/hooks/agent-bot-soul.json' }),
+  // Qwen Code (#378) shares its settings file with the soul's MCP entry and
+  // settings; like OpenCode it has no user-level adapter, so its file always
+  // carries the runner's guards (QWEN_GUARD_EVENTS), hooks declared or not.
+  Object.freeze({ harness: 'qwen', dialect: 'qwen', path: '.qwen/settings.json' }),
 ]);
-const HOOK_DIALECT_FOR = Object.freeze({ claude: 'claude', devin: 'claude', codex: 'codex', cursor: 'cursor', copilot: 'copilot', opencode: 'opencode' });
+const HOOK_DIALECT_FOR = Object.freeze({ claude: 'claude', devin: 'claude', codex: 'codex', cursor: 'cursor', copilot: 'copilot', opencode: 'opencode', qwen: 'qwen' });
+// The events Qwen's file always carries: pre-tool-use is where the runner's
+// identity guard scans `run_shell_command` and confinement checks file tools.
+export const QWEN_GUARD_EVENTS = Object.freeze(['pre-tool-use']);
+// Qwen Code fails OPEN on a hook that crashes, exits with anything but 0 or 2,
+// or outlives its timeout (60 s, the `qwen` row's cap). So a blocking Qwen
+// entry runs the runner under its own watchdog, which kills it before Qwen's
+// clock would, and turns every status but 0 and 2 into exit 2 (deny).
+export const QWEN_RUNNER_DEADLINE_SECONDS = 50;
 // Where each harness's hooks are delivered, for the report: a HOOK_TARGETS
 // file, or OpenCode's generated plugin.
 const hookTargetFor = (harness) => (HOOK_DIALECT_FOR[harness] === 'opencode'
@@ -602,7 +614,16 @@ export function soulHookCommand(dialectKey, event) {
   const root = dialectKey === 'claude'
     ? '${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}'
     : '$(git rev-parse --show-toplevel 2>/dev/null || pwd)';
-  return `D="${root}"; B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul ${event} hooks did not run" >&2; exit ${isBlocking(event) ? 2 : 0}; }; AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event ${event} --dialect ${dialectKey} # ${SOUL_HOOK_MARKER}`;
+  const prefix = `D="${root}"; B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul ${event} hooks did not run" >&2; exit ${isBlocking(event) ? 2 : 0}; }; `;
+  const run = `AGENT_BOT_HOOKS_DIR="$D/hooks" "$B" agent-hook --event ${event} --dialect ${dialectKey}`;
+  if (dialectKey === 'qwen' && isBlocking(event)) {
+    // The runner keeps the hook's stdin (an async command otherwise reads
+    // /dev/null); the watchdog holds no stdio, so a leftover sleep never keeps
+    // Qwen waiting on the pipes.
+    return `${prefix}${run} 0<&0 & p=$!; (sleep ${QWEN_RUNNER_DEADLINE_SECONDS}; kill $p) </dev/null >/dev/null 2>&1 & w=$!; wait $p; s=$?; kill $w 2>/dev/null; `
+      + `[ $s -eq 0 ] || [ $s -eq 2 ] || { echo "agent-bot soul ${event} hooks failed closed (runner exit $s)" >&2; exit 2; }; exit $s # ${SOUL_HOOK_MARKER}`;
+  }
+  return `${prefix}AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event ${event} --dialect ${dialectKey} # ${SOUL_HOOK_MARKER}`;
 }
 
 const isSoulHookEntry = (entry) => JSON.stringify(entry).includes(SOUL_HOOK_MARKER);
@@ -655,12 +676,28 @@ function renderHookTarget(target, base, events, { fromOutput }) {
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-function renderHooks(events, output, authored) {
+// With comms off, a hook file that is also an MCP file (Qwen's settings) is
+// rendered from the last build's bytes, so our own reach entry is dropped from
+// them first; the soul's own servers stay.
+function withoutOwnMcp(path, bytes) {
+  const target = MCP_TARGETS.find((candidate) => candidate.path === path);
+  if (!bytes || !target || target.format === 'toml') return bytes;
+  const { _comment, ...rest } = authoredObject(target, bytes);
+  const servers = { ...(rest[target.key] ?? {}) };
+  if (_comment !== MARKER || JSON.stringify(servers[MCP_SERVER_NAME]) !== JSON.stringify(mcpServer(target.style))) return bytes;
+  delete servers[MCP_SERVER_NAME];
+  if (Object.keys(servers).length) rest[target.key] = servers;
+  else delete rest[target.key];
+  return Buffer.from(`${JSON.stringify({ _comment, ...rest }, null, 2)}\n`);
+}
+
+function renderHooks(events, output, authored, { comms = true } = {}) {
   for (const target of HOOK_TARGETS) {
     const fromOutput = output.has(target.path);
-    const base = output.get(target.path) ?? authored.get(target.path);
-    if (!base && !events.length) continue;
-    const rendered = renderHookTarget(target, base, events, { fromOutput });
+    const base = output.get(target.path) ?? (comms ? authored.get(target.path) : withoutOwnMcp(target.path, authored.get(target.path)));
+    const targetEvents = target.dialect === 'qwen' ? [...new Set([...events, ...QWEN_GUARD_EVENTS])] : events;
+    if (!base && !targetEvents.length) continue;
+    const rendered = renderHookTarget(target, base, targetEvents, { fromOutput });
     if (rendered) output.set(target.path, rendered);
   }
   output.set(OPENCODE_PLUGIN_PATH, opencodeHookPlugin());
@@ -1161,6 +1198,6 @@ export function buildHarnessFiles(packageEntries, { authored = new Map() } = {})
     output.set(target.path, renderSettings(target, output.get(target.path) ?? authored.get(target.path), harnessSettings(manifest, target.harness)));
   }
   // After settings, so Claude's settings and its hooks share one file.
-  renderHooks(hookEvents, output, authored);
+  renderHooks(hookEvents, output, authored, { comms: soulCommsDeclared(source) });
   return new Map([...output].sort(([a], [b]) => compare(a, b)));
 }

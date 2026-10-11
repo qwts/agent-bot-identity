@@ -388,8 +388,9 @@ export const DIALECTS = [
     // stable release at least two weeks old on 2026-10-11: docs/users/features/
     // hooks.md, hooks/hookRunner.ts and core/toolHookTriggers.ts.
     //
-    // No `homeFile`: sync-hooks writes no user-level Qwen adapter. The soul's
-    // own `.qwen/settings.json` is where these entries go (a later slice).
+    // No `homeFile`: sync-hooks writes no user-level Qwen adapter. The soul
+    // builder writes these entries into the soul's own `.qwen/settings.json`,
+    // always with the runner's guards on pre-tool-use.
     key: 'qwen',
     file: '.qwen/settings.json',
     format: 'claude',
@@ -426,9 +427,8 @@ export const DIALECTS = [
     // Qwen fails OPEN: any exit other than 0 or 2, a crash, a timeout or a
     // hook error lets the tool call proceed ("Hook errors should not block
     // tool execution"). The runner answers on its own clock inside the cap
-    // below, and a rendered entry must turn a runner failure on a blocking
-    // event into exit 2 itself, as the soul builder's entries already do when
-    // agent-bot is missing.
+    // below, and the soul builder's entries turn a runner failure or overrun
+    // on a blocking event into exit 2 themselves (`soulHookCommand`).
     nativeFailMode: 'open',
     timeoutFailMode: 'open',
     // Seconds in the entry; 60 is Qwen's own default for a command hook.
