@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { CLASSIFICATIONS, CLASSIFICATION_RULES, ENV_CONTRACT_VERSION, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST,
-  RETENTION, SOUL_LAYOUT, classificationContract, classifyPath, retentionOf } from '../soul-env-contract.mjs';
+  IDENTITY_OWNED_COMPONENTS, RETENTION, SOUL_LAYOUT, classificationContract, classifyPath, retentionOf } from '../soul-env-contract.mjs';
 import * as harnessContract from '../soul-harness-contract.mjs';
+import { credentialsDirectory } from '../soul-credentials.mjs';
 
 test('the classification enum and retention kinds are fixed, frozen and versioned', () => {
   assert.equal(ENV_CONTRACT_VERSION, 1);
@@ -75,4 +77,16 @@ test('generated paths and the ignore list come from the harness contract, one so
   }
   const generated = SOUL_LAYOUT.find((component) => component.id === 'generated');
   assert.equal(generated.path, null, 'generated output is a set of paths, not one path');
+});
+
+test('credentials are identity-owned and sit where identity writes them (#645, D7)', () => {
+  assert.ok(Object.isFrozen(IDENTITY_OWNED_COMPONENTS));
+  assert.deepEqual([...IDENTITY_OWNED_COMPONENTS], ['credentials']);
+  const ids = SOUL_LAYOUT.map((component) => component.id);
+  for (const id of IDENTITY_OWNED_COMPONENTS) assert.ok(ids.includes(id), id);
+  const credentials = SOUL_LAYOUT.find((component) => component.id === 'credentials');
+  assert.equal(credentials.path, '.soul-state/credentials');
+  assert.equal(credentials.classification, 'private-home');
+  const root = path.join(path.sep, 'souls', 'example.soul');
+  assert.equal(credentialsDirectory(root), path.join(root, ...credentials.path.split('/')));
 });
