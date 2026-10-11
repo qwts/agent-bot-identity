@@ -248,6 +248,19 @@ function noticeRecords(agentId, notices, cleared = false) {
 // Shared with durable adapters so persisted events cannot acquire fields that
 // the scheduling core would never emit. Only the typed outcome event may carry
 // a bounded, explicitly unverified report preview; it never carries a prompt.
+// Across records: a transaction's `processing-advanced` events must start from
+// the processing checkpoint the preceding journal state actually held for that
+// soul (none for a first record, a pre-v9 state or an unscheduled soul). The
+// store calls this with the previous record's state, since each record is
+// otherwise validated on its own.
+export function validateDreamTransition(previous, events) {
+  for (const event of events) {
+    if (event?.kind !== 'processing-advanced') continue;
+    const held = (previous?.processingCheckpoints ?? []).find(row => row.agentId === event.run.agentId);
+    if (!isDeepStrictEqual(event.prior, held ? { evicted: held.evicted, entries: held.entries } : null)) invalid();
+  }
+  return events;
+}
 export function validateDreamEvents(events, { state = null } = {}) {
   if (!Array.isArray(events) || events.length < 1 || events.length > DREAM_REGISTRATION_LIMIT) invalid();
   // A stateless check reads a run's version from its shape; with state, the

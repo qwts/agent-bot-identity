@@ -509,7 +509,9 @@ each run is kept in the append-only `processing-advanced` event, published in
 the same transaction as the outcome and selection checkpoint, which it
 requires. It also carries the checkpoint it advanced from, and the published
 checkpoint must be exactly that one advanced by the run's sources, so a
-processed source cannot vanish without being evicted. The event carries the run's prepared input metadata, bound by digest
+processed source cannot vanish without being evicted. The store checks across records that
+this starting checkpoint is the one the previous journal state held, when it
+commits, when it opens the head and when it pages history. The event carries the run's prepared input metadata, bound by digest
 to the selection checkpoint's input receipt, and the outcome is validated
 against those delivered sources, so no path that was never delivered can be
 credited. The checkpoint only reports; selection is unchanged and
