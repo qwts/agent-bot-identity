@@ -9,7 +9,7 @@ import { NOT_CAPTURED } from '../skill-references.mjs';
 import { currentAgentId } from '../agent-identity.mjs';
 import { discardRevisionStaging, revisionCommand, revisionOwnerGate } from '../soul-revisions.mjs';
 import { assertUninstallCurrent, stageSkillInstall, stageSkillUninstall, trashSoulSkill } from '../skill-install.mjs';
-import { soulSkillStatus } from '../skill-status.mjs';
+import { soulSkillSearch, soulSkillStatus } from '../skill-status.mjs';
 import { loadGlobalSkill, loadSkill, unloadGlobalSkill, unloadSkill } from '../skill-workspace.mjs';
 import { assertOwnerAction, keydPresenceWithoutDialog, presenceOrConsent, soulMarkers } from '../owner-action.mjs';
 import { soulDreamCommand } from './soul-dream.mjs';
@@ -29,6 +29,7 @@ export const USAGE = `usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT 
        agent-bot soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin]
        agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin]
        agent-bot soul skill status --soul AGENT_ID [--json]
+       agent-bot soul skill search --soul AGENT_ID QUERY [--json]
        agent-bot soul skill load NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
        agent-bot soul skill unload NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
        agent-bot soul skill load NAME --soul AGENT_ID --global --reason TEXT [--harness claude] [--json] [--principal-stdin]
@@ -65,6 +66,8 @@ status reads a soul's skills and says how each fact is known: installed files
 rechecked now against their install record (verified or drifted), learning
 receipts (agent-reported), and knowledge coverage (unknown: no adapter yet).
 It writes nothing; a soul may read only its own.
+search reports that no knowledge search adapter is configured and exits 1;
+it sets up no service and returns no results.
 dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
 Results carry notCaptured: only these commands capture and recheck instruction
 files; what a harness fetches or reads on its own (web fetch, MCP tools) is not.
@@ -286,6 +289,22 @@ function statusMain(args, json, { stdout, stderr, markers = soulMarkers,
     return 1;
   }
 }
+// search (#902) has no adapter yet: it checks the caller, the soul and the
+// query as status does, then reports the missing adapter as an error.
+function searchMain(args, json, { stdout, stderr, markers = soulMarkers,
+  assertSoulTarget = id => { if (currentAgentId() !== id) throw new Error('a soul may search only its own knowledge; bind an Agent ID first'); }, ...options }) {
+  if (args.length !== 3 || args[0] !== '--soul' || !args[1] || args[1].startsWith('--') || args[2].startsWith('--')) { stderr.write(USAGE); return 2; }
+  try {
+    if (markers({ env: options.env, cwd: options.cwd }).length) assertSoulTarget(args[1]);
+    soulSkillSearch(args[1], args[2], options);
+    return 1; // unreachable: search without an adapter always throws
+  } catch (error) {
+    const failure = { code: error.code ?? 'skill-search-failed', message: error.message };
+    if (json) stdout.write(`${JSON.stringify({ error: failure })}\n`);
+    else stderr.write(`agent-bot soul skill: ${failure.code}: ${failure.message}\n`);
+    return 1;
+  }
+}
 export function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, ...options } = {}) {
   if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) { stdout.write(USAGE); return 0; }
   if (argv[0] === 'dream') return soulDreamCommand(argv.slice(1), { stdout, stderr, ...options });
@@ -295,6 +314,7 @@ export function main(argv = process.argv.slice(2), { stdout = process.stdout, st
   if (verb === 'update' && flags.length <= 1) return updateMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   if ((verb === 'install' || verb === 'uninstall') && flags.length <= 1) return installMain(verb, args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'status' && flags.length <= 1) return statusMain(args.slice(1), flags.length, { stdout, stderr, ...options });
+  if (verb === 'search' && flags.length <= 1) return searchMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   if ((verb === 'load' || verb === 'unload') && flags.length <= 1) return loadMain(verb, args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'learn' && flags.length <= 1) return learningMain(args.slice(1), flags.length, { stdout, stderr, ...options });
   if (verb === 'check' && extra.length && flags.length <= 1) return portableCheckMain(args.slice(1), flags.length, { stdout, stderr, ...options });

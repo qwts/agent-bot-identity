@@ -47,3 +47,17 @@ export function soulSkillStatus(agentId, options = {}) {
   return { agentId, revision: snapshot.manifest.revision, installs, learning,
     knowledge: { status: 'unknown', verification: 'no-capability-adapter', provisioned: false } };
 }
+
+// Soul skill search (#902): no retrieval adapter exists yet, so search says so
+// plainly and exits nonzero. It sets up no service, reads no package content
+// and returns no results; which adapter comes first, and its citation shape,
+// is decided on #902. The soul must exist and the query must be bounded text.
+export const SKILL_SEARCH_QUERY_BYTES = 4096;
+export function soulSkillSearch(agentId, query, options = {}) {
+  validateAgentId(agentId);
+  if (typeof query !== 'string' || !query.trim() || query.includes('\0') || Buffer.byteLength(query) > SKILL_SEARCH_QUERY_BYTES) {
+    fail('skill-search-query-invalid', `the search query must be non-empty text of at most ${SKILL_SEARCH_QUERY_BYTES} bytes`);
+  }
+  soulDirectory(agentId, { ...options, readOnly: true });
+  fail('skill-search-no-adapter', 'no knowledge search adapter is configured for this soul; agent-bot sets up no search service, so nothing was searched');
+}
