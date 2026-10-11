@@ -452,6 +452,8 @@ function receiptProblem(stamp, { name, kind, version, platform, archive = null, 
     || stamp.version !== version || stamp.platform !== platform) return 'install receipt does not match the selected runtime, version, kind or platform';
   if (!stamp.bin || path.isAbsolute(stamp.bin) || /^[A-Za-z]:/.test(stamp.bin) || stamp.bin.includes('\\')
     || stamp.bin.split('/').some(part => !part || part === '..') || /[\x00-\x1f\x7f]/.test(stamp.bin)) return 'install receipt has an unsafe executable directory';
+  // Recorded into the pins file as provenance, so a damaged one is never trusted (#617).
+  if (Object.hasOwn(stamp, 'catalogRelease') && !(stamp.catalogRelease === null || (typeof stamp.catalogRelease === 'string' && SHA256_HEX.test(stamp.catalogRelease)))) return 'install receipt has a malformed catalogRelease; reinstall it';
   if (archive && kind !== 'uv-python' && (stamp.sha256 !== archive.sha256 || stamp.bin !== archive.bin)) return 'install receipt does not match the selected archive digest or executable directory';
   // uv lays Python out itself, so only the digest is compared; a receipt from
   // before the catalog pinned it has none and stands, unverified (#617).

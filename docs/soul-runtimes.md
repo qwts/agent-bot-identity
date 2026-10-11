@@ -237,7 +237,7 @@ Every completed install directory carries `.agent-bot-install.json`: the name,
 kind, version, platform, URL, `sha256`, `bin` and `installedAt`. `archive`
 and `uv-python` stamps also record `catalogRelease`: the catalog release a
 catalog runtime was installed from, else null (a package's own `sources`, a
-harness archive); it is absent before #617. `uv-tool` and npm adapter stamps
+harness archive); it is absent before #617, and any other value makes the receipt invalid, so the install is repaired. `uv-tool` and npm adapter stamps
 do not carry it. Archive stamps
 record the digest verified by agent-bot. A `uv-python` stamp records the
 python-build-standalone archive's URL and `sha256` from the catalog: uv is

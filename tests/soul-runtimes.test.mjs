@@ -436,6 +436,14 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   f.writeManifest((m) => { m.runtimes = { node: '24.99.0' }; });
   await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn, runImpl: d.runImpl });
   assert.deepEqual(readRuntimePins(f.dir).pins.runtimes.node, { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) });
+  // A damaged receipt's catalogRelease is never copied into the pins: the install is not ready and is repaired.
+  rmSync(pinsPath);
+  const stampPath = path.join(f.runtimes, 'node', '24.99.0', INSTALL_STAMP);
+  writeFileSync(stampPath, JSON.stringify({ ...stampOf('24.99.0'), catalogRelease: 123 }));
+  const damaged = inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes[0];
+  assert.deepEqual([damaged.status, damaged.reason], ['missing', 'install receipt has a malformed catalogRelease; reinstall it']);
+  await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn, runImpl: d.runImpl });
+  assert.deepEqual([readRuntimePins(f.dir).problem, readRuntimePins(f.dir).pins.runtimes.node], [null, { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) }]);
   // Two installers racing on a soul with no pins: the one that records second sees the first's pin under the lock and keeps it.
   rmSync(pinsPath);
   f.writeManifest((m) => { m.runtimes = { node: '24' }; });
