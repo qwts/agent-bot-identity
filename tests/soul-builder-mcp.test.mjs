@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildHarnessFiles, harnessReport, MCP_SERVER_NAME, MCP_TARGETS, mergeableMcpServers, soulCommsDeclared } from '../soul-builder.mjs';
+import { buildHarnessFiles, harnessReport, MCP_SERVER_NAME, MCP_TARGETS, mergeableMcpServers, soulCommsDeclared, soulHookCommand } from '../soul-builder.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { computePackageRevision, readSoulPackageEntries, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, GENERATED_HARNESS_MARKER as MARKER } from '../soul-package.mjs';
 import { isGeneratedPath } from '../soul-harness-contract.mjs';
@@ -107,6 +107,9 @@ function reseal(root) {
   writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+// The guard entry Qwen's settings always carry (#378).
+const QWEN_GUARDS = { PreToolUse: [{ hooks: [{ type: 'command', command: soulHookCommand('qwen', 'pre-tool-use'), timeout: 60, shell: 'bash' }] }] };
+
 const cliRun = (root, ...args) => spawnSync(process.execPath, [cli, 'soul', 'build', ...args, ...(root ? [root] : [])],
   { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: root } });
 
@@ -121,9 +124,12 @@ test('each harness gets the reach/comms server in its own native file', () => {
   assert.equal(output.get('.codex/config.toml').toString(),
     `# ${MARKER}\n[mcp_servers.agent-reach]\ncommand = "agent-bot"\nargs = ["reach-mcp"]\n`);
   // Cursor's, Kiro's and Qwen Code's documented project files carry the same stdio entry.
-  for (const path of ['.cursor/mcp.json', '.kiro/settings/mcp.json', '.qwen/settings.json']) {
+  for (const path of ['.cursor/mcp.json', '.kiro/settings/mcp.json']) {
     assert.deepEqual(JSON.parse(output.get(path).toString()), { _comment: MARKER, mcpServers: { [MCP_SERVER_NAME]: ENTRY } }, path);
   }
+  // Qwen's file also always carries the runner's guards (#378).
+  assert.deepEqual(JSON.parse(output.get('.qwen/settings.json').toString()),
+    { _comment: MARKER, mcpServers: { [MCP_SERVER_NAME]: ENTRY }, hooks: QWEN_GUARDS });
   // Portable: no absolute path, no host-specific state, only PATH's agent-bot.
   for (const bytes of output.values()) {
     const content = bytes.toString();
@@ -140,7 +146,10 @@ test('comms off renders no MCP entry anywhere, and a rebuild removes the old one
   const source = packageEntries({ comms: false });
   assert.equal(soulCommsDeclared(new Map([['soul.json', source[1].bytes]])), false);
   const output = buildHarnessFiles(source);
-  for (const { path } of MCP_TARGETS) assert.equal(output.has(path), false, path);
+  for (const { path } of MCP_TARGETS) {
+    if (path === '.qwen/settings.json') assert.equal(JSON.parse(output.get(path).toString()).mcpServers, undefined);
+    else assert.equal(output.has(path), false, path);
+  }
   const report = harnessReport(output, { comms: false });
   assert.ok(Object.values(report).every((entry) => entry.rendered.includes('instructions')));
   // No AGENTS.md means no build at all, so nothing is reported as rendered.
@@ -152,9 +161,11 @@ test('comms off renders no MCP entry anywhere, and a rebuild removes the old one
   put(root, 'soul.json', Buffer.from(readFileSync(join(root, 'soul.json'), 'utf8').replace('"parentRevision"', '"comms": false,\n  "parentRevision"')));
   reseal(root);
   const removals = buildSoulDirectory(root, { check: true }).removals;
-  assert.deepEqual(removals, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', '.qwen/settings.json', 'opencode.json']);
+  assert.deepEqual(removals, ['.codex/config.toml', '.cursor/mcp.json', '.gemini/settings.json', '.kiro/settings/mcp.json', '.mcp.json', 'opencode.json']);
   buildSoulDirectory(root);
-  for (const { path } of MCP_TARGETS) assert.equal(existsSync(join(root, path)), false, path);
+  // Qwen's file stays for the runner's guards (#378), without the MCP entry.
+  for (const { path } of MCP_TARGETS) if (path !== '.qwen/settings.json') assert.equal(existsSync(join(root, path)), false, path);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.qwen/settings.json'), 'utf8')), { _comment: MARKER, hooks: QWEN_GUARDS });
   assert.equal(existsSync(join(root, '.kiro')), false, 'emptied generated parents are pruned');
 });
 
@@ -165,7 +176,7 @@ test('comms off leaves a soul\'s own MCP file alone and reports no merge', (t) =
   reseal(root);
   const result = buildSoulDirectory(root);
   assert.deepEqual({ writes: result.writes, removals: result.removals, merged: result.merged },
-    { writes: ['.opencode/plugins/agent-bot-soul.js', 'CLAUDE.md', 'GEMINI.md'], removals: [], merged: [] });
+    { writes: ['.opencode/plugins/agent-bot-soul.js', '.qwen/settings.json', 'CLAUDE.md', 'GEMINI.md'], removals: [], merged: [] });
   assert.equal(readFileSync(join(root, '.mcp.json'), 'utf8'), own);
   assert.deepEqual(result.harnesses.claude.rendered, ['instructions']);
 });
@@ -377,7 +388,7 @@ test('Qwen Code\'s project settings keep the soul\'s own keys and servers and ga
     [{ path: '.qwen/settings.json', harness: 'qwen', kept: ['git'] }]);
   const result = buildSoulDirectory(root);
   assert.deepEqual(JSON.parse(readFileSync(join(root, '.qwen/settings.json'), 'utf8')),
-    { _comment: MARKER, ...own, mcpServers: { ...own.mcpServers, [MCP_SERVER_NAME]: ENTRY } });
+    { _comment: MARKER, ...own, mcpServers: { ...own.mcpServers, [MCP_SERVER_NAME]: ENTRY }, hooks: QWEN_GUARDS });
   assert.deepEqual(result.harnesses.qwen.rendered, ['instructions', 'mcp']);
   assert.deepEqual(result.harnesses.qwen.files, ['.qwen/settings.json']);
   assert.deepEqual(buildSoulDirectory(root, { check: true }).drift, [], 'a rebuild over our own output is a no-op');

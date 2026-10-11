@@ -388,8 +388,9 @@ export const DIALECTS = [
     // stable release at least two weeks old on 2026-10-11: docs/users/features/
     // hooks.md, hooks/hookRunner.ts and core/toolHookTriggers.ts.
     //
-    // No `homeFile`: sync-hooks writes no user-level Qwen adapter. The soul's
-    // own `.qwen/settings.json` is where these entries go (a later slice).
+    // No `homeFile`: sync-hooks writes no user-level Qwen adapter. The soul
+    // builder writes these entries into the soul's own `.qwen/settings.json`,
+    // always with the runner's guards on pre-tool-use.
     key: 'qwen',
     file: '.qwen/settings.json',
     format: 'claude',
@@ -426,13 +427,16 @@ export const DIALECTS = [
     // Qwen fails OPEN: any exit other than 0 or 2, a crash, a timeout or a
     // hook error lets the tool call proceed ("Hook errors should not block
     // tool execution"). The runner answers on its own clock inside the cap
-    // below, and a rendered entry must turn a runner failure on a blocking
-    // event into exit 2 itself, as the soul builder's entries already do when
-    // agent-bot is missing.
+    // below, and the soul builder's entries turn a runner failure or overrun
+    // on a blocking event into exit 2 themselves (`soulHookCommand`).
     nativeFailMode: 'open',
     timeoutFailMode: 'open',
     // Seconds in the entry; 60 is Qwen's own default for a command hook.
     timeoutCapMs: { default: 60000 },
+    // A command hook runs in Qwen's configured shell, cmd.exe or PowerShell
+    // on an ordinary Windows install; an entry's `shell: "bash"` runs it in
+    // bash on every platform (hooks.md, getShellConfigForHook).
+    hookShell: 'bash',
     status: 'verified',
     evidence: [
       'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L352-L409',
@@ -440,6 +444,8 @@ export const DIALECTS = [
       'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L692-L703',
       'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L831-L860',
       'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L1473-L1508',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L67',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/hooks/hookRunner.ts#L795-L827',
       'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/hooks/hookRunner.ts#L1507-L1597',
       'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/hooks/hookRunner.ts#L1661-L1702',
       'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/core/toolHookTriggers.ts#L114-L210',
@@ -506,7 +512,7 @@ export function nativeHookEntry(dialectKey, event, run) {
       vendorEvent: mapped.event,
       entry: {
         ...(mapped.matcher ? { matcher: mapped.matcher } : {}),
-        hooks: [{ type: 'command', command: run, timeout: hookTimeoutSeconds(dialectKey, event) }],
+        hooks: [{ type: 'command', command: run, timeout: hookTimeoutSeconds(dialectKey, event), ...(row.hookShell ? { shell: row.hookShell } : {}) }],
       },
     };
   }

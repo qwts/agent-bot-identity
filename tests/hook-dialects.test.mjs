@@ -486,7 +486,7 @@ test('qwen maps Claude-shaped events, with plain matchers on its runtime tool id
   assert.equal(row.homeFile, undefined);
   assert.deepEqual(nativeHookEntry('qwen', 'pre-command', 'run'), {
     vendorEvent: 'PreToolUse',
-    entry: { matcher: 'run_shell_command', hooks: [{ type: 'command', command: 'run', timeout: 60 }] },
+    entry: { matcher: 'run_shell_command', hooks: [{ type: 'command', command: 'run', timeout: 60, shell: 'bash' }] },
   });
   assert.equal(supportsContext('qwen', 'session-start'), true);
   assert.equal(supportsContext('qwen', 'pre-tool-use'), false);
