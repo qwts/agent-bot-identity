@@ -53,7 +53,7 @@ jobs:
   merge-evidence:
     name: Verify exact main evidence
     needs: policy
-    if: needs.policy.outputs.run_post_merge == 'true'
+    if: (needs.policy.outputs.run_post_merge == 'true') && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
@@ -76,7 +76,7 @@ jobs:
   preflight-evidence:
     name: Verify exact PR-head preflight
     needs: policy
-    if: github.event_name == 'pull_request' && needs.policy.outputs.run_full == 'true'
+    if: (github.event_name == 'pull_request' && needs.policy.outputs.run_full == 'true') && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
@@ -101,7 +101,8 @@ jobs:
     name: Complete suite
     needs: [policy, merge-evidence, preflight-evidence]
     if: >-
-      always() && needs.policy.result == 'success' &&
+      always() && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics') &&
+      needs.policy.result == 'success' &&
       ((needs.policy.outputs.run_full == 'true' && needs.preflight-evidence.outputs.validated != 'true') ||
       (needs.policy.outputs.run_post_merge == 'true' && needs.merge-evidence.outputs.validated != 'true'))
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
@@ -119,7 +120,7 @@ jobs:
   windows-native:
     name: Windows native custody and pipe preflight
     needs: policy
-    if: needs.policy.result == 'success'
+    if: (needs.policy.result == 'success') && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -136,7 +137,8 @@ jobs:
     name: Advanced CodeQL
     needs: [policy, merge-evidence, preflight-evidence]
     if: >-
-      always() && needs.policy.result == 'success' &&
+      always() && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics') &&
+      needs.policy.result == 'success' &&
       (needs.policy.outputs.run_post_merge == 'true' ||
       (needs.policy.outputs.run_full == 'true' && needs.preflight-evidence.outputs.validated != 'true'))
     permissions:
@@ -149,7 +151,7 @@ jobs:
   workflow-runtime:
     name: Workflow runtime policy
     needs: policy
-    if: needs.policy.result == 'success'
+    if: (needs.policy.result == 'success') && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
@@ -175,7 +177,7 @@ jobs:
     # and the packaged executable agree. Every lane runs it, so a version bump
     # that outgrows qwts-versions fails before it can be tagged.
     needs: policy
-    if: needs.policy.result == 'success'
+    if: (needs.policy.result == 'success') && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
@@ -215,7 +217,7 @@ jobs:
     # release artifacts, so this lane runs in every lifecycle lane, like the
     # skill gate.
     needs: policy
-    if: needs.policy.result == 'success'
+    if: (needs.policy.result == 'success') && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 25
     strategy:
@@ -258,7 +260,7 @@ jobs:
     # variable that could name a self-hosted runner, because pull requests from
     # outside contributors reach this lane (#752).
     needs: policy
-    if: needs.policy.result == 'success'
+    if: (needs.policy.result == 'success') && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: macos-latest
     timeout-minutes: 20
     defaults:
@@ -283,7 +285,7 @@ jobs:
   gate:
     name: CI
     needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd, windows-native]
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: (always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)) && !(github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics')
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
@@ -329,3 +331,47 @@ jobs:
               ;;
             *) exit 1 ;;
           esac
+
+# Temporary evidence-only job: do not merge this diagnostics branch.
+  formula:
+    name: Formula 0.10.63 release validation
+    needs: policy
+    if: github.event_name == 'workflow_dispatch' && inputs.purpose == 'diagnostics'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      FORMULA_HEAD: 18c01de7e24fbf0711f7f42a79aaecb55334f946
+      RELEASE_HEAD: 3bdb2b0c63296c8aa10e00c6ed46b7823405a4e9
+      ARCHIVE_SHA256: ad3ab845afbe710a680e489a66b6262bcce746a64e434757c67e547dca8bed80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 18c01de7e24fbf0711f7f42a79aaecb55334f946
+          persist-credentials: false
+      - name: Verify exact Formula source and published archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FORMULA_HEAD"
+          archive="$RUNNER_TEMP/agent-bot-v0.10.63.tar.gz"
+          curl --fail --location --silent --show-error https://github.com/qwts/agent-bot-identity/archive/refs/tags/v0.10.63.tar.gz --output "$archive"
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | shasum -a 256 -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          source="$RUNNER_TEMP/agent-bot-identity-0.10.63"
+          test "$(node -p "require('$source/package.json').version")" = 0.10.63
+          test "$("$source/agent-bot" --version)" = 0.10.63
+          test "$(cat "$source/RELEASE_COMMIT")" = "$RELEASE_HEAD"
+          printf 'Formula head: %s\nRelease head: %s\nArchive SHA256: %s\n' "$FORMULA_HEAD" "$RELEASE_HEAD" "$ARCHIVE_SHA256"
+      - name: Tap and trust the exact Formula checkout
+        run: |
+          brew tap qwts/agent-bot-identity "$PWD"
+          brew trust qwts/agent-bot-identity
+          cmp Formula/agent-bot.rb "$(brew --repository qwts/agent-bot-identity)/Formula/agent-bot.rb"
+      - name: Audit the Formula
+        run: brew audit --strict agent-bot
+      - name: Install from the verified source archive
+        run: brew install --build-from-source agent-bot
+      - name: Run the actual Formula tests
+        run: brew test agent-bot
