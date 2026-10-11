@@ -442,6 +442,20 @@ how each one is done, and §9 puts them in order.
 
   Under D4, dispatch runs the bundled identity entry files as child
   processes. Command names and arguments don't change.
+
+  **F13 step 2 (2026-10-11).** The owner's Q2 answer grouped four cli files
+  as thin wrappers to reassign to identity. Only `cli/mint-token.mjs` (with
+  its formatter, `cli/mint-output.mjs`) is one: every import it has is
+  identity's, and the map now assigns both to identity. The other three
+  are cli composition roots that pass soul into identity:
+  - `cli/principal.mjs` passes soul's `assertOwnerAction` as the gate;
+  - `cli/identity-apps.mjs` passes `assertOwnerAction` and soul's
+    `identityAppSouls`;
+  - `cli/owner.mjs` passes soul's `soulMarkers`.
+
+  Identity may not import soul (ADR-0645). The owner chose to keep these three
+  in cli and to revisit them after F8 settles the owner-prompt design.
+  The policy and the baseline don't change.
 - **F14. Assign the non-`.mjs` identity assets.** The extraction plan has to
   cover `keyd/`, `hooks/*`, `scripts/ensure-identity.sh`, `wrangler.toml`
   and the 120 test files that import identity, including history, CI and
