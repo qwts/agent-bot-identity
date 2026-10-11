@@ -737,6 +737,31 @@ export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
 
 // Called by owner assignment or initial onboarding while the identity
 // mutation holds its lock; synchronize the census in the same transaction.
+// Records a joined soul's App in the census first and then runs identity's
+// write, in the owner's order (#645, F6; revert option 1). If the identity
+// write fails, soul puts back the App its row had, while the row still has
+// the App this step wrote. Identity never restores a record a caller hands it.
+export function setSoulAppThen(id, app, { file = populationFile() } = {}, identityWrite) {
+  const target = agentId(id), normalized = appSlug(app);
+  const previous = withLock(`${file}.lock`, 'population store', () => readDocument(file).souls[target]?.appSlug ?? null);
+  const soul = setSoulApp(target, normalized, { file });
+  try {
+    return { soul, identity: identityWrite() };
+  } catch (error) {
+    try {
+      withLock(`${file}.lock`, 'population store', () => {
+        const current = readDocument(file);
+        const row = current.souls[target];
+        if (!row || row.appSlug !== normalized) return;
+        writeDocument(file, { ...current.souls, [target]: normalizeSoul({ ...row, appSlug: previous }) });
+      });
+    } catch {
+      throw new Error('census rollback failed after identity App initialization failure', { cause: error });
+    }
+    throw error;
+  }
+}
+
 export function setSoulApp(id, app, { file = populationFile() } = {}) {
   const target = agentId(id), normalized = appSlug(app);
   return withLock(`${file}.lock`, 'population store', () => {

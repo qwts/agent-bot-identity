@@ -31,12 +31,11 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
-import { mintBindToken, readBinding } from './agent-binding.mjs';
-import { initializeAgentApp, mintAgentIdentity } from './agent-identity.mjs';
+import { readBinding } from './agent-binding.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
 import { stateDirectory } from './state-paths.mjs';
-import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, setSoulApp, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
+import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, setSoulAppThen, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
@@ -268,9 +267,10 @@ export async function joinSoul({
 
   // Recovery for the old join path fills only absent App metadata. It
   // never changes an assignment, revives a soul, or replaces a binding.
+  // The census gets the App first and identity's record last; if the
+  // identity write fails, the census row's App is put back (#645, F6).
   if (existing && appSlug && !existing.github) {
-    initializeAgentApp(agentId, appSlug, { stateDir,
-      afterWrite: () => setSoulApp(agentId, appSlug, { file }) });
+    setSoulAppThen(agentId, appSlug, { file }, () => identityOp('initialize-app', { id: agentId, appSlug, stateDir }));
   }
 
   let created = false;
@@ -279,7 +279,7 @@ export async function joinSoul({
     if (source) {
       agentId = (await spawn(source, { ...options, stateDir, file, name, harness, appSlug })).id;
     } else {
-      agentId = mintAgentIdentity({ ...options, stateDir, appSlug, harness, useGithub: Boolean(appSlug) }).id;
+      agentId = identityOp('mint', { stateDir, appSlug, harness, useGithub: Boolean(appSlug) }).id;
       upsertIdentitySoul(agentId, initAgentSpace(agentId, options).path, { file, stateDir });
     }
     created = true;
@@ -317,7 +317,7 @@ export async function joinSoul({
   let bind = 'binding reused';
   let token = null;
   if (!readBinding({ env: {}, gitDir })) {
-    try { token = mintBindToken({ gitDir, worktree: realpathSync(worktree), agentId }).token; bind = 'bind token minted'; }
+    try { token = identityOp('mint-bind-token', { gitDir, worktree: realpathSync(worktree), agentId }).token; bind = 'bind token minted'; }
     catch { bind = 'bind token unavailable'; }
   }
   // An ACP wake runs the soul through its daemon binding (#417), which a

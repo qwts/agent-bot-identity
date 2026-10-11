@@ -1,0 +1,1 @@
+- `agent-bot join` and `setup-worktree` now mint, fill in App metadata, find the transcript and mint bind tokens through identity's record entry. Join records a recovered App in the census first and the identity record last, and puts the census App back if the identity write fails (#645).
