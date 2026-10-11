@@ -1,11 +1,13 @@
 # Dream maintenance implementation contract
 
-Status: staged implementation contract for #603, following
+Status: implementation contract for #603, following
 [ADR-0603 decision 11](decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
-The scheduler, journal, bounded inputs, daemon service, CLI, durable reported
-outcomes, selection checkpoints and host-read notices are implemented. Processing
-checkpoints and notice delivery adapters remain incomplete;
-their requirements below remain proposed contracts.
+The scheduler, journal, bounded inputs, the soul's own conversation as input
+(#887), daemon service, CLI, durable reported outcomes, selection checkpoints,
+verified-change processing checkpoints (#886) and host-read notices are
+implemented. Memory input is deferred to #903 and knowledge search to #902.
+Notices stay `pending-host-read` because no delivery adapter exists, and
+maintenance coverage stays `unverified` beyond verified changes on purpose.
 Implementation does not register a schedule or grant owner authorization.
 
 Dreaming is a bounded agent turn that maintains eligible knowledge using the
@@ -232,7 +234,7 @@ host-wide harness stores or another soul's sessions.
 
 The first implementation supported definition and learned-skill sources only,
 verified against the soul revision and file digests. Memory-tool adapters report
-`unsupported` until implemented; the conversation reader below covers the soul's
+`unsupported` until implemented (#903); the conversation reader below covers the soul's
 own recorded session. A conversation reader must use
 the same verified store origin as its session; an unknown origin cannot be
 guessed from a current environment override. These are explicit partial coverage,
@@ -559,7 +561,10 @@ Version 1-8 states read as version 9 with no processing checkpoints and upgrade
 on the next write; recorded events are never rewritten. Readers must be upgraded before opening a v9 journal.
 `agent-bot soul dream status` lists the soul's processing checkpoint.
 
-### Remaining checkpoint and notice contract
+### Outcome, checkpoint and notice contract
+
+The processing checkpoint above implements the cursor rule below for verified
+changes; notice delivery adapters remain unimplemented.
 
 Execution status and maintenance coverage are separate. A process can finish
 successfully while some sources or capabilities remain blocked or unsupported.
