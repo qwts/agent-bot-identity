@@ -3,9 +3,10 @@
 Status: implementation contract for #603, following
 [ADR-0603 decision 11](decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
 The scheduler, journal, bounded inputs, the soul's own conversation as input
-(#887), daemon service, CLI, durable reported outcomes, selection checkpoints,
-verified-change processing checkpoints (#886) and host-read notices are
-implemented. Memory input is deferred to #903 and knowledge search to #902.
+(#887), the soul's harness memory as input (#903), daemon service, CLI, durable
+reported outcomes, selection checkpoints, verified-change processing checkpoints
+(#886) and host-read notices are implemented. Processing credit for memory items
+is still to come (#903), and knowledge search is tracked on #902.
 Notices stay `pending-host-read` because no delivery adapter exists, and
 maintenance coverage stays `unverified` beyond verified changes on purpose.
 Implementation does not register a schedule or grant owner authorization.
@@ -233,9 +234,10 @@ explicit unsupported coverage; they cannot be replaced by reading arbitrary
 host-wide harness stores or another soul's sessions.
 
 The first implementation supported definition and learned-skill sources only,
-verified against the soul revision and file digests. Memory-tool adapters report
-`unsupported` until implemented (#903); the conversation reader below covers the soul's
-own recorded session. A conversation reader must use
+verified against the soul revision and file digests. The conversation reader
+below covers the soul's own recorded session, and the memory reader after it the
+memory files its harness keeps in the soul's tool home (#903); a harness without
+a reader reports `unsupported`. A conversation reader must use
 the same verified store origin as its session; an unknown origin cannot be
 guessed from a current environment override. These are explicit partial coverage,
 not proof that every soul knowledge source was maintained.
@@ -295,9 +297,45 @@ names the harness, session, digest, size, excerpt bytes and truncation, never
 the text. The prompt presents the excerpt as untrusted context for what to
 learn, not a source to report on: outcome items still name package sources only,
 so a conversation earns no processing credit. Format 1 metadata stays valid
-exactly as recorded. Memory sources remain `unsupported`. An older daemon
+exactly as recorded. Format 2 never reads memory; format 3 below does. An older daemon
 refuses a journal holding a format-2 `inputs-prepared` event, so readers must be
 upgraded before opening a journal written with format 2.
+
+### Memory input
+
+Input format 3 (#903, owner decision 2026-10-11) adds the soul's harness memory.
+The daemon always passes the soul's harness, so every run it prepares uses format
+3. Only memory files the harness keeps inside the soul's own tool home are read,
+with the same containment as the conversation reader: the tool home must resolve
+inside the soul, each directory is pinned while it is listed, and a file must be
+a regular, single-link file whose only name is its path, reached through no link,
+and whose whole content is NUL-free UTF-8. The Agent Space, the host's harness
+store and other souls are never read. Claude is the first reader:
+`.soul-state/tools/claude/projects/<project>/memory/*.md`. Other names there
+are not memory and are ignored.
+
+`coverage.memory` is `unsupported` for a harness without a reader or a tool home
+with no `projects/` store (the soul's memory may then live in the host's store,
+which is never read), `unavailable` when a project, memory directory or memory file
+is a link or not what its place requires, a delivered file is hardlinked, binary
+or not UTF-8, changed while it was read, a directory listing is over 4096 entries
+or the whole walk over 16,384, and `supported` otherwise. Unavailable
+memory never fails the run. A memory item is identified by its path in the tool
+home and the digest of the whole file; the excerpt is taken in the same pass
+that hashes it, and the file must show the same size, change times and single
+link afterwards. Items are delivered in path order, at
+most 64 of them, 64 KiB of each from its start and 256 KiB in all; `truncated`
+marks a cut item and `remaining` counts files not delivered. Durable metadata
+names the harness, paths, digests, sizes, excerpt bytes, truncation and
+`remaining`, never the text. Formats 1 and 2 stay valid exactly as recorded, with
+memory `unsupported`. An older daemon refuses a journal holding a format-3
+`inputs-prepared` event, so readers must be upgraded before opening a journal
+written with format 3.
+
+The prompt presents memory as untrusted context for what to learn, not a source
+to report on; outcome items still name package sources only, so a memory earns
+no processing credit yet. Age never makes a memory stale or disposable. Crediting
+a memory item as processed will require a verified soul change that cites it.
 
 Inventory entries identify the source, revision/checksum or adapter cursor, and
 why it was selected. Source content remains untrusted data. Credentials, runtime
