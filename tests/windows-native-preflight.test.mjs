@@ -348,6 +348,9 @@ test('Windows native binding registry and secret use owner-only custody across r
     const bindingFile = path.join(root, '.git', 'agent-binding.json');
     const custody = createWindowsAccountCustody();
     const sid = custody.currentSid();
+    // A privileged volume owner is eligible only above the account-owned
+    // immediate parent; a claim directly under the volume root is refused.
+    assert.throws(() => custody.assertSafeBindingParents(path.join(path.parse(root).root, 'uncreated-binding.json'), sid), /parent custody/);
     for (const location of [file, bindingFile]) custody.assertPrivateFile(location, sid);
     assert.equal(readBinding({ cwd: root, env: { AGENT_BOT_BINDING: bindingFile } }).secret, secret);
     const reloaded = createBindingRegistry({ file });

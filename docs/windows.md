@@ -163,5 +163,7 @@ Windows binding secrets and the daemon's binding registry use native SID and
 owner-only file ACL checks. Existing parent ACLs are inspected without changes:
 parents must be real directories with trusted account or OS ownership, and
 foreign mutation or descendant replacement rights cause refusal. Secure Git
-worktrees outside the profile remain eligible. TrustedInstaller-owned ancestors
-are currently refused rather than assumed safe.
+worktrees outside the profile remain eligible. The fixed Windows Modules
+Installer (TrustedInstaller) SID is accepted as an ancestor owner; immediate
+parents and binding files still require ownership by the current account, and
+foreign mutation grants remain subject to the same refusal checks.

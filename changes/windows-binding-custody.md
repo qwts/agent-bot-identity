@@ -6,3 +6,5 @@
   file replacement cause refusal.
   Git directory authority checks compare native directory identities on Windows,
   accepting Git/Node path spelling differences without case-folding paths.
+  Native parent inspection executes its complete stdin block and recognizes the
+  fixed Windows Modules Installer SID only as a privileged ancestor owner.

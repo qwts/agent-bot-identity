@@ -156,6 +156,9 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
       `$owner = '${sid}'`,
       "try {",
       "  $trusted = @($owner, 'S-1-5-18', 'S-1-5-32-544')",
+      // The Windows Modules Installer can own normal volume roots. This SID
+      // is accepted only as an ancestor owner, never as a file owner or grant.
+      "  $installer = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'",
       "  $p = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($file))",
       "  $first = $true",
       "  while ($p) {",
@@ -163,7 +166,8 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
       "    if (-not $item.PSIsContainer -or [int]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'object' }",
       "    $acl = Get-Acl -LiteralPath $p",
       "    $actualOwner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
-      "    if ($trusted -notcontains $actualOwner -or ($first -and $actualOwner -ne $owner)) { throw 'owner' }",
+      "    $trustedOwner = $trusted -contains $actualOwner -or (-not $first -and $actualOwner -eq $installer)",
+      "    if (-not $trustedOwner -or ($first -and $actualOwner -ne $owner)) { throw 'owner' }",
       "    $rights = [System.Security.AccessControl.FileSystemRights]",
       "    $mutation = [long]$rights::Write -bor [long]$rights::Delete -bor [long]$rights::DeleteSubdirectoriesAndFiles -bor [long]$rights::ChangePermissions -bor [long]$rights::TakeOwnership",
       "    if (-not $first -and $actualOwner -ne $owner) { $mutation = $mutation -band (-bnot ([long]$rights::WriteData -bor [long]$rights::AppendData)) }",
@@ -177,6 +181,7 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
       "  }",
       "  [Console]::Out.Write('safe')",
       "} catch { [Console]::Out.Write('refused') }",
+      "",
       "",
     ].join('\n');
     const result = run('powershell.exe', POWERSHELL_ARGS, {

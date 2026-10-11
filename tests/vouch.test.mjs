@@ -525,3 +525,15 @@ test('a symlinked vouch key is refused, not read or chmodded through', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('Windows binding parent stdin script terminates its compound block with a blank line', () => {
+  let script;
+  const custody = createWindowsAccountCustody({ run: (_file, _args, options) => {
+    script = options.input;
+    return { status: 0, stdout: 'safe', stderr: '' };
+  } });
+  custody.assertSafeBindingParents("C:\\Users\\owner\\worktree's .git\\binding.json", WINDOWS_SID);
+  assert.ok(script.endsWith('\n\n'), 'classic PowerShell stdin needs a blank line to execute the closing compound block');
+  assert.ok(script.includes("worktree''s .git"), 'the literal path still escapes apostrophes');
+});
