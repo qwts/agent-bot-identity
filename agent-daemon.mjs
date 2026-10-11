@@ -87,7 +87,7 @@ import {
 } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
-import { loadOrCreateVouchKey, signSoulToken, vouchStateDir } from './vouch.mjs';
+import { loadOrCreateVouchKey, signSoulToken, vouchPublicKeyPem, vouchStateDir } from './vouch.mjs';
 import { PROOF_HEADER, parseBindingProof } from './binding-proof.mjs';
 import {
   daemonClient, daemonStateFile, LOOPBACK_HOSTS, probeDaemonHealth as probeHealth,
@@ -2427,7 +2427,7 @@ async function main() {
     }
     case 'pair-comms': {
       const broker = brokerFlag(rest);
-      const pairing = await pairDaemonComms({ brokerAccount: broker });
+      const pairing = await pairDaemonComms({ brokerAccount: broker, publicKey: vouchPublicKeyPem() });
       if (json) {
         process.stdout.write(`${JSON.stringify(pairing, null, 2)}\n`);
       } else {
@@ -2475,7 +2475,7 @@ async function main() {
     case 'vouch-key': {
       const unexpected = rest.filter((arg) => arg !== '--json');
       if (unexpected.length > 0) throw new Error('usage: agent-bot daemon vouch-key');
-      const { publicKeyPem } = loadOrCreateVouchKey(vouchStateDir());
+      const publicKeyPem = vouchPublicKeyPem();
       process.stdout.write(publicKeyPem.endsWith('\n') ? publicKeyPem : `${publicKeyPem}\n`);
       break;
     }

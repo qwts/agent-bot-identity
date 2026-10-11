@@ -25,13 +25,13 @@ import {
   commsPaths,
   createCommsSupervisor,
   daemonVouchKeyFile,
-  ensureDaemonKeyPair,
   loadCommsCredential,
   nextCommsBackoffMs,
   pairDaemonComms,
   reportCommsWake,
   saveCommsCredential,
 } from '../comms-client.mjs';
+import { vouchPublicKeyPem } from '../vouch.mjs';
 
 const roots = [];
 const ME = userInfo().username;
@@ -204,6 +204,7 @@ test('daemon pairing writes a proof file and persists the credential', async () 
       home: '/nonexistent',
       brokerAccount: ME,
       account: 'worker-daemon',
+      publicKey: vouchPublicKeyPem({ env: world.env, home: '/nonexistent' }),
     });
     assert.deepEqual(pairing, { account: 'worker-daemon', brokerUid: MY_UID, code: 'K7Q2XD', state: 'pending' });
 
@@ -226,8 +227,6 @@ test('daemon pairing writes a proof file and persists the credential', async () 
 
     // The vouch key file exists at 0600 for the sibling's signer.
     assert.equal(statSync(daemonVouchKeyFile({ env: world.env, home: '/nonexistent' })).mode & 0o777, 0o600);
-    const again = ensureDaemonKeyPair({ env: world.env, home: '/nonexistent' });
-    assert.ok(again.publicKeyPem.includes('BEGIN PUBLIC KEY'));
   } finally {
     await broker.close();
   }
@@ -242,7 +241,8 @@ test('the pairing proof is 0644 even under a restrictive umask', async () => {
   });
   const previous = process.umask(0o077);
   try {
-    await pairDaemonComms({ env: world.env, home: '/nonexistent', brokerAccount: ME, account: 'worker-daemon' });
+    await pairDaemonComms({ env: world.env, home: '/nonexistent', brokerAccount: ME, account: 'worker-daemon',
+      publicKey: vouchPublicKeyPem({ env: world.env, home: '/nonexistent' }) });
   } finally {
     process.umask(previous);
     await broker.close();
@@ -264,22 +264,37 @@ test('saving the credential leaves no temp file and concurrent saves stay whole'
   assert.deepEqual(readdirSync(path.dirname(file)).filter((name) => name.endsWith('.tmp')), []);
 });
 
-test('the vouch key is reused, never replaced, and must be an owner-only Ed25519 key', () => {
+test('pairing needs the public key passed in and never loads the vouch key itself (#645, F11)', async () => {
+  const world = scratchWorld();
+  const broker = await startFakeBroker(world.socket, () => {});
+  try {
+    await assert.rejects(
+      pairDaemonComms({ env: world.env, home: '/nonexistent', brokerAccount: ME, account: 'worker-daemon' }),
+      { code: 'usage' },
+    );
+    assert.equal(broker.requests.length, 0);
+    assert.equal(existsSync(daemonVouchKeyFile({ env: world.env, home: '/nonexistent' })), false);
+  } finally {
+    await broker.close();
+  }
+});
+
+test('the vouch public key is reused, never replaced, and must come from an owner-only Ed25519 key', () => {
   const world = scratchWorld();
   const options = { env: world.env, home: '/nonexistent' };
-  const first = ensureDaemonKeyPair(options);
+  const first = vouchPublicKeyPem(options);
   const file = daemonVouchKeyFile(options);
-  assert.equal(ensureDaemonKeyPair(options).publicKeyPem, first.publicKeyPem);
+  assert.equal(vouchPublicKeyPem(options), first);
 
   // A loosened mode is tightened back to 0600 rather than advertised as is.
   chmodSync(file, 0o644);
-  assert.equal(ensureDaemonKeyPair(options).publicKeyPem, first.publicKeyPem);
+  assert.equal(vouchPublicKeyPem(options), first);
   assert.equal(statSync(file).mode & 0o777, 0o600);
 
   // A key of the wrong type is refused and left in place, not rotated.
   const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
   writeFileSync(file, rsa, { mode: 0o600 });
-  assert.throws(() => ensureDaemonKeyPair(options), /not an Ed25519 PKCS#8 key/);
+  assert.throws(() => vouchPublicKeyPem(options), /not an Ed25519 PKCS#8 key/);
   assert.equal(readFileSync(file, 'utf8'), rsa);
 });
 
