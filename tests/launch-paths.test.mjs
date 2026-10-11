@@ -74,6 +74,7 @@ const LAUNCH_PATHS = {
   'setup-worktree.mjs': [2, 'git'],
   'signed-commit.mjs': [1, 'git'],
   'sop.mjs': [1, 'git'],
+  'soul-coauthor.mjs': [1, 'git'],
   'wake-listen.mjs': [1, 'git'],
   'worktree-token.mjs': [1, 'git'],
   // Build tooling, never shipped to a soul.

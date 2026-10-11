@@ -1,7 +1,8 @@
 #!/bin/sh
-# Attach the private execution-identity lookup key to bot commits (ENG-0081).
-# The Git author remains the exact GitHub App bot; this trailer adds finer
-# provenance without changing GitHub attribution or exposing the transcript.
+# Attach the private execution-identity lookup key to bot commits (ENG-0081)
+# and credit the soul as co-author (ADR-0815). The Git author remains the
+# exact GitHub App bot; these trailers add finer provenance without changing
+# GitHub attribution or exposing the transcript.
 
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 "$HOOK_DIR/chain-hook" prepare-commit-msg "$@" || exit $?
@@ -30,8 +31,10 @@ node "$IDENTITY_TOOL" show "$ID" >/dev/null || {
   exit 1
 }
 
-MESSAGE_FILE=$1
-grep -q "^Agent-Identity: $ID$" "$MESSAGE_FILE" 2>/dev/null || {
-  printf '\nAgent-Identity: %s\n' "$ID" >>"$MESSAGE_FILE"
+# The soul is credited as co-author next to Agent-Identity, in the final
+# trailer block (ADR-0815); a message crediting another soul is refused.
+node "$HOOK_DIR/../soul-coauthor.mjs" prepare "$1" "$ID" || {
+  echo "agent-bot: refusing a commit whose soul trailers cannot be written" >&2
+  exit 1
 }
 exit 0

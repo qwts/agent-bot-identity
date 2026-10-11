@@ -60,6 +60,42 @@ export function validateAgentId(id) {
   return id;
 }
 
+// ADR-0815: a soul is credited as a Git co-author whose email is its Agent
+// ID in a reserved, never-resolving domain (RFC 6761), so no GitHub account
+// can verify the address and claim the soul's commits.
+export const SOUL_COAUTHOR_DOMAIN = 'souls.agent-bot.invalid';
+const SOUL_CREDIT = new RegExp(
+  `^co-authored-by:[ \\t]*[^\\n<]*<([^@>\\s]*)@${SOUL_COAUTHOR_DOMAIN.replaceAll('.', '\\.')}>`,
+  'gim',
+);
+
+// The `Co-authored-by:` line for a soul. The name is the census name at
+// commit time; characters that would end or split the trailer are dropped.
+export function soulCoAuthorTrailer(id, name) {
+  validateAgentId(id);
+  const shown = String(name ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim();
+  if (!shown) throw new Error('a soul co-author needs a display name');
+  return `Co-authored-by: ${shown} <${id}@${SOUL_COAUTHOR_DOMAIN}>`;
+}
+
+// The Agent IDs (as written, valid or not) that a message credits as soul
+// co-authors, anywhere in the message. Other co-authors are not reported.
+export function soulCoAuthorCredits(message) {
+  return [...String(message).matchAll(SOUL_CREDIT)].map((match) => match[1]);
+}
+
+// A message may credit only the soul it is committed as: one soul cannot be
+// credited with another soul's work (ADR-0815 §2, matrix row 7). With no
+// bound soul, no soul may be credited.
+export function assertSoulCoAuthor(message, id) {
+  const foreign = soulCoAuthorCredits(message).filter((credited) => credited !== id)
+    .map((credited) => credited.replace(/[^\x21-\x7e]/g, '?').slice(0, 64));
+  if (foreign.length === 0) return;
+  throw new Error(id
+    ? `the message credits another soul as co-author (${foreign[0]}); only ${id} may be credited here`
+    : `the message credits a soul as co-author (${foreign[0]}), but no soul is bound here`);
+}
+
 export { stateDirectory } from './state-paths.mjs';
 
 export function discoverTranscript(env = process.env) {
