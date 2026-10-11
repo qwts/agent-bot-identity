@@ -667,7 +667,7 @@ test('enroll and remove change no pins when keyd cannot ask, the owner declines,
   assert.equal(swapped.receipts[0].decision, 'failed');
 });
 
-test('enroll refuses a software key unless asked, and the keyd store until it exists', async (t) => {
+test('enroll refuses a software key unless asked, and the keyd store when no keyd is wired', async (t) => {
   const ctx = command(t);
   const file = join(ctx.dir, 'id_ed25519');
   writeFileSync(`${file}.pub`, `${keydKey().line} owner@laptop\n`);

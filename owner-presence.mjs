@@ -408,6 +408,78 @@ export async function keydAttestPins(pins, {
   return record;
 }
 
+// keyd's report of the owner statement key (#753): a `k1.` record, signed
+// with the presence key for this nonce, of the key's raw public half and its
+// fingerprint. Returns `{ publicKey, fingerprint }` with the key as the
+// ssh-ed25519 line a pin holds; throws `statement-key-invalid` otherwise.
+export function verifyStatementKeyRecord(token, { key, nonce, now = Date.now() }) {
+  const invalid = () => Object.assign(new Error('agent-bot-keyd answered with an owner statement key record that does not verify'), { code: 'statement-key-invalid' });
+  const payload = openSigned(token, { prefix: 'k1', kind: 'statement-key', key, nonce, now, invalid });
+  if (typeof payload.key !== 'string' || !rawKey(payload.key)) throw invalid();
+  const publicKey = ed25519KeyLine(payload.key);
+  const fingerprint = sshFingerprint(parseSshPublicKey(publicKey).blob);
+  if (payload.fingerprint !== fingerprint) throw invalid();
+  return { publicKey, fingerprint };
+}
+
+function keydStoreFailure(error, method) {
+  if (error.rpcCode === -32601) return unavailable(`this agent-bot-keyd cannot answer ${method}; update it`);
+  if (error.code === 'keyd-unavailable' || error.rpcCode === PRESENCE_UNAVAILABLE_RPC) return unavailable(error.message);
+  if (error.code === 'keyd-untrusted') return untrustedItem(error);
+  if (error.rpcCode === -32602) return Object.assign(new Error(`agent-bot-keyd refused the statement (${error.message})`), { code: 'statement-invalid' });
+  return Object.assign(new Error(`the owner did not approve (${error.message})`), { code: 'owner-declined' });
+}
+
+// The keyd store for owner statements (ADR-0753 section 5, #753): keyd holds
+// the owner statement key and signs a payload segment only after showing the
+// owner its text, scope and expiry. Returns `{ alg, publicKey, fingerprint,
+// key, sign(segment) }` for owner-statement.mjs, with the public key taken
+// from keyd's record under the pinned presence key, never from the socket
+// alone. `sign` resolves to the 64-byte signature, checked against that key
+// before it is returned, so a socket standing in for keyd signs nothing.
+export async function keydStatementStore({
+  env = process.env,
+  home = env.HOME || homedir(),
+  pinned = pinnedPresenceKey,
+  request = keydRequest,
+  now = () => Date.now(),
+  nonce = () => randomBytes(18).toString('base64url'),
+} = {}) {
+  const presence = pinned({ env, home });
+  if (!presence) throw unavailable('agent-bot-keyd is not set up to sign owner statements here');
+  const socket = keydPaths({ env, home }).ownerSocket;
+  const sent = nonce();
+  let result;
+  try {
+    result = await request(socket, 'owner/statement-key', { nonce: sent }, { timeoutMs: PINS_STATUS_TIMEOUT_MS });
+  } catch (error) {
+    throw keydStoreFailure(error, 'owner/statement-key');
+  }
+  const { publicKey, fingerprint } = verifyStatementKeyRecord(result?.record, { key: presence, nonce: sent, now: now() });
+  const key = parseSshPublicKey(publicKey);
+  const verifier = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: key.raw.toString('base64url') }, format: 'jwk' });
+  return {
+    alg: 'ed25519',
+    publicKey,
+    fingerprint,
+    key,
+    async sign(segment) {
+      let answer;
+      try {
+        answer = await request(socket, 'owner/sign', { payload: segment }, { timeoutMs: OWNER_TIMEOUT_MS });
+      } catch (error) {
+        throw keydStoreFailure(error, 'owner/sign');
+      }
+      const signature = typeof answer?.signature === 'string' ? Buffer.from(answer.signature, 'base64url') : Buffer.alloc(0);
+      if (signature.length !== 64 || signature.toString('base64url') !== answer.signature
+        || !verify(null, Buffer.from(segment, 'ascii'), verifier, signature)) {
+        throw Object.assign(new Error('agent-bot-keyd answered with a signature that does not verify under its statement key'), { code: 'owner-sign-failed' });
+      }
+      return signature;
+    },
+  };
+}
+
 // `owner/pins-status` asks nobody, so it answers quickly or not at all.
 const PINS_STATUS_TIMEOUT_MS = 10_000;
 

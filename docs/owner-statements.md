@@ -14,10 +14,10 @@ the ssh store, and signed-challenge fallbacks for the owner gate: a terminal
 prompt (#822) and the daemon's decision routes. Each trusts the owner pins
 only on a request where agent-bot-keyd vouches for them (see below); on any
 other request the owner gate is answered by keyd presence or the
-administrator dialog, as before. There is no inbox delivery yet. **Not yet:**
-the keyd store (keyd's `owner/sign` RPC) and pins from the organization
-profile. Until then `owner enroll --store keyd` answers
-`owner-store-unavailable`.
+administrator dialog, as before. The keyd store signs statements and
+enrolment on a Mac (below). **Not yet:** inbox delivery of challenges,
+answering a challenge with the keyd store, and installing pins from the
+organization profile.
 
 ## The statement
 
@@ -57,8 +57,9 @@ shape not listed here.
 
 ```text
 agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json]
-agent-bot owner sign "<text>" --repo OWNER/NAME --issue N --key PATH [--expires 7d]
+agent-bot owner sign "<text>" --repo OWNER/NAME --issue N (--key PATH | --store keyd) [--expires 7d]
 agent-bot owner sign --challenge <JSON> --key PATH
+agent-bot owner enroll --store keyd [--name NAME]
 agent-bot owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key]
 agent-bot owner keys [--json]
 agent-bot owner remove NAME
@@ -108,6 +109,10 @@ its text, scope and expiry, and asks `ssh-keygen -Y sign` to sign it with the
 key at `--key` (its public half is read from `PATH.pub`). It refuses a caller
 with soul markers or an agent harness's environment (`CLAUDECODE`,
 `CODEX_*`, `CURSOR_AGENT`, and the others `detect-harness.mjs` keys on).
+With `--store keyd` it asks agent-bot-keyd instead (see [the keyd
+store](#the-keyd-store)): keyd shows the owner the text, scope and expiry
+itself, so an agent harness may run it, but a caller with soul markers is
+still refused before keyd is asked.
 
 **When the challenge fallbacks answer.** `<state>/owner/keys.json` is
 writable by anything running as the owner, a soul included, and a security
@@ -186,7 +191,12 @@ challenge, then asks agent-bot-keyd to record the whole new key set
 (`owner/pins-attest`, #753): keyd shows the owner every key the set holds,
 by name and fingerprint, those already pinned included, and records it only
 when they approve with Touch ID or the login password. Only then is the key
-pinned. At most four keys are pinned, each under its own name.
+pinned. At most four keys are pinned, each under its own name. With
+`--store keyd` the key is keyd's owner statement key, which keyd reports
+signed with its presence key, so enrolment asks the owner twice: once to sign
+the enrolment challenge, and once to trust the new key set. It takes no
+`--key`, `--verify-required` or `--allow-software-key`; the default name is
+`keyd`.
 
 **remove** unpins one key, also by having keyd record the remaining set.
 A caller carrying a soul's Agent ID, binding or App identity is refused
@@ -218,8 +228,25 @@ enrols, rotates or removes a key.
 - **The ssh store has no trusted display.** A security key proves a touch or
   a PIN, not what was signed. Run `owner sign` and `owner sign --challenge`
   only on a machine or terminal where no agent runs in your account. The
-  challenge flow is a user-mediated CLI path; a trusted display on an agent
-  host and keyd signing remain future work.
+  challenge flow is a user-mediated CLI path; on an agent host, use the keyd
+  store.
+
+## The keyd store
+
+agent-bot-keyd holds the owner statement key on a Mac, in a Keychain seed of
+its own (service `agent-bot.keyd`, account `owner-statement-key`), apart
+from the presence key. agent-bot takes the key from keyd's
+`owner/statement-key` record, signed with the presence key it pins from the
+code-signed binary, and has keyd sign with `owner/sign`. keyd checks the
+payload, shows the owner its own words for it (the text, the repository and
+issue or host, and the expiry) in the Touch ID prompt, and only on approval
+signs exactly those bytes. agent-bot then checks the signature against the
+reported key before printing anything. The pin is `store: keyd`, `alg:
+ed25519`. The keyd store has a trusted display, so unlike the ssh store it
+may run where an agent runs the terminal. It does not yet answer challenges:
+the challenge path runs where presence is unavailable, which is where keyd
+cannot ask either. See [the keyd
+protocol](keyd-protocol.md#owner-statement-signing-keyd-store-753).
 
 ## How agents use a statement
 
