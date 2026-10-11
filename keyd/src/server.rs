@@ -534,6 +534,15 @@ impl Keyd {
                     )));
                 }
                 self.consent.ask(&statement::reason(&request))?;
+                // The prompt can take minutes: a payload that expired while
+                // the owner was asked is not signed.
+                if (self.now)() >= request.exp {
+                    malformed = true;
+                    return Err(Refusal::Declined(format!(
+                        "the {} expired while the owner was asked",
+                        request.kind
+                    )));
+                }
                 Ok(statement::sign(&seed, segment))
             });
         let (decision, detail) = match &outcome {
@@ -2138,6 +2147,35 @@ mod tests {
         keyd.store = Store::new(Box::new(items.clone()));
         keyd.consent = Box::new(Arc::clone(consent));
         (keyd, items)
+    }
+
+    #[test]
+    fn does_not_sign_a_payload_that_expired_while_the_owner_was_asked() {
+        use crate::statement::tests::SEGMENT;
+        thread_local! {
+            static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        // The request is read at NOW; the owner answers eight days later,
+        // past the vector statement's seven-day expiry.
+        fn later() -> u64 {
+            let call = CALLS.with(|calls| calls.replace(calls.get() + 1));
+            if call == 0 {
+                NOW
+            } else {
+                NOW + 8 * 86_400
+            }
+        }
+        let consent = Arc::new(Consenting::new(true));
+        let (mut keyd, _) = statement_keyd(&consent);
+        keyd.now = later;
+        let answer = sign_statement(&keyd, json!(SEGMENT));
+        assert_eq!(answer["error"]["code"], -32602, "{answer}");
+        assert!(answer.get("result").is_none());
+        assert_eq!(
+            consent.asked.lock().unwrap().len(),
+            1,
+            "the owner was asked"
+        );
     }
 
     fn sign_statement(keyd: &Keyd, payload: Value) -> Value {

@@ -525,7 +525,8 @@ Both methods are on `owner.sock` only; `soul.sock` refuses them.
   or, for a challenge, "agent-bot asks you to approve a request on studio for
   qwts/x#5, until …: “…”". Only on approval does it answer `{ signature }`,
   the base64url Ed25519 signature of the segment's ASCII bytes exactly as
-  sent; agent-bot appends it to make the `s1.` token. A cancel is `-32000`;
+  sent; agent-bot appends it to make the `s1.` token. A payload that expires
+  while the owner is asked is not signed (`-32602`). A cancel is `-32000`;
   nobody to ask is `-32001`; a statement key keyd does not control is
   `-32002`. Every attempt leaves a `keyd-owner` receipt naming the kind and the
   SHA-256 of the segment, never the text.
