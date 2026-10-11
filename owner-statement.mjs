@@ -1,6 +1,7 @@
 // Owner-signed statements (ADR-0753, #753): a decision the owner signs with a
-// key no agent can read, which any agent, CI job or subagent can check offline
-// against the keys pinned here.
+// key no agent can read. Any agent, CI job or subagent can check its
+// signature offline against the keys pinned here; it is the owner's approval
+// only where agent-bot-keyd vouches for those pins on that call (below).
 //
 //   s1.<base64url(payload JSON)>.<base64url(signature)>
 //   payload: { v: 1, aud: 'agent-bot-owner-statement', kind, alg, key,
@@ -17,8 +18,10 @@
 // goes through keyd (#753): keyd shows the owner the whole new key set and,
 // only on approval, records it, and enrolling also needs a signature from the
 // new key. With no keyd to ask, the pins do not change. A statement never
-// changes the pins, so the fallback cannot bootstrap itself. Verification reads only those pins: no
-// network, no daemon, no secret.
+// changes the pins, so the fallback cannot bootstrap itself. Checking a
+// signature reads only those pins: no network, no daemon, no secret. Calling
+// it approval also asks keyd, on that call, whether it recorded exactly
+// those pins (`owner/pins-status`); without keyd, as in CI, it never is.
 //
 // This slice ships the format, the verifier (Ed25519 and SSHSIG, including
 // FIDO `sk-ssh-ed25519@openssh.com` keys and their presence flags), the pins,
@@ -679,11 +682,13 @@ function verifyInput(source, { readStdin, readFile }) {
 // `owner-key` receipt.
 // Owner pins live in a file anything running as the owner can write, a soul
 // included, and a software-made security key looks like hardware, so a soul
-// could pin its own key and sign its own "owner statement" (#753). Until the
-// pins are integrity-protected (for example MAC'd or signed by keyd), `owner
-// verify` reports a valid signature but never says the owner approved.
-export const OWNER_PINS_PROTECTED = false;
-const PINS_UNPROTECTED = 'the owner pins on this host are not integrity-protected, so anything running as the owner could have pinned this key; do not act on this statement';
+// could pin its own key and sign its own "owner statement" (#753). `owner
+// verify` therefore says the owner approved only when keyd vouches, for this
+// call, that the pins it read are the set the owner approved (`attestPins`,
+// owner-presence.mjs's attestedOwnerKeys, wired by cli/owner.mjs). Otherwise
+// it reports a valid signature and why it is not approval.
+const PINS_UNPROTECTED = 'agent-bot-keyd does not vouch for the owner pins on this host, so anything running as the owner could have pinned this key; do not act on this statement';
+const noPinAttestation = async () => ({ attested: false, code: 'presence-unavailable', reason: 'nothing here asks agent-bot-keyd about the owner keys' });
 
 export async function ownerCommand(argv, {
   env = process.env,
@@ -699,9 +704,9 @@ export async function ownerCommand(argv, {
   receipt = () => {},
   sign = sshSign,
   host = localHost,
-  // Whether this host's owner pins are integrity-protected (#753). Nothing
-  // protects them yet, and the command line never passes this.
-  pinsProtected = OWNER_PINS_PROTECTED,
+  // (pins, { env, home }) => { attested, code, reason }: whether keyd vouches
+  // for exactly these owner pins, asked per call (#753). Never throws.
+  attestPins = noPinAttestation,
 } = {}) {
   const [command, ...rest] = argv;
   const { parseArgs } = await import('node:util');
@@ -720,17 +725,26 @@ export async function ownerCommand(argv, {
       if (positionals.length !== 1) throw usage('owner verify takes one token, file or -');
       const scope = scopeFlags(values, { required: false });
       try {
+        // One read of the pins: the set the signature is checked against is
+        // the set keyd is asked to vouch for.
+        const keys = readOwnerKeys(store);
         const { payload, pin } = verifyStatement(verifyInput(positionals[0], { readStdin, readFile }), {
-          keys: readOwnerKeys(store), now: now(), repo: scope?.repo ?? null, issue: scope?.number ?? null,
+          keys, now: now(), repo: scope?.repo ?? null, issue: scope?.number ?? null,
         });
         const verified = { kind: payload.kind, text: payload.text, scope: payload.scope, key: pin.name,
           fingerprint: pin.fingerprint, issuedAt: new Date(payload.iat * 1000).toISOString(), expiresAt: new Date(payload.exp * 1000).toISOString() };
-        if (!pinsProtected) {
+        let attestation;
+        try { attestation = await attestPins(keys, { env, home }); } catch (error) {
+          attestation = { attested: false, code: error.code ?? 'pins-invalid', reason: error.message };
+        }
+        if (attestation?.attested !== true) {
           // The signature math still runs, as a diagnostic, but a pin that
           // anything running as the owner could have written proves nothing.
-          const result = { ok: false, code: 'owner-pins-unprotected', signature: 'valid', message: PINS_UNPROTECTED, ...verified };
+          const reason = attestation?.reason ?? 'agent-bot-keyd did not vouch for the owner pins';
+          const result = { ok: false, code: 'owner-pins-unprotected', signature: 'valid', message: PINS_UNPROTECTED,
+            pins: { code: attestation?.code ?? 'pins-invalid', reason }, ...verified };
           if (values.json) json(result);
-          else write(`NOT owner approval: ${PINS_UNPROTECTED}\nsignature valid for owner ${payload.kind} (key ${pin.name}), ${describeScope(payload.scope)}, expires ${verified.expiresAt}:\n${payload.text}\n`);
+          else write(`NOT owner approval: ${PINS_UNPROTECTED} (${reason})\nsignature valid for owner ${payload.kind} (key ${pin.name}), ${describeScope(payload.scope)}, expires ${verified.expiresAt}:\n${payload.text}\n`);
           return result;
         }
         const result = { ok: true, ...verified };

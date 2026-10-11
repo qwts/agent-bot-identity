@@ -11,7 +11,8 @@ import {
   ORGANIZATION_PROFILE_SCHEMA_VERSION, isProjectedRuntimeConfig, organizationProfileToConfig, validateOrganizationProfile,
 } from '../organization-profile.mjs';
 import {
-  PRESENCE_AUDIENCE, PRESENCE_KEY_UNTRUSTED, PRESENCE_UNAVAILABLE_RPC, actionDigest, developerIdRequirement, keydAttestPins, keydPresence,
+  PRESENCE_AUDIENCE, PRESENCE_KEY_UNTRUSTED, PRESENCE_UNAVAILABLE_RPC, actionDigest, attestedOwnerKeys, createPinsGenerationFloor,
+  developerIdRequirement, keydAttestPins, keydPresence,
   keydPresenceWithoutDialog, pinSetDigest, pinnedPresenceKey, pinnedPresenceKeyWithoutDialog, presenceKeyFingerprint, presencePinPath,
   presenceSignerPath, verifyPinsAttestation, verifyPresence,
 } from '../owner-presence.mjs';
@@ -584,6 +585,88 @@ test('keydAttestPins asks keyd to record the whole key set and checks the record
     { code: 'owner-declined' });
   await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('not one agent-bot-keyd controls'), { code: 'keyd-untrusted', rpcCode: -32002 }))),
     { code: 'keyd-untrusted' });
+});
+
+// The readers' check (#753): keyd's signed record, fresh for this nonce,
+// under the pinned presence key, of exactly the pins read, and no older than
+// a record this process has seen. Every other answer is "not vouched for",
+// never a throw, so the caller keeps keyd presence or the dialog.
+test('attestedOwnerKeys vouches only for the exact pins keyd recorded, freshly signed and not older than seen', async (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const pins = [{ name: 'yubikey', store: 'ssh', alg: 'sshsig', publicKey: 'sk-ssh-ed25519@openssh.com AAAA', fingerprint: `SHA256:${'A'.repeat(43)}`,
+    verifyRequired: false, softwareKey: false, pinnedAt: '2026-10-10T00:00:00.000Z' }];
+  const calls = [];
+  const status = ({ digest = pinSetDigest(pins), generation = 4, ...over } = {}) => async (socket, method, params, options) => {
+    calls.push({ socket, method, params, options });
+    return { attestation: key.pins({ digest, generation, nonce: params.nonce, ...over }) };
+  };
+  const seams = (over = {}) => ({ env, pinned: () => key.raw, request: status(), now: () => NOW, nonce: () => NONCE,
+    floor: createPinsGenerationFloor(), ...over });
+  const refused = async (code, over, message) => {
+    const result = await attestedOwnerKeys(pins, seams(over));
+    assert.equal(result.attested, false);
+    assert.equal(result.code, code);
+    if (message) assert.match(result.reason, message);
+  };
+
+  assert.deepEqual(await attestedOwnerKeys(pins, seams()), { attested: true, generation: 4 });
+  assert.equal(calls[0].method, 'owner/pins-status');
+  assert.match(calls[0].socket, /keyd\/owner\.sock$/);
+  assert.deepEqual(calls[0].params, { nonce: NONCE });
+  assert.ok(calls[0].options.timeoutMs <= 10_000, 'pins-status asks nobody, so it is not given a person\'s time');
+
+  // Another key set, a pin changed by one field, or no set approved at all.
+  await refused('pins-mismatch', { request: status({ digest: pinSetDigest([]) }) }, /not the ones the owner approved/);
+  await refused('pins-mismatch', { request: status({ digest: pinSetDigest([{ ...pins[0], verifyRequired: true }]) }) });
+  await refused('pins-mismatch', { request: status({ digest: null, generation: 0 }) }, /has not approved any owner keys/);
+  // Not keyd's key, an answer for another nonce, a stale or malformed record,
+  // or a presence assertion in its place.
+  await refused('pins-invalid', { pinned: () => presenceKey().raw });
+  await refused('pins-invalid', { request: status({ nonce: 'zyxwvutsrqponmlkjihgfedc' }) });
+  await refused('pins-invalid', { request: status({ iat: SECONDS - 600, exp: SECONDS - 540 }) });
+  await refused('pins-invalid', { request: status({ generation: 0 }) });
+  await refused('pins-invalid', { request: async () => ({ attestation: key.assertion('x') }) });
+  await refused('pins-invalid', { request: async () => ({}) });
+  await refused('pins-invalid', { request: async () => null });
+
+  // No keyd here, a presence key that cannot be confirmed, or one keyd does
+  // not control: nothing vouches, and no dialog was raised to find out.
+  await refused('presence-unavailable', { pinned: () => null }, /not set up here/);
+  await refused('presence-pin-mismatch', { pinned: () => { throw Object.assign(new Error('re-pin refused'), { code: 'presence-pin-mismatch' }); } });
+  await refused('keyd-untrusted', { pinned: () => { throw Object.assign(new Error('seed not controlled'), { code: 'keyd-untrusted' }); } });
+  await refused('presence-unavailable', { pinned: () => { throw new Error('codesign failed'); } });
+  const failing = (error) => ({ request: async () => { throw error; } });
+  await refused('presence-unavailable', failing(Object.assign(new Error('agent-bot-keyd is not running'), { code: 'keyd-unavailable' })));
+  await refused('presence-unavailable', failing(Object.assign(new Error('method not found'), { code: 'keyd-refused', rpcCode: -32601 })), /update it/);
+  // A record keyd cannot read, or one it does not control (#890), is not
+  // vouched for, and is not read as "no keys" either.
+  await refused('pins-invalid', failing(Object.assign(new Error('cannot read the record'), { code: 'keyd-refused', rpcCode: -32000 })));
+  await refused('keyd-untrusted', failing(Object.assign(new Error('not one agent-bot-keyd controls'), { code: 'keyd-untrusted', rpcCode: -32002 })), /not one it controls/);
+  await refused('pins-invalid', failing(new Error('socket reset')));
+
+  // A record older than one this process has seen is refused, even for the
+  // pins it names; the same or a newer one is fine.
+  const floor = createPinsGenerationFloor();
+  const older = pinSetDigest([pins[0], { ...pins[0], name: 'phone', fingerprint: `SHA256:${'B'.repeat(43)}` }]);
+  assert.equal((await attestedOwnerKeys(pins, seams({ floor, request: status({ generation: 5 }) }))).attested, true);
+  assert.equal((await attestedOwnerKeys(pins, seams({ floor, request: status({ generation: 5 }) }))).attested, true);
+  await refused('pins-stale', { floor, request: status({ generation: 3 }) }, /older than record 5/);
+  // A newer record for another set still moves the floor: keyd signed it.
+  await refused('pins-mismatch', { floor, request: status({ digest: older, generation: 7 }) });
+  await refused('pins-stale', { floor, request: status({ generation: 6 }) });
+  assert.equal(floor.value, 7);
+  // A record that does not verify never moves it.
+  await refused('pins-invalid', { floor, pinned: () => presenceKey().raw, request: status({ generation: 99 }) });
+  assert.equal(floor.value, 7);
+});
+
+// With no keyd set up, the defaults look for nothing past this HOME and run
+// no binary: the readers fall back without prompting anyone.
+test('attestedOwnerKeys with its defaults and no keyd here is "not vouched for"', async (t) => {
+  const { env } = home(t);
+  const result = await attestedOwnerKeys([], { env, floor: createPinsGenerationFloor() });
+  assert.deepEqual([result.attested, result.code], [false, 'presence-unavailable']);
 });
 
 // End to end through a real process: presence-key's exit 3 is an untrusted

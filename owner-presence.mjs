@@ -407,3 +407,81 @@ export async function keydAttestPins(pins, {
   }
   return record;
 }
+
+// `owner/pins-status` asks nobody, so it answers quickly or not at all.
+const PINS_STATUS_TIMEOUT_MS = 10_000;
+
+// The newest generation of the owner key record this process has seen keyd
+// sign (#753). keyd's Keychain item only ever moves forward, and an item keyd
+// does not control is `-32002`, so a record going backwards means something
+// answered for keyd with an older one. This floor lives in memory only:
+// agent-bot has no record of the generation a soul cannot write, so a restart
+// forgets it, and a rollback across a restart is not seen here. As with the
+// presence pin, that is detected, not prevented, until the data-protection
+// keychain under the signed host app holds it.
+export function createPinsGenerationFloor() {
+  let floor = -1;
+  return {
+    get value() { return floor; },
+    // False when `generation` is older than one already seen; otherwise
+    // raises the floor to it.
+    admit(generation) {
+      if (generation < floor) return false;
+      floor = generation;
+      return true;
+    },
+  };
+}
+const processGenerationFloor = createPinsGenerationFloor();
+
+// Whether keyd vouches for exactly `pins`, the owner keys a reader has just
+// read from `<state>/owner/keys.json` (#753). Asked once per request, with a
+// fresh nonce, under the presence key pinned from the code-signed binary and
+// never through the administrator dialog. Returns `{ attested: true,
+// generation }` only when keyd's signed record verifies and its digest is
+// this set's. Anything else is `{ attested: false, code, reason }` and never
+// throws: no keyd, an older keyd (`-32601`), a record keyd cannot read or does
+// not control (`-32002`), a bad signature, another key set, or an older
+// generation than this process has seen. The caller then keeps today's
+// behaviour, keyd presence or the administrator dialog, and trusts no pin.
+// Unlike `keydPresence`, an untrusted record is not a refusal here: it only
+// means the pins are not vouched for, which is where every host stood before.
+export async function attestedOwnerKeys(pins, {
+  env = process.env,
+  home = env.HOME || homedir(),
+  pinned = pinnedPresenceKeyWithoutDialog,
+  request = keydRequest,
+  now = () => Date.now(),
+  nonce = () => randomBytes(18).toString('base64url'),
+  floor = processGenerationFloor,
+} = {}) {
+  const refused = (code, reason) => ({ attested: false, code, reason });
+  let key;
+  try { key = pinned({ env, home }); } catch (error) {
+    return refused(error.code ?? 'presence-unavailable', `agent-bot-keyd's presence key could not be confirmed (${error.message})`);
+  }
+  if (!key) return refused('presence-unavailable', 'agent-bot-keyd is not set up here, so nothing vouches for the owner keys');
+  const sent = nonce();
+  let result;
+  try {
+    result = await request(keydPaths({ env, home }).ownerSocket, 'owner/pins-status', { nonce: sent }, { timeoutMs: PINS_STATUS_TIMEOUT_MS });
+  } catch (error) {
+    if (error.rpcCode === -32601) return refused('presence-unavailable', 'this agent-bot-keyd cannot report the owner keys; update it');
+    if (error.code === 'keyd-untrusted') return refused('keyd-untrusted', `agent-bot-keyd's record of the owner keys is not one it controls (${error.message})`);
+    if (error.code === 'keyd-unavailable') return refused('presence-unavailable', `agent-bot-keyd did not answer (${error.message})`);
+    return refused('pins-invalid', `agent-bot-keyd could not report the owner keys (${error.message})`);
+  }
+  let record;
+  try { record = verifyPinsAttestation(result?.attestation, { key, nonce: sent, now: now() }); } catch (error) {
+    return refused(error.code ?? 'pins-invalid', error.message);
+  }
+  if (!floor.admit(record.generation)) {
+    return refused('pins-stale', `agent-bot-keyd answered with owner key record ${record.generation}, older than record ${floor.value} seen before`);
+  }
+  if (record.digest !== pinSetDigest(pins)) {
+    return refused('pins-mismatch', record.digest === null
+      ? 'the owner has not approved any owner keys through agent-bot-keyd'
+      : 'the owner keys on file are not the ones the owner approved through agent-bot-keyd');
+  }
+  return { attested: true, generation: record.generation };
+}

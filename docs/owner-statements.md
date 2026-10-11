@@ -2,17 +2,19 @@
 
 An owner decision that an agent finds in an issue, a PR or a chat is only a
 claim: anything one agent writes, another can forge. An owner-signed
-statement is a decision the owner signs with a key no agent can read, which
-any agent, CI job or subagent can check offline. The design is
+statement is a decision the owner signs with a key no agent can read. Any
+agent, CI job or subagent can check its signature offline against the pinned
+keys; it counts as the owner's approval only where agent-bot-keyd vouches
+for those pins on that call, which needs keyd on the host. The design is
 [ADR-0753](decisions/ADR-0753-owner-signed-statements.md); this page is the
 contract as built.
 
 **Built so far:** the `s1.` format, `agent-bot owner verify`, pinned keys,
 the ssh store, and signed-challenge fallbacks for the owner gate: a terminal
-prompt (#822) and the daemon's decision routes. Both are built and switched
-off until owner pins are integrity-protected (see below), so today the owner
-gate is answered only by keyd presence or the administrator dialog. There is
-no inbox delivery yet. **Not yet:**
+prompt (#822) and the daemon's decision routes. Each trusts the owner pins
+only on a request where agent-bot-keyd vouches for them (see below); on any
+other request the owner gate is answered by keyd presence or the
+administrator dialog, as before. There is no inbox delivery yet. **Not yet:**
 the keyd store (keyd's `owner/sign` RPC) and pins from the organization
 profile. Until then `owner enroll --store keyd` answers
 `owner-store-unavailable`.
@@ -65,21 +67,25 @@ agent-bot owner remove NAME
 **verify** finds the one statement block in a token, a file or stdin, checks
 it against the pinned keys, and prints the verified text, scope, key and
 expiry. With `--repo` and `--issue` it also checks the scope. It needs no
-secret, no network and no daemon. A file must be a regular file, not a
+secret and no network. A file must be a regular file, not a
 symbolic link, FIFO or device, and a file or stdin is read up to 1 MiB.
 
-**Until pins are integrity-protected, verify never says the owner
-approved.** `<state>/owner/keys.json` is writable by anything running as the
+**verify says the owner approved only when agent-bot-keyd vouches for the
+pins.** `<state>/owner/keys.json` is writable by anything running as the
 owner, a soul included, and a security key made in software looks the same
 as hardware, so a soul could pin its own key and sign its own statement
-(#753). A statement whose signature checks out against the local pins is
-printed as `NOT owner approval: ...` followed by `signature valid for owner
-statement ...` and its text, and exits 1 with `owner-pins-unprotected` (`--json`: `{ ok:
-false, code: "owner-pins-unprotected", signature: "valid", message, kind,
-text, scope, key, fingerprint, issuedAt, expiresAt }`). That is a diagnostic
-of the signature, not a decision. Once pins are protected (for example
-MAC'd or signed by keyd), a valid statement prints `verified owner
-statement ...` and exits 0.
+(#753). So after the signature checks out, verify asks keyd, on this call,
+for its signed record of the owner keys (`owner/pins-status`, see
+[the keyd protocol](keyd-protocol.md#readers)) and compares it with the pins
+it just read. Only when they match does a valid statement print `verified
+owner statement ...` and exit 0. Otherwise (no keyd on this host, as in CI
+or over SSH; another key set; a record keyd does not control; an older
+record) it is printed as `NOT owner approval: ... (<why>)` followed by
+`signature valid for owner statement ...` and its text, and exits 1 with
+`owner-pins-unprotected` (`--json`: `{ ok: false, code:
+"owner-pins-unprotected", signature: "valid", message, pins: { code, reason
+}, kind, text, scope, key, fingerprint, issuedAt, expiresAt }`). That is a
+diagnostic of the signature, not a decision. Asking keyd shows no prompt.
 
 Any other refusal exits 1 with one code:
 
@@ -89,7 +95,7 @@ Any other refusal exits 1 with one code:
 | `statement-unknown-key` | signed by a key not pinned here |
 | `statement-expired` | authentic, but past its `exp` |
 | `statement-scope-mismatch` | authentic, but scoped to another repository or issue |
-| `owner-pins-unprotected` | the signature is valid against the local pins, which are not integrity-protected yet; not approval |
+| `owner-pins-unprotected` | the signature is valid against the local pins, but agent-bot-keyd did not vouch for them on this call; not approval |
 
 The signature is checked first, so `statement-expired` and
 `statement-scope-mismatch` are only ever said about an authentic statement.
@@ -101,19 +107,22 @@ key at `--key` (its public half is read from `PATH.pub`). It refuses a caller
 with soul markers or an agent harness's environment (`CLAUDECODE`,
 `CODEX_*`, `CURSOR_AGENT`, and the others `detect-harness.mjs` keys on).
 
-**Why the challenge fallbacks are off.** `<state>/owner/keys.json` is
+**When the challenge fallbacks answer.** `<state>/owner/keys.json` is
 writable by anything running as the owner, a soul included, and a security
 key made in software (`sk-ssh-ed25519` carries no attestation) looks the
 same as hardware. A soul that clears its markers could pin its own key and
-sign its own challenge. So until the pins are integrity-protected (for
-example MAC'd or signed by keyd), no owner gate trusts the pin file: the
-terminal fallback needs the gate option `signedChallenges: true` and the
-daemon routes need `signedChallengeRoutes`, and nothing sets either. With
-them off the gate never reads the pins, so a missing or malformed pin file
-never blocks the owner. This closes a gap in the terminal fallback as
-merged in #822. `owner enroll`, `sign` and `verify` are unchanged.
+sign its own challenge. So no owner gate trusts the pin file on its own:
+when presence is unavailable, the gate asks agent-bot-keyd, on that request
+and with a fresh nonce, for its signed record of the owner keys, and uses the
+pins only if it matches them ([keyd protocol](keyd-protocol.md#readers)).
+There is no switch that turns this on for every request. With no keyd to
+ask, another key set, a record keyd does not control or cannot read, or an
+older record than seen before, the gate does what it did before pins
+existed: the administrator dialog, or a refusal where nobody can see one.
+A missing or malformed pin file never blocks the owner either.
 
-When the terminal fallback is on, it works as follows.
+The terminal fallback, on a request where keyd vouches for the pins, works
+as follows.
 
 **sign --challenge** accepts the JSON challenge shown by the waiting owner gate.
 Run it on a trusted terminal with the matching SSH key, inspect the displayed
@@ -121,29 +130,32 @@ summary and host scope, then paste its armored output into the waiting prompt.
 The gate accepts one reply only while that request is pending and the signing
 key remains pinned. The prompt requires a TTY, reads at most 1 MiB, and waits
 for at most ten minutes; EOF, blank input, cancellation, timeout, malformed
-input or a bad signature refuses the action. If any owner key is enrolled but
-no enrolled SSH key can answer, a challenge-eligible action refuses instead
-of falling back to administrator consent. The older administrator fallback
-remains for those actions on hosts with no enrolled owner keys. Enrolment and
+input or a bad signature refuses the action. If keyd vouches for the
+enrolled owner keys but no enrolled SSH key can answer, a challenge-eligible
+action refuses instead of falling back to administrator consent. The older
+administrator fallback remains for hosts with no enrolled owner keys and for
+pins keyd does not vouch for on that request. Enrolment and
 removal go through keyd's owner key record (below) and cannot use a signed
 challenge.
 
 **On a decision route.** Deciding a soul's waiting tool request through
 `POST /v0/approvals/decide` (`agent-bot approvals approve|deny`) or
-`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal,
-and today it is answered only by keyd presence or the administrator dialog.
+`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal.
+It is answered by keyd presence; when keyd cannot ask, by a signed challenge
+on a request where keyd vouches for the owner pins (below); otherwise by the
+administrator dialog.
 The receipt of each decision records how it was authorized (`authorized:
-presence`, `consent`, or `statement <key>`). The daemon does not read the
-owner pins for these routes at all, so a missing or malformed pin file never
-blocks a decision.
+presence`, `consent`, or `statement <key>`). A missing or malformed pin
+file never blocks a decision.
 
-Signed challenges on these routes are built but off (`createDaemonServer`'s
-`signedChallengeRoutes`, default false, with no flag or environment switch).
-They stay off until the pins are integrity-protected, for example MAC'd or
-signed by keyd: `<state>/owner/keys.json` is writable by anything running as
-the owner, a soul included, and a security key made in software
-(`sk-ssh-ed25519` carries no attestation) looks the same as hardware, so a
-soul could pin its own key and sign its own approval. When the guard is on:
+Signed challenges on these routes count only on a request where
+agent-bot-keyd vouches for the owner pins, as for the terminal fallback:
+`<state>/owner/keys.json` is writable by anything running as the owner, a
+soul included, and a security key made in software (`sk-ssh-ed25519`
+carries no attestation) looks the same as hardware, so a soul could pin its
+own key and sign its own approval. Pins keyd does not vouch for are no pins:
+the route asks the dialog, and a reply sent with the decision is spent
+unused. Where keyd vouches for them:
 when keyd cannot ask and an SSH security key (`sk-ssh-ed25519` or
 `sk-ecdsa`) is pinned, the route decides nothing and answers 409 with
 `code: "owner-challenge-required"` and `challenges: [{ name, fingerprint,
@@ -209,12 +221,13 @@ enrols, rotates or removes a key.
 
 ## How agents use a statement
 
-**Today no statement is owner approval.** Until owner pins are
-integrity-protected, `owner verify` answers `owner-pins-unprotected` for
-every valid signature, and an agent does not act on a statement: it asks
-the owner directly, as it would without one.
+**A statement is owner approval only where keyd vouches for the pins.**
+Where it does not (no keyd on the host, as in CI or over SSH, or any of the
+cases above), `owner verify` answers `owner-pins-unprotected` for every
+valid signature, and an agent does not act on a statement: it asks the owner
+directly, as it would without one.
 
-Once pins are protected, an agent treats a statement as owner approval only
+An agent treats a statement as owner approval only
 when `owner verify` accepts it (exit 0) with `--repo` and `--issue` set to the
 work at hand, it is a
 `statement` (or a challenge the agent itself issued), and its verified text
