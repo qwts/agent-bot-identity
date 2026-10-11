@@ -20,7 +20,8 @@
 //       "unmanagedAuthors": ["ai9d"],      // humans who may publish as themselves
 //                                          // from an agent session (#675)
 //       "keydTeamId": "ABCDE12345",        // Developer ID team that signs keyd (#594)
-//       "keydIdentifier": "agent-bot-keyd" // keyd's code-signing identifier (#594)
+//       "keydIdentifier": "agent-bot-keyd", // keyd's code-signing identifier (#594)
+//       "soulCoauthorDomain": "souls.example.org" // soul co-author email domain (ADR-0815)
 //     },
 //     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
 //   }
@@ -37,6 +38,7 @@ import { isAbsolute, join } from 'node:path';
 import {
   OrganizationProfileError,
   PROFILE_HARNESSES,
+  isSoulCoauthorDomain,
   profileStatusForSlug,
   runtimeProfileInfo,
 } from './organization-profile-schema.mjs';
@@ -318,6 +320,18 @@ function validateOwner(config) {
   }
 }
 
+// The organization's domain for soul co-author emails (ADR-0815), or null
+// for the reserved default. The profile validates it; a hand-written config
+// is held to the same rule, and a malformed value fails the config load.
+export function soulCoauthorDomainSetting(config = loadConfig()) {
+  const value = settingsSection(config).soulCoauthorDomain;
+  if (value === undefined) return null;
+  if (!isSoulCoauthorDomain(value)) {
+    throw new Error('invalid settings.soulCoauthorDomain: expected a lowercase domain name that is not a GitHub domain');
+  }
+  return value;
+}
+
 function validateSettings(config) {
   const settings = settingsSection(config);
   validateOwner(config);
@@ -325,6 +339,7 @@ function validateSettings(config) {
   if (settings.soulsRoot !== undefined) soulsRootSetting(config);
   if (settings.daemonPreference !== undefined) validateDaemonPreference(settings.daemonPreference);
   if (settings.unmanagedAuthors !== undefined) unmanagedAuthorsSetting(config);
+  soulCoauthorDomainSetting(config);
   keydSignerSetting(config);
   rosterScope(config);
   validateFeatures(config);

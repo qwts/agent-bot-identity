@@ -1,0 +1,1 @@
+- An organization profile may set `settings.soul_coauthor_domain` (projected to `settings.soulCoauthorDomain`) to write soul co-author trailers in its own domain; GitHub domains and malformed names are refused, and credits in the default `souls.agent-bot.invalid` domain are still checked (#815).

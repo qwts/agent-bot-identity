@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { apiBase, githubHost, isGateEnabled, loadConfig } from './config.mjs';
-import { assertSoulCoAuthor, currentAgentId } from './agent-identity.mjs';
+import { assertSoulCoAuthor, currentAgentId, soulCoAuthorDomains } from './agent-identity.mjs';
 import { mintForCaller } from './git-credential-bot.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 
@@ -190,8 +190,9 @@ export async function runSignedCommit(options, {
   // survives. A commit made past the hook (--no-verify) may still not credit
   // another soul (ADR-0815): checked before anything is created.
   const soul = currentAgentId({ env, cwd });
+  const soulDomains = soulCoAuthorDomains(config);
   for (const sha of commits) {
-    try { assertSoulCoAuthor(git(['log', '-1', '--format=%B', sha], { cwd }), soul); }
+    try { assertSoulCoAuthor(git(['log', '-1', '--format=%B', sha], { cwd }), soul, soulDomains); }
     catch (error) { throw new Error(`${sha.slice(0, 8)}: ${error.message}. Nothing was written.`); }
   }
 

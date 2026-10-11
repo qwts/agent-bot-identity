@@ -15,7 +15,8 @@ import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { assertSoulCoAuthor, soulCoAuthorCredits, soulCoAuthorTrailer, validateAgentId } from './agent-identity.mjs';
+import { assertSoulCoAuthor, soulCoAuthorCredits, soulCoAuthorDomains, soulCoAuthorTrailer, validateAgentId } from './agent-identity.mjs';
+import { loadConfig } from './config.mjs';
 import { displayName, populationFile, showSoul, soulDirectory, soulShownName } from './agent-population.mjs';
 
 // The census name at commit time (#429): the launch or join name, else the
@@ -46,8 +47,8 @@ function finalTrailers(message, cwd) {
   return git(['interpret-trailers', '--parse', '--no-divider'], { cwd, input: message }).split('\n').filter(Boolean);
 }
 
-function creditsIn(lines, id) {
-  return soulCoAuthorCredits(lines.join('\n')).includes(id);
+function creditsIn(lines, id, domains) {
+  return soulCoAuthorCredits(lines.join('\n'), domains).includes(id);
 }
 
 // Adds the soul's co-author trailer and `Agent-Identity` to a commit message
@@ -55,15 +56,17 @@ function creditsIn(lines, id) {
 // (`Co-Authored-By: Claude …`) and both trailers stay in one block. A
 // message that credits another soul is refused. A message that already
 // credits this soul keeps that line, so an amend after a rename does not add
-// a second credit; the new name appears on new commits only.
+// a second credit; the new name appears on new commits only. The trailer is
+// written in the organization's domain when its profile names one.
 export function prepareSoulTrailers(messageFile, id, { cwd = process.cwd(), env = process.env, stderr = process.stderr } = {}) {
   validateAgentId(id);
+  const domains = soulCoAuthorDomains(loadConfig({ env }));
   const message = readFileSync(messageFile, 'utf8');
-  assertSoulCoAuthor(message, id);
+  assertSoulCoAuthor(message, id, domains);
   // As for Agent-Identity since ENG-0081, a credit already anywhere in the
   // message is not repeated (a hook re-run, an amend).
   const trailers = [];
-  if (!soulCoAuthorCredits(message).includes(id)) trailers.push(soulCoAuthorTrailer(id, soulCoAuthorName(id, { env, stderr })));
+  if (!soulCoAuthorCredits(message, domains).includes(id)) trailers.push(soulCoAuthorTrailer(id, soulCoAuthorName(id, { env, stderr }), domains[0]));
   if (!message.split('\n').includes(`Agent-Identity: ${id}`)) trailers.push(`Agent-Identity: ${id}`);
   if (trailers.length === 0) return;
   git([
@@ -78,10 +81,10 @@ export function prepareSoulTrailers(messageFile, id, { cwd = process.cwd(), env 
 // its own co-author block after the commit's trailers), `absent` when
 // nowhere. In the
 // last two cases the local identity record stays the authority.
-export function soulTrailerStatus(message, id, { cwd = process.cwd() } = {}) {
+export function soulTrailerStatus(message, id, { cwd = process.cwd(), domains = soulCoAuthorDomains() } = {}) {
   validateAgentId(id);
-  if (creditsIn(finalTrailers(message, cwd), id)) return 'trailer';
-  return soulCoAuthorCredits(message).includes(id) ? 'body' : 'absent';
+  if (creditsIn(finalTrailers(message, cwd), id, domains)) return 'trailer';
+  return soulCoAuthorCredits(message, domains).includes(id) ? 'body' : 'absent';
 }
 
 async function main(argv) {
