@@ -403,7 +403,7 @@ export const DIALECTS = [
       // regex, so these stay plain). Claude's `Bash`/`Write`/`Edit` are also
       // accepted there as aliases, but only as exact entries.
       'pre-command': { event: 'PreToolUse', matcher: 'run_shell_command' },
-      'pre-file-write': { event: 'PreToolUse', matcher: 'write_file|edit' },
+      'pre-file-write': { event: 'PreToolUse', matcher: 'write_file|edit|notebook_edit' },
       'post-tool-use': 'PostToolUse',
       'agent-stop': 'Stop',
     },

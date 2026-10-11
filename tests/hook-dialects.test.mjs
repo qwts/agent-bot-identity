@@ -472,7 +472,7 @@ const QWEN_DIR = '/work/soul';
 test('qwen maps Claude-shaped events, with plain matchers on its runtime tool ids', () => {
   assert.deepEqual(vendorEvent('qwen', 'pre-tool-use'), { event: 'PreToolUse', matcher: null });
   assert.deepEqual(vendorEvent('qwen', 'pre-command'), { event: 'PreToolUse', matcher: 'run_shell_command' });
-  assert.deepEqual(vendorEvent('qwen', 'pre-file-write'), { event: 'PreToolUse', matcher: 'write_file|edit' });
+  assert.deepEqual(vendorEvent('qwen', 'pre-file-write'), { event: 'PreToolUse', matcher: 'write_file|edit|notebook_edit' });
   assert.deepEqual(vendorEvent('qwen', 'prompt-submit'), { event: 'UserPromptSubmit', matcher: null });
   assert.deepEqual(vendorEvent('qwen', 'agent-stop'), { event: 'Stop', matcher: null });
   for (const event of ['session-start', 'session-end', 'post-tool-use']) assert.ok(vendorEvent('qwen', event), event);
