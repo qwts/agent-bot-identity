@@ -1,0 +1,1 @@
+- Machine wiring is the documented trigger for harness user-level hooks: `agent-bot bootstrap --machine-only` and `agent-bot update` write every known harness's adapter with no detection, so a harness added later finds its hooks in place, and a rerun rewrites only drift; tests pin this down (#979).
