@@ -137,9 +137,9 @@ export function ownerActionSummary(action, options = {}) {
 // request where keyd vouches for the pin file (#753): the file is writable by
 // anything running as the owner, a soul included.
 export function decisionOwnerGate({ env = process.env, challenges = null, ...gateOptions } = {}) {
-  return (action, { principal = null, request = null, statement = null } = {}) => {
+  return (action, { principal = null, request = null, statement = null, context = null } = {}) => {
     const route = request === null ? {}
-      : challenges ? { challenge: challenges.hook({ request, statement }) } : { allowChallenge: false };
+      : challenges ? { challenge: challenges.hook({ request, statement, context }) } : { allowChallenge: false };
     return confirmOwnerPresence(action, { ...gateOptions, env, principal, ...route });
   };
 }
@@ -158,7 +158,20 @@ export function decisionOwnerGate({ env = process.env, challenges = null, ...gat
 // challenges is pending per request (a proposal), for one exact action; a new
 // request replaces it, and checking a reply spends it whether it verifies or
 // not, so each nonce is used once. Pending challenges live only in daemon
-// memory: a restart drops them.
+// memory: a restart drops them. A request may record a `context` (the
+// decision and scope it asked for) with its challenges; `pendingByNonce`
+// finds it for a signed reply that arrives in a soul's inbox, which then goes
+// through the same hook, and the same spending, as a reply to the route.
+// The agent-comms message that carries a decision's challenges to whoever
+// woke the turn that asked (#753): one line, then one fenced JSON block per
+// challenge, which is exactly what `owner sign --challenge` takes.
+export function ownerChallengeMessage(challenges) {
+  const [{ payload }] = challenges;
+  const line = `Owner presence is unavailable on ${payload.scope.host}. To decide "${payload.text}", sign one challenge below where no agent runs, `
+    + `with \`agent-bot owner sign --challenge '<JSON>' --key PATH\`, and reply to this message with the signed block before ${new Date(payload.exp * 1000).toISOString()}.`;
+  return [line, ...challenges.map(({ name, fingerprint, payload: challenge }) => `${name} (${fingerprint}):\n\`\`\`json\n${JSON.stringify(challenge)}\n\`\`\``)].join('\n\n');
+}
+
 const securityKeyPin = (pin) => pin.store === 'ssh' && pin.softwareKey !== true && /^sk-/.test(pin.publicKey);
 
 export function createChallengeLedger({ env = process.env, home = undefined, now = Date.now, host = localHost, limit = 64, attest = attestedOwnerKeys } = {}) {
@@ -171,9 +184,19 @@ export function createChallengeLedger({ env = process.env, home = undefined, now
   };
   return {
     get size() { prune(); return pending.size; },
+    // The request whose pending challenges hold `nonce`, with the context it
+    // recorded, or null. Finding one spends nothing.
+    pendingByNonce(nonce) {
+      prune();
+      if (typeof nonce !== 'string' || nonce === '') return null;
+      for (const [request, { challenges, context }] of pending) {
+        if (challenges.some(({ payload }) => payload.nonce === nonce)) return { request, context };
+      }
+      return null;
+    },
     // The gate hook for one request: `request` names it (a proposal ID) and
     // `statement` is the caller's signed reply, if any.
-    hook({ request, statement = null } = {}) {
+    hook({ request, statement = null, context = null } = {}) {
       return async (action, { summary }) => {
         // A pin file that cannot be read never blocks a decision: the dialog
         // asks. Pins keyd does not vouch for on this request, or that changed
@@ -196,7 +219,7 @@ export function createChallengeLedger({ env = process.env, home = undefined, now
           const challenges = createOwnerChallenges(action, summary, securityKeys, { host: host(), now: now() });
           pending.delete(request);
           while (pending.size >= limit) pending.delete(pending.keys().next().value);
-          pending.set(request, { action, challenges });
+          pending.set(request, { action, challenges, context });
           throw Object.assign(statementError('owner-challenge-required',
             'owner presence is unavailable: sign one of these challenges with `agent-bot owner sign --challenge`, then repeat this decision with the signed statement'),
           { challenges: challenges.map(({ name, fingerprint, payload }) => ({ name, fingerprint, payload })) });

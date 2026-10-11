@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -121,21 +121,4 @@ test('a child that writes no result is a plain failure', () => {
   const execFile = () => { throw Object.assign(new Error('killed'), { stdout: '', stderr: 'boom\n' }); };
   assert.throws(() => identityOp('read', {}, { execFile }), { code: 'operation-failed', message: 'identity read failed: boom' });
   assert.throws(() => identityOp('read', {}, { execFile: () => '{}' }), { code: 'operation-failed', message: /no result/ });
-});
-
-test('current with pinOnly ignores the Agent ID variables and reads the pin', (t) => {
-  const { env, dir } = sandbox(t);
-  const id = agentId();
-  assert.equal(identityOp('current', { pinOnly: true }, { env: { ...env, AGENT_BOT_ID: id }, cwd: dir }), null);
-  assert.throws(() => identityOp('current', { pinOnly: 'yes' }, { env }), { code: 'invalid-input' });
-});
-
-test('a git failure keeps its exit status', (t) => {
-  const { env, dir } = sandbox(t);
-  // A .git file naming a missing directory makes git exit 128.
-  const broken = path.join(dir, 'broken');
-  mkdirSync(broken);
-  writeFileSync(path.join(broken, '.git'), `gitdir: ${path.join(dir, 'missing')}\n`);
-  assert.throws(() => identityOp('current', {}, { env, cwd: broken }),
-    (error) => error.code === 'operation-failed' && error.status === 128);
 });

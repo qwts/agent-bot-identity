@@ -93,12 +93,9 @@ export const IDENTITY_OPS = Object.freeze({
       }
     });
   },
-  // pinOnly skips the Agent ID variables, for a caller that has already
-  // looked in its own environment and wants only the checkout pin.
   current(input) {
-    const { pinOnly = false } = only(input, ['pinOnly']);
-    if (typeof pinOnly !== 'boolean') throw invalid('pinOnly must be a boolean');
-    return pinOnly ? currentAgentId({ env: {} }) : currentAgentId();
+    only(input, []);
+    return currentAgentId();
   },
   'discover-transcript'(input) {
     only(input, []);
@@ -147,8 +144,6 @@ function errorPayload(error) {
       code,
       message: String(error?.message ?? error),
       ...(Number.isInteger(error?.statusCode) ? { statusCode: error.statusCode } : {}),
-      // A git failure's exit status, which some callers tell apart.
-      ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
     },
   };
 }

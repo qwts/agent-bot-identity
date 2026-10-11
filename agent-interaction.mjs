@@ -214,6 +214,9 @@ export function createInteractionService({
   const executions = new Map();
   // Executors waiting on an open proposal: proposalId -> settle(outcome).
   const approvalWaiters = new Map();
+  // The agent-comms message that woke a cold turn's approval (#753): the
+  // soul it woke and the sender to answer. In memory, beside its waiter.
+  const approvalSources = new Map();
 
   function audit(decision, { principal = null, transport = null, agentId = null, operation = null }) {
     appendAuditReceipt({
@@ -294,6 +297,7 @@ export function createInteractionService({
           clearTimeout(timer);
           controller.signal.removeEventListener('abort', onAbort);
           approvalWaiters.delete(proposal.proposalId);
+          approvalSources.delete(proposal.proposalId);
           resolve(value);
         };
         const onAbort = () => settle({ decision: 'deny', cancelled: true });
@@ -865,7 +869,7 @@ export function createInteractionService({
     // owner or an approving principal decides, the proposal expires, or the
     // turn's own signal aborts. Anything but an approval is a deny.
     requestTurnApproval({ agentId, operation, summary, tool = null,
-      risk = classifyRisk({ toolName: tool, summary, operation }), ttlMs = DEFAULT_PROPOSAL_TTL_MS, signal = null }) {
+      risk = classifyRisk({ toolName: tool, summary, operation }), ttlMs = DEFAULT_PROPOSAL_TTL_MS, signal = null, source = null }) {
       const soul = agentIdOrFail(agentId);
       const digest = operationDigest(operation);
       const proposal = createProposal(
@@ -881,6 +885,7 @@ export function createInteractionService({
           clearTimeout(timer);
           signal?.removeEventListener?.('abort', onAbort);
           approvalWaiters.delete(proposal.proposalId);
+          approvalSources.delete(proposal.proposalId);
           resolve(value);
         };
         // Only the call that moves the proposal out of open writes the
@@ -900,7 +905,19 @@ export function createInteractionService({
         if (signal?.aborted) { onAbort(); return; }
         signal?.addEventListener?.('abort', onAbort, { once: true });
         approvalWaiters.set(proposal.proposalId, settle);
+        if (source) approvalSources.set(proposal.proposalId, source);
       });
+    },
+
+    // The waking message a cold turn's open proposal came from, or null.
+    approvalSource(proposalId) {
+      return approvalSources.get(proposalId) ?? null;
+    },
+
+    // Whether a turn of `agentId` woken by a message waits on a proposal.
+    awaitsApproval(agentId) {
+      for (const source of approvalSources.values()) if (source.soul?.agentId === agentId) return true;
+      return false;
     },
 
     // Bounded artifact resolution for download surfaces (#59 req 7). Bytes

@@ -30,9 +30,9 @@ import { pathToFileURL } from 'node:url';
 
 import {
   finalizeAgentIdentity,
+  readAgentIdentity,
   retireAgentIdentity,
 } from './agent-identity.mjs';
-import { identityOp } from './daemon-client.mjs';
 import { isAgentId, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
@@ -493,7 +493,7 @@ export function upsertIdentitySoul(
   return withSoulLifecycleLock(target, stateDir, () => {
     // Identity resolution may have completed before a concurrent finalizer.
     // Re-read under the shared lifecycle lock so setup cannot revive a soul.
-    const identity = identityOp('read', { id: target, stateDir });
+    const identity = readAgentIdentity(target, { stateDir });
     if (identity.status === 'retired') {
       throw new Error(
         `agent identity ${target} is retired; refusing to register it in the population census`,

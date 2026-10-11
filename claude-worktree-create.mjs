@@ -30,7 +30,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { ensureAgentIdentity } from './agent-identity.mjs';
+import { ensureAgentIdentity, readAgentIdentity } from './agent-identity.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { daemonPreference, harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
@@ -40,7 +40,7 @@ import { AGENT_ID_KEYS } from './identity-format.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { bindSoul } from './setup-worktree.mjs';
-import { daemonClient, identityOp } from './daemon-client.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { linkWorktree, placeWorktree, sanitizeWorktreeName, soulWorktreePath } from './soul-worktrees.mjs';
 
 const SETUP = join(dirname(fileURLToPath(import.meta.url)), 'setup-worktree.mjs');
@@ -169,7 +169,7 @@ function canReuseWorktree(path, { commonDir, branch, sessionId, app }) {
     if (realpathSync(git(['rev-parse', '--path-format=absolute', '--git-common-dir'], path)) !== commonDir) return false;
     if (git(['symbolic-ref', 'HEAD'], path) !== `refs/heads/${branch}`) return false;
     const id = git(['config', '--worktree', '--get', 'agentBot.agentId'], path);
-    const identity = identityOp('read', { id, stateDir: stateDirectory() });
+    const identity = readAgentIdentity(id, { stateDir: stateDirectory() });
     return identity.id === id && identity.status !== 'retired'
       && identity.transcript?.provider === 'claude' && identity.transcript.id === sessionId
       && (!app || (identity.github?.appSlug === app

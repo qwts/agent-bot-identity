@@ -9,8 +9,7 @@ import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:pat
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
-import { recordAgentPackageRevision } from './agent-identity.mjs';
-import { identityOp } from './daemon-client.mjs';
+import { currentAgentId, readAgentIdentity, recordAgentPackageRevision } from './agent-identity.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { appendSoulRevision, registeredSoulDir } from './soul-history.mjs';
@@ -33,7 +32,7 @@ function rootFor(id, options) {
   return join(options.stateDir ?? stateDirectory(), 'soul-revisions', validateAgentId(id));
 }
 function active(id, options) {
-  const identity = identityOp('read', { id, stateDir: options.stateDir });
+  const identity = readAgentIdentity(id, options);
   if (identity.status === 'retired') throw new Error('retired souls cannot change revisions');
   return identity;
 }
@@ -554,7 +553,7 @@ export function revisionOwnerGate(action, { principal, presence, env, cwd } = {}
 }
 export async function revisionCommand(args, { assertSoulTarget = (id) => {
   // The caller must be the bound soul itself; an unbound process is not one.
-  if (identityOp('current') !== id) {
+  if (currentAgentId() !== id) {
     throw new Error('a soul may propose changes only to its own package; bind an Agent ID first');
   }
 }, assertUser = (action, { principal }) => revisionOwnerGate(action, { principal, presence, env: options.env, cwd: options.cwd }),

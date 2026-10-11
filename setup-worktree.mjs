@@ -11,10 +11,11 @@ import { resolveAgentSlug, pinnedSlug } from './resolve-agent.mjs';
 import { AGENT_ID_KEYS } from './identity-format.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
 import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost } from './config.mjs';
-import { daemonClient, identityOp } from './daemon-client.mjs';
+import { daemonClient } from './daemon-client.mjs';
 import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import {
   discoverTranscript,
+  readAgentIdentity,
 } from './agent-identity.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
@@ -63,16 +64,11 @@ function sessionIdentity() {
   if (process.env.AGENT_BOT_BINDING && !binding) throw new Error('session binding is missing; check in again with agent-bot join');
   if (fromEnv && binding && fromEnv !== binding.agentId) throw new Error('session soul and binding disagree');
   const id = fromEnv ?? binding?.agentId;
-  let identity = id ? identityOp('read', { id }) : null;
+  let identity = id ? readAgentIdentity(id) : null;
   if (!identity) {
     const transcript = discoverTranscript();
     if (!transcript) return null;
-    // One child reads every candidate; the first unreadable one fails the
-    // lookup, as reading them one by one did.
-    const read = identityOp('read-many', { ids: listSouls().filter((soul) => soul.status !== 'retired').map((soul) => soul.id) });
-    const unreadable = read.find((entry) => entry.error);
-    if (unreadable) throw Object.assign(new Error(unreadable.error.message), { code: unreadable.error.code });
-    const matches = read.map((entry) => entry.record)
+    const matches = listSouls().filter((soul) => soul.status !== 'retired').map((soul) => readAgentIdentity(soul.id))
       .filter((record) => record.transcript?.provider === transcript.provider && record.transcript.id === transcript.id);
     if (matches.length > 1) throw new Error('multiple souls match this session; supply AGENT_BOT_ID from agent-bot join');
     identity = matches[0];
