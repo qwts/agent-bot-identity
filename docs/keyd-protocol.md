@@ -69,8 +69,8 @@ payload: { v: 1, aud: "agent-bot-keyd", agentId, app, tool, iat, exp,
 agent-bot, the issuer, sets a 60-second lifetime and a fresh nonce. It keeps
 no record of grants and does not check them again.
 
-**keyd-side** (the verifier, `grant::verify` in
-[grant.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L74-L130) at the commit linked above) has its own,
+**keyd-side** (the verifier, `verify` in
+[keyd/src/grant.rs](../keyd/src/grant.rs)) has its own,
 wider envelope. With `now` in whole seconds it accepts a grant only when:
 
 - `exp > now`;
@@ -83,7 +83,8 @@ wider envelope. With `now` in whole seconds it accepts a grant only when:
 - the nonce is 16 to 64 base64url characters and not already spent.
 
 The nonce is spent last, after every other check passes and before the mint
-([grant.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L50-L65), [#L126](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/grant.rs#L126)). Spent nonces
+(the `spend` call at the end of `verify` in
+[keyd/src/grant.rs](../keyd/src/grant.rs)). Spent nonces
 live in an in-memory map and are dropped once their `exp` has passed.
 
 ### The 60-second replay window
@@ -142,7 +143,8 @@ as `items` and `daemonKey`: the vouch key's raw 32-byte Ed25519 public key,
 base64. The daemon key is sent on every import. If the call fails, every
 soul in it is reported `failed` and no `soul.json` is changed.
 
-**keyd-side** ([server.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/server.rs#L378-L462)): `items` must hold 1 to
+**keyd-side** (`owner_import`, `import_entries` and `import_pin` in
+[keyd/src/server.rs](../keyd/src/server.rs)): `items` must hold 1 to
 64 keys, otherwise the whole import is refused. Since agent-bot does not split
 the call, `--all` with more than 64 movable souls fails for all of them.
 keyd asks the owner (Touch ID or the login password), pins `daemonKey` on the
@@ -185,7 +187,7 @@ payload: { v: 1, aud: "agent-bot-owner", kind: "presence",
 
 These are the verifier's bounds. **keyd-side:** keyd issues assertions with a
 60-second lifetime
-([presence.rs](https://github.com/qwts/GeniusBar/blob/363f52c590efe5df8cb75490ca81667e74425cf8/keyd/src/presence.rs#L25))
+(`LIFETIME_SECONDS` in [keyd/src/presence.rs](../keyd/src/presence.rs))
 and gives up on the prompt at 120 s. `iat` is the time the owner answered,
 not the time the request arrived (#594): stamped at arrival, an approval
 slower than 90 s came back already past `exp + 30`. agent-bot keeps no record of used
