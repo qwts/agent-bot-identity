@@ -202,6 +202,7 @@ request and must match.
 | `presence-unavailable` | no pinned key and none can be pinned; `keyd-unavailable` (no socket, connection closed); keyd answers RPC error `-32001` | the wired owner gate follows the signed-challenge fallback order below |
 | `keyd-signer-unverified` | the owner refused a loosened keyd signer | refused, nobody else is asked |
 | `presence-pin-mismatch` | the cached presence key disagrees with the code-signed binary and the owner did not approve a re-pin | refused, nobody else is asked |
+| `keyd-untrusted` | keyd answers RPC error `-32002`, or `agent-bot-keyd presence-key` exits 3: a pin keyd needs is a Keychain item it does not control (#753) | refused, nobody else is asked; a delegation grant keeps the code |
 | `owner-declined` | any other keyd refusal, including `keyd-timeout` | refused, nobody else is asked |
 | `presence-invalid` | the assertion does not verify | refused, nobody else is asked |
 

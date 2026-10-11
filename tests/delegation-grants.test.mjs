@@ -172,7 +172,9 @@ test('an expired grant can be neither approved nor spent', async () => {
 });
 
 test('missing owner presence is refused, with no fallback ceremony', async () => {
-  for (const [code, expected] of [['presence-unavailable', 'presence-required'], ['owner-declined', 'owner-declined'], ['presence-invalid', 'presence-invalid']]) {
+  for (const [code, expected] of [['presence-unavailable', 'presence-required'], ['owner-declined', 'owner-declined'], ['presence-invalid', 'presence-invalid'],
+    // An untrusted keyd item is not the owner's no (#753).
+    ['keyd-untrusted', 'keyd-untrusted']]) {
     const { ledger, env, receipts } = scratch({ presence: async () => { throw Object.assign(new Error('no'), { code }); } });
     const grant = ledger.request({ agentId: SOUL, operation: COMMENT });
     await assert.rejects(ledger.approve(grant.proposalId, { digest: grant.operationDigest }), { code: expected });
