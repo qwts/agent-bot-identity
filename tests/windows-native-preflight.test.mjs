@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { createBindingRegistry, readBinding } from '../agent-binding.mjs';
 import { CommsClient } from '../comms-client.mjs';
 import { isWindowsRelayFailure, readWindowsBrokerPin } from '../comms-windows.mjs';
 import { createWindowsAccountCustody } from '../windows-account-custody.mjs';
@@ -327,4 +328,49 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
     }
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test('Windows native binding registry and secret use owner-only custody across restart', {
+  skip: process.platform !== 'win32', timeout: 180_000,
+}, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'agent-bot-native-binding-'));
+  try {
+    const git = spawnSync('git', ['init', '-q', root]);
+    assert.equal(git.status, 0);
+    const file = path.join(root, 'bindings.json');
+    const store = createBindingRegistry({ file });
+    store.rewrite('http://127.0.0.1:1234');
+    const secret = store.bind({ agentId: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', parent: null,
+      gitDir: path.join(root, '.git'), worktree: root });
+    const bindingFile = path.join(root, '.git', 'agent-binding.json');
+    const custody = createWindowsAccountCustody();
+    const sid = custody.currentSid();
+    for (const location of [file, bindingFile]) custody.assertPrivateFile(location, sid);
+    assert.equal(readBinding({ cwd: root, env: { AGENT_BOT_BINDING: bindingFile } }).secret, secret);
+    const reloaded = createBindingRegistry({ file });
+    reloaded.rewrite('http://127.0.0.1:5678');
+    assert.equal(readBinding({ cwd: root, env: { AGENT_BOT_BINDING: bindingFile } }).daemon, 'http://127.0.0.1:5678');
+    assert.equal(reloaded.resolve(secret).agentId, 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const privateBytes = readFileSync(bindingFile);
+    const gitDir = path.join(root, '.git');
+    assert.equal(spawnSync('icacls.exe', [gitDir, '/grant', '*S-1-1-0:M'], { stdio: 'ignore' }).status, 0);
+    try {
+      assert.throws(() => readBinding({ cwd: root, env: { AGENT_BOT_BINDING: bindingFile } }), /untrusted/);
+      assert.throws(() => custody.assertSafeBindingParents(bindingFile, sid), /parent custody/);
+      assert.equal(readFileSync(bindingFile).equals(privateBytes), true);
+    } finally {
+      assert.equal(spawnSync('icacls.exe', [gitDir, '/remove:g', '*S-1-1-0'], { stdio: 'ignore' }).status, 0);
+    }
+    for (const location of [file, bindingFile]) {
+      const before = readFileSync(location);
+      assert.equal(spawnSync('icacls.exe', [location, '/grant', '*S-1-1-0:R'], { stdio: 'ignore' }).status, 0);
+      try {
+        assert.throws(() => location === file ? createBindingRegistry({ file }) : readBinding({ cwd: root, env: { AGENT_BOT_BINDING: bindingFile } }), /untrusted/);
+        assert.equal(readFileSync(location).equals(before), true);
+      } finally {
+        assert.equal(spawnSync('icacls.exe', [location, '/remove:g', '*S-1-1-0'], { stdio: 'ignore' }).status, 0);
+      }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

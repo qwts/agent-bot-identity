@@ -158,3 +158,10 @@ state and result code, daemon health, and fixed startup error classifications.
 The uniquely named runtime directory is retained with its local startup log
 for diagnosis; that directory can contain credentials and must not be
 published with the report. Successful runs remove their runtime directory.
+
+Windows binding secrets and the daemon's binding registry use native SID and
+owner-only file ACL checks. Existing parent ACLs are inspected without changes:
+parents must be real directories with trusted account or OS ownership, and
+foreign mutation or descendant replacement rights cause refusal. Secure Git
+worktrees outside the profile remain eligible. TrustedInstaller-owned ancestors
+are currently refused rather than assumed safe.
