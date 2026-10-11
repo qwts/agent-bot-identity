@@ -683,33 +683,6 @@ export function printIdentityRecord(record, json) {
   process.stdout.write(`${record.id}\n`);
 }
 
-export function childIdentityEnv(result, env = process.env) {
-  return { ...env, AGENT_BOT_BINDING: result.binding, AGENT_BOT_ID: result.agentId,
-    QWTS_AGENT_ID: result.agentId, AGENT_BOT_PARENT_ID: result.parent, QWTS_AGENT_PARENT_ID: result.parent };
-}
-
-export async function spawnIdentity({ options = {}, env = process.env, cwd = process.cwd(), fetchImpl = fetch } = {}) {
-  const { readBinding } = await import('./agent-binding.mjs');
-  const parent = readBinding({ env, cwd });
-  if (!parent) {
-    if (env.AGENT_BOT_BINDING) throw new Error('spawn requires a parent binding: AGENT_BOT_BINDING is unreadable');
-    return null;
-  }
-  const { PROOF_HEADER, signBindingProof } = await import('./binding-proof.mjs');
-  const target = new URL('/v0/spawn', parent.daemon);
-  const proof = signBindingProof({ secret: parent.secret, method: 'POST', path: target.pathname, authority: target.host });
-  const response = await fetchImpl(target.href, {
-    method: 'POST', headers: { 'content-type': 'application/json', [PROOF_HEADER]: proof },
-    body: JSON.stringify(options), signal: AbortSignal.timeout(30000),
-  });
-  if (!response.ok) throw new Error(`identity spawn failed: HTTP ${response.status}`);
-  const result = await response.json();
-  if (result.warning) process.stderr.write(`identity spawn: ${result.warning}\n`);
-  validateAgentId(result.agentId);
-  if (result.parent !== parent.agentId || !path.isAbsolute(result.binding ?? '')) throw new Error('invalid spawn response');
-  return { agentId: result.agentId, parent: result.parent, binding: result.binding };
-}
-
 // The git hooks' entry (hooks/*): `current`, `show` and `record`, with the
 // output they have always had. Every other command is `agent-bot identity`
 // (cli/identity.mjs), which composes soul and the population census (#645).

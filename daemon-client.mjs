@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import { readBinding } from './agent-binding.mjs';
 import { PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
+import { validateAgentId } from './identity-format.mjs';
 
 export const SCHEMA_VERSION = 1;
 export const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
@@ -346,4 +347,28 @@ export function identityOp(op, input = {}, {
     throw Object.assign(new Error(`identity ${op} failed: ${detail}`), { code: 'operation-failed' });
   }
   return payload.result;
+}
+
+// Asks the daemon for a child identity under this process's binding (ADR-0008):
+// POST /v0/spawn, signed with the parent's binding proof. Returns null when
+// there is no binding, so the caller can mint a claimed identity locally.
+// `agent-bot identity spawn` calls it (#645, F13).
+export async function spawnIdentity({ options = {}, env = process.env, cwd = process.cwd(), fetchImpl = fetch } = {}) {
+  const parent = readBinding({ env, cwd });
+  if (!parent) {
+    if (env.AGENT_BOT_BINDING) throw new Error('spawn requires a parent binding: AGENT_BOT_BINDING is unreadable');
+    return null;
+  }
+  const target = new URL('/v0/spawn', parent.daemon);
+  const proof = signBindingProof({ secret: parent.secret, method: 'POST', path: target.pathname, authority: target.host });
+  const response = await fetchImpl(target.href, {
+    method: 'POST', headers: { 'content-type': 'application/json', [PROOF_HEADER]: proof },
+    body: JSON.stringify(options), signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) throw new Error(`identity spawn failed: HTTP ${response.status}`);
+  const result = await response.json();
+  if (result.warning) process.stderr.write(`identity spawn: ${result.warning}\n`);
+  validateAgentId(result.agentId);
+  if (result.parent !== parent.agentId || !path.isAbsolute(result.binding ?? '')) throw new Error('invalid spawn response');
+  return { agentId: result.agentId, parent: result.parent, binding: result.binding };
 }

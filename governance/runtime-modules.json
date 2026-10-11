@@ -276,7 +276,7 @@
     "agent-hook.mjs": "Process entry point every harness hook config calls; composes binding, confinement and the unbound-bot identity check.",
     "approval-action.mjs": "Names a waiting proposal's soul from the population for the owner's prompt; soul, shared by the daemon host and the approvals command.",
     "canonical-json.mjs": "The canonical byte form behind soul revisions and genesis IDs; shared so identity can derive IDs without importing soul. soul-package re-exports it.",
-    "cli/identity.mjs": "`agent-bot identity`: composes identity with soul (a local `spawn --package` hashes the package) and the census (`finalize`). agent-identity.mjs keeps the library and the git hooks' entry (current, show, record).",
+    "cli/identity.mjs": "`agent-bot identity`: composes identity with soul (a local `spawn --package` hashes the package) and the census (`finalize`). It runs identity's record operations through identityOp and asks the daemon for a spawn through daemon-client.mjs (#645, F13); agent-identity.mjs keeps the library and the git hooks' entry (current, show, record).",
     "cli/soul-env-transfer.mjs": "The `soul env export|import` process entry: composes the soul module's life archive with the host interaction store (#583), which soul may not import.",
     "comms-membership.mjs": "Joins and leaves agent-comms as a launched soul; split from the daemon host so soul lifecycle commands need not import it.",
     "daemon-client.mjs": "Identity's daemon contract (#645, F5, owner decision D3): the daemon state file, its loopback base URL, the health probe and the authenticated client every module uses to call the daemon. It stays identity-owned because the client reads the bearer token and signs binding proofs, which shared may not do (ADR-0645).",
@@ -319,7 +319,8 @@
         "daemonStateFile",
         "identityOp",
         "probeDaemonHealth",
-        "readDaemonState"
+        "readDaemonState",
+        "spawnIdentity"
       ],
       "reason": "Owner answers on #645 (answer 2, 2026-10-09; decision D3, 2026-10-11): daemon-client.mjs is the one sanctioned way soul, host, cli and comms reach the daemon, and daemon.json keeps its format. Listed with its exact exports so widening it is a reviewed map change."
     },

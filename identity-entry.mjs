@@ -9,6 +9,9 @@
 //
 // Inputs are data only. Options that are functions in-process take a data
 // form here: `now` is an ISO timestamp and `id` fixes the minted Agent ID.
+// `ensure` with `fieldsFromEnv` reads the team, squad, type, level and parent
+// from the caller's AGENT_BOT_* variables, as `agent-bot identity ensure`
+// always has, and `fields` then overrides them.
 // The child runs with the caller's environment, so the state root, the
 // add-on gate and transcript discovery resolve exactly as they would
 // in-process. Operations that take a callback run under the identity lock
@@ -19,11 +22,14 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import {
+  bindAgentTranscript,
   currentAgentId,
   discoverTranscript,
   ensureAgentIdentity,
+  identityFieldsFromEnv,
   mintAgentIdentity,
   readAgentIdentity,
+  recordAgentEvidence,
 } from './agent-identity.mjs';
 import { mintBindToken } from './agent-binding.mjs';
 
@@ -117,12 +123,27 @@ export const IDENTITY_OPS = Object.freeze({
     });
   },
   ensure(input) {
-    only(input, [...ENSURE_FIELDS, 'stateDir', 'now', 'id']);
+    only(input, [...ENSURE_FIELDS, 'fieldsFromEnv', 'stateDir', 'now', 'id']);
+    if (input.fieldsFromEnv !== undefined && typeof input.fieldsFromEnv !== 'boolean') throw invalid('fieldsFromEnv must be a boolean');
+    const fromEnv = input.fieldsFromEnv ? { fields: { ...identityFieldsFromEnv(), ...(input.fields ?? {}) } } : {};
     return ensureAgentIdentity({
       ...fields(input, ENSURE_FIELDS),
+      ...fromEnv,
       ...stateDirOption(input.stateDir),
       ...nowOption(input.now),
       ...idOption(input.id),
+    });
+  },
+  'bind-transcript'(input) {
+    const { id, transcript, stateDir, now } = only(input, ['id', 'transcript', 'stateDir', 'now']);
+    return bindAgentTranscript(text('id', id), transcript, { ...stateDirOption(stateDir), ...nowOption(now) });
+  },
+  'record-evidence'(input) {
+    only(input, ['id', 'subjects', 'artifacts', 'stateDir', 'now']);
+    return recordAgentEvidence(text('id', input.id), {
+      ...fields(input, ['subjects', 'artifacts']),
+      ...stateDirOption(input.stateDir),
+      ...nowOption(input.now),
     });
   },
   'mint-bind-token'(input) {
