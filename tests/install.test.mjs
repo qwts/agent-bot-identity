@@ -13,6 +13,8 @@ import {
 } from '../install.mjs';
 import { installGhShim } from '../install-gh-shim.mjs';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
+import { DIALECTS } from '../hook-dialects.mjs';
+import { MANAGED_MARKER, hookHomePath } from '../sync-hooks.mjs';
 
 const HAS_ZSH = spawnSync('zsh', ['-c', ':'], { stdio: 'ignore' }).status === 0;
 
@@ -572,6 +574,70 @@ test('machine install writes the known harness adapters into the user directory'
   assert.equal(existsSync(join(home, '.copilot', 'hooks', 'agent-bot.json')), true);
   assert.equal(existsSync(join(home, '.windsurf', 'hooks.json')), true);
   assert.equal(existsSync(join(home, '.github', 'hooks', 'agent-bot.json')), false);
+});
+
+// #979 (from managed-machine#161): machine wiring is the trigger. Bootstrap
+// and `agent-bot update` (which runs this same install) write every known
+// harness's user-level hooks with no detection, so a harness added later
+// finds its hooks already there; a rerun rewrites only drift, and nothing is
+// written into a repository.
+test('machine wiring installs user-level hooks for every known harness once and repairs only drift (#979)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-harness-added-'));
+  const repo = mkdtempSync(join(tmpdir(), 'agent-bot-harness-repo-'));
+  execFileSync('git', ['init', '-q', repo]);
+  const env = { HOME: home };
+  const run = (args) => {
+    if (args.includes('--get')) throw Object.assign(new Error('unset'), { status: 1 });
+    return '';
+  };
+  const wire = () => installAgentBot({
+    home,
+    env,
+    run,
+    embeddingApp: null,
+    installCli: () => installationPaths(home).executable,
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async () => ({ applied: true, loaded: true, unitPath: 'test' }),
+    ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
+    installTranscriptAdapter: () => ({ status: 'not_applicable' }),
+  });
+  const userFiles = DIALECTS.filter((row) => row.homeFile).map((row) => hookHomePath(row, home, env));
+  assert.ok(userFiles.length > 0);
+  const snapshot = () => userFiles.map((file) => [file, readFileSync(file, 'utf8'), statSync(file).mtimeMs]);
+
+  // First wiring, before any harness is installed: every harness's file.
+  const first = await wire();
+  for (const file of userFiles) assert.equal(existsSync(file), true, file);
+  assert.ok(first.userHooks.length >= userFiles.length);
+
+  // Cursor is installed afterwards and rewrites its hooks file with one of
+  // the person's own hooks; the next wiring repairs only that drift, keeping
+  // the harness's own keys and the foreign hook exactly as they were.
+  const cursor = join(home, '.cursor', 'hooks.json');
+  const ownHook = { command: '/usr/local/bin/my-own-stop-hook' };
+  writeFileSync(cursor, `${JSON.stringify({ version: 1, hooks: { stop: [ownHook] } })}\n`);
+  const repaired = await wire();
+  assert.deepEqual(repaired.userHooks, [cursor]);
+  const cursorHooks = JSON.parse(readFileSync(cursor, 'utf8'));
+  assert.equal(cursorHooks.version, 1);
+  assert.deepEqual(cursorHooks.hooks.stop.filter((entry) => !JSON.stringify(entry).includes(MANAGED_MARKER)), [ownHook]);
+  assert.ok(Object.values(cursorHooks.hooks).flat().some((entry) => JSON.stringify(entry).includes(MANAGED_MARKER)));
+
+  // A second run finds every file current and changes nothing.
+  const before = snapshot();
+  const again = await wire();
+  assert.deepEqual(again.userHooks, []);
+  assert.deepEqual(snapshot(), before);
+
+  // Hooks live in the user directories only, never in a repository.
+  assert.equal(existsSync(join(repo, '.cursor', 'hooks.json')), false);
+  assert.deepEqual(readdirSync(repo), ['.git']);
+});
+
+test('agent-bot update runs the same machine install as bootstrap (#979)', () => {
+  const source = readFileSync(new URL('../update.mjs', import.meta.url), 'utf8');
+  assert.match(source, /import \{ main as install \} from '\.\/install\.mjs';/);
+  assert.match(source, /return install\(argv\);/);
 });
 
 test('install writes the supervisor through the injected helper and does not disable it', async () => {
