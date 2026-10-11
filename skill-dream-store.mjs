@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, openSync,
   opendirSync, readSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
 import path from 'node:path';
-import { validateDreamEvents, validateDreamState } from './skill-dream-scheduler.mjs';
+import { validateDreamEvents, validateDreamState, validateDreamTransition } from './skill-dream-scheduler.mjs';
 
 export const DREAM_STORE_LIMITS = Object.freeze({ transactions: 100_000, recordBytes: 8 * 1024 * 1024, page: 16, temporaryFiles: 1024 });
 const RECORD = /^[0-9]{16}\.json$/;
@@ -108,8 +108,9 @@ export function createDreamFileStore({ directory, capacity = DREAM_STORE_LIMITS.
       if (next) fail('dream-journal-foreign-writer', 'another writer advanced the dream journal; reopen through daemon recovery');
     }
     if (!head) return { revision: 0, temporaryFiles, current: null };
-    const current = record(head);
-    if (head > 1 && current.previousDigest !== record(head - 1).digest) invalid();
+    const current = record(head), previous = head > 1 ? record(head - 1) : null;
+    if (head > 1 && current.previousDigest !== previous.digest) invalid();
+    try { validateDreamTransition(previous?.state ?? null, current.events); } catch { invalid(); }
     // A previous process may have died after publishing but before syncing the
     // directory. Establish durability of the recovered complete record before
     // any scheduler can use it as dispatch authority.
@@ -123,6 +124,7 @@ export function createDreamFileStore({ directory, capacity = DREAM_STORE_LIMITS.
     try { before = latest(); }
     catch (error) { if (error.code === 'dream-journal-foreign-writer') return false; throw error; }
     if (before.revision !== expectedRevision) return false;
+    validateDreamTransition(before.current?.state ?? null, events);
     if (before.revision >= capacity) fail('dream-journal-full', 'dream journal capacity reached; no records were pruned and no dispatch is allowed');
     const payload = { schemaVersion: 1, previousDigest: before.current?.digest ?? null, state, events };
     const bytes = Buffer.from(`${JSON.stringify({ ...payload, digest: digest(payload) })}\n`);
@@ -162,11 +164,12 @@ export function createDreamFileStore({ directory, capacity = DREAM_STORE_LIMITS.
       fail('dream-history-query', 'dream history requires a nonnegative revision and a bounded page size');
     }
     const end = latest().revision, records = [];
-    let previous = afterRevision > 0 && afterRevision <= end ? record(afterRevision).digest : null;
+    let prior = afterRevision > 0 && afterRevision <= end ? record(afterRevision) : null;
     for (let revision = afterRevision + 1; revision <= end && records.length < limit; revision++) {
       const value = record(revision);
-      if (value.previousDigest !== previous) invalid();
-      records.push({ revision, events: value.events }); previous = value.digest;
+      if (value.previousDigest !== (prior?.digest ?? null)) invalid();
+      try { validateDreamTransition(prior?.state ?? null, value.events); } catch { invalid(); }
+      records.push({ revision, events: value.events }); prior = value;
     }
     const nextRevision = records.at(-1)?.revision ?? afterRevision;
     return { records, nextRevision, remaining: Math.max(0, end - nextRevision) };

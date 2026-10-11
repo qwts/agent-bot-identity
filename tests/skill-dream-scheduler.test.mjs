@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { createDreamScheduler, emptyDreamState, parseDreamSchedule, validateDreamEvents, validateDreamState, DREAM_TIMEOUT_MS } from '../skill-dream-scheduler.mjs';
+import { createDreamScheduler, emptyDreamState, parseDreamSchedule, validateDreamEvents, validateDreamState, DREAM_PROCESSING_BYTES, DREAM_TIMEOUT_MS } from '../skill-dream-scheduler.mjs';
 import { dreamOutcomeDigest, dreamPreviewDigest, interpretDreamReport } from '../skill-dream-outcomes.mjs';
 
 const A = 'agent_12345678-1234-4234-8234-123456789abc';
@@ -436,6 +436,171 @@ test('selection checkpoint validation refuses foreign generations, duplicates an
   }
 });
 
+// Processing checkpoints (v9, owner decision on #603): only `verified-change`
+// evidence from the revision-evidence check counts a source as processed.
+function processingFixture() {
+  const f = fixture(); f.scheduler.register(A, 'PT1H');
+  const R1 = `sha256:${'1'.repeat(64)}`, R2 = `sha256:${'2'.repeat(64)}`;
+  const sources = paths => ({ ...metadata(), sources: paths.map((file, index) => ({ path: file, kind: file === 'AGENTS.md' ? 'context' : 'skill',
+    digest: `sha256:${String(index).padStart(64, 'c')}`, size: 1, excerptBytes: 1, truncated: false })),
+    coverage: { ...metadata().coverage, eligible: paths.length, selected: paths.length, suppliedBytes: paths.length } });
+  // The verifier confirms a change only for the paths named in `changed`.
+  const verifier = (revision, changed) => ({ reference }) => reference.revision === revision
+    ? { verdict: 'verified-change', attribution: 'not-established', checked: { event: { revision, status: 'approved' }, changedPaths: changed.map(file => ({ path: file })) } } : null;
+  const settle = async ({ inputs, items, verify = null, cancel = false }) => {
+    const started = f.scheduler.runNow(A); await Promise.resolve();
+    const call = f.calls.at(-1); call.prepareInputs(inputs);
+    const reply = JSON.stringify({ schemaVersion: 1, runId: call.run.runId, startingRevision: inputs.revision, items: items.map(([file, evidence]) => ({
+      path: file, digest: inputs.sources.find(source => source.path === file).digest, outcome: 'completed', reason: 'consolidated', evidence })) });
+    call.stageOutcome(interpretDreamReport({ run: call.run, inputs, reply, endedAt: new Date().toISOString(), verifyRevisionEvidence: verify }));
+    if (cancel) f.scheduler.cancel(started.runId);
+    const before = f.events.length; call.resolve(); await started.done;
+    return f.events.slice(before);
+  };
+  return { f, R1, R2, sources, verifier, settle };
+}
+
+test('only verified-change items become processed, at the delivered digest, latest per path', async () => {
+  const { f, R1, R2, sources, verifier, settle } = processingFixture();
+  const two = sources(['AGENTS.md', 'skills/demo/SKILL.md']);
+  // Agent-reported and unverified revision claims count for nothing.
+  let tail = await settle({ inputs: two, items: [['AGENTS.md', null], ['skills/demo/SKILL.md', { revision: R1 }]], verify: () => null });
+  assert.ok(!tail.some(event => event.kind === 'processing-advanced'));
+  assert.deepEqual(f.state().processingCheckpoints, []);
+  // A verified revision that changes another source does not credit this one.
+  tail = await settle({ inputs: two, items: [['AGENTS.md', { revision: R1 }]], verify: verifier(R1, ['skills/demo/SKILL.md']) });
+  assert.deepEqual(f.state().processingCheckpoints, []);
+  // A cancelled run's verified report advances nothing.
+  await settle({ inputs: two, items: [['AGENTS.md', { revision: R1 }]], verify: verifier(R1, ['AGENTS.md']), cancel: true });
+  assert.deepEqual(f.state().processingCheckpoints, []);
+  tail = await settle({ inputs: two, items: [['AGENTS.md', { revision: R1 }], ['skills/demo/SKILL.md', null]], verify: verifier(R1, ['AGENTS.md']) });
+  const advanced = tail.find(event => event.kind === 'processing-advanced');
+  const first = f.state().processingCheckpoints[0];
+  assert.deepEqual(advanced.processed, [{ path: 'AGENTS.md', digest: two.sources[0].digest, artifactRevision: R1 }]);
+  assert.deepEqual(advanced.checkpoint, first);
+  assert.deepEqual([first.coverage, first.evicted, first.generation], ['verified-change-only', 0, f.state().registrations[0].generation]);
+  assert.deepEqual(first.entries, [{ path: 'AGENTS.md', digest: two.sources[0].digest, artifactRevision: R1, runId: advanced.run.runId, journalRevision: f.state().revision }]);
+  assert.ok(tail.some(event => event.kind === 'selection-advanced'), 'selection still advances alongside');
+  assert.equal(f.state().selectionCheckpoints[0].processingCoverage, 'unverified', 'existing labels are unchanged');
+  // A later run replaces that path's entry and orders newest first.
+  const changed = { ...two, sources: two.sources.map(source => ({ ...source, digest: `sha256:${'d'.repeat(63)}${source.path.length % 10}` })) };
+  await settle({ inputs: changed, items: [['skills/demo/SKILL.md', { revision: R2 }], ['AGENTS.md', { revision: R2 }]], verify: verifier(R2, ['AGENTS.md', 'skills/demo/SKILL.md']) });
+  const second = f.state().processingCheckpoints[0];
+  assert.deepEqual(second.entries.map(entry => [entry.path, entry.digest, entry.artifactRevision]),
+    [['AGENTS.md', changed.sources[0].digest, R2], ['skills/demo/SKILL.md', changed.sources[1].digest, R2]]);
+  assert.deepEqual(createDreamScheduler(f.ports).status().processingCheckpoints, [second]);
+  f.scheduler.pause(A);
+  assert.equal(f.state().processingCheckpoints[0].generation, f.state().registrations[0].generation);
+  f.scheduler.unschedule(A);
+  assert.deepEqual(f.state().processingCheckpoints, []);
+  assert.equal(f.events.filter(event => event.kind === 'processing-advanced').length, 2, 'unscheduling preserves history');
+});
+
+test('a processing checkpoint stays within its byte budget and counts what it evicts', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  const paths = Array.from({ length: 60 }, (_, index) => `skills/demo/references/${'r'.repeat(180)}-${String(index).padStart(2, '0')}.md`);
+  const tail = await settle({ inputs: sources(paths), items: paths.map(file => [file, { revision: R1 }]), verify: verifier(R1, paths) });
+  const checkpoint = f.state().processingCheckpoints[0];
+  assert.equal(tail.find(event => event.kind === 'processing-advanced').processed.length, 60, 'the event keeps the full list');
+  assert.ok(checkpoint.evicted > 0 && checkpoint.entries.length + checkpoint.evicted === 60);
+  assert.ok(Buffer.byteLength(JSON.stringify(checkpoint)) <= DREAM_PROCESSING_BYTES);
+  assert.deepEqual(checkpoint.entries.map(entry => entry.path), paths.slice(0, checkpoint.entries.length), 'ties keep path order');
+  // A single path too long for the budget is evicted alone rather than failing the run.
+  const huge = `skills/demo/references/${'é'.repeat(4000)}.md`;
+  await settle({ inputs: sources([huge]), items: [[huge, { revision: R1 }]], verify: verifier(R1, [huge]) });
+  const after = f.state().processingCheckpoints[0];
+  assert.deepEqual([after.entries, after.evicted], [checkpoint.entries, checkpoint.evicted + 1], 'older entries stay');
+  assert.deepEqual(validateDreamState(f.state()), f.state());
+});
+
+test('a near-limit path that fits the checkpoint alone is kept, measured at the real eviction count', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  const generation = f.state().registrations[0].generation;
+  const size = file => Buffer.byteLength(JSON.stringify({ schemaVersion: 1, agentId: A, generation, coverage: 'verified-change-only', evicted: 0,
+    entries: [{ path: file, digest: `sha256:${'0'.repeat(64)}`, artifactRevision: R1, runId: '00000000-0000-4000-8000-000000000000', journalRevision: f.state().revision + 3 }] }));
+  let n = 1;
+  while (size(`skills/demo/references/${'é'.repeat(n + 1)}.md`) <= DREAM_PROCESSING_BYTES) n++;
+  const file = `skills/demo/references/${'é'.repeat(n)}.md`;
+  assert.ok(DREAM_PROCESSING_BYTES - size(file) < String(Number.MAX_SAFE_INTEGER).length - 1, 'a sentinel count would not fit');
+  await settle({ inputs: sources([file]), items: [[file, { revision: R1 }]], verify: verifier(R1, [file]) });
+  const checkpoint = f.state().processingCheckpoints[0];
+  assert.deepEqual([checkpoint.entries.map(entry => entry.path), checkpoint.evicted], [[file], 0]);
+  assert.ok(Buffer.byteLength(JSON.stringify(checkpoint)) <= DREAM_PROCESSING_BYTES);
+});
+
+test('the single-entry fit counts only the other entries, across an eviction-count digit boundary', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  // Nine paths too long to fit alone leave an empty checkpoint with evicted 9.
+  const huge = Array.from({ length: 9 }, (_, index) => `skills/demo/references/${index}${'é'.repeat(4000)}.md`);
+  await settle({ inputs: sources(huge), items: huge.map(file => [file, { revision: R1 }]), verify: verifier(R1, huge) });
+  assert.deepEqual([f.state().processingCheckpoints[0].entries, f.state().processingCheckpoints[0].evicted], [[], 9]);
+  // A path whose checkpoint is exactly the budget at evicted 9 (one byte over at 10) is kept.
+  const generation = f.state().registrations[0].generation, revision = f.state().revision + 3;
+  const size = file => Buffer.byteLength(JSON.stringify({ schemaVersion: 1, agentId: A, generation, coverage: 'verified-change-only', evicted: 9,
+    entries: [{ path: file, digest: `sha256:${'0'.repeat(64)}`, artifactRevision: R1, runId: '00000000-0000-4000-8000-000000000000', journalRevision: revision }] }));
+  let n = 1;
+  while (size(`skills/demo/references/${'é'.repeat(n + 1)}.md`) <= DREAM_PROCESSING_BYTES) n++;
+  let file = `skills/demo/references/${'é'.repeat(n)}.md`;
+  if (size(file) < DREAM_PROCESSING_BYTES) file = `skills/demo/references/${'é'.repeat(n)}a.md`;
+  assert.equal(size(file), DREAM_PROCESSING_BYTES);
+  const tail = await settle({ inputs: sources([file]), items: [[file, { revision: R1 }]], verify: verifier(R1, [file]) });
+  const checkpoint = f.state().processingCheckpoints[0];
+  assert.deepEqual([checkpoint.entries.map(entry => entry.path), checkpoint.evicted], [[file], 9]);
+  assert.equal(Buffer.byteLength(JSON.stringify(checkpoint)), DREAM_PROCESSING_BYTES, 'the estimate matched the real checkpoint');
+  assert.deepEqual(tail.find(event => event.kind === 'processing-advanced').prior, { evicted: 9, entries: [] });
+});
+
+test('processing checkpoints and events refuse claims the verified outcome does not back', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  const inputs = sources(['AGENTS.md', 'skills/demo/SKILL.md']);
+  const tail = await settle({ inputs, items: [['AGENTS.md', { revision: R1 }], ['skills/demo/SKILL.md', null]], verify: verifier(R1, ['AGENTS.md']) });
+  const state = f.state();
+  assert.deepEqual(validateDreamEvents(tail, { state }), tail);
+  const unbacked = { path: 'skills/demo/SKILL.md', digest: inputs.sources[1].digest, artifactRevision: R1 };
+  for (const mutate of [
+    events => { events.find(event => event.kind === 'processing-advanced').processed.push(unbacked); },
+    events => { events.find(event => event.kind === 'processing-advanced').processed = []; },
+    events => { events.find(event => event.kind === 'processing-advanced').checkpoint.entries.push({ ...unbacked, runId: events[0].run.runId, journalRevision: state.revision }); },
+    events => { events.find(event => event.kind === 'processing-advanced').checkpoint.coverage = 'verified'; },
+    // A processing event needs the same run's selection checkpoint, which binds its inputs.
+    events => { events.splice(events.findIndex(event => event.kind === 'selection-advanced'), 1); },
+    events => { events.find(event => event.kind === 'processing-advanced').inputs.sources.pop(); },
+    events => { delete events.find(event => event.kind === 'processing-advanced').inputs; },
+    // A processed source cannot vanish from the checkpoint without being evicted.
+    events => { const advanced = events.find(event => event.kind === 'processing-advanced'); advanced.checkpoint.entries = []; advanced.checkpoint.evicted = 1; },
+    events => { events.find(event => event.kind === 'processing-advanced').checkpoint.evicted = 3; },
+    events => { events.find(event => event.kind === 'processing-advanced').prior = { evicted: 2, entries: [] }; },
+  ]) {
+    const events = copy(tail); mutate(events); assert.throws(() => validateDreamEvents(events, { state }), { code: 'dream-state-invalid' });
+  }
+  // A forged outcome that credits a path never delivered to the run is refused,
+  // even with its receipt digest recomputed and the event list made consistent.
+  {
+    const events = copy(tail), recorded = events.find(event => event.kind === 'outcome-recorded');
+    const advanced = events.find(event => event.kind === 'processing-advanced');
+    const forged = copy(recorded.outcome.items[0]); forged.claim.path = 'skills/other/SKILL.md';
+    recorded.outcome.items[1] = forged; recorded.receipt.digest = dreamOutcomeDigest(recorded.outcome);
+    advanced.processed.push({ path: forged.claim.path, digest: forged.claim.digest, artifactRevision: forged.verification.artifactRevision });
+    assert.throws(() => validateDreamEvents(events), { code: 'dream-state-invalid' });
+  }
+  for (const mutate of [
+    value => { value.processingCheckpoints[0].entries[0].path = '../secret'; },
+    value => { value.processingCheckpoints[0].entries[0].journalRevision = value.revision + 1; },
+    value => { value.processingCheckpoints[0].generation = '00000000-0000-4000-8000-000000000000'; },
+    value => { value.processingCheckpoints[0].entries = []; },
+    value => { value.processingCheckpoints.push(copy(value.processingCheckpoints[0])); },
+    value => { value.schemaVersion = 8; },
+  ]) {
+    const value = copy(state); mutate(value); assert.throws(() => validateDreamState(value), { code: 'dream-state-invalid' });
+  }
+  // A v8 state reads as v9 with no processing checkpoints, without a disk write.
+  const legacy = copy(state); delete legacy.processingCheckpoints; legacy.schemaVersion = 8;
+  f.replace(legacy);
+  const upgraded = createDreamScheduler(f.ports).status();
+  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [9, []]);
+  assert.equal(f.state().schemaVersion, 8);
+});
+
 test('notices publish with terminal run facts, deduplicate across runs and are acknowledged by the owner', async () => {
   const f = fixture(); f.scheduler.register(A, 'PT1H');
   const settle = async ({ reply = null, reject = false } = {}) => {
@@ -558,7 +723,7 @@ test('a restart quarantine publishes one owner-visible recovery notice that surv
     [quarantine, { ...update, cleared: [{ ...notice, clearedAt: update.at }] }],
     [quarantine, { ...update, suppressed: 1 }],
   ]) assert.throws(() => validateDreamEvents(events), { code: 'dream-state-invalid' });
-  const old = { ...copy(state), schemaVersion: 5 };
+  const old = { ...copy(state), schemaVersion: 5 }; delete old.processingCheckpoints;
   assert.throws(() => validateDreamState(old), { code: 'dream-state-invalid' }, 'version 5 readers never see the recovery kind');
   f.calls[0].resolve(); await run.done;
 });
@@ -604,7 +769,7 @@ test('ownership is recorded once per live run, before the first prompt, as a v7 
   for (const forged of [{ ...event, run: { ...event.run, ownership: null } }, { ...event, run: { ...event.run, ownership: { pgid: 1, leaderStartedAt: STARTED } } }]) {
     assert.throws(() => validateDreamEvents([forged]), { code: 'dream-state-invalid' });
   }
-  const v6 = { ...f.state(), schemaVersion: 6 };
+  const v6 = { ...f.state(), schemaVersion: 6 }; delete v6.processingCheckpoints;
   assert.throws(() => validateDreamState(v6), { code: 'dream-state-invalid' }, 'version 6 runs carry no ownership field');
   await release();
 });
@@ -619,7 +784,8 @@ test('a verified-absent group settles as interrupted, never successful, and allo
   assert.equal(state.registrations[0].nextDueAt, new Date(Date.parse(lastRun.endedAt) + HOUR).toISOString());
   assert.deepEqual(f.events.slice(before).map(event => event.kind), ['ended']);
   assert.deepEqual(state.noticeLedgers, []);
-  assert.throws(() => validateDreamState({ ...state, schemaVersion: 6 }), { code: 'dream-state-invalid' }, 'version 6 has no interrupted status');
+  const { processingCheckpoints: _, ...v6state } = state;
+  assert.throws(() => validateDreamState({ ...v6state, schemaVersion: 6 }), { code: 'dream-state-invalid' }, 'version 6 has no interrupted status');
   assert.equal(restarted.runNow(A).status, 'started');
   await release();
 });
@@ -730,11 +896,11 @@ test('v6 state upgrades its runs with null ownership, and stateless v6 events st
   const f = fixture(); f.scheduler.register(A, 'PT1H');
   const run = f.scheduler.runNow(A); await Promise.resolve();
   const legacy = f.state();
-  delete legacy.flights[0].ownership; legacy.schemaVersion = 6;
+  delete legacy.flights[0].ownership; delete legacy.processingCheckpoints; legacy.schemaVersion = 6;
   assert.deepEqual(validateDreamState(legacy), legacy);
   f.replace(legacy);
   const upgraded = createDreamScheduler(f.ports).status();
-  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [8, null]);
+  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [9, null]);
   const started = copy(f.events.find(event => event.kind === 'started'));
   delete started.run.ownership;
   assert.deepEqual(validateDreamEvents([started]), [started]);

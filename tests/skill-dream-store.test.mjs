@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs, { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { createDreamFileStore, DREAM_STORE_LIMITS } from '../skill-dream-store.mjs';
@@ -48,15 +49,15 @@ dreamStoreConformance('POSIX dream journal', fixture, posix);
 
 test('v1 journal state upgrades on the next transaction without rewriting history', posix, t => {
   const f = fixture(t), legacy = structuredClone(f.first);
-  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts; delete legacy.state.outcomeReceipts; delete legacy.state.selectionCheckpoints; delete legacy.state.noticeLedgers;
+  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts; delete legacy.state.outcomeReceipts; delete legacy.state.selectionCheckpoints; delete legacy.state.noticeLedgers; delete legacy.state.processingCheckpoints;
   assert.equal(f.store.commit(legacy), true);
   const bytes = readFileSync(path.join(f.directory, name(1)));
   const store = f.reopen(), scheduler = createDreamScheduler({ store, execute: () => {}, soulDirectory: () => f.directory });
-  assert.equal(scheduler.status().schemaVersion, 8);
+  assert.equal(scheduler.status().schemaVersion, 9);
   assert.deepEqual(scheduler.status().inputReceipts, []);
   assert.equal(store.read().schemaVersion, 1, 'read-only inspection does not migrate disk');
   scheduler.pause(A);
-  assert.equal(store.read().schemaVersion, 8);
+  assert.equal(store.read().schemaVersion, 9);
   assert.deepEqual(readFileSync(path.join(f.directory, name(1))), bytes);
   assert.equal(store.history().records.length, 2);
 });
@@ -79,7 +80,7 @@ for (const version of [2, 3, 4, 5, 6]) test(`v${version} prepared runs retain th
   old.register(A, 'PT1H'); old.runNow(A); await Promise.resolve();
   for (const change of captured) {
     withoutOwnership(change);
-    change.state.schemaVersion = version; if (version < 5) delete change.state.noticeLedgers;
+    change.state.schemaVersion = version; delete change.state.processingCheckpoints; if (version < 5) delete change.state.noticeLedgers;
     if (version < 4) delete change.state.selectionCheckpoints;
     if (version === 2) delete change.state.outcomeReceipts;
     assert.equal(f.store.commit(change), true);
@@ -88,7 +89,7 @@ for (const version of [2, 3, 4, 5, 6]) test(`v${version} prepared runs retain th
   const scheduler = createDreamScheduler({ store: f.reopen(), execute() {}, soulDirectory: () => f.directory });
   assert.equal(f.reopen().read().schemaVersion, version);
   assert.equal(scheduler.recover().quarantined, 1);
-  assert.equal(f.reopen().read().schemaVersion, 8);
+  assert.equal(f.reopen().read().schemaVersion, 9);
   assert.deepEqual(scheduler.status().inputReceipts, [reference]);
   assert.deepEqual(scheduler.status().noticeLedgers.map(ledger => ledger.notices.map(notice => notice.kind)), [['recovery']],
     'the migrating quarantine transaction carries its recovery notice');
@@ -286,4 +287,44 @@ test('real fsync errors never acknowledge a transaction, including a published b
     if (failedSync === 'file') { assert.equal(reopened.read(), null); assert.equal(reopened.history().records.length, 0); }
     else { assert.deepEqual(reopened.read(), f.first.state); assert.deepEqual(reopened.history().records[0].events, f.first.events); }
   });
+});
+
+// Owner decision 4 on #603: a processing checkpoint must advance from the one
+// the preceding journal state held, checked by the store across records.
+test('a processing event must start from the checkpoint the previous record held', posix, async t => {
+  const f = fixture(t);
+  const R = `sha256:${'1'.repeat(64)}`;
+  const metadata = { ...emptyInputs(), sources: ['AGENTS.md', 'soul.md'].map((file, index) => ({ path: file, kind: file === 'soul.md' ? 'soul' : 'context',
+    digest: `sha256:${String(index).repeat(64)}`, size: 1, excerptBytes: 1, truncated: false })),
+  coverage: { ...emptyInputs().coverage, eligible: 2, selected: 2, suppliedBytes: 2 } };
+  const store = createDreamFileStore({ directory: f.directory });
+  const verify = ({ reference }) => ({ verdict: 'verified-change', attribution: 'not-established',
+    checked: { event: { revision: reference.revision, status: 'approved' }, changedPaths: metadata.sources.map(source => ({ path: source.path })) } });
+  let file = 'AGENTS.md';
+  const scheduler = createDreamScheduler({ store, soulDirectory: () => f.directory, execute: ({ run, prepareInputs, stageOutcome }) => {
+    prepareInputs(metadata);
+    const source = metadata.sources.find(row => row.path === file);
+    stageOutcome(interpretDreamReport({ run, inputs: metadata, verifyRevisionEvidence: verify, reply: JSON.stringify({ schemaVersion: 1, runId: run.runId,
+      startingRevision: metadata.revision, items: [{ path: source.path, digest: source.digest, outcome: 'completed', reason: 'consolidated', evidence: { revision: R } }] }) }));
+  } });
+  scheduler.register(A, 'PT1H');
+  await scheduler.runNow(A).done;
+  file = 'soul.md';
+  await scheduler.runNow(A).done;
+  const reopened = f.reopen(), head = reopened.read();
+  assert.deepEqual(head.processingCheckpoints[0].entries.map(entry => entry.path), ['soul.md', 'AGENTS.md']);
+  assert.ok(reopened.history({ afterRevision: 0 }).records.length > 0, 'the honest journal reads');
+  // Rewrite the last record so the run "starts fresh", silently dropping AGENTS.md.
+  const last = path.join(f.directory, name(head.revision)), record = JSON.parse(readFileSync(last, 'utf8'));
+  const advanced = record.events.find(event => event.kind === 'processing-advanced');
+  advanced.prior = null;
+  advanced.checkpoint = { ...advanced.checkpoint, entries: advanced.checkpoint.entries.filter(entry => entry.path === 'soul.md') };
+  record.state.processingCheckpoints = [advanced.checkpoint];
+  const { digest: _old, ...payload } = record;
+  record.digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  writeFileSync(last, `${JSON.stringify(record)}\n`);
+  // Each record still validates alone; only the transition across records exposes it.
+  assert.doesNotThrow(() => validateDreamEvents(record.events, { state: record.state }));
+  assert.throws(() => f.reopen().read(), { code: 'dream-journal-invalid' });
+  assert.throws(() => f.reopen().history({ afterRevision: 0, limit: DREAM_STORE_LIMITS.page }), { code: 'dream-journal-invalid' });
 });

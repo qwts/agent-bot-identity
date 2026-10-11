@@ -397,7 +397,7 @@ acknowledgment. Uncertain publication retains the lease in the running process;
 restart sees either the unfinished flight or the complete terminal/outcome
 transaction. Unscheduling removes current references, not append-only history.
 All outcome records state `processingCoverage: unverified`. Selection rotation is
-implemented below, as is notice deduplication; processing checkpoints remain incomplete.
+implemented below, as are notice deduplication and verified-change processing checkpoints.
 
 ### Implemented selection checkpoints
 
@@ -415,8 +415,8 @@ truncated or unstructured attempts preserve the previous checkpoint. Even a
 valid report with zero items can advance selection: all those items remain
 unreported, and no processing credit is assigned. Missing or blocked items are
 never removed from eligibility; after the last page the cursor wraps to the
-start. Truncated source tails still have unknown coverage. Semantic processing
-checkpoints require a trusted operation-specific verifier and are not implemented.
+start. Truncated source tails still have unknown coverage. Processing credit comes only
+from the processing checkpoints below.
 
 Before capture, the daemon reads the exact preparation transaction through a
 bounded one-record history query and checks its receipt and next cursor against
@@ -513,7 +513,7 @@ notice cannot be derived, the quarantine is still journaled without it.
 State version 7 adds `ownership` to every run record: null, or the recorded
 `{ pgid, leaderStartedAt }`. It also adds the `ownership-recorded` event and
 the terminal status `interrupted`, used only by restart recovery. Earlier
-states read as version 7 with null ownership and upgrade on the next write;
+states read with null ownership and upgrade on the next write;
 their journal records are never rewritten.
 
 `agent-bot soul skill dream --soul ID|NAME --status` shows the soul's ledger.
@@ -524,6 +524,40 @@ or unknown notice is `dream-notice-not-found`. Unscheduling removes current
 notices while their events remain, except while a quarantined flight survives.
 Versions 1–5 remain readable without disk changes; the next write adds v6
 state, and readers must be upgraded before opening a v6 journal.
+
+### Implemented processing checkpoints
+
+Scheduler state version 9 adds one version-1 processing checkpoint per
+registration (#603, owner decision 4). A source counts as processed only when
+its outcome item carries `verified-change` evidence from the existing
+revision-evidence check: the soul revision it names is a verified change
+that touched that path. As in that check, the proposal's status (pending,
+approved, rejected or uncertain) does not affect the verdict, so credit means
+the dream changed the source, not that the owner approved the change. Agent-reported, source-identity and not-verified items
+earn no credit, and notices stay `pending-host-read`.
+
+The checkpoint names the soul and registration generation, its `coverage` is
+`verified-change-only`, and each entry records the path, the digest that was
+delivered to the run, the verified artifact revision, the run and the journal
+revision. The digest is the delivered one: the bytes the run changed are not
+themselves counted as processed. A later verified run replaces a path's entry,
+entries are ordered newest first, and the checkpoint stays within 8 KiB by
+dropping the oldest entries and counting them in `evicted`. The full list for
+each run is kept in the append-only `processing-advanced` event, published in
+the same transaction as the outcome and selection checkpoint, which it
+requires. It also carries the checkpoint it advanced from, and the published
+checkpoint must be exactly that one advanced by the run's sources, so a
+processed source cannot vanish without being evicted. The store checks across records that
+this starting checkpoint is the one the previous journal state held, when it
+commits, when it opens the head and when it pages history. The event carries the run's prepared input metadata, bound by digest
+to the selection checkpoint's input receipt, and the outcome is validated
+against those delivered sources, so no path that was never delivered can be
+credited. The checkpoint only reports; selection is unchanged and
+the existing `processingCoverage: unverified` labels stay as they are.
+
+Version 1-8 states read as version 9 with no processing checkpoints and upgrade
+on the next write; recorded events are never rewritten. Readers must be upgraded before opening a v9 journal.
+`agent-bot soul dream status` lists the soul's processing checkpoint.
 
 ### Remaining checkpoint and notice contract
 
@@ -626,9 +660,10 @@ and directory, trigger, start time, execution bound and cancellation state.
 Strict validation refuses unknown schemas, extra fields, duplicate souls/runs,
 invalid timestamps and inconsistent states. State v2 added input receipt
 references, v3 added outcome references, v4 added bounded selection checkpoints,
-v5 added bounded live notice ledgers, and v6 adds the recovery notice kind.
+v5 added bounded live notice ledgers, v6 added the recovery notice kind, v7 added run
+ownership, v8 moved previews out of the journal, and v9 adds processing checkpoints.
 These records belong to the dream journal; existing soul and daemon stores are
-not rewritten. Semantic processing schemas remain later work.
+not rewritten.
 A canonical directory cannot be assigned to different souls across registrations
 and unsettled flights. The same soul may re-register at a new directory while its
 old flight remains quarantined; another soul cannot claim that old directory

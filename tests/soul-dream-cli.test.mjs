@@ -31,6 +31,7 @@ const STATUS = {
   selectionCheckpoints: [{ agentId: ID, runId: 'previous-successful-run', coverage: 'selection-only', processingCoverage: 'unverified' },
     { agentId: OTHER, runId: OTHER_RUN, coverage: 'selection-only', processingCoverage: 'unverified' }],
   outcomeReceipts: [{ runId: OTHER_RUN, journalRevision: 5, startingRevision: HASH, digest: HASH }],
+  processingCheckpoints: [{ agentId: OTHER, coverage: 'verified-change-only', entries: [] }, { agentId: ID, coverage: 'verified-change-only', entries: [] }],
   noticeLedgers: [{ schemaVersion: 1, agentId: ID, lastRunId: RUN, suppressed: 0, notices: [{ id: `ntc_${'a'.repeat(24)}`, kind: 'execution' }] },
     { schemaVersion: 1, agentId: OTHER, lastRunId: OTHER_RUN, suppressed: 2, notices: [{ id: `ntc_${'b'.repeat(24)}`, kind: 'report' }] }],
   fault: null, orphanRecovery: 'process-group-or-quarantine',
@@ -98,6 +99,7 @@ test('status and history disclose only the named soul and always report unverifi
   assert.deepEqual(status.outcomeReceipts, [], 'receipt kinds from later state versions are filtered too');
   assert.equal(status.registration.intervalHours, 24);
   assert.deepEqual(status.selectionCheckpoints, [STATUS.selectionCheckpoints[0]], 'checkpoints are filtered by soul, including an older successful run');
+  assert.deepEqual(status.processingCheckpoints, [STATUS.processingCheckpoints[1]], "only this soul's processing checkpoint is disclosed");
   assert.deepEqual(status.notices, STATUS.noticeLedgers[0], "only this soul's live notices are disclosed");
   assert.deepEqual([status.started, status.closing, status.orphanRecovery], [true, false, 'process-group-or-quarantine']);
   assert.deepEqual(status.journal, STATUS.journal, 'journal budget and no-pruning facts stay visible');
