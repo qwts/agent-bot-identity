@@ -1,0 +1,1 @@
+- Internal: the module map lists `daemon-client.mjs` as identity's daemon contract, with its exact exports, importable by soul, host, cli and comms. Nothing moves, and `daemon.json` keeps its format (#645).
