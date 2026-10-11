@@ -494,3 +494,21 @@ test('dream input carries the soul\'s harness memory from its own tool home, nev
   assert.equal(seen[0].captured.memory.items[0].excerpt, 'MEMORY_CANARY\n');
   assert.equal(prepared.inputs.memory.items[0].path, 'projects/-work/memory/MEMORY.md');
 });
+
+test('the memory cursor advances with selection, so later runs reach memory past the limits (#903)', posix, async t => {
+  const seen = [];
+  const f = fixture(t, { harness: 'claude', executorFor: () => async input => {
+    const captured = JSON.parse(input.message.split('\n\n').at(-1)); seen.push(captured);
+    input.appendEvent(UPDATE_EVENT, { sessionUpdate: 'agent_message_chunk', content: { text: JSON.stringify({
+      schemaVersion: 1, runId: captured.runId, startingRevision: captured.revision, items: [] }) } });
+  } });
+  const memory = path.join(f.soul, '.soul-state', 'tools', 'claude', 'projects', '-work', 'memory');
+  mkdirSync(memory, { recursive: true });
+  for (let i = 0; i < 66; i++) writeFileSync(path.join(memory, `m${String(i).padStart(3, '0')}.md`), `note ${i}\n`);
+  f.control('register', { schedule: 'PT1H' });
+  for (let i = 0; i < 3; i++) { f.control('run-now'); await f.service.idle(); }
+  assert.deepEqual(seen.map(captured => [captured.memory.items.length, captured.memory.items[0].path, captured.memory.nextCursor]), [
+    [64, 'projects/-work/memory/m000.md', 'projects/-work/memory/m063.md'],
+    [2, 'projects/-work/memory/m064.md', null],
+    [64, 'projects/-work/memory/m000.md', 'projects/-work/memory/m063.md']]);
+});

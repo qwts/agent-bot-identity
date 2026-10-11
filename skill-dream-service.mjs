@@ -112,6 +112,15 @@ export function createDreamService({ directory, previewDirectory = path.join(pat
     }
     return checkpoint.nextCursor;
   };
+  // The memory cursor rides in the same verified preparation as the
+  // selection cursor (format 3), so it advances only when selection does,
+  // and only for the harness it was recorded for.
+  const memoryCursor = (checkpoint, harness) => {
+    if (checkpoint === null) return null;
+    const record = store.history({ afterRevision: checkpoint.inputReceipt.journalRevision - 1, limit: 1 }).records[0];
+    const memory = record?.events.find(event => event.kind === 'inputs-prepared' && event.run.runId === checkpoint.runId)?.inputs.memory ?? null;
+    return memory !== null && memory.harness === harness ? memory.nextCursor : null;
+  };
   const requireExecutor = () => { if (!configured) fail('dream-executor-unavailable', 'The daemon has no configured dream executor.'); };
   try {
     if (typeof lookupSoul !== 'function' || typeof turns?.run !== 'function' || typeof turns?.busy !== 'function') fail('dream-service-configuration', 'Dream service needs the daemon soul lookup and turn registry.');
@@ -136,7 +145,7 @@ export function createDreamService({ directory, previewDirectory = path.join(pat
           // The soul's harness memory is read only from its own tool home (#903);
           // input format 3 always says whether it was.
           inputs = captureDreamInputs(soul.directory, { cursor: selectionCursor(selectionCheckpoint), ...(typeof recordedSession === 'function' ? { session } : {}),
-            memory: { harness: soul.harness } });
+            memory: { harness: soul.harness, cursor: memoryCursor(selectionCheckpoint, soul.harness) } });
           inputFailures.delete(run.agentId);
         } catch (error) {
           inputFailures.delete(run.agentId);

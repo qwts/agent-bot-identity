@@ -325,7 +325,13 @@ home and the digest of the whole file; the excerpt is taken in the same pass
 that hashes it, and the file must show the same size, change times and single
 link afterwards. Items are delivered in path order, at
 most 64 of them, 64 KiB of each from its start and 256 KiB in all; `truncated`
-marks a cut item and `remaining` counts files not delivered. Durable metadata
+marks a cut item and `remaining` counts files not delivered. `nextCursor` is the
+last delivered path while files after it were left over, else null: the next run
+starts after it, so files past the limits are reached in later runs, and the end
+wraps to the first file. The cursor rides in the run's durable `inputs-prepared`
+metadata and is used only when that run advanced the selection checkpoint, for
+the same harness; a cursor whose file is gone starts at the next path. Like
+the selection cursor it is progress, never evidence of processing. Durable metadata
 names the harness, paths, digests, sizes, excerpt bytes, truncation and
 `remaining`, never the text. Formats 1 and 2 stay valid exactly as recorded, with
 memory `unsupported`. An older daemon refuses a journal holding a format-3

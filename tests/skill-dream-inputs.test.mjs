@@ -347,6 +347,7 @@ test('harness memory in the soul\'s tool home is delivered as format 3, identifi
     value => { value.memory.items[0].excerptBytes = DREAM_MEMORY_LIMITS.excerptBytes + 1; },
     value => { value.memory.harness = 'codex'; },
     value => { value.memory.remaining = -1; },
+    value => { value.memory.remaining = DREAM_MEMORY_LIMITS.visited + 1; },
     value => { value.coverage.memory = 'unavailable'; },
     value => { value.memory = null; },
     value => { delete value.memory; },
@@ -368,7 +369,7 @@ test('memory coverage is unsupported without a reader or store, and unavailable 
   const coverage = harness => captureDreamInputs(f.root, { memory: { harness } }).coverage.memory;
   assert.deepEqual([coverage('codex'), coverage(undefined), coverage('claude')], ['unsupported', 'unsupported', 'unsupported'], 'no reader, or no store in the tool home');
   mkdirSync(f.projects, { recursive: true });
-  assert.deepEqual(captureDreamMemory(f.root, 'claude'), { coverage: 'supported', memory: { harness: 'claude', items: [], remaining: 0 } });
+  assert.deepEqual(captureDreamMemory(f.root, 'claude'), { coverage: 'supported', memory: { harness: 'claude', items: [], remaining: 0, nextCursor: null } });
   const file = f.remember('-p/memory/a.md', 'mine\n');
   assert.equal(coverage('claude'), 'supported');
   const outside = mkdtempSync(path.join(tmpdir(), 'dream-memory-outside-'));
@@ -447,4 +448,54 @@ test('memory is delivered within item and byte limits, with truncation and the r
   assert.equal(memory.items.reduce((sum, item) => sum + item.excerptBytes, 0), DREAM_MEMORY_LIMITS.bytes);
   assert.deepEqual([memory.items.length, memory.remaining], [4, 1], 'the byte budget stops delivery and counts the rest');
   assert.ok(dreamInputMetadata(captureDreamInputs(f.root, { memory: { harness: 'claude' } })));
+});
+
+test('memory listed through an ancestor swapped for a link is unavailable, not silently skipped', t => {
+  const f = memoryFixture(t);
+  f.remember('-b/memory/notes.txt', 'not memory');
+  // While the memory directory is open, its project moves out of the store
+  // and a link takes its place. The memory directory itself is unchanged
+  // (same inode, still a real directory at its last component), so only
+  // the whole path shows the listing is now outside the store.
+  const outside = mkdtempSync(path.join(tmpdir(), 'dream-ancestor-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  const project = path.join(realpathSync(f.root), '.soul-state', 'tools', 'claude', 'projects', '-b');
+  let moved = false;
+  const result = captureDreamMemory(f.root, 'claude', { afterDirectoryOpen: opened => {
+    if (opened !== path.join(project, 'memory') || moved) return;
+    moved = true; renameSync(project, path.join(outside, '-b')); symlinkSync(path.join(outside, '-b'), project);
+  } });
+  assert.deepEqual([moved, result.coverage], [true, 'unavailable']);
+  rmSync(project); renameSync(path.join(outside, '-b'), project);
+  assert.equal(captureDreamMemory(f.root, 'claude').coverage, 'supported', 'the swap undone');
+});
+
+test('a memory cursor lets later runs reach files past the limits, then wraps', t => {
+  const f = memoryFixture(t);
+  const count = DREAM_MEMORY_LIMITS.items + 3;
+  for (let index = 0; index < count; index++) f.remember(`-p/memory/m${String(index).padStart(3, '0')}.md`, `note ${index}\n`);
+  const page = cursor => captureDreamInputs(f.root, { memory: { harness: 'claude', cursor } }).memory;
+  const first = page(null);
+  const last = `projects/-p/memory/m${String(DREAM_MEMORY_LIMITS.items - 1).padStart(3, '0')}.md`;
+  assert.equal(first.nextCursor, last);
+  const second = page(first.nextCursor);
+  assert.deepEqual(second.items.map(item => item.path), [64, 65, 66].map(index => `projects/-p/memory/m${String(index).padStart(3, '0')}.md`));
+  assert.deepEqual([second.nextCursor, second.remaining], [null, DREAM_MEMORY_LIMITS.items], 'the end wraps the next run to the start');
+  assert.equal(page(second.nextCursor).items[0].path, 'projects/-p/memory/m000.md');
+  // A cursor whose file is gone starts at the next path; one past the end wraps.
+  rmSync(path.join(f.projects, '-p/memory/m064.md'));
+  assert.equal(page('projects/-p/memory/m064.md').items[0].path, 'projects/-p/memory/m065.md');
+  assert.equal(page('projects/-p/memory/z.md').items[0].path, 'projects/-p/memory/m000.md');
+  assert.equal(page('../elsewhere').items[0].path, 'projects/-p/memory/m000.md', 'an invalid cursor starts from the beginning');
+  const metadata = dreamInputMetadata(captureDreamInputs(f.root, { memory: { harness: 'claude', cursor: null } }));
+  assert.equal(metadata.memory.nextCursor, last);
+  for (const mutate of [
+    value => { value.memory.nextCursor = 'projects/-p/memory/m000.md'; },
+    value => { value.memory.nextCursor = '../x.md'; },
+    value => { value.memory.remaining = 0; },
+    value => { delete value.memory.nextCursor; },
+  ]) {
+    const value = structuredClone(metadata); mutate(value);
+    assert.throws(() => validateDreamInputMetadata(value), { code: 'dream-input-metadata-invalid' });
+  }
 });
