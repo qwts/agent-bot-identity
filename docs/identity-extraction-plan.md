@@ -7,8 +7,9 @@ repository as `qwts/agent-identity`:
 - what the `agent-bot` facade does;
 - how to roll back.
 
-The plan is reviewed before the repository is created. Nothing here runs until
-the owner approves it, and the questions at the end are answered.
+The plan is reviewed before the repository is created. The owner answered
+its four questions on 2026-10-11 (see the end of this page). Nothing here
+runs until the owner approves the plan.
 
 What identity offers is [identity-contract.md](identity-contract.md) (step 7).
 The inventory is [identity-contract-inventory.md](identity-contract-inventory.md).
@@ -115,7 +116,21 @@ All of these must hold before step 9 starts:
   abandoned, it is archived and `identity/` here becomes ordinary source
   again.
 
-## Questions for the owner
+## Owner answers (2026-10-11)
+
+The owner picked the recommended option on all four questions:
+
+1. **Carried history:** carried commits are re-signed as the bot, each with a
+   trailer naming the original commit.
+2. **The pinned copy:** a vendored copy under `identity/`. Its version and
+   digest are recorded in `governance/agent-identity.json`, and CI checks
+   them.
+3. **The shared files:** a byte-identical pinned copy in agent-identity,
+   tested in both repositories.
+4. **Order:** step 6 (`identity/` with shims at the old paths) ships first,
+   in its own agent-bot release, before the repository is created.
+
+The questions as they were asked:
 
 1. **Carried history.** Carried commits can't keep their signatures.
    - **(a) Recommended:** re-sign carried commits as the bot, with a trailer
