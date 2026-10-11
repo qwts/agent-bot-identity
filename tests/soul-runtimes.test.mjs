@@ -10,7 +10,7 @@ import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
-import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
+import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, catalogPin, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
 import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
@@ -132,16 +132,15 @@ function fixture(t, { manifest = {}, census = false } = {}) {
 
 const tree = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).filter((p) => !p.includes('cpython') || p.endsWith('python3')).sort() : null);
 
-test('the catalog pins one version per supported major with an https URL and a 64-hex sha256 for every platform', () => {
+test('the catalog pins versions per supported major with an https URL and a 64-hex sha256 for every platform', () => {
   assert.deepEqual(Object.keys(RUNTIME_CATALOG).sort(), ['go', 'node', 'python', 'uv']);
   for (const [name, pins] of Object.entries(RUNTIME_CATALOG)) {
     assert.ok(pins.length >= 1, name);
-    const majors = new Set();
+    const versions = new Set();
     for (const pin of pins) {
       assert.match(pin.version, /^\d+\.\d+\.\d+$/, `${name} ${pin.version}`);
-      const major = name === 'python' ? pin.version.split('.').slice(0, 2).join('.') : pin.version.split('.')[0];
-      assert.ok(!majors.has(major), `${name} pins ${major} once`);
-      majors.add(major);
+      assert.ok(!versions.has(pin.version), `${name} pins ${pin.version} once`);
+      versions.add(pin.version);
       if (name === 'python') assert.equal(pin.via, 'uv');
       assert.deepEqual(Object.keys(pin.sources).sort(), [...RUNTIME_PLATFORMS].sort(), `${name} ${pin.version} covers every platform`);
       for (const [platform, source] of Object.entries(pin.sources)) {
@@ -153,26 +152,39 @@ test('the catalog pins one version per supported major with an https URL and a 6
       }
     }
   }
-  assert.deepEqual(RUNTIME_CATALOG.node.map((pin) => pin.version.split('.')[0]), ['22', '24']);
-  assert.deepEqual(RUNTIME_CATALOG.python.map((pin) => pin.version.split('.').slice(0, 2).join('.')), ['3.12', '3.13']);
-  assert.ok(new Set(Object.values(RUNTIME_CATALOG).flat().flatMap((pin) => Object.values(pin.sources ?? {}).map((s) => s.sha256))).size === 30, 'thirty distinct digests');
+  // Superseded pins may be kept, so check the supported lines and that no two sources share a digest.
+  assert.deepEqual([...new Set(RUNTIME_CATALOG.node.map((pin) => pin.version.split('.')[0]))].sort(), ['22', '24']);
+  assert.deepEqual([...new Set(RUNTIME_CATALOG.python.map((pin) => pin.version.split('.').slice(0, 2).join('.')))].sort(), ['3.12', '3.13']);
+  const digests = Object.values(RUNTIME_CATALOG).flat().flatMap((pin) => Object.values(pin.sources).map((s) => s.sha256));
+  assert.equal(new Set(digests).size, digests.length, 'every source has its own digest');
   assert.equal(hostPlatform({ platform: 'darwin', arch: 'arm64' }), 'darwin-arm64');
   assert.equal(hostPlatform({ platform: 'freebsd', arch: 'x64' }), null);
   assert.equal(hostPlatform({ platform: 'win32', arch: 'x64' }), 'win32-x64');
 });
 
 test('a declared version is a major, a range of one, or exact, and resolves to the newest matching pin', () => {
-  assert.equal(resolveCatalogPin('node', '24').version, RUNTIME_CATALOG.node.at(-1).version);
-  assert.equal(resolveCatalogPin('node', '24.x').version, RUNTIME_CATALOG.node.at(-1).version);
-  assert.equal(resolveCatalogPin('node', '22').version, RUNTIME_CATALOG.node[0].version);
-  assert.equal(resolveCatalogPin('node', RUNTIME_CATALOG.node[1].version).version, RUNTIME_CATALOG.node[1].version);
+  // The newest pin on a line, worked out here rather than read from catalog order, which keeps superseded pins.
+  const newestOn = (name, line) => RUNTIME_CATALOG[name].map((pin) => pin.version).filter((v) => v.startsWith(`${line}.`))
+    .sort((a, b) => { const [x, y] = [a, b].map((v) => v.split('.').map(Number)); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; }).at(-1);
+  assert.equal(resolveCatalogPin('node', '24').version, newestOn('node', '24'));
+  assert.equal(resolveCatalogPin('node', '24.x').version, newestOn('node', '24'));
+  assert.equal(resolveCatalogPin('node', '22').version, newestOn('node', '22'));
+  for (const pin of RUNTIME_CATALOG.node) assert.equal(resolveCatalogPin('node', pin.version).version, pin.version, 'every pinned version resolves exactly');
   assert.equal(resolveCatalogPin('node', '24.0.0'), null, 'an exact version the catalog does not pin');
   assert.equal(resolveCatalogPin('node', '20'), null);
-  assert.equal(resolveCatalogPin('python', '3.12').version, RUNTIME_CATALOG.python[0].version);
-  assert.equal(resolveCatalogPin('python', '3').version, RUNTIME_CATALOG.python.at(-1).version, 'the newest minor');
-  assert.equal(resolveCatalogPin('go', '1').version, RUNTIME_CATALOG.go[0].version);
+  assert.equal(resolveCatalogPin('python', '3.12').version, newestOn('python', '3.12'));
+  assert.equal(resolveCatalogPin('python', '3').version, newestOn('python', '3'), 'the newest minor');
+  assert.equal(resolveCatalogPin('go', '1').version, newestOn('go', '1'));
   assert.equal(resolveCatalogPin('go', '>=1.20'), null, 'comparators are not ranges');
   assert.equal(resolveCatalogPin('ruby', '3'), null);
+  // A bump keeps the superseded pin: the range takes the newest, the exact version still finds the old (#617).
+  const kept = { node: [{ version: '24.21.0', sources: {} }, { version: '24.22.1', sources: {} }, { version: '22.23.3', sources: {} }] };
+  assert.equal(resolveCatalogPin('node', '24', { catalog: kept }).version, '24.22.1');
+  assert.equal(catalogPin('node', '24.21.0', { catalog: kept }), kept.node[0]);
+  assert.equal(catalogPin('node', '24.21.0').version, '24.21.0');
+  assert.equal(catalogPin('node', '24', { catalog: kept }), null, 'a range is not an exact version');
+  assert.equal(catalogPin('node', '24.20.0', { catalog: kept }), null);
+  assert.equal(catalogPin('ruby', '3.3.0'), null);
   assert.ok(versionMatches('24', '24.21.0') && versionMatches('24.21', '24.21.0') && !versionMatches('24.2', '24.21.0') && !versionMatches('2', '24.21.0'));
   assert.deepEqual(normalizeRuntimeDeclaration('node', '24'), { version: '24', via: null, sources: null });
   assert.deepEqual(normalizeRuntimeDeclaration('python', { version: '3.12', via: 'uv' }), { version: '3.12', via: 'uv', sources: null });

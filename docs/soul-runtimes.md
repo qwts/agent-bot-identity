@@ -71,7 +71,10 @@ the archive once and checking it against the publisher's checksum file.
 | go | 1.27.1 | go.dev tarballs (zip on Windows) |
 | uv | 0.12.23 | github.com/astral-sh/uv release archives |
 
-A range resolves to the newest pin it matches (`24` → 24.21.0). An exact
+A range resolves to the newest pin it matches (`24` → 24.21.0). A bump adds
+the new pin and keeps the one it supersedes, so a soul that recorded the older
+version can still reinstall it from a verified source (#617, "Pin per
+install"); `catalogPin(name, version)` finds a pin by exact version. An exact
 version the catalog does not pin is unsupported unless the soul declares its
 own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1. Inspection
 resolves against the currently supplied catalog; it does not lock a range to an older install

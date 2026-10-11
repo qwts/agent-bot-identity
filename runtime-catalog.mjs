@@ -1,9 +1,11 @@
 // The pin catalog (#583 slice 3, ADR-0583 decision 6; #322, ADR-0322): the
-// runtime downloads agent-bot provisions into a soul, one pinned version per
+// runtime downloads agent-bot provisions into a soul, pinned versions per
 // supported major, with the URL and SHA-256 of every archive per platform.
 // Pure data and pure functions over it: no I/O. Every digest here was
-// verified by downloading the archive once and hashing it; a bump replaces
-// the whole pin, never one digest.
+// verified by downloading the archive once and hashing it. A bump adds a new
+// pin, never edits one digest, and keeps the pin it supersedes (#617, owner
+// decision "Pin per install"): a range resolves to its newest pin, and a soul
+// that recorded an older one can still reinstall it from a verified source.
 //
 // Python is installed by uv (`uv python install`) from python-build-standalone
 // (#617, owner decision "Hash-locked installs"): each python pin carries the
@@ -151,6 +153,13 @@ export function versionMatches(range, version) {
 export function hostPlatform({ platform = process.platform, arch = process.arch } = {}) {
   const key = `${platform}-${arch}`;
   return RUNTIME_PLATFORMS.includes(key) ? key : null;
+}
+
+/** The catalog pin with exactly this version, superseded or not, or null. */
+export function catalogPin(name, version, { catalog = RUNTIME_CATALOG } = {}) {
+  const pins = catalog[name];
+  if (!Array.isArray(pins) || !isExactVersion(version)) return null;
+  return pins.find((pin) => pin.version === version) ?? null;
 }
 
 /** The catalog pin a declared range resolves to (the newest match), or null. */
