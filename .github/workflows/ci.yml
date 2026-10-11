@@ -342,13 +342,13 @@ jobs:
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
       HOMEBREW_NO_INSTALL_CLEANUP: '1'
-      FORMULA_HEAD: 18c01de7e24fbf0711f7f42a79aaecb55334f946
+      FORMULA_HEAD: 229983fbdb848fca7670b35d11b63a5df2252da8
       RELEASE_HEAD: 3bdb2b0c63296c8aa10e00c6ed46b7823405a4e9
       ARCHIVE_SHA256: ad3ab845afbe710a680e489a66b6262bcce746a64e434757c67e547dca8bed80
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 18c01de7e24fbf0711f7f42a79aaecb55334f946
+          ref: 229983fbdb848fca7670b35d11b63a5df2252da8
           persist-credentials: false
       - name: Verify exact Formula source and published archive
         shell: bash
