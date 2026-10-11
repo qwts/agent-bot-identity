@@ -403,6 +403,26 @@ Claude's installed 2.1.290 settings schema describes `effortLevel` as
 key; it does not create a `reasoningEffort` key in Claude settings. Support is
 an adapter capability, independent of whether a particular model honors effort.
 
+Reasoning effort stays unsupported for Gemini and OpenCode (owner decision,
+2026-10-10, #379): neither has one native key that means the same effort for
+every model, so `reasoningEffort` is reported, not mapped.
+
+- OpenCode 1.18.34 sets effort as a provider's own model option:
+  `reasoningEffort` for OpenAI, `thinking.budgetTokens` for Anthropic
+  ([`models.mdx`](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/web/src/content/docs/models.mdx#L70-L97)).
+  The other route is an agent's `variant`, which "applies only when using the
+  agent's configured model"
+  ([`agent.ts`](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/core/src/v1/config/agent.ts#L14-L17)), and whose
+  names differ by provider: Anthropic `high` / `max`, Google `low` / `high`
+  ([built-in variants](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/web/src/content/docs/models.mdx#L144-L166)),
+  so `medium` has no match on either.
+- Gemini CLI v0.63.0 sets it as `generateContentConfig.thinkingConfig` in a
+  model-matched `modelConfigs` override
+  ([`settingsSchema.ts`](https://github.com/google-gemini/gemini-cli/blob/573846625af9e93b3b968e0e0b86bb093a4c9b16/packages/cli/src/config/settingsSchema.ts#L1144-L1191)):
+  Gemini 3 models take `thinkingLevel`, Gemini 2.5 models a numeric
+  `thinkingBudget`
+  ([`defaultModelConfigs.ts`](https://github.com/google-gemini/gemini-cli/blob/573846625af9e93b3b968e0e0b86bb093a4c9b16/packages/core/src/config/defaultModelConfigs.ts#L43-L62)).
+
 Settings render independently of `comms`; turning comms off does not disable
 settings. Only declared, supported keys are written. Authored settings supplied
 through `authored` retain unrelated keys, nested permission entries, and MCP
