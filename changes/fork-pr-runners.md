@@ -1,0 +1,1 @@
+- `SECURITY.md` states the CI runner policy for outside contributors: pull requests from forks run on GitHub-hosted runners with no secrets, self-hosted runners are meant only for pushes, maintainer runs and same-repository pull requests, the deleted-fork gap is named, and approval of outside contributors' workflows is a repository setting the maintainers turn on (#752).
