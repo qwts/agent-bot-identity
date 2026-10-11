@@ -14,7 +14,6 @@
 // in-process. Operations that take a callback run under the identity lock
 // (retire, finalize, initialize-app, record-package-revision) are not here.
 
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -149,12 +148,20 @@ function errorPayload(error) {
   };
 }
 
-function main() {
+// Reads stdin as a stream: a synchronous read of fd 0 can fail with EAGAIN
+// when the parent has not written yet and the pipe is non-blocking.
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function main() {
   let output;
   try {
     let input;
     try {
-      input = JSON.parse(readFileSync(0, 'utf8'));
+      input = JSON.parse(await readStdin());
     } catch {
       throw invalid('stdin must be one JSON object');
     }
@@ -166,4 +173,4 @@ function main() {
   if (output.error) process.exitCode = 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
