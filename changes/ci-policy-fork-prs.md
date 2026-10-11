@@ -1,0 +1,1 @@
+- CI pins qwts-agent-ci at d9f8cf9, whose `Action Policy` admits a pull request from a fork when it runs on a GitHub-hosted runner in this public repository, so an outside contributor's pull request can pass CI once a maintainer approves its run (#752).
