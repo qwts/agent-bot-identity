@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { populationFile, registerSoulDir, setSoulParent, showSoul, upsertSoul } from '../agent-population.mjs';
 import { readColdWakeSettings, setColdWake } from '../cold-wake-settings.mjs';
 import { REMOVE_CAPABILITIES, removalPlan, soulRemoveCommand } from '../soul-remove.mjs';

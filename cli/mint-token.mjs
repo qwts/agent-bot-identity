@@ -5,7 +5,7 @@
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { readBinding } from '../agent-binding.mjs';
-import { appendAuditReceipt } from '../agent-principals.mjs';
+import { appendAuditReceipt } from '../identity-format.mjs';
 import { mintForCaller } from '../git-credential-bot.mjs';
 import { MINT_USAGE, parseMintArgs, selectionReason } from '../mint-token.mjs';
 import { explicitAppArg, ownerApprovalRequired, requireOwnerApproval } from '../owner-approval.mjs';

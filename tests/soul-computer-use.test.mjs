@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { populationFile, recordSoulLaunch, setSoulComputerUse, showSoul, soulComputerUse, upsertSoul } from '../agent-population.mjs';
 import { soulComputerUseCommand } from '../soul-computer-use.mjs';
 import { createDaemonServer, daemonClient, daemonStateFile, withPermissionReceipts } from '../agent-daemon.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { createComputerUseActivity } from '../computer-use-activity.mjs';
 import { createContractExecutor } from '../executor-contract.mjs';
 import { createTurnRegistry, coldTurnExecutor } from '../wake-plane.mjs';

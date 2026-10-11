@@ -32,7 +32,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { spacesHome } from './agent-space.mjs';
 import { listSouls, populationFile } from './agent-population.mjs';
 import { minimalChildEnv } from './child-env.mjs';

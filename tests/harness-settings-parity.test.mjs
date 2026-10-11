@@ -18,7 +18,7 @@ import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { daemonModeFor, daemonModelFor, daemonReasoningEffortFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
 import { listProposals } from '../agent-jobs.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { packageModel, packageReasoningEffort, repoModel, repoReasoningEffort, resolveSoulModel, resolveSoulReasoningEffort, setSoulModel } from '../soul-model.mjs';

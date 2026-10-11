@@ -63,10 +63,9 @@ import {
   writeInvocationPayload,
 } from './agent-jobs.mjs';
 import {
-  appendAuditReceipt,
   assertAuthorized,
-  validateTransport,
 } from './agent-principals.mjs';
+import { appendAuditReceipt, validateTransport } from './identity-format.mjs';
 import { assertSoulUnpaused, listSouls, populationFile, showSoul } from './agent-population.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { classifyRisk } from './permission-risk.mjs';

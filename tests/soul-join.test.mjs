@@ -11,7 +11,7 @@ import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity } from '../ag
 import { stateDirectory } from '../state-paths.mjs';
 import { populationFile, showSoul, soulDirectory, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer, recordedWorktree } from '../agent-daemon.mjs';
-import { appendAuditReceipt, auditFile } from '../agent-principals.mjs';
+import { appendAuditReceipt, auditFile } from '../identity-format.mjs';
 import { createColdWaker } from '../cold-wake.mjs';
 import { installSoulHarnesses } from '../soul-home.mjs';
 import { bundledStarter, ensureAcpHarness, joinSoul, parseJoinArgs, WORKSPACE_NAME } from '../soul-join.mjs';

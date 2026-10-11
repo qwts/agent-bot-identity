@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { PROOF_HEADER } from '../binding-proof.mjs';
 import { verifyPrincipalOwner } from '../owner-action.mjs';
 import { computePackageRevision } from '../soul-package.mjs';

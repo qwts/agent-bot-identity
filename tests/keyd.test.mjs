@@ -10,7 +10,7 @@ import path from 'node:path';
 import { ensureAgentIdentity, retireAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import {

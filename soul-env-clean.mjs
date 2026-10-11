@@ -19,7 +19,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { RETENTION, classifyPath, retentionOf } from './soul-env-contract.mjs';
 import { readMigrationStep } from './soul-migration-journal.mjs';

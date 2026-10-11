@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { auditCommand } from '../agent-audit.mjs';
-import { auditFile, appendAuditReceipt } from '../agent-principals.mjs';
+import { auditFile, appendAuditReceipt } from '../identity-format.mjs';
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER_ID = 'agent_22222222-2222-4222-8222-222222222222';

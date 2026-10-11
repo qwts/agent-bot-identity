@@ -9,7 +9,7 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { listSouls, showSoul, upsertSoul } from '../agent-population.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { CLASSIFICATIONS, classifyPath, retentionOf } from '../soul-env-contract.mjs';
 import { EXPORT_MANIFEST, IMPORTS_DIRECTORY, LIFE_IMPORT_STEP_ID, planSoulExport, readExportManifest, soulEnvExportCommand, soulEnvImportCommand, writeSoulExport } from '../soul-env-export.mjs';

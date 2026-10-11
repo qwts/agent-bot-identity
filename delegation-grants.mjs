@@ -39,7 +39,7 @@ import {
   operationDigest,
   validateProposalId,
 } from './agent-jobs.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { validateAgentId } from './agent-identity.mjs';
 import { keydPresence } from './owner-presence.mjs';
 

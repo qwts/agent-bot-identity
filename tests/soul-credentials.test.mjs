@@ -10,7 +10,7 @@ import { loadConfig } from '../config.mjs';
 import { legacyAppFolderStatus, readAppMetadata } from '../identity-app-store.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../agent-identity.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { appConfig } from '../mint-token.mjs';
 import { confinementCheck, setConfinementMode } from '../confinement.mjs';
 import { normalizeEnvelope } from '../hook-dialects.mjs';

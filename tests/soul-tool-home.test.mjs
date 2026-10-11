@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { ownerActionSummary } from '../owner-gate.mjs';
 import { readToolHomeRecord, setToolHomeChoice, toolHomeRecordPath } from '../soul-tool-home-record.mjs';
 import { soulToolHomeCommand } from '../soul-tool-home.mjs';

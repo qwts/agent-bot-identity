@@ -7,7 +7,7 @@ import path from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { soulEnvExportCommand } from '../soul-env-export.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
 import { EXPORT_CATEGORIES, incomingRoot, outgoingRoot, readPrivateJson, runSandboxExport, sandboxExportCommand, verifySandboxExport } from '../sandbox-export.mjs';

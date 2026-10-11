@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { PACKAGE_IGNORE_LIST } from '../soul-package.mjs';

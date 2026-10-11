@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAgentIdentity } from '../agent-identity.mjs';
 import { recordSoulDisplayName, showSoul } from '../agent-population.mjs';
-import { auditFile } from '../agent-principals.mjs';
+import { auditFile } from '../identity-format.mjs';
 import { readSoulEnvironment } from '../soul-env.mjs';
 import { TEMPLATE_NAME_STEP_ID, MIGRATION_OPERATIONS, soulEnvMigrateCommand } from '../soul-env-migrate.mjs';
 import { readMigrationJournal, readMigrationStep } from '../soul-migration-journal.mjs';

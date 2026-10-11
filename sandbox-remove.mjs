@@ -15,7 +15,7 @@
 // command again reads the broker afresh and carries on, so a pairing already
 // gone is not revoked twice.
 import { homedir } from 'node:os';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { ownerCredentialRequired, soulMarkers } from './owner-action.mjs';
 import { populationFile, showSoul } from './agent-population.mjs';
 import { verifySandboxExport } from './sandbox-export.mjs';

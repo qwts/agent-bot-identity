@@ -9,7 +9,6 @@
 
 import { randomUUID } from 'node:crypto';
 import {
-  appendFileSync,
   chmodSync,
   mkdirSync,
   readFileSync,
@@ -21,18 +20,15 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { validateAgentId } from './agent-identity.mjs';
 import { withLock } from './file-lock.mjs';
+import { appendAuditReceipt, validateAgentId, validatePrincipalId, validateTransport } from './identity-format.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
-import { interactionHome } from './state-paths.mjs';
 
 const SCHEMA_VERSION = 1;
 
 // The complete operation vocabulary of the interaction contract (#55).
 export const PRINCIPAL_OPERATIONS = Object.freeze(['message', 'observe', 'cancel', 'approve']);
 
-const PRINCIPAL_ID_PATTERN = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const TRANSPORT_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 // Provider IDs are immutable provider-side identifiers (numeric Telegram user
 // IDs, opaque web-client subjects). Normalized form: visible ASCII, no spaces.
 const PROVIDER_ID_PATTERN = /^[\x21-\x7e]{1,128}$/;
@@ -44,20 +40,6 @@ function printableText(name, value, { max = 512 } = {}) {
     || /[\x00-\x1f\x7f]/.test(value)
   ) {
     throw new Error(`${name} must be printable text no longer than ${max} characters`);
-  }
-  return value;
-}
-
-export function validatePrincipalId(value) {
-  if (typeof value !== 'string' || !PRINCIPAL_ID_PATTERN.test(value)) {
-    throw new Error('invalid principal ID');
-  }
-  return value;
-}
-
-export function validateTransport(value) {
-  if (typeof value !== 'string' || !TRANSPORT_PATTERN.test(value)) {
-    throw new Error('transport must be a short lowercase slug');
   }
   return value;
 }
@@ -244,53 +226,6 @@ function requirePrincipal(principals, principalId) {
   return existing;
 }
 
-// Secret-free audit receipts (#57 req 7, #31). Append-only JSONL under the
-// interaction home. Only whitelisted identifier fields are recorded — never
-// provider tokens, display names, or message bodies. A credential mint also
-// names the App it minted for (`appSlug`) and a fixed reason code for its
-// outcome (`reason`, #107); both are optional, so older readers ignore them.
-// An inbox take names where its bearer came from (`bearerSource`, #229), as
-// one of a fixed set of labels — the bearer itself is never recorded.
-const BEARER_SOURCES = new Set(['env', 'pass-cli']);
-
-export function auditFile({ env = process.env, home = homedir() } = {}) {
-  return path.join(interactionHome({ env, home }), 'audit.jsonl');
-}
-
-// Why a receipt's decision went the way it did (#382), one line. A URL is
-// never kept: a webhook's URL is a secret, and an error may carry one.
-function receiptDetail(value) {
-  const line = String(value).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim();
-  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
-}
-
-export function appendAuditReceipt(
-  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null, bearerSource = null },
-  { env = process.env, home = homedir(), now = () => new Date() } = {},
-) {
-  if (bearerSource !== null && !BEARER_SOURCES.has(bearerSource)) throw new Error('audit receipt bearerSource must be env or pass-cli');
-  const receipt = {
-    at: now().toISOString(),
-    event: printableText('event', event, { max: 40 }),
-    ...(principalId === null ? {} : { principalId: validatePrincipalId(principalId) }),
-    ...(transport === null ? {} : { transport: validateTransport(transport) }),
-    ...(agentId === null ? {} : { agentId: agentIdOrThrow(agentId, 'agentId') }),
-    ...(operation === null ? {} : { operation: printableText('operation', operation, { max: 40 }) }),
-    ...(decision === null ? {} : { decision: printableText('decision', decision, { max: 40 }) }),
-    ...(detail === null ? {} : { detail: receiptDetail(detail) }),
-    ...(appSlug === null ? {} : { appSlug: printableText('appSlug', appSlug, { max: 100 }) }),
-    ...(reason === null ? {} : { reason: printableText('reason', reason, { max: 40 }) }),
-    ...(bearerSource === null ? {} : { bearerSource }),
-  };
-  const file = auditFile({ env, home });
-  ensurePrivateDirectory(path.dirname(file));
-  appendFileSync(file, `${JSON.stringify(receipt)}\n`, { encoding: 'utf8', mode: 0o600 });
-  return receipt;
-}
-
-// Enrollment is a local owner ceremony: it starts with no bindings, no souls,
-// and no operations, so a freshly enrolled principal can do nothing until the
-// owner explicitly binds a transport identity and allows souls/operations.
 export function enrollPrincipal(
   { label },
   {

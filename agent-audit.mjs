@@ -7,7 +7,7 @@ import { createInterface } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { pathToFileURL } from 'node:url';
 
-import { auditFile } from './agent-principals.mjs';
+import { auditFile } from './identity-format.mjs';
 
 const USAGE = 'usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--agent AGENT_ID] [--event KIND] [--limit N] | audit tail [--json] [--agent ID]';
 const DEFAULT_LIMIT = 200;

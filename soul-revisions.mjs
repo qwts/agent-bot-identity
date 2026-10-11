@@ -16,7 +16,7 @@ import { appendSoulRevision, registeredSoulDir } from './soul-history.mjs';
 import { soulSpacePath } from './soul-memory.mjs';
 import { assertOwnerAction, consentOwner, ownerCredentialRequired, presenceOrConsent } from './owner-action.mjs';
 import { populationFile, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { appendAuditReceipt } from './agent-principals.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, classifyPath } from './soul-env-contract.mjs';
 import { kindOf } from './soul-profile.mjs';
 
