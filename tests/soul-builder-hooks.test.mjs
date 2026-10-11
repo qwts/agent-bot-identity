@@ -128,12 +128,13 @@ test('the rendered entry runs the soul hook through the real runner, and fails c
 test('the report lists every hook as rendered or unsupported, per harness', () => {
   const output = buildHarnessFiles(hooked());
   const report = harnessReport(output, { hooks: declaredHooks(hooked()) });
-  for (const harness of ['claude', 'devin', 'codex', 'cursor', 'copilot']) {
+  // OpenCode delivers both through its generated plugin (#378).
+  for (const harness of ['claude', 'devin', 'codex', 'cursor', 'copilot', 'opencode']) {
     assert.deepEqual(report[harness].hooks, { received: NAMES, rendered: NAMES }, harness);
     assert.deepEqual(report[harness].unsupported.hooks, [], harness);
     assert.ok(report[harness].rendered.includes('hooks'), harness);
   }
-  for (const harness of ['gemini', 'opencode', 'muse', 'kiro']) {
+  for (const harness of ['gemini', 'muse', 'kiro']) {
     assert.deepEqual(report[harness].hooks, { received: NAMES, rendered: [] }, harness);
     assert.deepEqual(report[harness].unsupported.hooks, NAMES, harness);
     assert.equal(report[harness].rendered.includes('hooks'), false, harness);
@@ -283,7 +284,8 @@ test('soul build --check --json and the plain summary name unsupported hooks', (
   const dirty = run('--check', '--json');
   assert.equal(dirty.status, 1);
   const report = JSON.parse(dirty.stdout);
-  assert.deepEqual(report.harnesses.opencode.unsupported.hooks, NAMES);
+  assert.deepEqual(report.harnesses.gemini.unsupported.hooks, NAMES);
+  assert.deepEqual(report.harnesses.opencode.unsupported.hooks, []);
   assert.deepEqual(report.harnesses.claude.hooks.rendered, NAMES);
   const plain = run();
   assert.equal(plain.status, 0, plain.stderr);

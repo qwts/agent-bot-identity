@@ -43,9 +43,10 @@ test('pure output is sorted, deterministic, input-independent and confined to th
   // Codex now receives `.codex/config.toml` for its MCP entry (#378) and
   // OpenCode its `opencode.json`; neither gets a duplicate skills folder.
   assert.ok(a.has('.codex/config.toml') && a.has('opencode.json'));
-  // Cursor and Kiro receive only their MCP file; no harness duplicates the skills.
+  // Cursor and Kiro receive only their MCP file, OpenCode only its hook
+  // plugin (#378); no harness duplicates the skills.
   assert.ok(a.has('.cursor/mcp.json') && a.has('.kiro/settings/mcp.json'));
-  assert.ok([...a.keys()].every((p) => !/^\.(cursor|opencode|devin|kiro)\//.test(p) || ['.cursor/mcp.json', '.kiro/settings/mcp.json'].includes(p)),
+  assert.ok([...a.keys()].every((p) => !/^\.(cursor|opencode|devin|kiro)\//.test(p) || ['.cursor/mcp.json', '.kiro/settings/mcp.json', '.opencode/plugins/agent-bot-soul.js'].includes(p)),
     'compatible harnesses receive no duplicate folder');
   assert.throws(() => buildHarnessFiles([{ path: 'skills/../escape', bytes: Buffer.alloc(0) }]), /unsafe/);
 });

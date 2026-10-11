@@ -290,9 +290,9 @@ export const DIALECTS = [
   {
     // OpenCode has no hook config file. It loads every `{plugin,plugins}/*.{ts,js}`
     // under `.opencode/` as a plugin module (config/plugin.ts) and awaits its
-    // hooks inside its own process, so the adapter is a generated plugin (#378,
-    // a later slice) rather than a JSON entry, and this row is the contract
-    // that plugin speaks. Both spellings load; `plugins/` is the one the docs
+    // hooks inside its own process, so the adapter is a generated plugin
+    // (soul-builder's `opencodeHookPlugin`, #378) rather than a JSON entry, and
+    // this row is the contract that plugin speaks. Both spellings load; `plugins/` is the one the docs
     // name for a project, so `pluginFile` uses it. Checked against
     // OpenCode 1.18.34 (anomalyco/opencode@aec0b9a6): `Hooks` in
     // packages/plugin/src/index.ts, and the call sites in session/tools.ts,

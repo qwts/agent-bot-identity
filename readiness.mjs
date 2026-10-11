@@ -27,6 +27,8 @@ import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
+import { OPENCODE_PLUGIN_PATH, opencodeHookPlugin } from './soul-builder.mjs';
+import { GENERATED_HARNESS_MARKER } from './soul-harness-contract.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { keydStatus, keydVersionAction } from './keyd-client.mjs';
 import { readBindToken, readBinding } from './agent-binding.mjs';
@@ -250,6 +252,9 @@ export function hookCoverage(today = new Date()) {
       // instead of only reporting an empty list.
       contextEvents: Object.keys(row.contextChannel ?? {}),
       contextNote: row.contextNote ?? null,
+      // A dialect served by a generated plugin rather than a config entry
+      // (OpenCode, #378); `hooks.opencode_plugin` checks each soul's copy.
+      pluginFile: row.pluginFile ?? null,
     };
   });
 }
@@ -1820,6 +1825,78 @@ function coverageCheck(now) {
   });
 }
 
+// Each active soul's generated OpenCode plugin (#378): the only adapter that
+// carries the runner's identity and confinement guards, and the soul's own
+// hooks, into OpenCode. A soul with no AGENTS.md renders nothing, so it is not
+// expected to have one. An unmarked file at the path is the soul's own plugin:
+// the build refuses to replace it, so it is reported, never touched. So is a
+// symlink or other non-regular entry on the path, which the build refuses too:
+// it is never followed, so a link to the right bytes does not read as current.
+export function opencodePluginCheck({ souls, read = readFileSync, lstat = lstatSync }) {
+  const expected = opencodeHookPlugin();
+  const marker = `// ${GENERATED_HARNESS_MARKER}`;
+  const found = { current: [], missing: [], stale: [], unmarked: [] };
+  for (const soul of souls) {
+    const readOptional = (relative) => {
+      try { return read(join(soul.soulDir, relative)); }
+      catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+    };
+    let bytes;
+    try {
+      if (readOptional('AGENTS.md') === null) continue;
+      const parts = OPENCODE_PLUGIN_PATH.split('/');
+      const irregular = parts.some((_, index) => {
+        const info = optionalLstat(join(soul.soulDir, ...parts.slice(0, index + 1)), lstat);
+        return info && (info.isSymbolicLink() || !(index < parts.length - 1 ? info.isDirectory() : info.isFile()));
+      });
+      if (irregular) {
+        found.unmarked.push(soul.id);
+        continue;
+      }
+      bytes = readOptional(OPENCODE_PLUGIN_PATH);
+    } catch {
+      found.stale.push(soul.id);
+      continue;
+    }
+    if (bytes === null) found.missing.push(soul.id);
+    else if (Buffer.from(bytes).equals(expected)) found.current.push(soul.id);
+    else if (Buffer.from(bytes).toString('utf8').replace(/\r\n?/g, '\n').split('\n')[0] === marker) found.stale.push(soul.id);
+    else found.unmarked.push(soul.id);
+  }
+  const evidence = { path: OPENCODE_PLUGIN_PATH, ...found };
+  if (!found.missing.length && !found.stale.length && !found.unmarked.length) {
+    return readinessCheck({
+      id: 'hooks.opencode_plugin',
+      status: 'ready',
+      message: found.current.length
+        ? `OpenCode hook plugin is current in every soul that renders one (${found.current.length})`
+        : 'no soul renders an OpenCode hook plugin',
+      evidence,
+    });
+  }
+  const parts = [];
+  if (found.missing.length) parts.push(`missing in ${found.missing.join(', ')}`);
+  if (found.stale.length) parts.push(`out of date or unreadable in ${found.stale.join(', ')}`);
+  if (found.unmarked.length) parts.push(`replaced by an unmarked plugin or a non-regular file in ${found.unmarked.join(', ')}`);
+  return readinessCheck({
+    id: 'hooks.opencode_plugin',
+    status: 'warning',
+    code: found.unmarked.length ? 'opencode-plugin-unmarked' : 'opencode-plugin-stale',
+    message: `OpenCode hook plugin ${OPENCODE_PLUGIN_PATH} is ${parts.join('; ')}: OpenCode sessions there run without agent-bot's guards and soul hooks`,
+    action: found.unmarked.length
+      ? `move the soul's own plugin to another name under .opencode/plugins/, then run: agent-bot soul build <soul folder>`
+      : 'run: agent-bot soul build <soul folder>',
+    evidence,
+  });
+}
+
+function opencodeSoulPlugins({ home, env }) {
+  let souls;
+  try { souls = listSouls({ file: populationFile({ home, env }) }).filter((soul) => soul.status === 'active' && typeof soul.soulDir === 'string'); }
+  catch { return null; } // spaces.home already reports an unreadable census
+  return opencodePluginCheck({ souls });
+}
+
 function ghShimCheck({ home, required, inspect }) {
   const result = inspect({ home });
   if (result.status === 'ready') {
@@ -2641,6 +2718,8 @@ export async function collectReadiness({
     machineChecks.push(app && coverage.status === 'warning'
       ? notUsedByApp({ ...coverage, status: 'failed' }, app, 'harness hook dialects are reviewed for installed hooks only')
       : coverage);
+    const opencodePlugins = opencodeSoulPlugins({ home, env });
+    if (opencodePlugins) machineChecks.push(opencodePlugins);
     if (configValid) {
       machineChecks.push(readinessCheck({
         id: 'hooks.claude_worktree',

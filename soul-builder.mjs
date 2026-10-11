@@ -2,7 +2,7 @@
 // imports: ACP spawn data includes machine-specific paths and is not build input.
 import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
 import { REACH_SERVER_NAME } from './reach-contract.mjs';
-import { CANONICAL_EVENTS, isBlocking, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
+import { CANONICAL_EVENTS, dialect, isBlocking, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
 import { PROVIDERS, claudeProviderEnv, codexProviderConfig, normalizeProvider, opencodeProviderConfig, providerRenders } from './soul-providers.mjs';
 
 const compare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
@@ -545,8 +545,12 @@ export const HOOK_TARGETS = Object.freeze([
   Object.freeze({ harness: 'cursor', dialect: 'cursor', path: '.cursor/hooks.json' }),
   Object.freeze({ harness: 'copilot', dialect: 'copilot', path: '.github/hooks/agent-bot-soul.json' }),
 ]);
-const HOOK_DIALECT_FOR = Object.freeze({ claude: 'claude', devin: 'claude', codex: 'codex', cursor: 'cursor', copilot: 'copilot' });
-const hookTargetFor = (harness) => HOOK_TARGETS.find((target) => target.dialect === HOOK_DIALECT_FOR[harness]);
+const HOOK_DIALECT_FOR = Object.freeze({ claude: 'claude', devin: 'claude', codex: 'codex', cursor: 'cursor', copilot: 'copilot', opencode: 'opencode' });
+// Where each harness's hooks are delivered, for the report: a HOOK_TARGETS
+// file, or OpenCode's generated plugin.
+const hookTargetFor = (harness) => (HOOK_DIALECT_FOR[harness] === 'opencode'
+  ? { dialect: 'opencode', path: OPENCODE_PLUGIN_PATH }
+  : HOOK_TARGETS.find((target) => target.dialect === HOOK_DIALECT_FOR[harness]));
 
 // The same name grammar as other primitives, plus an optional extension so a
 // script may keep `.sh` or `.py`; a numeric prefix orders the runner (`10-`).
@@ -659,6 +663,117 @@ function renderHooks(events, output, authored) {
     const rendered = renderHookTarget(target, base, events, { fromOutput });
     if (rendered) output.set(target.path, rendered);
   }
+  output.set(OPENCODE_PLUGIN_PATH, opencodeHookPlugin());
+}
+
+// OpenCode (#378): no hook config file, so its adapter is one generated plugin
+// at the `opencode` row's `pluginFile`. Deliberately not a HOOK_TARGETS entry:
+// those are merge bases the disk layer hands back as authored input, and an
+// unmarked plugin at this path must stay a conflict the build refuses, never a
+// file it adopts. Its marker is the first line, as for any generated script.
+//
+// The text is fixed: every event the row maps, not only the declared ones.
+// OpenCode has no user-level lifecycle adapter (the row has no `homeFile`), so
+// this plugin is the only way the runner's built-in identity and confinement
+// guards reach an OpenCode session, and a soul with no hooks still needs them.
+// The runner reads the soul's `hooks/` beside the plugin, never the toolkit's
+// or a project's `agent-hooks/`.
+//
+// It answers on its own clock, above the runner's 10 s hook budget. A blocking
+// event denies on a deny, and also when agent-bot is missing, crashes, exits
+// with anything but 0 or 2, or runs out of time: OpenCode aborts a tool call or
+// a prompt when its hook throws. A non-blocking event never throws.
+export const OPENCODE_PLUGIN_PATH = dialect('opencode').pluginFile;
+export const OPENCODE_PLUGIN_TIMEOUT_MS = 15000;
+
+function opencodeRoutes() {
+  const routes = {};
+  for (const event of SOUL_HOOK_EVENTS) {
+    const mapped = vendorEvent('opencode', event);
+    if (mapped) (routes[mapped.event] ??= []).push([event, mapped.matcher, isBlocking(event)]);
+  }
+  return routes;
+}
+
+export function opencodeHookPlugin() {
+  return Buffer.from(`// ${MARKER}
+// agent-bot soul build renders this file from the opencode row in
+// hook-dialects.mjs; a rebuild replaces any edit. It runs
+// \`agent-bot agent-hook --dialect opencode\` (from PATH) for each mapped
+// event, with the hook's input and output merged on stdin, over the soul's
+// hooks/ and the runner's built-in identity and confinement guards (#378).
+// Exit 0 allows and exit 2 denies; on a blocking event a missing runner, a
+// crash, any other exit or a timeout denies too.
+// ${SOUL_HOOK_MARKER}
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const HOOKS_DIR = fileURLToPath(new URL('../../hooks', import.meta.url));
+// OpenCode hook -> [canonical event, matcher, blocking], in canonical order.
+const ROUTES = ${JSON.stringify(opencodeRoutes())};
+// AGENT_BOT_PLUGIN_TIMEOUT_MS may only tighten this.
+const LIMIT_MS = ${OPENCODE_PLUGIN_TIMEOUT_MS};
+
+function limitMs() {
+  const requested = Number(process.env.AGENT_BOT_PLUGIN_TIMEOUT_MS);
+  return requested > 0 && requested < LIMIT_MS ? requested : LIMIT_MS;
+}
+
+function runHook(event, payload, cwd) {
+  return new Promise((resolve) => {
+    let input, child, timer, settled = false, stderr = '';
+    const finish = (verdict) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(verdict);
+    };
+    try {
+      input = JSON.stringify(payload);
+      child = spawn('agent-bot', ['agent-hook', '--event', event, '--dialect', 'opencode'], {
+        cwd, env: { ...process.env, AGENT_BOT_HOOKS_DIR: HOOKS_DIR }, stdio: ['pipe', 'ignore', 'pipe'],
+      });
+    } catch (error) {
+      finish({ status: 'error', reason: error.message });
+      return;
+    }
+    const ms = limitMs();
+    timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish({ status: 'error', reason: \`agent-hook did not answer within \${ms}ms\` });
+    }, ms);
+    child.on('error', (error) => finish({ status: 'error', reason: \`cannot run agent-bot: \${error.message}\` }));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { if (stderr.length < 8192) stderr += chunk; });
+    child.on('close', (code, signal) => {
+      const reason = stderr.trim();
+      if (code === 0) finish({ status: 'allow' });
+      else if (code === 2) finish({ status: 'deny', reason: reason || 'denied by hook' });
+      else finish({ status: 'error', reason: reason || \`agent-hook \${signal ? \`was killed by \${signal}\` : \`exited \${code}\`}\` });
+    });
+    // A runner that exits before reading its stdin has still answered.
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
+}
+
+export const AgentBotSoul = async ({ directory }) => {
+  const hooks = {};
+  for (const [name, routes] of Object.entries(ROUTES)) {
+    hooks[name] = async (input, output) => {
+      const subject = typeof input?.tool === 'string' ? input.tool : input?.event?.type;
+      const payload = { ...input, ...output, directory };
+      for (const [event, matcher, blocking] of routes) {
+        if (matcher && !new RegExp(matcher).test(subject ?? '')) continue;
+        const verdict = await runHook(event, payload, directory);
+        if (verdict.status === 'allow' || !blocking) continue;
+        throw new Error(\`agent-bot \${event} \${verdict.status === 'deny' ? 'denied this' : 'failed closed'}: \${verdict.reason}\`);
+      }
+    };
+  }
+  return hooks;
+};
+`);
 }
 
 // Claude renders every declared agent/command, so its output inventories the
@@ -680,7 +795,9 @@ export function harnessReport(output, { comms = true, manifest = {}, hooks = [] 
     const paths = [...output.keys()].filter((path) => path === files.instructions
       || (files.skills && path.startsWith(files.skills)) || path === files.mcp || path === settingsTarget?.path
       || (files.subagents && path.startsWith(files.subagents)) || (files.commands && path.startsWith(files.commands))
-      || (deliveredHooks.length > 0 && path === hookTarget.path));
+      // OpenCode's plugin is rendered for every soul (its guards), so it is
+      // always one of OpenCode's files, declared hooks or not.
+      || (path === hookTarget?.path && (deliveredHooks.length > 0 || hookTarget.dialect === 'opencode')));
     // An empty build rendered nothing at all: there is no AGENTS.md to point a
     // harness at, so it gets no instructions either.
     const rendered = [];
