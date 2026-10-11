@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.64
+
+- Revision CLI/daemon mutations and cold-wake changes now check the presented principal's current grant for their immutable soul target through agent-comms, refusing revoked or unprovable targets without falling back to broker health or consent. Known soul accounts come from the broker; pre-join souls require an unrestricted or exact soul-ID grant. This is partial target authorization for qwts/agent-comms#77, not native credential custody or signed decision receipts.
+- Windows daemon updates wait for the previous scheduled task instance and daemon process to terminate before starting its replacement, and require a new daemon PID before reporting healthy. This fixes successful-looking refreshes that left no daemon running when Task Scheduler ignored an immediate restart (#954).
+
 ## 0.10.63
 
 - `docs/soul-builder.md` marks Cursor and Kiro commands, Gemini CLI subagents and every Muse primitive as won't-do for now, with the reason for each (an upstream format for Cursor, Kiro and Gemini CLI; no verified Muse definition adapter in this repo for Muse), and no longer lists OpenCode hooks as missing (#378).
