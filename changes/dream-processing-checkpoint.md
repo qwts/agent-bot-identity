@@ -1,0 +1,1 @@
+- Dream runs now keep a processing checkpoint per soul that counts a source as processed only when the revision-evidence check verifies an approved change to it, shown by `agent-bot soul dream status`; dream state moves to version 9 and older states stay readable (#603).

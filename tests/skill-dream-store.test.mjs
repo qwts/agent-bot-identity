@@ -48,15 +48,15 @@ dreamStoreConformance('POSIX dream journal', fixture, posix);
 
 test('v1 journal state upgrades on the next transaction without rewriting history', posix, t => {
   const f = fixture(t), legacy = structuredClone(f.first);
-  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts; delete legacy.state.outcomeReceipts; delete legacy.state.selectionCheckpoints; delete legacy.state.noticeLedgers;
+  legacy.state.schemaVersion = 1; delete legacy.state.inputReceipts; delete legacy.state.outcomeReceipts; delete legacy.state.selectionCheckpoints; delete legacy.state.noticeLedgers; delete legacy.state.processingCheckpoints;
   assert.equal(f.store.commit(legacy), true);
   const bytes = readFileSync(path.join(f.directory, name(1)));
   const store = f.reopen(), scheduler = createDreamScheduler({ store, execute: () => {}, soulDirectory: () => f.directory });
-  assert.equal(scheduler.status().schemaVersion, 8);
+  assert.equal(scheduler.status().schemaVersion, 9);
   assert.deepEqual(scheduler.status().inputReceipts, []);
   assert.equal(store.read().schemaVersion, 1, 'read-only inspection does not migrate disk');
   scheduler.pause(A);
-  assert.equal(store.read().schemaVersion, 8);
+  assert.equal(store.read().schemaVersion, 9);
   assert.deepEqual(readFileSync(path.join(f.directory, name(1))), bytes);
   assert.equal(store.history().records.length, 2);
 });
@@ -79,7 +79,7 @@ for (const version of [2, 3, 4, 5, 6]) test(`v${version} prepared runs retain th
   old.register(A, 'PT1H'); old.runNow(A); await Promise.resolve();
   for (const change of captured) {
     withoutOwnership(change);
-    change.state.schemaVersion = version; if (version < 5) delete change.state.noticeLedgers;
+    change.state.schemaVersion = version; delete change.state.processingCheckpoints; if (version < 5) delete change.state.noticeLedgers;
     if (version < 4) delete change.state.selectionCheckpoints;
     if (version === 2) delete change.state.outcomeReceipts;
     assert.equal(f.store.commit(change), true);
@@ -88,7 +88,7 @@ for (const version of [2, 3, 4, 5, 6]) test(`v${version} prepared runs retain th
   const scheduler = createDreamScheduler({ store: f.reopen(), execute() {}, soulDirectory: () => f.directory });
   assert.equal(f.reopen().read().schemaVersion, version);
   assert.equal(scheduler.recover().quarantined, 1);
-  assert.equal(f.reopen().read().schemaVersion, 8);
+  assert.equal(f.reopen().read().schemaVersion, 9);
   assert.deepEqual(scheduler.status().inputReceipts, [reference]);
   assert.deepEqual(scheduler.status().noticeLedgers.map(ledger => ledger.notices.map(notice => notice.kind)), [['recovery']],
     'the migrating quarantine transaction carries its recovery notice');

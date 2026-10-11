@@ -44,8 +44,9 @@ export function parseDreamSchedule(value) {
 }
 const emptyAt = schemaVersion => ({ schemaVersion, revision: 0, registrations: [], flights: [],
   ...(schemaVersion >= 2 ? { inputReceipts: [] } : {}), ...(schemaVersion >= 3 ? { outcomeReceipts: [] } : {}),
-  ...(schemaVersion >= 4 ? { selectionCheckpoints: [] } : {}), ...(schemaVersion >= 5 ? { noticeLedgers: [] } : {}) });
-export const emptyDreamState = () => emptyAt(8);
+  ...(schemaVersion >= 4 ? { selectionCheckpoints: [] } : {}), ...(schemaVersion >= 5 ? { noticeLedgers: [] } : {}),
+  ...(schemaVersion >= 9 ? { processingCheckpoints: [] } : {}) });
+export const emptyDreamState = () => emptyAt(9);
 function inputReceipt(value) {
   keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
   const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
@@ -71,9 +72,53 @@ function selectionCheckpoint(value) {
         selected: 0, suppliedBytes: 0, skippedBinary: 0, remaining: 1 }, nextCursor: value.nextCursor });
   }
 }
+// From version 9 (owner decision on #603, 2026-10-10) a source counts as
+// processed only when the revision-evidence check found a `verified-change`
+// for it. Each registered soul keeps one checkpoint of those sources: the path,
+// the digest delivered to that run (the change then altered the live source,
+// so its new bytes are not themselves processed) and the artifact revision.
+// Latest wins per path; the oldest entries leave once the checkpoint exceeds
+// its byte budget, counted in `evicted` (so a checkpoint may hold none), while every run's full list stays in
+// its append-only `processing-advanced` event. Selection is unaffected.
+export const DREAM_PROCESSING_BYTES = 8 * 1024;
+const PROCESSING_COVERAGE = 'verified-change-only';
+const sha = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
+// The actual reader's path eligibility, through metadata validation.
+function eligibleSourcePath(value) {
+  try {
+    validateDreamInputMetadata({ schemaVersion: 1, revision: `sha256:${'0'.repeat(64)}`, sources: [],
+      coverage: { definition: 'supported', memory: 'unsupported', conversations: 'unsupported', eligible: 1,
+        selected: 0, suppliedBytes: 0, skippedBinary: 0, remaining: 1 }, nextCursor: { revision: `sha256:${'0'.repeat(64)}`, path: value } });
+  } catch { invalid(); }
+}
+function processedSource(value, fields = ['path', 'digest', 'artifactRevision']) {
+  keys(value, fields);
+  if (!sha(value.digest) || !sha(value.artifactRevision)) invalid();
+  eligibleSourcePath(value.path);
+}
+const processingOrder = (a, b) => b.journalRevision - a.journalRevision || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+function processingCheckpoint(value) {
+  keys(value, ['schemaVersion', 'agentId', 'generation', 'coverage', 'evicted', 'entries']);
+  if (value.schemaVersion !== 1 || !isAgentId(value.agentId) || !id(value.generation) || value.coverage !== PROCESSING_COVERAGE
+    || !Number.isSafeInteger(value.evicted) || value.evicted < 0 || !Array.isArray(value.entries)
+    || value.entries.length < 1 && value.evicted < 1
+    || Buffer.byteLength(JSON.stringify(value)) > DREAM_PROCESSING_BYTES) invalid();
+  const paths = new Set();
+  value.entries.forEach((entry, index) => {
+    processedSource(entry, ['path', 'digest', 'artifactRevision', 'runId', 'journalRevision']);
+    if (!id(entry.runId) || !Number.isSafeInteger(entry.journalRevision) || entry.journalRevision < 1 || paths.has(entry.path)
+      || index > 0 && processingOrder(value.entries[index - 1], entry) >= 0) invalid();
+    paths.add(entry.path);
+  });
+}
+// The sources one outcome credits as processed: its `verified-change` items.
+const verifiedSources = outcome => (outcome?.items ?? []).filter(item => item.verification.evidence === 'verified-change')
+  .map(item => ({ path: item.claim.path, digest: item.claim.digest, artifactRevision: item.verification.artifactRevision }));
 function rebindSelection(state, registration) {
   const checkpoint = state.selectionCheckpoints.find(item => item.agentId === registration.agentId);
   if (checkpoint) checkpoint.generation = registration.generation;
+  const processing = state.processingCheckpoints?.find(item => item.agentId === registration.agentId);
+  if (processing) processing.generation = registration.generation;
 }
 // From version 7 `ownership` is null until the daemon records the agent's
 // process group, before its first prompt, as `{ pgid, leaderStartedAt }`.
@@ -90,8 +135,8 @@ function runRecord(run, settled, version) {
     || version >= 7 && run.ownership !== null && !validProcessOwnership(run.ownership)) invalid();
 }
 export function validateDreamState(state) {
-  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion >= 5 ? ['noticeLedgers'] : [])]);
-  if (![1, 2, 3, 4, 5, 6, 7, 8].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
+  keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion >= 5 ? ['noticeLedgers'] : []), ...(state?.schemaVersion >= 9 ? ['processingCheckpoints'] : [])]);
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -157,6 +202,16 @@ export function validateDreamState(state) {
         || !ledger.notices.length && !ledger.suppressed
         || state.schemaVersion === 5 && ledger.notices.some(notice => notice.kind === 'recovery')) invalid();
       seen.add(ledger.agentId);
+    }
+  }
+  if (state.schemaVersion >= 9) {
+    if (!Array.isArray(state.processingCheckpoints) || state.processingCheckpoints.length > DREAM_REGISTRATION_LIMIT) invalid();
+    const seen = new Set();
+    for (const checkpoint of state.processingCheckpoints) {
+      processingCheckpoint(checkpoint);
+      if (seen.has(checkpoint.agentId) || checkpoint.entries.length && checkpoint.entries[0].journalRevision > state.revision
+        || !state.registrations.some(row => row.agentId === checkpoint.agentId && row.generation === checkpoint.generation)) invalid();
+      seen.add(checkpoint.agentId);
     }
   }
   return state;
@@ -230,6 +285,28 @@ export function validateDreamEvents(events, { state = null } = {}) {
         || !events.some(row => row.kind === 'ended' && isDeepStrictEqual(row.run, event.run))) invalid();
       if (state && (state.schemaVersion < 4 || event.checkpoint.journalRevision !== state.revision
         || !state.selectionCheckpoints.some(row => isDeepStrictEqual(row, event.checkpoint)))) invalid();
+      continue;
+    }
+    if (event?.kind === 'processing-advanced') {
+      // Every processed source must be a `verified-change` item of the same
+      // transaction's structured outcome, and every such item must be listed.
+      keys(event, ['kind', 'at', 'run', 'checkpoint', 'processed']);
+      if (!date(event.at)) invalid();
+      runRecord(event.run, true, version(event.run)); processingCheckpoint(event.checkpoint);
+      if (!Array.isArray(event.processed) || event.processed.length < 1 || event.processed.length > 100) invalid();
+      event.processed.forEach(source => processedSource(source));
+      const outcome = events.find(row => row.kind === 'outcome-recorded' && isDeepStrictEqual(row.run, event.run))?.outcome;
+      const verified = verifiedSources(outcome);
+      const current = event.checkpoint.entries.filter(entry => entry.runId === event.run.runId);
+      if (event.run.status !== 'completed' || event.run.cancelRequestedAt !== null || outcome?.report?.status !== 'structured'
+        || event.checkpoint.agentId !== event.run.agentId || event.checkpoint.generation !== event.run.generation
+        || !isDeepStrictEqual(event.processed, verified)
+        || current.some(entry => !event.processed.some(source => source.path === entry.path && source.digest === entry.digest
+          && source.artifactRevision === entry.artifactRevision))
+        || new Set(current.map(entry => entry.journalRevision)).size > 1
+        || !events.some(row => row.kind === 'ended' && isDeepStrictEqual(row.run, event.run))) invalid();
+      if (state && (state.schemaVersion < 9 || current.some(entry => entry.journalRevision !== state.revision)
+        || !state.processingCheckpoints.some(row => isDeepStrictEqual(row, event.checkpoint)))) invalid();
       continue;
     }
     if (event?.kind === 'outcome-recorded') {
@@ -312,13 +389,14 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
   const read = () => {
     const observed = synchronous(store.read());
     const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
-    if (state.schemaVersion >= 8) return state;
-    // Version 8 changes only how outcome events store preview text.
-    if (state.schemaVersion === 7) return { ...state, schemaVersion: 8 };
+    if (state.schemaVersion >= 9) return state;
+    // Version 9 adds processing checkpoints; version 8 changed only how
+    // outcome events store preview text.
+    if (state.schemaVersion >= 7) return { ...state, schemaVersion: 9, processingCheckpoints: [] };
     // Upgrade only the next transaction, leaving historical v1 bytes intact.
     // An older run recorded no ownership, so its interruption stays ambiguous.
     const unowned = run => run === null ? null : { ...run, ownership: null };
-    return { ...state, schemaVersion: 8, inputReceipts: state.inputReceipts ?? [],
+    return { ...state, schemaVersion: 9, processingCheckpoints: [], inputReceipts: state.inputReceipts ?? [],
       outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: state.noticeLedgers ?? [],
       registrations: state.registrations.map(row => ({ ...row, lastRun: unowned(row.lastRun) })), flights: state.flights.map(unowned) };
   };
@@ -339,6 +417,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
     const latest = new Set(state.registrations.flatMap(row => row.lastRun ? [row.lastRun.runId] : []));
     state.outcomeReceipts = state.outcomeReceipts.filter(receipt => latest.has(receipt.runId));
     state.selectionCheckpoints = state.selectionCheckpoints.filter(checkpoint => state.registrations.some(row => row.agentId === checkpoint.agentId));
+    state.processingCheckpoints = state.processingCheckpoints.filter(checkpoint => state.registrations.some(row => row.agentId === checkpoint.agentId));
     // Unscheduling cannot clear a quarantine, so its notice outlives the registration too.
     state.noticeLedgers = state.noticeLedgers.filter(ledger => state.registrations.some(row => row.agentId === ledger.agentId)
       || state.flights.some(run => run.agentId === ledger.agentId));
@@ -478,6 +557,22 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
           current.selectionCheckpoints = current.selectionCheckpoints.filter(item => item.agentId !== agentId);
           current.selectionCheckpoints.push(checkpoint);
           events.push({ kind: 'selection-advanced', at: endedAt, run: result, checkpoint });
+          const processed = verifiedSources(entry.outcome);
+          if (processed.length) {
+            const journalRevision = current.revision + 1, fresh = new Set(processed.map(source => source.path));
+            const prior = current.processingCheckpoints.find(item => item.agentId === agentId);
+            const next = { schemaVersion: 1, agentId, generation: owner.generation, coverage: PROCESSING_COVERAGE, evicted: prior?.evicted ?? 0,
+              entries: [...processed.map(source => ({ ...source, runId: run.runId, journalRevision })),
+                ...(prior?.entries ?? []).filter(item => !fresh.has(item.path))].sort(processingOrder) };
+            // A path too long to fit the budget even alone is evicted first,
+            // so it cannot push out every older entry.
+            const alone = item => Buffer.byteLength(JSON.stringify({ ...next, evicted: Number.MAX_SAFE_INTEGER, entries: [item] })) > DREAM_PROCESSING_BYTES;
+            next.evicted += next.entries.filter(alone).length; next.entries = next.entries.filter(item => !alone(item));
+            while (next.entries.length && Buffer.byteLength(JSON.stringify(next)) > DREAM_PROCESSING_BYTES) { next.entries.pop(); next.evicted++; }
+            current.processingCheckpoints = current.processingCheckpoints.filter(item => item.agentId !== agentId);
+            current.processingCheckpoints.push(next);
+            events.push({ kind: 'processing-advanced', at: endedAt, run: result, checkpoint: next, processed });
+          }
         }
         noticeRun(current, events, result, entry);
         persist(current, events);

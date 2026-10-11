@@ -80,6 +80,7 @@ function soulStatus(status, agentId) {
     fault: status.fault ?? null, maintenanceCoverage: 'unverified', journal: status.journal ?? null, previews: status.previews ?? null, diagnostics,
     registration, flights, inputReceipts: [], ...receipts,
     selectionCheckpoints: (status.selectionCheckpoints ?? []).filter(checkpoint => checkpoint?.agentId === agentId),
+    processingCheckpoints: (status.processingCheckpoints ?? []).filter(checkpoint => checkpoint?.agentId === agentId),
     notices: (status.noticeLedgers ?? []).find(ledger => ledger?.agentId === agentId) ?? null };
 }
 // Notice acknowledgements name their soul at the top level, not in a run.
