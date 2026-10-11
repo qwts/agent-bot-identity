@@ -1553,6 +1553,10 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   the domain accepts no mail (a `.invalid` name does by construction), or
   anyone who can receive `<agent-id>@<domain>` could verify it on a GitHub
   account and claim the soul's commits.
+- `settings.skillSearchAdapter` — the adapter `agent-bot soul skill search`
+  uses (#902). `local-text` searches the soul's own definition and skill
+  files at its declared revision; unset, search reports that no adapter is
+  configured. Any other value fails the config load. No service is set up.
 - `settings.keydTeamId` and `settings.keydIdentifier` — the Developer ID Team
   ID and code-signing identifier a keyd binary must carry before agent-bot
   pins its presence key. The Team ID has no default; an organization profile
