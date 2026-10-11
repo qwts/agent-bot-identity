@@ -1,0 +1,1 @@
+- Five identity files (`owner-text`, `session-approvals`, `git-publish-scan`, `soul-genesis`, `vouch`) move into `identity/`, and their old paths stay as re-export shims, so every import and path keeps working (#645, ADR-0645 step 6).

@@ -24,7 +24,7 @@ import {
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { createWindowsAccountCustody } from './windows-account-custody.mjs';
+import { createWindowsAccountCustody } from '../windows-account-custody.mjs';
 
 export const SOUL_TOKEN_TTL_SECONDS = 300;
 export const SOUL_TOKEN_AUDIENCE = 'agent-comms';
