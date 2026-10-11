@@ -43,6 +43,9 @@ The command must stop when:
 
 - the worktree is dirty;
 - the range is empty or contains a merge commit;
+- `--base` (or the default branch) is not an ancestor of HEAD: the worktree
+  was built on an older commit, and publishing would revert what the base
+  gained since. Rebase onto it first;
 - a submodule update appears in the range;
 - the App identity or token cannot be resolved;
 - the remote branch differs from the fetched remote-tracking ref;
