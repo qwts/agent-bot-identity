@@ -682,13 +682,15 @@ for those depends on the adapter that runs it:
   directory ([`acp-agent.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/acp-agent.ts#L1060-L1084)),
   so the `.claude/settings.json` the builder renders into the soul's home is
   read on a daemon turn there, as on a direct open: its `env` and its rules.
-  The adapter's PreToolUse hook answers from the same files' `deny`, then
-  `allow` rules before the daemon is asked
+  For Claude's own tools the CLI applies those rules from the loaded
+  settings. For the tools the adapter routes through ACP (`mcp__acp__*`), its
+  PreToolUse hook answers from the same files' `deny`, then `allow` rules
+  before the daemon is asked
   ([`settings.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/settings.ts#L446-L470),
   [`tools.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/tools.ts#L787-L831)).
-  A declared `deny` therefore holds on both paths. A matching `allow` rule
-  also runs the tool without reaching the daemon's approval queue, whatever
-  the mode; in a repo, the repo's own rules do the same. This is not yet
+  Either way, a declared `deny` holds on both paths, and a matching `allow`
+  rule runs the tool without the daemon's approval queue, whatever the mode;
+  in a repo, the repo's own rules do the same. This is not yet
   under the ask-before-loosening rule above (open on #379).
 - **OpenCode.** A daemon turn runs as the daemon's own `agent-bot` agent,
   whose ruleset (`OPENCODE_DAEMON_PERMISSION` in `acp-registry.mjs`) starts
