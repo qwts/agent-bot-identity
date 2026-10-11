@@ -58,8 +58,8 @@ async function command(file, args) {
   try { return { exit: 0, ...(await exec(file, args, { env, windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 })) }; }
   catch (error) { return { exit: typeof error.code === 'number' ? error.code : -1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
 }
-async function cli(args) {
-  phase(`comms-${args.slice(0, 2).join('-')}`);
+async function cli(args, substageName) {
+  phase(substageName ?? `comms-${args.slice(0, 2).join('-')}`);
   const response = await command(process.execPath, [bin, ...args]);
   let body;
   try { body = JSON.parse(response.stdout); } catch { /* report only safe error classification */ }
@@ -107,23 +107,26 @@ try {
   await record('real namespaced broker and normal native daemon pairing', async () => {
     await cli(['broker', 'install', '--single-account']);
     await until(async () => (await command(process.execPath, [bin, 'broker', 'pairings'])).exit === 0, 'broker-start-timeout');
+    // The broker requires an approved OS-account pairing before either a
+    // principal or daemon can request its own credential kind. Requests
+    // return pending codes immediately; approval follows each request.
+    const pairedAccount = await cli(['account', 'pair']);
+    await cli(['broker', 'approve', pairedAccount.code], 'approve-account-pairing');
+    phase('load-account-credential');
+    account = client.loadCredential(pathsModule.clientPaths(env));
+    const pairedPrincipal = await cli(['principal', 'pair', '--name', 'Disposable supervised daemon acceptance']);
+    await cli(['admin', 'principal-approve', pairedPrincipal.code], 'approve-principal-pairing');
+    phase('create-principal-client');
+    principal = principalModule.createPrincipalClient({ env });
     phase('native-vouch-public-key');
     // Match the production daemon CLI composition after #645/F11: the comms
     // module receives only the native provider's public half.
     const publicKey = vouch.vouchPublicKeyPem({ env, home });
     phase('native-daemon-pair');
     const pairing = await pairDaemonComms({ env, home, publicKey });
-    await cli(['broker', 'approve', pairing.code]);
+    await cli(['broker', 'approve', pairing.code], 'approve-daemon-pairing');
     daemonAccount = pairing.account;
-    const pairedAccount = await cli(['account', 'pair']);
-    await cli(['broker', 'approve', pairedAccount.code]);
-    phase('load-account-credential');
-    account = client.loadCredential(pathsModule.clientPaths(env));
     assert.equal(account.account, daemonAccount);
-    const pairedPrincipal = await cli(['principal', 'pair', '--name', 'Disposable supervised daemon acceptance']);
-    await cli(['admin', 'principal-approve', pairedPrincipal.code]);
-    phase('create-principal-client');
-    principal = principalModule.createPrincipalClient({ env });
     phase('hash-daemon-credential-and-vouch-key');
     credentialHash = hash(commsCredentialFile({ env, home }));
     keyHash = hash(daemonVouchKeyFile({ env, home }));
