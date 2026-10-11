@@ -282,15 +282,29 @@ export function keydSignerSetting(config = loadConfig()) {
 // even if the environment overrides that value. A malformed value throws;
 // the caller pins nothing.
 export function keydSigner({ env = process.env, config, home } = {}) {
-  const fromEnv = (name) => (env[name] ? env[name].trim() : '');
-  const envTeam = fromEnv('AGENT_BOT_KEYD_TEAM_ID');
-  const envIdentifier = fromEnv('AGENT_BOT_KEYD_IDENTIFIER');
+  const {
+    AGENT_BOT_KEYD_TEAM_ID: envTeam,
+    AGENT_BOT_KEYD_IDENTIFIER: envIdentifier,
+  } = keydSignerEnvironment(env);
   const configured = envTeam && envIdentifier
     ? { teamId: null, identifier: null }
     : keydSignerSetting(config ?? loadConfig({ env, home }));
   return {
-    teamId: envTeam ? keydSignerValue(envTeam, KEYD_TEAM_ID, 'AGENT_BOT_KEYD_TEAM_ID') : configured.teamId,
-    identifier: envIdentifier ? keydSignerValue(envIdentifier, KEYD_IDENTIFIER, 'AGENT_BOT_KEYD_IDENTIFIER') : configured.identifier ?? DEFAULT_KEYD_IDENTIFIER,
+    teamId: envTeam ?? configured.teamId,
+    identifier: envIdentifier ?? configured.identifier ?? DEFAULT_KEYD_IDENTIFIER,
+  };
+}
+
+// The environment half of keydSigner alone, trimmed and validated, an unset
+// or empty variable absent; the config is never read. The supervised daemon
+// is given these in its unit, so it keeps the installing host's signer (#865).
+export function keydSignerEnvironment(env = process.env) {
+  const fromEnv = (name) => (env[name] ? env[name].trim() : '');
+  const team = fromEnv('AGENT_BOT_KEYD_TEAM_ID');
+  const identifier = fromEnv('AGENT_BOT_KEYD_IDENTIFIER');
+  return {
+    ...(team ? { AGENT_BOT_KEYD_TEAM_ID: keydSignerValue(team, KEYD_TEAM_ID, 'AGENT_BOT_KEYD_TEAM_ID') } : {}),
+    ...(identifier ? { AGENT_BOT_KEYD_IDENTIFIER: keydSignerValue(identifier, KEYD_IDENTIFIER, 'AGENT_BOT_KEYD_IDENTIFIER') } : {}),
   };
 }
 

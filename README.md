@@ -1537,7 +1537,8 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   sets it with `settings.keyd_team_id`, and with none set nothing is pinned
   and owner actions use the administrator dialog. The identifier defaults to
   `agent-bot-keyd`. `AGENT_BOT_KEYD_TEAM_ID` and `AGENT_BOT_KEYD_IDENTIFIER`
-  override them when non-empty. `any-developer-id` drops that check, and
+  override them when non-empty, and `agent-bot daemon install` writes them
+  into the supervised daemon's unit. `any-developer-id` drops that check, and
   pinning under it, or under another signer than the last pin, asks the
   owner first. See [keyd protocol](docs/keyd-protocol.md#presence-key-bootstrap).
 - `features.github-identity` and `features.persona-accounts` — optional add-on
