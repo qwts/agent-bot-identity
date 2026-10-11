@@ -26,7 +26,7 @@
 
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -115,7 +115,7 @@ export function presenceKeyFingerprint(raw) {
 // dialog, which a soul cannot answer, and the dialog names both keys; without
 // that answer nothing is re-pinned (#753).
 function approveRepinnedKey({ cached, key }) {
-  const was = cached ? `the pinned key ${presenceKeyFingerprint(cached)}` : 'a pinned key whose record was removed';
+  const was = cached ? `the pinned key ${presenceKeyFingerprint(cached)}` : 'a pinned key whose record is missing or damaged';
   requireOwnerApproval({
     prompt: `agent-bot's record of the keyd presence key does not match the code-signed keyd binary. Re-pin from ${was} to ${presenceKeyFingerprint(key)}, the key that binary reports now? Approve only if you asked for this — after updating the host app, or after removing keyd's presence key.`,
     outcome: 'the keyd presence key was not re-pinned',
@@ -128,23 +128,44 @@ function pinMismatch(file, cause) {
   { code: 'presence-pin-mismatch', cause });
 }
 
-// keyd's own receipts (keyd/src/audit.rs), in the keyd directory a soul is
-// denied (confinement.mjs). An `owner/presence` or `owner/pins-attest` call is
-// made only under a pinned presence key, so one on record means a key was
-// pinned here before.
+// What one record says about an earlier pin. Only a file that is not there
+// at all (ENOENT) says "never"; one that cannot be checked, a symlink, a
+// directory or any other non-regular file says "pinned before", so a record
+// made unreadable fails closed rather than open (#753).
+function recordState(file) {
+  let info;
+  try { info = lstatSync(file); } catch (error) { return error?.code === 'ENOENT' ? 'absent' : 'pinned'; }
+  return info.isFile() && !info.isSymbolicLink() ? 'file' : 'pinned';
+}
+
+// keyd's own receipts (keyd/src/audit.rs). An `owner/presence` or
+// `owner/pins-attest` call is made only under a pinned presence key, so one on
+// record means a key was pinned here before. An audit that cannot be read
+// counts as one that says so.
 function keydUsedPresence(file) {
+  const state = recordState(file);
+  if (state !== 'file') return state === 'pinned';
   let text;
-  try { text = readFileSync(file, 'utf8'); } catch { return false; }
+  try { text = readFileSync(file, 'utf8'); } catch { return true; }
   return /"operation":\s*"owner\/(?:presence|pins-attest)"/.test(text);
 }
 
 // Whether a presence key was pinned here before, when the cache is missing or
 // does not parse. Removing `presence.pub` must not turn the next key the
 // binary reports, possibly a planted seed, into a silent first pin (#753).
-// `presence.signer` is written with every pin since #594, and keyd's audit
-// keeps a receipt of every presence call; either one means the owner is asked.
-function pinnedBefore({ env, home, signerFile }) {
-  try { readFileSync(signerFile); return true; } catch { /* no signer recorded */ }
+// A cache that is there but does not parse, a `presence.signer` (written with
+// every pin since #594), or a presence call in keyd's audit each means the
+// owner is asked; only all three absent means a first pin.
+//
+// All three sit in `<state>/keyd`, which confinement.mjs denies a soul's tool
+// calls by path, not by any OS boundary. A process running as the owner can
+// still remove every one of them and get a silent first pin: this makes a
+// partial removal or a damaged record visible, it does not prevent a whole
+// one. As with keyd's Keychain lock (store.rs), the durable answer is the
+// data-protection keychain under the signed host app.
+function pinnedBefore({ env, home, file, signerFile }) {
+  if (recordState(file) !== 'absent') return true;
+  if (recordState(signerFile) !== 'absent') return true;
   return keydUsedPresence(path.join(keydPaths({ env, home }).dir, 'audit.jsonl'));
 }
 
@@ -218,10 +239,10 @@ export function pinnedPresenceKey({
   // owner asked for, or somebody else's doing. Only the owner can say which,
   // and the answer is receipted either way. Approved, the write below re-pins
   // to what the binary reports.
-  const moved = cached ? cached !== key : pinnedBefore({ env, home, signerFile });
+  const moved = cached ? cached !== key : pinnedBefore({ env, home, file, signerFile });
   if (moved) {
     const detail = cached ? 'the pinned presence key does not match the code-signed keyd binary'
-      : 'the presence key cache is missing although a key was pinned before';
+      : 'the presence key cache is missing or damaged although a key was pinned before';
     const record_ = (decision) => receipt({ event: 'keyd-signer', operation: 'repin-presence-key', decision, detail }, { env, home });
     try {
       approveRepin({ cached, key });

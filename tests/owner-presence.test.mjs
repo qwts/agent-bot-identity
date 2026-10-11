@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import process from 'node:process';
 import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
 import { ANY_DEVELOPER_ID, keydSigner } from '../config.mjs';
 import {
@@ -379,7 +380,7 @@ test('a removed cache with a pin on record goes to the owner, not to a silent fi
   assert.throws(() => pinnedPresenceKey(refusing), { code: 'presence-pin-mismatch' });
   assert.deepEqual(receipts.map(({ operation, decision }) => [operation, decision]),
     [['repin-presence-key', 'refused'], ['repin-presence-key', 'refused']]);
-  assert.match(receipts[0].detail, /cache is missing although a key was pinned before/);
+  assert.match(receipts[0].detail, /cache is missing or damaged although a key was pinned before/);
 
   // keyd's audit is a second record: with the signer file gone too, a
   // presence call on record still sends the new key to the owner.
@@ -440,28 +441,68 @@ test('no keyd, an unsigned keyd or a malformed answer pins nothing', (t) => {
   assert.throws(() => readFileSync(presencePinPath({ env })), { code: 'ENOENT' });
 });
 
-test('a corrupt pin is replaced from the binary and left owner-only', (t) => {
+// A cache that is there but does not parse is a pin that was damaged, not a
+// first pin, so it goes to the owner; approved, it is replaced and left
+// owner-only (#746, #753).
+test('a corrupt pin is replaced from the binary only with the owner, and left owner-only', (t) => {
   const { env } = home(t);
   const key = presenceKey();
   const file = presencePinPath({ env });
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, 'not a key\n', { mode: 0o644 });
-  assert.equal(pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
-    run: () => `${key.raw}\n` }), key.raw);
+  const seams = { env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {}, run: () => `${key.raw}\n`, receipt: () => {} };
+  assert.throws(() => pinnedPresenceKey({ ...seams, approveRepin: () => { throw new Error('owner approval was cancelled'); } }),
+    { code: 'presence-pin-mismatch' });
+  assert.equal(readFileSync(file, 'utf8'), 'not a key\n');
+  const asked = [];
+  assert.equal(pinnedPresenceKey({ ...seams, approveRepin: (detail) => asked.push(detail) }), key.raw);
+  assert.deepEqual(asked, [{ cached: null, key: key.raw }]);
   assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`);
   assert.equal(statSync(file).mode & 0o777, 0o600);
 });
 
-test('a pin that does not parse as a key is pinned again from the signed binary', (t) => {
+// Only a record that is not there at all says "never pinned". One that cannot
+// be read, or is not a regular file, says "pinned before" (#753).
+test('a pin record that cannot be checked counts as a pin, never as a first pin', (t) => {
   const { env } = home(t);
   const key = presenceKey();
   const file = presencePinPath({ env });
-  writeFileSync(file, 'not a key\n', { mode: 0o600 });
-  const runs = [];
-  assert.equal(pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' },
-    verifyBinary: () => runs.push('verify'), run: () => { runs.push('run'); return key.raw; } }), key.raw);
-  assert.deepEqual(runs, ['verify', 'run']);
-  assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`);
+  const dir = dirname(file);
+  const audit = join(dir, 'audit.jsonl');
+  const seams = { env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {}, run: () => `${key.raw}\n`, receipt: () => {} };
+  const refusing = { ...seams, approveRepin: () => { throw new Error('owner approval was cancelled'); } };
+  const refused = (what) => {
+    assert.throws(() => pinnedPresenceKey(refusing), { code: 'presence-pin-mismatch' }, what);
+    assert.throws(() => readFileSync(file), { code: 'ENOENT' }, `${what}: nothing pinned`);
+  };
+
+  // An audit that is a directory, a symlink or unreadable.
+  mkdirSync(audit);
+  refused('an audit that is a directory');
+  rmSync(audit, { recursive: true });
+  const elsewhere = join(dir, 'elsewhere.jsonl');
+  writeFileSync(elsewhere, '');
+  symlinkSync(elsewhere, audit);
+  refused('an audit that is a symlink');
+  rmSync(audit);
+  writeFileSync(audit, '', { mode: 0o000 });
+  if (process.getuid?.() !== 0) refused('an audit that cannot be read');
+  rmSync(audit);
+  // A cache or signer that is a directory.
+  mkdirSync(file);
+  assert.throws(() => pinnedPresenceKey(refusing), { code: 'presence-pin-mismatch' }, 'a cache that is a directory');
+  rmSync(file, { recursive: true });
+  mkdirSync(presenceSignerPath({ env }));
+  refused('a signer that is a directory');
+  rmSync(presenceSignerPath({ env }), { recursive: true });
+
+  // All three absent is the one first pin: removing every record still pins
+  // silently, which only the data-protection keychain will close.
+  assert.equal(pinnedPresenceKey({ ...seams, approveRepin: () => assert.fail('nothing on record') }), key.raw);
+  rmSync(file);
+  rmSync(presenceSignerPath({ env }));
+  rmSync(elsewhere);
+  assert.equal(pinnedPresenceKey({ ...seams, approveRepin: () => assert.fail('every record removed') }), key.raw);
 });
 
 test('keydPresence asks keyd with the action and a fresh nonce, and checks the answer', async (t) => {

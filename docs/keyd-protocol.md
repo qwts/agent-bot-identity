@@ -234,7 +234,7 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    last pin. It is never the pin: a file in this account is one a soul can
    write, so every call goes on to the binary, and a cache that disagrees
    with it is refused rather than used or quietly replaced (#753). A cache
-   that does not parse counts as none.
+   that does not parse is a damaged pin, not a missing one (step 4).
 2. If the keyd install record (`<state>/keyd/keyd.json`) names an
    absolute `bin` and a keyd Team ID is configured, run
    `/usr/bin/codesign --verify --strict -R=<requirement> <bin>`. The
@@ -297,23 +297,33 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    what the binary reports. Refused, or with nobody to ask,
    `pinnedPresenceKey` throws `presence-pin-mismatch`, leaves the cache where
    it can be examined, and the owner gate refuses without another prompt.
-   Removing `presence.pub` does not pin again on its own: a missing or
-   unparseable cache with a pin on record — a `presence.signer`, or an
-   `owner/presence` or `owner/pins-attest` receipt in keyd's `audit.jsonl` —
-   goes to the same dialog, so a planted presence seed is never a silent first
-   pin. A well-formed answer that agrees, or a first pin with nothing on
-   record, is written to `presence.pub` with the signer to
-   `presence.signer`. Both files are left at mode 0600, whether new or
-   replacing a pin that did not parse (#746).
+   Removing `presence.pub` does not pin again on its own. With no usable
+   cache, the binary's key goes to the same dialog when any record of an
+   earlier pin is there: a `presence.pub` that does not parse, a
+   `presence.signer`, or an `owner/presence` or `owner/pins-attest` receipt
+   in keyd's `audit.jsonl`. Only a record that is not there at all (ENOENT)
+   counts as none; one that cannot be read, a symlink, a directory or any
+   other non-regular file counts as an earlier pin. A well-formed answer that
+   agrees, or a first pin with every record absent, is written to
+   `presence.pub` with the signer to `presence.signer`. Both files are left
+   at mode 0600, whether new or replacing a damaged pin (#746).
+
+   This is detected, not prevented. All three records sit in `<state>/keyd`,
+   which confinement denies a soul's tool calls by path only. A process
+   running as the owner can remove every one of them, and the next key the
+   binary reports, a planted presence seed included, is then pinned silently.
+   As with keyd's Keychain lock (#873), the durable answer is the
+   data-protection keychain under the signed host app.
 5. Any other failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
 The key is never taken from the socket, and never from the cache alone. A
-file in `presence.pub` that does not parse as a key is treated as no cache, and
-step 4 asks the owner if a pin is on record.
+file in `presence.pub` that does not parse as a key is treated as a damaged
+pin, and step 4 asks the owner.
 
-The daemon and commands a soul runs (`agent-bot soul skill load --global`)
-use `keydPresenceWithoutDialog`: keyd's own prompt only. Where step 3 or 4
+The daemon's autopilot loosening (`daemonModeFor`) and a soul's global
+skill change (`agent-bot soul skill load --global`) use
+`keydPresenceWithoutDialog`: keyd's own prompt only. Where step 3 or 4
 would raise the administrator dialog, they refuse with
 `keyd-signer-unverified` or `presence-pin-mismatch` instead, and the action
 does not happen.
@@ -588,7 +598,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | The presence key is derived from the signed binary on every call, the pin file 0600 is a cache, never the pin, and never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key comes from the signed binary every time, and the pin file is only a cache", "a corrupt pin is replaced from the binary and left owner-only" |
 | A cached key the binary disagrees with is put to the owner: approved it re-pins, refused it is receipted, left in place, and never falls back to the dialog | — | `pinnedPresenceKey`, `presenceOrConsent` | `tests/owner-presence.test.mjs`: "a pin the owner will not re-pin is refused, not used and not replaced", "a pin the owner approves is re-pinned from the signed binary", "a pin mismatch refuses the owner action with its code, never falling back to the dialog" |
 | No record, an unsigned binary (never run) or a malformed answer pins nothing | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "no keyd, an unsigned keyd or a malformed answer pins nothing" |
-| An unparseable pin file is pinned again from the signed binary | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "a pin that does not parse as a key is pinned again from the signed binary" |
+| An unparseable pin file is a damaged pin: pinned again from the signed binary only with the owner's approval; a record that cannot be checked counts as an earlier pin | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "a corrupt pin is replaced from the binary only with the owner, and left owner-only", "a pin record that cannot be checked counts as a pin, never as a first pin" |
 | `presence-unavailable` vs `owner-declined` (timeout included) | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence tells \"nobody can be asked\" apart from \"the owner said no\"" |
 | The administrator dialog only when keyd cannot ask and no owner keys are enrolled, or the trust-root command disables challenges; a refusal is final | — | wired `presenceOrConsent`, `assertOwnerAction` | `tests/owner-statement.test.mjs`: "hosts with no enrolled owner keys retain the existing administrator fallback", "challenge refusal, cancellation, and disabled challenge paths never approve or fall through"; `tests/owner-gate.test.mjs`: "revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback" |
 | An SSH reply answers one pending CLI challenge, binding the raw-action digest and separately rendered summary, host, key, nonce and expiry; current pins are rechecked after waiting | owner SSH signer | `verifyOwnerChallenge`, wired owner gate | `tests/owner-statement.test.mjs`: "an owner challenge binds the displayed action summary and can be answered once by an enrolled SSH key", "the owner-action presence wrapper checks presence once before the challenge flow", "owner challenge refuses keyd-only pins and rechecks SSH pins after waiting" |
