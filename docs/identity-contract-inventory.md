@@ -91,7 +91,7 @@ and the F numbers point to the follow-ups in §7.
 
 | File | What it is | Stability | Outside callers | Disposition |
 | --- | --- | --- | --- | --- |
-| `agent-identity.mjs` | Agent ID records: mint, read, finalize, retire, lineage, transcript; ID format; `withLock` | internal | 58 (soul 44, host 8, cli 4, comms 2) | ID format to the contract file (F1); `stateDirectory` re-export goes (F2); `withLock` (F3); record operations through routes (F6) |
+| `agent-identity.mjs` | Agent ID records: mint, read, finalize, retire, lineage, transcript; ID format; `withLock` | internal, except `mintAgentIdentity`, which GeniusBar's compat driver imports by path (below) | 58 (soul 44, host 8, cli 4, comms 2) | ID format to the contract file (F1); `stateDirectory` re-export goes (F2); `withLock` (F3); record operations through routes (F6) |
 | `agent-principals.mjs` | Transport principals, authorization, audit receipts | internal | 26 (soul 18, host 6, cli 2) | `appendAuditReceipt` (F4); principal checks stay with the daemon (F9) |
 | `agent-binding.mjs` | Bind tokens, the binding registry, binding files | internal; its files are public (§4) | 12 (soul 5, host 5, cli 2) | `readBinding` and `readBindToken` to the contract file (F1); `mintBindToken` (F6); registry (F9) |
 | `daemon-client.mjs` | HTTP client for the daemon, `daemon.json` reader | internal | 12 (soul 6, host 3, cli 2, comms 1) | It carries every daemon call, not only identity's (F5) |
@@ -122,6 +122,13 @@ and the F numbers point to the follow-ups in §7.
 | `uninstalled-identity-hook.mjs` | Fallback hook when agent-bot is not installed | internal | 1 (cli) | F13 |
 | `git-publish-scan.mjs` | Which repositories a shell command publishes to | internal | 1 (host) | F9 |
 | `windows-account-custody.mjs` | Windows SID and ACL custody | internal | 1 (comms) | F11 |
+
+GeniusBar's compatibility check loads agent-bot modules by path, from the
+agent-bot tree it pins. `scripts/compat-driver.mjs:71` imports
+`mintAgentIdentity` from `agent-identity.mjs`; lines 64 to 74 also load
+`agent-population.mjs`, `soul-package.mjs`, `soul-revisions.mjs` and
+`cold-wake-settings.mjs`. That makes the file path and that export public
+until the driver moves onto an identity entry file (F6).
 
 Twelve identity files have no caller outside identity. They are reached only
 as commands, as a deployed Worker, or from other identity files:
@@ -347,6 +354,9 @@ how each one is done, and §9 puts them in order.
   up, or runs the bundled identity entry file as a child process. The
   daemon-down paths, join and `setup-worktree` before the first bind, always
   use the child process. The contract names each route and entry file.
+  GeniusBar's `scripts/compat-driver.mjs:71`, which imports
+  `mintAgentIdentity` by path, moves onto the same entry file, in a GeniusBar
+  PR pinned to the agent-bot release that ships it.
 - **F7. Credential custody reached from outside identity.** These callers
   move onto identity operations (D4), or onto the name rules in the F1 file,
   instead of importing the stores:
