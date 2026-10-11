@@ -425,13 +425,13 @@ test('Codex apply_patch is confined like write and edit, path by path', async (t
   mkdirSync(path.join(home, 'elsewhere'));
   symlinkSync(path.join(home, 'elsewhere'), path.join(soul, 'link'));
   assert.equal(check(patchOf('*** Add File: link/x.txt', '+x'), soul).decision, 'deny');
-  // A patch that cannot be read names no target, and deny refuses it.
-  for (const text of ['not a patch', patchOf(), patchOf('*** Add File: a', 'no plus')]) {
-    assert.equal(check(text, soul).decision, 'deny', text);
+  for (const [text, why] of [['not a patch', /does not start with/], [patchOf(), /empty apply_patch/], [patchOf('*** Add File: a', 'no plus'), /neither file content nor a file header/]]) {
+    const denied = check(text, soul);
+    assert.equal(denied.decision, 'deny', text); assert.match(denied.reason, why); assert.match(denied.reason, /cannot be checked/);
   }
   assert.equal(existsSync(log), false);
 });
-test('apply_patch in warn logs each outside path; malformed patches follow the warn rule', (t) => {
+test('apply_patch in warn logs each outside path', (t) => {
   const { home, soul, opts, log } = fixture(t);
   const text = patchOf(`*** Add File: ${path.join(home, 'a')}`, '+x', `*** Update File: ${path.join(soul, 'in')}`, `*** Move to: ${path.join(home, 'b')}`, `*** Delete File: ${path.join(home, 'a')}`);
   const result = confinementCheck(patchEnvelope(home, text), opts);
@@ -439,7 +439,21 @@ test('apply_patch in warn logs each outside path; malformed patches follow the w
   const rows = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(rows.map((row) => row.path), [path.join(home, 'a'), path.join(home, 'b')]);
   assert.ok(rows.every((row) => row.tool === 'apply_patch' && row.harness === 'codex'));
-  assert.deepEqual(confinementCheck(patchEnvelope(home, 'garbage'), opts), { decision: 'allow' });
+});
+test('an unparseable or empty apply_patch is refused in every mode, but not outside a soul', async (t) => {
+  const { home, opts, log } = fixture(t);
+  const bad = ['garbage', patchOf(), patchOf('*** Update File: a', '@@', '+x', '*** Move to: b'), '*** Begin Patch\n*** Add File: a\n+x\n'];
+  for (const mode of ['warn', 'off', 'deny']) {
+    if (mode !== 'warn') await setConfinementMode(id, mode, { ...opts, gate: owner });
+    for (const text of bad) {
+      const result = confinementCheck(patchEnvelope(home, text), opts);
+      assert.equal(result.decision, 'deny', `${mode}: ${text}`); assert.match(result.reason, /apply_patch/);
+    }
+    const missing = normalizeEnvelope({ dialectKey: 'codex', event: 'pre-tool-use', payload: { cwd: home, tool_name: 'apply_patch', tool_input: {} } });
+    assert.match(confinementCheck(missing, opts).reason, /no patch text/);
+  }
+  assert.deepEqual(confinementCheck(patchEnvelope(home, 'garbage'), { ...opts, env: { ...opts.env, AGENT_BOT_ID: undefined } }), { decision: 'allow' });
+  assert.equal(existsSync(log), false);
 });
 test('apply_patch cannot reach owner state or key stores in any mode', async (t) => {
   const { home, soul, opts } = fixture(t);

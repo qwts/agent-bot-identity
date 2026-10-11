@@ -118,9 +118,10 @@ they allow, and in explicit deny they refuse recognized file tools.
 `*** Update File:`, `*** Delete File:` and `*** Move to:` path is resolved
 against the tool call's cwd and gets the same checks as a write path, so a
 patch is allowed only when all of its files are, and a move out of territory
-counts as an outside write. Warn logs one record per outside path. A patch that
-cannot be parsed, or that names no file, is treated like a file tool with no
-path: refused in deny, allowed in warn and off.
+counts as an outside write. Warn logs one record per outside path. A soul's
+patch that cannot be parsed, or that names no file, is refused in every mode,
+`off` included, with a reason naming the parse failure: its files cannot be
+checked against the owner-state guards either.
 
 Apart from the credential and literal owner-state path guards above, shell
 commands, shell redirections, `patch` or `git apply` run from a shell, MCP tools, unknown

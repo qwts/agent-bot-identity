@@ -281,7 +281,8 @@ export function applyPatchTargets(text) {
   while (lines.length && lines.at(-1).trim() === '') lines.pop();
   // Codex also accepts the patch wrapped in a heredoc.
   if (lines.length > 2 && /^(?:apply_patch\s+)?<<(['"]?)EOF\1$/.test(lines[0].trim()) && lines.at(-1).trim() === 'EOF') lines = lines.slice(1, -1);
-  if (lines[0]?.trim() !== '*** Begin Patch' || lines.length < 2 || lines.at(-1).trim() !== '*** End Patch') throw new Error('malformed apply_patch');
+  if (lines[0]?.trim() !== '*** Begin Patch') throw new Error('malformed apply_patch: it does not start with *** Begin Patch');
+  if (lines.length < 2 || lines.at(-1).trim() !== '*** End Patch') throw new Error('malformed apply_patch: it does not end with *** End Patch');
   const targets = [];
   let section = null;
   let movable = false;
@@ -290,9 +291,10 @@ export function applyPatchTargets(text) {
     if (section === 'Update File' && /^(?:[ +-]|@@|\*\*\* End of File\s*$)/.test(line)) { movable = false; continue; }
     if (line.trim() === '') continue;
     const header = PATCH_HEADER.exec(line.trim());
-    if (!header || !header[2].trim()) throw new Error('malformed apply_patch');
+    if (!header) throw new Error('malformed apply_patch: a line is neither file content nor a file header');
+    if (!header[2].trim()) throw new Error('malformed apply_patch: a file header has no path');
     if (header[1] === 'Move to') {
-      if (!movable) throw new Error('malformed apply_patch');
+      if (!movable) throw new Error('malformed apply_patch: Move to does not directly follow Update File');
       movable = false;
     } else {
       section = header[1];
@@ -300,7 +302,7 @@ export function applyPatchTargets(text) {
     }
     targets.push(header[2].trim());
   }
-  if (!targets.length) throw new Error('empty apply_patch');
+  if (!targets.length) throw new Error('empty apply_patch: it names no file');
   return [...new Set(targets)];
 }
 const FILE_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit|create|edit|create_file|edit_file|write_file|replace_string_in_file|multi_replace_string_in_file)$/i;
@@ -320,16 +322,18 @@ export function confinementCheck(envelope, opts = {}) {
   // Prefer the generic event, and use the file event for legacy dialects.
   if (envelope.event !== (preTool ? 'pre-tool-use' : 'pre-file-write')) return allow;
   const patch = Boolean(preTool) && PATCH_TOOL.test(envelope.tool_name ?? '');
-  // An unparseable patch names no target, which the checks below treat like
-  // a file tool with no path: refused in deny, allowed in warn and off.
+  // A patch that cannot be read cannot have its files checked, so a soul's
+  // unparseable or empty patch is refused in every mode, off included.
   let targets = [];
-  if (patch) { try { targets = applyPatchTargets(patchText(envelope)); } catch { /* no targets */ } }
+  let patchError = null;
+  if (patch) { try { targets = applyPatchTargets(patchText(envelope)); } catch (error) { patchError = error.message; } }
   else if (envelope.file_path) targets = [envelope.file_path];
   try {
     const agentId = opts.binding?.agentId ?? currentAgentId({ env: opts.env ?? process.env, cwd: envelope.cwd ?? opts.cwd });
     if (agentId) {
       const denied = credentialGuard(envelope, agentId, opts);
       if (denied) return denied;
+      if (patchError) return { decision: 'deny', reason: `${patchError}; its files cannot be checked, so the patch is refused` };
       for (const target of patch ? targets : []) {
         const deniedTarget = credentialGuard({ ...envelope, file_path: target, command: null }, agentId, opts);
         if (deniedTarget) return deniedTarget;
