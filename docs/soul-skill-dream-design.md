@@ -3,9 +3,10 @@
 Status: implementation contract for #603, following
 [ADR-0603 decision 11](decisions/ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md).
 The scheduler, journal, bounded inputs, the soul's own conversation as input
-(#887), daemon service, CLI, durable reported outcomes, selection checkpoints,
-verified-change processing checkpoints (#886) and host-read notices are
-implemented. Memory input is deferred to #903 and knowledge search to #902.
+(#887), the soul's harness memory as input (#903), daemon service, CLI, durable
+reported outcomes, selection checkpoints, verified-change processing checkpoints
+(#886) and host-read notices are implemented. Processing credit for memory items
+is still to come (#903), and knowledge search is tracked on #902.
 Notices stay `pending-host-read` because no delivery adapter exists, and
 maintenance coverage stays `unverified` beyond verified changes on purpose.
 Implementation does not register a schedule or grant owner authorization.
@@ -233,9 +234,10 @@ explicit unsupported coverage; they cannot be replaced by reading arbitrary
 host-wide harness stores or another soul's sessions.
 
 The first implementation supported definition and learned-skill sources only,
-verified against the soul revision and file digests. Memory-tool adapters report
-`unsupported` until implemented (#903); the conversation reader below covers the soul's
-own recorded session. A conversation reader must use
+verified against the soul revision and file digests. The conversation reader
+below covers the soul's own recorded session, and the memory reader after it the
+memory files its harness keeps in the soul's tool home (#903); a harness without
+a reader reports `unsupported`. A conversation reader must use
 the same verified store origin as its session; an unknown origin cannot be
 guessed from a current environment override. These are explicit partial coverage,
 not proof that every soul knowledge source was maintained.
