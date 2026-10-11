@@ -146,7 +146,12 @@ public key in `<state>/owner/keys.json` (mode 0600), with its name, store,
 - For the keyd store, `--pub` is not taken from the caller: agent-bot asks
   keyd for the statement key's public half on `owner.sock` only after
   presence verifies with the presence key, which is pinned from the signed
-  binary.
+  binary. *As built (#753):* keyd answers `owner/statement-key` with the
+  public half in a record signed by the presence key, so agent-bot checks it
+  against the pinned presence key without a prompt of its own. Enrolment then
+  asks the owner twice, as they chose: once through `owner/sign` for the
+  enrolment challenge, and once through `owner/pins-attest` for the new key
+  set.
 
 Hosts with no GUI cannot show presence, so they cannot enrol locally. They
 get their pins from the organization profile: the profile carries the owner's
@@ -223,9 +228,11 @@ verifier and these stores; a host app provides only UI (#752).
   bytes, so no caller can show one text and sign another. It signs with a
   separate Keychain seed, the owner statement key, not the presence seed. Keeping them apart means a
   presence assertion can never be a statement and either key rotates on its
-  own. This is GeniusBar-side and is reviewed there; this repository owns the
-  contract and records it in [keyd-protocol.md](../keyd-protocol.md) when
-  it is built.
+  own. *Corrected (#753, the owner's choice):* keyd's source lives in this
+  repository's `keyd/`, so `owner/sign` is built and reviewed here, not
+  GeniusBar-side. The seed is the Keychain item service `agent-bot.keyd`,
+  account `owner-statement-key`, and the contract is in
+  [keyd-protocol.md](../keyd-protocol.md#owner-statement-signing-keyd-store-753).
 - **ssh (elsewhere).** `ssh-keygen -Y sign -n agent-bot-owner-statement` with
   a FIDO key (`sk-ssh-ed25519@openssh.com`). The verifier requires the
   user-presence flag, and the user-verified flag when the key was enrolled

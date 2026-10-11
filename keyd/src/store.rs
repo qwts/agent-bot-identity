@@ -27,6 +27,11 @@
 //!   (agent-bot-identity #753): service `agent-bot.keyd`, account
 //!   `owner-pins`, value JSON `{digest, generation}`, the digest of the key
 //!   set (pins.rs) and a count keyd raises on every approval.
+//! - the owner statement key (agent-bot-identity #753), which signs the
+//!   owner's statements after keyd shows them the text (statement.rs):
+//!   service `agent-bot.keyd`, account `owner-statement-key`, value base64 of
+//!   the 32-byte Ed25519 seed. keyd makes it on first use, apart from the
+//!   presence seed, so neither key can stand in for the other.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -83,6 +88,7 @@ pub const PIN_SERVICE: &str = "agent-bot.keyd";
 pub const PIN_ACCOUNT: &str = "daemon-grant-key";
 pub const PRESENCE_ACCOUNT: &str = "presence-key";
 pub const OWNER_PINS_ACCOUNT: &str = "owner-pins";
+pub const STATEMENT_ACCOUNT: &str = "owner-statement-key";
 pub const APP_SERVICE: &str = "agent-bot.keyd.app";
 
 /// Why a pin could not be read. `Untrusted` means the item is there but is not
@@ -269,18 +275,27 @@ impl Store {
 
     /// keyd's presence signing seed, made and kept on first use.
     pub fn presence_seed(&self) -> Result<[u8; 32], StoreError> {
-        if let Some(mut value) = self.items.read(PIN_SERVICE, PRESENCE_ACCOUNT)? {
+        self.seed(PRESENCE_ACCOUNT, "presence key")
+    }
+
+    /// The owner statement key's seed, made and kept on first use (#753).
+    pub fn statement_seed(&self) -> Result<[u8; 32], StoreError> {
+        self.seed(STATEMENT_ACCOUNT, "owner statement key")
+    }
+
+    fn seed(&self, account: &str, what: &str) -> Result<[u8; 32], StoreError> {
+        if let Some(mut value) = self.items.read(PIN_SERVICE, account)? {
             let decoded = STANDARD.decode(value.trim_ascii());
             value.fill(0);
-            let mut raw = decoded.map_err(|_| "presence key is malformed".to_owned())?;
+            let mut raw = decoded.map_err(|_| format!("{what} is malformed"))?;
             let seed: Result<[u8; 32], _> = raw.as_slice().try_into();
             raw.fill(0);
-            return seed.map_err(|_| "presence key is malformed".into());
+            return seed.map_err(|_| format!("{what} is malformed").into());
         }
         let mut seed = [0u8; 32];
-        getrandom::fill(&mut seed).map_err(|_| "no randomness for the presence key")?;
+        getrandom::fill(&mut seed).map_err(|_| format!("no randomness for the {what}"))?;
         let mut value = STANDARD.encode(seed).into_bytes();
-        let written = self.items.write(PIN_SERVICE, PRESENCE_ACCOUNT, &value);
+        let written = self.items.write(PIN_SERVICE, account, &value);
         value.fill(0);
         written?;
         Ok(seed)
@@ -1013,6 +1028,13 @@ pub mod tests {
         let seed = store.presence_seed().unwrap();
         assert_eq!(store.presence_seed().unwrap(), seed, "made once, then kept");
         assert_ne!(seed, [0u8; 32]);
+        let statement = store.statement_seed().unwrap();
+        assert_eq!(
+            store.statement_seed().unwrap(),
+            statement,
+            "made once, then kept"
+        );
+        assert_ne!(statement, seed, "the statement key is not the presence key");
         assert!(store.owner_pins().unwrap().is_none());
         let record = OwnerPins {
             digest: "a".repeat(64),
@@ -1115,7 +1137,12 @@ pub mod tests {
     fn an_untrusted_pin_is_typed_not_absent() {
         let items = Memory::default();
         let store = Store::new(Box::new(items.clone()));
-        for account in [PIN_ACCOUNT, PRESENCE_ACCOUNT, OWNER_PINS_ACCOUNT] {
+        for account in [
+            PIN_ACCOUNT,
+            PRESENCE_ACCOUNT,
+            OWNER_PINS_ACCOUNT,
+            STATEMENT_ACCOUNT,
+        ] {
             items
                 .write(PIN_SERVICE, account, &[UNTRUSTED_VALUE, b"legacy"].concat())
                 .unwrap();
@@ -1126,6 +1153,7 @@ pub mod tests {
         };
         assert_eq!(store.presence_seed(), Err(untrusted(PRESENCE_ACCOUNT)));
         assert_eq!(store.owner_pins(), Err(untrusted(OWNER_PINS_ACCOUNT)));
+        assert_eq!(store.statement_seed(), Err(untrusted(STATEMENT_ACCOUNT)));
         assert!(store.owner_pins().unwrap_err().is_untrusted());
         // A malformed record is a failure of another kind.
         items.write(PIN_SERVICE, OWNER_PINS_ACCOUNT, b"{}").unwrap();
@@ -1239,6 +1267,7 @@ pub mod tests {
                 (PIN_SERVICE, PRESENCE_ACCOUNT),
                 (PIN_SERVICE, PIN_ACCOUNT),
                 (PIN_SERVICE, OWNER_PINS_ACCOUNT),
+                (PIN_SERVICE, STATEMENT_ACCOUNT),
                 (APP_SERVICE, "github-app/test-app"),
             ] {
                 items.write(service, account, b"value").unwrap();
@@ -1277,7 +1306,12 @@ pub mod tests {
             // agent-bot trusts, so keyd neither hands back one it cannot vouch
             // for nor quietly makes another. Every account under `PIN_SERVICE`
             // is such a pin, the owner's statement keys included.
-            for account in [PRESENCE_ACCOUNT, PIN_ACCOUNT, OWNER_PINS_ACCOUNT] {
+            for account in [
+                PRESENCE_ACCOUNT,
+                PIN_ACCOUNT,
+                OWNER_PINS_ACCOUNT,
+                STATEMENT_ACCOUNT,
+            ] {
                 items.remove(PIN_SERVICE, account).unwrap();
                 keychain
                     .add_generic_password(PIN_SERVICE, account, b"legacy")

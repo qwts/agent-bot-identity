@@ -477,6 +477,67 @@ owner approved through keyd with Touch ID. Holding the declaration where a
 soul cannot change it needs keyd to record it with the pins, which is not
 built.
 
+## Owner statement signing (keyd store, #753)
+
+keyd is the owner's statement store on a Mac (ADR-0753 section 5): it shows
+the owner what they are signing and signs only that. It signs with the
+owner statement key, an Ed25519 seed of its own in keyd's Keychain item
+(service `agent-bot.keyd`, account `owner-statement-key`), made on first use
+and never the presence seed, so a presence assertion is never a statement and
+either key rotates on its own. Like every item under `agent-bot.keyd`, a
+statement key keyd does not control is refused (`-32002`), never used.
+
+Both methods are on `owner.sock` only; `soul.sock` refuses them.
+
+- `owner/statement-key { nonce }`: no prompt. Answers `{ record }`, the key's
+  public half as a `k1.` record signed with the presence key, so agent-bot
+  pins the key keyd holds and not one a process standing in for the socket
+  handed it:
+
+  ```text
+  k1.<base64url(payload JSON)>.<base64url(Ed25519 signature of the payload segment)>
+
+  payload: { v: 1, aud: "agent-bot-owner", kind: "statement-key",
+             key: base64(raw 32-byte public key), fingerprint, nonce, iat, exp }
+  ```
+
+  `fingerprint` is the key's as agent-bot computes it: `SHA256:` and unpadded
+  base64 of the SHA-256 of its `ssh-ed25519` wire blob. keyd stamps `exp` 60 s
+  after `iat`. A bad nonce is `-32602`.
+- `owner/sign { payload }`: `payload` is the base64url payload segment of the
+  `s1.` statement or challenge agent-bot built
+  ([owner statements](owner-statements.md)). keyd decodes it and applies
+  every rule of agent-bot's verifier: exactly the eleven fields, `v: 1`,
+  `aud: "agent-bot-owner-statement"`, `kind` `statement` or `challenge`,
+  `alg: "ed25519"`, the text rules (at most 500 bytes, no control, line-break
+  or bidirectional character), the scope shape for the kind, `action`
+  `null` for a statement and a SHA-256 hex digest for a challenge, the
+  nonce, and a lifetime of at most 30 days or 15 minutes. It also refuses a
+  payload issued more than 30 s in the future, one already expired, one not
+  in canonical base64url, and one whose `key` is not its own statement key's
+  fingerprint. All of these are `-32602`, before anyone is asked. Then, one
+  prompt at a time, keyd asks the owner with its own words for the payload:
+
+  > agent-bot wants you to sign a statement as the owner, for
+  > qwts/agent-bot-identity#753, until 2027-01-22 08:00 UTC: “Ship the keyd
+  > owner/sign slice.”
+
+  or, for a challenge, "agent-bot asks you to approve a request on studio for
+  qwts/x#5, until …: “…”". Only on approval does it answer `{ signature }`,
+  the base64url Ed25519 signature of the segment's ASCII bytes exactly as
+  sent; agent-bot appends it to make the `s1.` token. A cancel is `-32000`;
+  nobody to ask is `-32001`; a statement key keyd does not control is
+  `-32002`. Every attempt leaves a `keyd-owner` receipt naming the kind and the
+  SHA-256 of the segment, never the text.
+
+`owner enroll --store keyd` asks the owner twice, as the owner chose on #753:
+once through `owner/sign` for the enrolment challenge that proves keyd holds
+the key, and once through `owner/pins-attest` to trust the new key set.
+
+The vectors in `keyd/src/statement.rs` (`matches_the_shared_vectors`: the
+seed of 32 bytes of 7, its public key and fingerprint, and the signature of a
+fixed statement segment) are shared with agent-bot's tests.
+
 ## App-level keys (#110)
 
 The owner chose (#110, 2026-10-09) to let keyd hold **App-level keys**: one
@@ -675,6 +736,9 @@ Tests named here are `node:test` titles, or Rust test functions under
 | `presence-unavailable` vs `owner-declined` (timeout included) | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence tells \"nobody can be asked\" apart from \"the owner said no\"" |
 | The administrator dialog only when keyd cannot ask and no owner keys are enrolled, or the trust-root command disables challenges; a refusal is final | — | wired `presenceOrConsent`, `assertOwnerAction` | `tests/owner-statement.test.mjs`: "hosts with no enrolled owner keys retain the existing administrator fallback", "challenge refusal, cancellation, and disabled challenge paths never approve or fall through"; `tests/owner-gate.test.mjs`: "revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback" |
 | An SSH reply answers one pending CLI challenge, binding the raw-action digest and separately rendered summary, host, key, nonce and expiry; current pins are rechecked after waiting | owner SSH signer | `verifyOwnerChallenge`, wired owner gate | `tests/owner-statement.test.mjs`: "an owner challenge binds the displayed action summary and can be answered once by an enrolled SSH key", "the owner-action presence wrapper checks presence once before the challenge flow", "owner challenge refuses keyd-only pins and rechecks SSH pins after waiting" |
+| `owner/sign` signs exactly the segment it was sent, with the owner statement key and never the presence key, only on the owner's approval of keyd's own words for the payload; nobody to ask is `-32001`, a decline `-32000` | keyd-side | keyd `owner/sign` | `keyd/src/server.rs`: `signs_a_statement_only_when_the_owner_approves`; `keyd/src/statement.rs`: `matches_the_shared_vectors`, `reads_a_statement_and_a_challenge`; `keyd/src/store.rs`: `memory_store_round_trips` |
+| A payload agent-bot's verifier would refuse, an expired one, or one naming another key is `-32602` without asking; a statement key keyd does not control signs nothing (`-32002`); both methods are owner-channel only | keyd-side | keyd `owner/sign`, `owner/statement-key` | `keyd/src/server.rs`: `refuses_owner_sign_requests_without_asking`; `keyd/src/statement.rs`: `refuses_what_agent_bot_would_refuse`; `keyd/src/store.rs`: `an_untrusted_pin_is_typed_not_absent` |
+| `owner/statement-key` reports the statement key, made on first use apart from the presence seed, in a `k1.` record signed with the presence key for agent-bot's nonce, without a prompt | keyd-side | keyd `owner/statement-key` | `keyd/src/server.rs`: `reports_the_statement_key_signed_with_the_presence_key`; `keyd/src/statement.rs`: `signs_its_key_record_with_the_presence_key` |
 | A decision on a soul's tool request always asks presence; a principal is checked as well, never instead | — | `confirmOwnerPresence`, `/v0/approvals/decide`, `/v1/proposals/<id>/decision` | `tests/owner-gate.test.mjs`: "a decision on a soul tool request asks for presence even when a principal verifies (#438)"; `tests/agent-approvals.test.mjs`: "the daemon token alone cannot decide: a refused owner gate decides nothing on either route (#438)" |
 
 ## Owner decisions (#594)

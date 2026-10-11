@@ -16,6 +16,10 @@
 //!   signed assertion of it (presence.rs, agent-bot-identity #416); when no
 //!   one can be asked here it fails with PRESENCE_UNAVAILABLE, so agent-bot
 //!   may fall back to its own dialog, and never after a person declined.
+//!   `owner/sign` shows the owner a statement or challenge agent-bot built
+//!   and, on approval, signs it with the owner statement key;
+//!   `owner/statement-key` reports that key's public half, signed with the
+//!   presence key (statement.rs, agent-bot-identity #753).
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -35,6 +39,7 @@ use crate::ids::{is_agent_id, is_app_slug};
 use crate::paths::Paths;
 use crate::pins;
 use crate::presence;
+use crate::statement;
 use crate::store::{Credential, OwnerPins, Store, StoreError};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -271,6 +276,8 @@ impl Keyd {
             "owner/presence" => return Some(self.owner_presence(&id, &params, now)),
             "owner/pins-attest" => return Some(self.owner_pins_attest(&id, &params, now)),
             "owner/pins-status" => return Some(self.owner_pins_status(&id, &params, now)),
+            "owner/sign" => return Some(self.owner_sign(&id, &params, now)),
+            "owner/statement-key" => return Some(self.owner_statement_key(&id, &params, now)),
             "owner/status" => self.owner_status(&params),
             "owner/app-status" => self.owner_app_status(&params),
             "owner/import"
@@ -483,6 +490,92 @@ impl Keyd {
         });
         match signed {
             Ok(attestation) => reply(id, json!({ "attestation": attestation })),
+            Err(error @ StoreError::Untrusted { .. }) => {
+                failure(id, UNTRUSTED_ITEM, &error.to_string())
+            }
+            Err(error) => failure(id, -32000, &error.to_string()),
+        }
+    }
+
+    /// The owner signs one statement or challenge agent-bot built: keyd
+    /// checks the payload segment, shows the owner its own words for it, and
+    /// signs exactly those bytes with the owner statement key.
+    fn owner_sign(&self, id: &Value, params: &Value, now: u64) -> Value {
+        let Some(segment) = params.get("payload").and_then(Value::as_str) else {
+            return failure(id, -32602, "owner/sign needs the payload segment");
+        };
+        let request = match statement::parse(segment, now) {
+            Ok(request) => request,
+            Err(message) => return failure(id, -32602, &message),
+        };
+        let _one_prompt_at_a_time = self.owner_lock.lock().unwrap();
+        let seed = self.store.statement_seed();
+        let untrusted = seed.as_ref().is_err_and(StoreError::is_untrusted);
+        let mut malformed = false;
+        let outcome = seed
+            .map_err(|error| Refusal::Declined(error.into()))
+            .and_then(|seed| {
+                let own = statement::fingerprint(&statement::public_key(&seed));
+                if request.key != own {
+                    malformed = true;
+                    return Err(Refusal::Declined(format!(
+                        "the payload names key {}, not this keyd's owner statement key {own}",
+                        request.key
+                    )));
+                }
+                self.consent.ask(&statement::reason(&request))?;
+                Ok(statement::sign(&seed, segment))
+            });
+        let (decision, detail) = match &outcome {
+            Ok(_) => ("granted", None),
+            Err(Refusal::Unavailable(message)) => ("unavailable", Some(message.as_str())),
+            Err(Refusal::Declined(message)) => ("refused", Some(message.as_str())),
+        };
+        // The receipt names the payload by digest only, as presence names its
+        // action: agent-bot's own audit records the words.
+        let named = format!("{} payload {}", request.kind, statement::digest(segment));
+        let detail = match detail {
+            None => named,
+            Some(message) => format!("{named}: {message}"),
+        };
+        self.audit.record(
+            Receipt {
+                event: "keyd-owner",
+                agent_id: None,
+                app: None,
+                operation: "owner/sign",
+                decision,
+                detail: Some(&detail),
+            },
+            now,
+        );
+        match outcome {
+            Ok(signature) => reply(id, json!({ "signature": signature })),
+            Err(Refusal::Declined(message)) if malformed => failure(id, -32602, &message),
+            Err(Refusal::Unavailable(message)) => failure(id, PRESENCE_UNAVAILABLE, &message),
+            Err(Refusal::Declined(message)) if untrusted => failure(id, UNTRUSTED_ITEM, &message),
+            Err(Refusal::Declined(message)) => failure(id, -32000, &message),
+        }
+    }
+
+    /// The owner statement key's public half, signed with the presence key
+    /// for agent-bot's nonce; no prompt. The key is made on first use.
+    fn owner_statement_key(&self, id: &Value, params: &Value, now: u64) -> Value {
+        let nonce = params.get("nonce").and_then(Value::as_str);
+        let Some(nonce) = nonce.filter(|v| presence::nonce_ok(v)) else {
+            return failure(id, -32602, "the nonce is not 16 to 64 base64url characters");
+        };
+        let signed = self.store.statement_seed().and_then(|seed| {
+            let presence_seed = self.store.presence_seed()?;
+            Ok(statement::sign_key_record(
+                &presence_seed,
+                &statement::public_key(&seed),
+                nonce,
+                now,
+            ))
+        });
+        match signed {
+            Ok(record) => reply(id, json!({ "record": record })),
             Err(error @ StoreError::Untrusted { .. }) => {
                 failure(id, UNTRUSTED_ITEM, &error.to_string())
             }
@@ -2012,5 +2105,150 @@ mod tests {
                 .unwrap();
             assert!(soul.get("result").is_none(), "{method}");
         }
+    }
+
+    /// keyd with the shared vector seed as its owner statement key.
+    fn statement_keyd(consent: &Arc<Consenting>) -> (Keyd, Memory) {
+        use crate::statement::tests::SEED;
+        use crate::store::{Items, PIN_SERVICE, STATEMENT_ACCOUNT};
+        let items = Memory::default();
+        items
+            .write(
+                PIN_SERVICE,
+                STATEMENT_ACCOUNT,
+                STANDARD.encode(SEED).as_bytes(),
+            )
+            .unwrap();
+        let mut keyd = keyd(true);
+        keyd.store = Store::new(Box::new(items.clone()));
+        keyd.consent = Box::new(Arc::clone(consent));
+        (keyd, items)
+    }
+
+    fn sign_statement(keyd: &Keyd, payload: Value) -> Value {
+        owner_pins(keyd, "owner/sign", json!({ "payload": payload }))
+    }
+
+    #[test]
+    fn signs_a_statement_only_when_the_owner_approves() {
+        use crate::statement::tests::{SEGMENT, SIGNATURE};
+        let consent = Arc::new(Consenting::new(true));
+        let (keyd, _) = statement_keyd(&consent);
+        let answer = sign_statement(&keyd, json!(SEGMENT));
+        assert_eq!(answer["result"]["signature"], SIGNATURE, "{answer}");
+        assert_eq!(
+            consent.asked.lock().unwrap().as_slice(),
+            ["agent-bot wants you to sign a statement as the owner, for qwts/agent-bot-identity#753, until 2027-01-22 08:00 UTC: \u{201c}Ship the keyd owner/sign slice.\u{201d}"]
+        );
+
+        let declined = Arc::new(Consenting::new(false));
+        let (keyd, _) = statement_keyd(&declined);
+        let answer = sign_statement(&keyd, json!(SEGMENT));
+        assert_eq!(answer["error"]["code"], -32000);
+        assert!(answer.get("result").is_none());
+        assert_eq!(declined.asked.lock().unwrap().len(), 1);
+
+        let nobody = Arc::new(Consenting::unavailable());
+        let (keyd, _) = statement_keyd(&nobody);
+        assert_eq!(
+            sign_statement(&keyd, json!(SEGMENT))["error"]["code"],
+            PRESENCE_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn refuses_owner_sign_requests_without_asking() {
+        use crate::statement::tests::{challenge, segment, statement, FINGERPRINT, SEGMENT};
+        use crate::store::tests::UNTRUSTED_VALUE;
+        use crate::store::{Items, PIN_SERVICE, STATEMENT_ACCOUNT};
+        let consent = Arc::new(Consenting::new(true));
+        let (keyd, items) = statement_keyd(&consent);
+        // Malformed: no payload, not a string, not a payload, expired.
+        for params in [
+            json!({}),
+            json!({ "payload": 1 }),
+            json!({ "payload": "e30" }),
+        ] {
+            assert_eq!(
+                owner_pins(&keyd, "owner/sign", params.clone())["error"]["code"],
+                -32602,
+                "{params}"
+            );
+        }
+        let mut expired = challenge(FINGERPRINT);
+        expired["iat"] = json!(NOW - 900);
+        expired["exp"] = json!(NOW - 1);
+        assert_eq!(
+            sign_statement(&keyd, json!(segment(&expired)))["error"]["code"],
+            -32602
+        );
+        // A payload naming another key than keyd's own.
+        let other = statement("SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        let answer = sign_statement(&keyd, json!(segment(&other)));
+        assert_eq!(answer["error"]["code"], -32602);
+        assert!(answer["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(FINGERPRINT));
+        assert!(consent.asked.lock().unwrap().is_empty(), "nobody is asked");
+
+        // A statement seed keyd does not control signs nothing.
+        items
+            .write(PIN_SERVICE, STATEMENT_ACCOUNT, UNTRUSTED_VALUE)
+            .unwrap();
+        assert_eq!(
+            sign_statement(&keyd, json!(SEGMENT))["error"]["code"],
+            UNTRUSTED_ITEM
+        );
+        assert_eq!(
+            owner_pins(
+                &keyd,
+                "owner/statement-key",
+                json!({ "nonce": "abcdefghijklmnopqrstuvwx" })
+            )["error"]["code"],
+            UNTRUSTED_ITEM
+        );
+        assert!(consent.asked.lock().unwrap().is_empty(), "nobody is asked");
+
+        // Statements are for the owner channel only.
+        for method in ["owner/sign", "owner/statement-key"] {
+            let soul = keyd
+                .handle_soul(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": { "payload": SEGMENT, "nonce": "abcdefghijklmnopqrstuvwx" } }))
+                .unwrap();
+            assert!(soul.get("result").is_none(), "{method}");
+        }
+    }
+
+    #[test]
+    fn reports_the_statement_key_signed_with_the_presence_key() {
+        use crate::statement::tests::{FINGERPRINT, PUBLIC};
+        let consent = Arc::new(Consenting::new(true));
+        let (owner, _) = statement_keyd(&consent);
+        let nonce = "abcdefghijklmnopqrstuvwx";
+        let answer = owner_pins(&owner, "owner/statement-key", json!({ "nonce": nonce }));
+        let seed = owner.store.presence_seed().unwrap();
+        let payload = crate::pins::tests::open(answer["result"]["record"].as_str().unwrap(), &seed);
+        assert_eq!(payload["kind"], crate::statement::KEY_KIND);
+        assert_eq!(payload["key"], PUBLIC);
+        assert_eq!(payload["fingerprint"], FINGERPRINT);
+        assert_eq!(payload["nonce"], nonce);
+        assert!(consent.asked.lock().unwrap().is_empty(), "no prompt");
+        assert_eq!(
+            owner_pins(&owner, "owner/statement-key", json!({ "nonce": "short" }))["error"]["code"],
+            -32602
+        );
+        // A keyd with no statement key makes one, apart from the presence key.
+        let fresh = keyd(true);
+        let answer = owner_pins(&fresh, "owner/statement-key", json!({ "nonce": nonce }));
+        let presence = fresh.store.presence_seed().unwrap();
+        let payload =
+            crate::pins::tests::open(answer["result"]["record"].as_str().unwrap(), &presence);
+        assert_ne!(payload["key"], crate::presence::public_key(&presence));
+        assert_eq!(
+            payload["key"],
+            STANDARD.encode(crate::statement::public_key(
+                &fresh.store.statement_seed().unwrap()
+            ))
+        );
     }
 }
