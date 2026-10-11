@@ -523,7 +523,8 @@ agent-bot soul skill search --soul AGENT_ID QUERY [--json]
 `settings.skillSearchAdapter` (#902; a host setting, never part of a soul
 package). It first checks the caller (the owner may search any soul, a soul
 only its own), that the soul exists, and that the query is non-empty text of
-at most 4096 bytes and 16 words.
+at most 4096 bytes with at most 16 distinct words (compared case-insensitively,
+so a repeated word counts once).
 
 - Unset: it fails with `skill-search-no-adapter` and exits 1. Nothing is set up
   or searched.
