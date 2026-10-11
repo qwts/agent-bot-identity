@@ -10,9 +10,9 @@ import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
-import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, catalogPin, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
+import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, catalogPin, catalogReleaseHash, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
-import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, readRuntimePins, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
@@ -276,7 +276,7 @@ test('an install lands atomically under .soul-state/runtimes with a stamp, is id
   assert.ok(existsSync(path.join(goDir, 'bin', 'go')));
   const stamp = JSON.parse(readFileSync(path.join(nodeDir, INSTALL_STAMP), 'utf8'));
   assert.deepEqual(stamp, { schemaVersion: 1, name: 'node', kind: 'archive', version: NODE.version, platform: PLATFORM, url: f.catalog.node[0].sources[PLATFORM].url,
-    sha256: sha(NODE_ARCHIVE), bin: 'bin', installedAt: '2026-10-07T12:00:00.000Z' });
+    sha256: sha(NODE_ARCHIVE), bin: 'bin', catalogRelease: catalogReleaseHash({ catalog: f.catalog }), installedAt: '2026-10-07T12:00:00.000Z' });
   assert.deepEqual(JSON.parse(readFileSync(path.join(f.runtimes, 'node', 'last-install.json'), 'utf8')), { version: NODE.version, status: 'ok', at: '2026-10-07T12:00:00.000Z' });
   assert.deepEqual(readdirSync(path.join(f.runtimes, 'node')).sort(), [NODE.version, 'last-install.json'], 'no staging directory remains');
   assert.deepEqual(readdirSync(f.cache).sort(), [sha(GO_ARCHIVE), sha(NODE_ARCHIVE)].sort(), 'only the verified archives are shared, by digest');
@@ -318,6 +318,8 @@ test('a failed install keeps the previous one and records its coded error; check
   const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
   const d = doubles({ archives: f.archives });
   await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  // Without its pins file the soul re-resolves, as one installed before #617 does.
+  rmSync(path.join(f.dir, '.soul-state', 'runtime-pins.json'));
   const installed = tree(f.runtimes);
   // The catalog moves node 24 on: the new pin's archive is corrupt.
   const bumped = structuredClone(f.catalog);
@@ -373,6 +375,69 @@ test('a failed install keeps the previous one and records its coded error; check
   // A soul without .soul-state cannot hold an install.
   rmSync(path.join(f.dir, '.soul-state'), { recursive: true });
   await assert.rejects(installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl }), (e) => e.code === 'soul-state-missing');
+});
+
+test('the pins file records what each runtime installed as; reinstall and a newer catalog reuse it, a missing file re-resolves, and a gone or corrupt pin refuses (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const d = doubles({ archives: f.archives });
+  const pinsPath = path.join(f.dir, '.soul-state', 'runtime-pins.json');
+  const release = catalogReleaseHash({ catalog: f.catalog });
+  assert.deepEqual(readRuntimePins(f.dir), { pins: { runtimes: {}, harnesses: {} }, problem: null }, 'no file is empty pins');
+  await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  const recorded = { schemaVersion: 1, runtimes: { node: { version: NODE.version, catalogRelease: release } }, harnesses: {} };
+  assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')), recorded);
+  if (process.platform !== 'win32') assert.equal(lstatSync(pinsPath).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(path.join(f.dir, '.soul-state')).filter((name) => name.startsWith('runtime-pins')), ['runtime-pins.json'], 'no lock or staging remains');
+  // A newer agent-bot pins a newer node 24 and keeps the superseded one: the soul stays on what it installed.
+  const bumped = structuredClone(f.catalog);
+  const next = { version: '24.99.0', sources: Object.fromEntries(RUNTIME_PLATFORMS.map((p) => [p, { url: `https://example.test/${p}/next.tgz`, sha256: sha(NODE_ARCHIVE), bin: 'bin' }])) };
+  bumped.node.push(next);
+  const archives = { ...f.archives, [next.sources[PLATFORM].url]: NODE_ARCHIVE };
+  const kept = inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped });
+  assert.deepEqual([kept.runtimes[0].version, kept.runtimes[0].status, kept.runtimes[0].pin], [NODE.version, 'installed', recorded.runtimes.node]);
+  assert.match(formatRuntimes({ ...kept, agentId: ID, soulDir: f.dir, overrides: [] }), new RegExp(`node: installed ${NODE.version.replaceAll('.', '\\.')} \\(declared 24, catalog\\) \\[pinned\\]`));
+  // A reinstall (runtimes are reconstructible) brings back the same version; the pin does not move.
+  rmSync(f.runtimes, { recursive: true });
+  const again = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn, runImpl: d.runImpl });
+  assert.deepEqual([again.installed, again.runtimes[0].version], [['node'], NODE.version]);
+  assert.equal(JSON.parse(readFileSync(path.join(f.runtimes, 'node', NODE.version, INSTALL_STAMP), 'utf8')).catalogRelease, catalogReleaseHash({ catalog: bumped }), 'the stamp names the catalog it was installed from');
+  assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')), recorded);
+  // A catalog that no longer has the pinned version refuses rather than move the soul.
+  const gone = { ...bumped, node: [next] };
+  const refused = inspectSoulRuntimes(f.dir, { ...f.options, catalog: gone }).runtimes[0];
+  assert.deepEqual([refused.version, refused.status, refused.code, refused.action], [NODE.version, 'unsupported', 'runtime-install-failed', `update agent-bot to a release whose catalog pins node ${NODE.version}`]);
+  assert.match(refused.reason, /is pinned for this soul in \.soul-state\/runtime-pins\.json, and this agent-bot's catalog no longer has it/);
+  const goneError = await installSoulRuntimes(f.dir, { ...f.options, catalog: gone, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+  assert.deepEqual([goneError?.code, goneError?.action], ['runtime-install-failed', refused.action]);
+  // A missing file resolves from the current catalog, as before #617, and records what installs.
+  rmSync(pinsPath);
+  assert.deepEqual([inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes[0].version, inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes[0].pin], ['24.99.0', null]);
+  await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn, runImpl: d.runImpl });
+  assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')).runtimes.node, { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) });
+  // A declaration that no longer allows the pinned version re-resolves, and its entry is replaced.
+  writeFileSync(pinsPath, `${JSON.stringify(recorded)}\n`);
+  f.writeManifest((m) => { m.runtimes.node = '24.99.0'; });
+  const moved = inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes[0];
+  assert.deepEqual([moved.version, moved.status, moved.pin], ['24.99.0', 'installed', null]);
+  await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')).runtimes.node, { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) });
+  // A failed install still records what did install before it.
+  rmSync(pinsPath);
+  f.writeManifest((m) => { m.runtimes.go = '1'; });
+  const goUrl = f.catalog.go[0].sources[PLATFORM].url;
+  const partial = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives, fail: { [goUrl]: '404' } }).fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+  assert.equal(partial?.code, 'runtime-download-failed');
+  assert.deepEqual(Object.keys(readRuntimePins(f.dir).pins.runtimes), ['node'], 'node is recorded, the failed go is not');
+  // A corrupt file is reported and blocks every install, --runtime included, and is left as it is.
+  for (const contents of ['{"schemaVersion":2,"runtimes":{},"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24; rm -rf /","catalogRelease":null}},"harnesses":{}}', 'not json']) {
+    writeFileSync(pinsPath, contents);
+    const state = inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped });
+    assert.equal(state.invalid.at(-1).path, '.soul-state/runtime-pins.json');
+    assert.match(state.invalid.at(-1).message, /\.soul-state\/runtime-pins\.json .*; fix it, or delete it to resolve from the current catalog/);
+    const blocked = await installSoulRuntimes(f.dir, { ...f.options, only: 'node', catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+    assert.deepEqual([blocked?.code, blocked?.action], ['runtime-install-failed', 'fix or delete .soul-state/runtime-pins.json']);
+    assert.equal(readFileSync(pinsPath, 'utf8'), contents);
+  }
 });
 
 test('fetchArchive verifies before sharing and never leaves a partial file', async (t) => {
@@ -448,6 +513,11 @@ test('non-npm harnesses install from a pinned archive or as a uv tool into .soul
   assert.equal(tool.env.UV_PYTHON_INSTALL_DIR, path.join(f.runtimes, 'python', PYTHON.version));
   assert.equal(tool.env.UV_PYTHON_PREFERENCE, 'only-managed');
   assert.equal(result.ready, true);
+  // uv, which python and muse need, is pinned like a declared runtime; harness installs record their exact version.
+  const release = catalogReleaseHash({ catalog: f.catalog });
+  assert.deepEqual(readRuntimePins(f.dir).pins, { runtimes: { uv: { version: UV.version, catalogRelease: release }, python: { version: PYTHON.version, catalogRelease: release } },
+    harnesses: { opencode: { version: '1.2.3', catalogRelease: null }, muse: { version: '1.9.0', catalogRelease: null } } });
+  assert.deepEqual(result.harnesses.map((h) => h.pin?.version ?? null), ['1.2.3', '1.9.0']);
   // A harness archive without its executable is refused and leaves nothing.
   f.writeManifest((m) => { m.harnesses.opencode.install.version = '2.0.0'; m.harnesses.opencode.install.sha256[PLATFORM] = sha(GO_ARCHIVE); });
   const wrong = await installSoulRuntimes(f.dir, { ...f.options, only: 'opencode', fetchFn: doubles({ archives: { [`https://example.test/opencode-${PLATFORM}-2.0.0.zip`]: GO_ARCHIVE } }).fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
@@ -551,7 +621,7 @@ test('python installs from the one archive the catalog pins and records its dige
   assert.deepEqual([legacy.status, legacy.verification], ['installed', 'unverified']);
   const text = formatRuntimes({ agentId: ID, soulDir: f.dir, platform: PLATFORM, integrity: null, ready: true, runtimes: inspectSoulRuntimes(f.dir, f.options).runtimes, harnesses: [], overrides: [], invalid: [] });
   assert.match(text, /\nintegrity: not required\n/);
-  assert.match(text, new RegExp(`\\npython: installed ${PYTHON.version.replaceAll('.', '\\.')} \\(declared 3\\.12, catalog\\) \\[unverified\\] `));
+  assert.match(text, new RegExp(`\\npython: installed ${PYTHON.version.replaceAll('.', '\\.')} \\(declared 3\\.12, catalog\\) \\[pinned\\] \\[unverified\\] `));
   // Required: that python is reinstalled with its evidence, and an unlocked uv tool is refused.
   f.writeManifest((m) => { m.runtimes.integrity = 'required'; m.harnesses = { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose' } } }; });
   const required = inspectSoulRuntimes(f.dir, f.options);
@@ -798,7 +868,7 @@ test('soul runtimes and soul runtimes install report by Agent ID or name with --
   const status = await soulRuntimesCommand(['billy', '--json'], { ...options, write });
   assert.deepEqual(JSON.parse(out), status);
   assert.deepEqual(Object.keys(status), ['schemaVersion', 'agentId', 'soulDir', 'platform', 'root', 'cache', 'integrity', 'runtimes', 'harnesses', 'overrides', 'invalid', 'ready']);
-  assert.deepEqual(status.runtimes, [{ name: 'node', declared: '24', requiredBy: [], version: NODE.version, source: 'catalog', status: 'missing', reason: null, path: null, bin: null, verification: null, lastError: null, code: null, action: null, via: null }]);
+  assert.deepEqual(status.runtimes, [{ name: 'node', declared: '24', requiredBy: [], version: NODE.version, source: 'catalog', status: 'missing', reason: null, path: null, bin: null, verification: null, lastError: null, pin: null, code: null, action: null, via: null }]);
   assert.deepEqual([status.agentId, status.soulDir, status.platform, status.root, status.cache, status.ready], [ID, f.dir, PLATFORM, f.runtimes, f.cache, false]);
   assert.deepEqual(status.overrides, []);
   assert.deepEqual(gates, [], 'reading is not an owner action');

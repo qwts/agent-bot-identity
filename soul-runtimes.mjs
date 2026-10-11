@@ -29,7 +29,7 @@ import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { withLock } from './agent-identity.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
-import { PROVIDER_NAMES, RUNTIME_NAMES, harnessInstallSource, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, uvToolRequirements } from './runtime-catalog.mjs';
+import { PROVIDER_NAMES, RUNTIME_NAMES, SHA256_HEX, catalogPin, catalogReleaseHash, harnessInstallSource, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, versionMatches, uvToolRequirements } from './runtime-catalog.mjs';
 
 export const RUNTIMES_SCHEMA_VERSION = 1;
 // Stable failure codes (ADR-0322 decision 5): each names the declared
@@ -38,6 +38,11 @@ export const RUNTIME_ERROR_CODES = Object.freeze(['runtime-download-failed', 'ru
 export const INSTALL_STAMP = '.agent-bot-install.json';
 const LAST_INSTALL = 'last-install.json';
 const STATE = '.soul-state';
+// What each runtime and harness was installed as (#617, owner decisions "Pin
+// per install" and "the new pins file"): durable soul state, so it survives
+// a reinstall and travels with an export.
+export const RUNTIME_PINS_FILE = 'runtime-pins.json';
+const PINS_SCHEMA_VERSION = 1;
 const OVERRIDE_RUNTIME_NAMES = Object.freeze({ node: 'node', npm: null, npx: null, go: 'go', gofmt: null, python3: 'python', uv: 'uv', uvx: null });
 const OVERRIDE_NAMES = Object.freeze(Object.fromEntries(Object.keys(OVERRIDE_RUNTIME_NAMES).map((name) => [name, name])));
 const OVERRIDE_RUNTIME_ENV = Object.freeze({
@@ -282,6 +287,69 @@ export function readSoulManifest(soulDir) {
   return readJson(path.join(soulDir, 'soul.json'));
 }
 
+const pinsFile = (soulDir) => path.join(soulDir, STATE, RUNTIME_PINS_FILE);
+const PIN_VERSION = /^[0-9][0-9A-Za-z.+-]{0,63}$/;
+const PIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+
+/**
+ * `.soul-state/runtime-pins.json`: `{ schemaVersion: 1, runtimes: { <name>:
+ * { version, catalogRelease } }, harnesses: { ... } }`, the exact version
+ * each was installed as and the catalog release hash it came from (null for
+ * a package's own sources or a harness install). Only versions: a recorded
+ * catalog version installs from the catalog's own verified pin, so editing
+ * the file can select another verified pin and nothing else. Returns
+ * `{ pins, problem }`; no file is empty pins, and an unreadable or malformed
+ * one is a problem the caller reports instead of silently re-resolving.
+ */
+export function readRuntimePins(soulDir) {
+  const empty = { runtimes: {}, harnesses: {} };
+  const file = pinsFile(soulDir);
+  try { lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return { pins: empty, problem: null }; }
+  const bad = (why) => ({ pins: empty, problem: `${STATE}/${RUNTIME_PINS_FILE} ${why}; fix it, or delete it to resolve from the current catalog` });
+  const record = readJson(file);
+  if (!record) return bad('is not a small regular JSON file');
+  if (record.schemaVersion !== PINS_SCHEMA_VERSION || Object.keys(record).some((key) => !['schemaVersion', 'runtimes', 'harnesses'].includes(key))) return bad('has an unknown schema');
+  const pins = { runtimes: {}, harnesses: {} };
+  for (const area of ['runtimes', 'harnesses']) {
+    const entries = record[area] ?? {};
+    if (!object(entries)) return bad(`has a malformed ${area} map`);
+    for (const [name, entry] of Object.entries(entries)) {
+      const known = area === 'runtimes' ? [...RUNTIME_NAMES, ...PROVIDER_NAMES].includes(name) : PIN_NAME.test(name);
+      if (!known || !object(entry) || Object.keys(entry).some((key) => !['version', 'catalogRelease'].includes(key))
+        || typeof entry.version !== 'string' || !PIN_VERSION.test(entry.version)
+        || !(entry.catalogRelease === null || (typeof entry.catalogRelease === 'string' && SHA256_HEX.test(entry.catalogRelease)))) return bad(`has a malformed ${area}.${name} entry`);
+      pins[area][name] = { version: entry.version, catalogRelease: entry.catalogRelease };
+    }
+  }
+  return { pins, problem: null };
+}
+
+// Records what is installed now, under a lock, as one atomic replace. An
+// entry that still matches what is installed is never changed: only an
+// explicit upgrade moves a soul to a newer pin. A missing entry, or one for
+// a version no longer installed because the declaration changed, records
+// the current install.
+function recordRuntimePins(soulDir, state, release) {
+  const file = pinsFile(soulDir);
+  withLock(`${file}.lock`, 'runtime pins', () => {
+    const current = readRuntimePins(soulDir);
+    if (current.problem) return;
+    const next = { schemaVersion: PINS_SCHEMA_VERSION, runtimes: { ...current.pins.runtimes }, harnesses: { ...current.pins.harnesses } };
+    let changed = false;
+    const keep = (area, row, catalogRelease) => {
+      if (row.status !== 'installed' || next[area][row.name]?.version === row.version) return;
+      next[area][row.name] = { version: row.version, catalogRelease };
+      changed = true;
+    };
+    for (const row of state.runtimes) keep('runtimes', row, row.source === 'catalog' ? release : null);
+    for (const row of state.harnesses) keep('harnesses', row, null);
+    if (!changed) return;
+    const staged = `${file}.${randomUUID()}.tmp`;
+    writeFileSync(staged, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    try { renameSync(staged, file); } catch (error) { rmSync(staged, { force: true }); throw error; }
+  });
+}
+
 /**
  * The manifest's declarations, normalized, with what could not be read as
  * `invalid[]` (a descriptor reports it; a launch refuses on it).
@@ -415,8 +483,8 @@ const installCommand = (agentId, runtime = null) => `agent-bot soul runtimes ins
 // sources when it ships them (they are definition, reviewed as a revision),
 // else the catalog pin for its range; `unsupported` with the reason when
 // neither covers the host.
-function resolveRuntime(name, declaration, { platform, catalog }) {
-  const row = { name, declared: declaration.version, version: null, source: null, archive: null, via: declaration.via, status: null, reason: null };
+function resolveRuntime(name, declaration, { platform, catalog, pin = null }) {
+  const row = { name, declared: declaration.version, version: null, source: null, archive: null, via: declaration.via, status: null, reason: null, pin: null, code: null, action: null };
   if (declaration.sources) {
     row.version = declaration.version;
     row.source = 'package';
@@ -424,19 +492,32 @@ function resolveRuntime(name, declaration, { platform, catalog }) {
     if (!row.archive) { row.status = 'unsupported'; row.reason = `the package's sources for ${name} ${declaration.version} do not cover ${platform ?? 'this platform'}`; }
     return row;
   }
-  const pin = resolveCatalogPin(name, declaration.version, { catalog });
-  if (!pin) {
+  // A recorded version the declaration still allows is reused, never re-resolved.
+  if (pin && versionMatches(declaration.version, pin.version)) {
+    row.pin = pin;
+    if (!catalogPin(name, pin.version, { catalog })) return pinnedGone(row, name, pin);
+  }
+  const pinned = row.pin ? catalogPin(name, row.pin.version, { catalog }) : resolveCatalogPin(name, declaration.version, { catalog });
+  if (!pinned) {
     row.status = 'unsupported';
     row.reason = `no catalog pin for ${name} ${declaration.version} in agent-bot (${supportedMajors(name, { catalog }).map((major) => `"${major}"`).join(', ') || 'none'}); declare a supported major, or exact sources`;
     return row;
   }
-  row.version = pin.version;
+  row.version = pinned.version;
   row.source = 'catalog';
-  if (pin.sources) {
-    row.archive = pin.sources[platform] ?? null;
-    if (!row.archive) { row.status = 'unsupported'; row.reason = `${name} ${pin.version} has no download for ${platform ?? 'this platform'}`; }
-  } else if (!platform) { row.status = 'unsupported'; row.reason = `${name} ${pin.version} has no download for this platform`; }
+  if (pinned.sources) {
+    row.archive = pinned.sources[platform] ?? null;
+    if (!row.archive) { row.status = 'unsupported'; row.reason = `${name} ${pinned.version} has no download for ${platform ?? 'this platform'}`; }
+  } else if (!platform) { row.status = 'unsupported'; row.reason = `${name} ${pinned.version} has no download for this platform`; }
   return row;
+}
+
+// A recorded version this agent-bot's catalog no longer has: refused, never
+// silently moved to another pin.
+function pinnedGone(row, name, pin) {
+  return Object.assign(row, { version: pin.version, source: 'catalog', status: 'unsupported', code: 'runtime-install-failed',
+    reason: `${name} ${pin.version} is pinned for this soul in ${STATE}/${RUNTIME_PINS_FILE}, and this agent-bot's catalog no longer has it`,
+    action: `update agent-bot to a release whose catalog pins ${name} ${pin.version}` });
 }
 
 /**
@@ -449,14 +530,20 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
   const declared = declaredRuntimes(manifest, { registry });
   const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, platform, root, cache: downloadCacheDir({ env, home }), integrity: declared.integrity, runtimes: [], harnesses: [], invalid: declared.invalid, ready: true };
   const required = declared.integrity === 'required';
+  const { pins, problem: pinsProblem } = readRuntimePins(soulDir);
+  if (pinsProblem) result.invalid = [...result.invalid, { path: `${STATE}/${RUNTIME_PINS_FILE}`, message: pinsProblem }];
   const needsUv = Object.hasOwn(declared.runtimes, 'python') || Object.values(declared.harnesses).some((install) => install.kind === 'uv-tool');
   const requiredBy = [...(Object.hasOwn(declared.runtimes, 'python') ? ['python'] : []),
     ...Object.entries(declared.harnesses).filter(([, install]) => install.kind === 'uv-tool').map(([name]) => name)];
-  const rows = Object.entries(declared.runtimes).map(([name, declaration]) => ({ ...resolveRuntime(name, declaration, { platform, catalog }), requiredBy: [] }));
+  const rows = Object.entries(declared.runtimes).map(([name, declaration]) => ({ ...resolveRuntime(name, declaration, { platform, catalog, pin: pins.runtimes[name] ?? null }), requiredBy: [] }));
   if (needsUv) {
-    const pin = newestPin('uv', { catalog });
-    const uvRow = { name: 'uv', declared: null, requiredBy, version: pin?.version ?? null, source: pin ? 'catalog' : null, archive: pin?.sources?.[platform] ?? null, via: null, status: null, reason: null };
-    if (!uvRow.archive) { uvRow.status = 'unsupported'; uvRow.reason = `uv${pin ? ` ${pin.version}` : ''} has no download for ${platform ?? 'this platform'}`; }
+    // uv has no declared range: a recorded uv is reused as long as the catalog keeps it.
+    const recorded = pins.runtimes.uv ?? null;
+    const pin = recorded ? catalogPin('uv', recorded.version, { catalog }) : newestPin('uv', { catalog });
+    const uvRow = { name: 'uv', declared: null, requiredBy, version: pin?.version ?? null, source: pin ? 'catalog' : null, archive: pin?.sources?.[platform] ?? null, via: null, status: null, reason: null,
+      pin: recorded, code: null, action: null };
+    if (recorded && !pin) pinnedGone(uvRow, 'uv', recorded);
+    else if (!uvRow.archive) { uvRow.status = 'unsupported'; uvRow.reason = `uv${pin ? ` ${pin.version}` : ''} has no download for ${platform ?? 'this platform'}`; }
     rows.push(uvRow);
   }
   rows.sort((a, b) => ORDER.indexOf(a.name) - ORDER.indexOf(b.name));
@@ -477,7 +564,7 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
         : stamp && !installed ? `the installed ${executableName(executable, platform)} is missing or not executable` : null),
       path: installed ? directory : null, bin: installed ? stamp.bin : null, verification: installed ? (unverified ? 'unverified' : 'verified') : null,
       lastError: !installed && last?.status === 'failed' && last.version === row.version ? { code: last.code ?? 'runtime-install-failed', message: last.message ?? '', at: last.at ?? null } : null,
-      code: null, action: null, archive: row.archive, via: row.via };
+      pin: row.pin, code: row.code, action: row.action, archive: row.archive, via: row.via };
     if (entry.status !== 'installed') result.ready = false;
     result.runtimes.push(entry);
   }
@@ -502,6 +589,7 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
       reason: unsupported ?? problem,
       path: installed ? directory : null, bin: installed ? stamp.bin : null,
       verification: installed && !unsupported ? (install.kind === 'uv-tool' && !lock ? 'unverified' : 'verified') : null,
+      pin: pins.harnesses[name]?.version === install.version ? pins.harnesses[name] : null,
       lastError: !installed && last?.status === 'failed' && last.version === install.version ? { code: last.code ?? 'runtime-install-failed', message: last.message ?? '', at: last.at ?? null } : null,
       code: refused ? 'runtime-install-failed' : null, action: refused ? `add harnesses.${name}.install.lock in a revision` : null,
       archive, lock };
@@ -682,7 +770,7 @@ function publish(staging, payload, target, { usable = null } = {}) {
 // An archive install: verified download, extraction into an exclusive
 // `.installing-<uuid>` beside the target, the stamp, then one rename. A
 // failure removes only the staging; whatever was installed before stays.
-async function installArchive({ name, version, archive, kind, executable = null }, target, { cache, fetchFn, runImpl, label, action, now, platform, log = () => {} }) {
+async function installArchive({ name, version, archive, kind, executable = null, catalogRelease = null }, target, { cache, fetchFn, runImpl, label, action, now, platform, log = () => {} }) {
   const { file } = await fetchArchive(archive, { cache, fetchFn, label, action });
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const staging = path.join(path.dirname(target), `.installing-${randomUUID()}`);
@@ -696,7 +784,7 @@ async function installArchive({ name, version, archive, kind, executable = null 
     if (!existsSync(binDir) || (executable && !containedExecutable(payload, payload, archive.bin, executable, platform))) {
       fail('runtime-install-failed', `${label}: the archive has no ${executable ? `${archive.bin === '.' ? '' : `${archive.bin}/`}${executable}` : `${archive.bin} directory`}`, { runtime: label, action });
     }
-    writeFileSync(path.join(payload, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind, version, platform, url: archive.url, sha256: archive.sha256, bin: archive.bin, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
+    writeFileSync(path.join(payload, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name, kind, version, platform, url: archive.url, sha256: archive.sha256, bin: archive.bin, catalogRelease, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
     const retained = publish(staging, payload, target, { usable: () => {
       const stamp = readStamp(target);
       return stamp && !receiptProblem(stamp, { name, kind, version, platform, archive })
@@ -735,7 +823,7 @@ export function uvPythonDownloads(version, archive, platform) {
 // uv installs the pinned CPython (python-build-standalone) from the one
 // download the catalog pins, into an exclusive staging directory, never into
 // ~/.local/bin. The receipt records that archive's URL and digest.
-async function installPython({ version, archive }, target, uvBin, { root, runImpl, label, action, now, platform, log = () => {} }) {
+async function installPython({ version, archive, catalogRelease = null }, target, uvBin, { root, runImpl, label, action, now, platform, log = () => {} }) {
   const downloads = uvPythonDownloads(version, archive, platform);
   if (!downloads) fail('runtime-unsupported-platform', `${label}: python ${version} has no pinned download for ${platform ?? 'this platform'}`, { runtime: label, action });
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
@@ -754,7 +842,7 @@ async function installPython({ version, archive }, target, uvBin, { root, runImp
     if (!containedExecutable(staging, staging, bin, platform?.startsWith('win32-') ? 'python' : 'python3', platform)) {
       fail('runtime-install-failed', `${label}: uv installed no contained Python executable`, { runtime: label, action });
     }
-    writeFileSync(path.join(staging, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name: 'python', kind: 'uv-python', version, platform, url: archive.url, sha256: archive.sha256, bin, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
+    writeFileSync(path.join(staging, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name: 'python', kind: 'uv-python', version, platform, url: archive.url, sha256: archive.sha256, bin, catalogRelease, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
     // Only an install with this digest wins; one without (from before #617) is replaced.
     const retained = publish(staging, staging, target, { usable: () => {
       const stamp = readStamp(target);
@@ -825,14 +913,33 @@ async function installLockedUvTool(install, target, uvBin, { env, python, runImp
 
 const installing = new Map();
 
+const invalidAction = (entry) => (entry.path === `${STATE}/${RUNTIME_PINS_FILE}` ? `fix or delete ${STATE}/${RUNTIME_PINS_FILE}` : `fix soul.json ${entry.path} in a revision`);
+
 /**
  * Installs what the soul declares and does not have: runtimes first (uv
  * before python), then harness installs. `only` limits to one runtime or
  * harness name. Stops at the first failure with a coded error and records
  * it beside the runtime for the descriptor. Returns the inspection after,
- * with `installed[]` and `skipped[]`.
+ * with `installed[]` and `skipped[]`. Whatever is installed afterwards,
+ * after a failure too, is recorded in the pins file (#617).
  */
-export async function installSoulRuntimes(soulDir, { only = null, agentId = null, env = process.env, home = env.HOME ?? homedir(), platform = hostPlatform(), catalog,
+export async function installSoulRuntimes(soulDir, options = {}) {
+  const { env = process.env, home = env.HOME ?? homedir(), platform = hostPlatform(), catalog, registry = ACP_SPAWN_REGISTRY } = options;
+  const inspect = () => inspectSoulRuntimes(soulDir, { platform, catalog, env, home, registry });
+  const pinInstalled = () => {
+    if (existsSync(path.join(soulDir, STATE))) recordRuntimePins(soulDir, inspect(), catalogReleaseHash({ catalog }));
+  };
+  let result;
+  try { result = await installDeclared(soulDir, options); }
+  catch (error) {
+    try { pinInstalled(); } catch { /* the install's own error is the one to report */ }
+    throw error;
+  }
+  pinInstalled();
+  return { ...inspect(), installed: result.installed, skipped: result.skipped };
+}
+
+async function installDeclared(soulDir, { only = null, agentId = null, env = process.env, home = env.HOME ?? homedir(), platform = hostPlatform(), catalog,
   fetchFn = globalThis.fetch, runImpl = run, now = () => new Date(), log = () => {}, registry = ACP_SPAWN_REGISTRY } = {}) {
   if (!existsSync(path.join(soulDir, STATE))) fail('soul-state-missing', `${soulDir} has no .soul-state yet; launch the soul once first`);
   const root = runtimesRoot(soulDir);
@@ -846,8 +953,10 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
     throw Object.assign(new Error(error.reason), { code: error.code, runtime: error.name, action: error.action });
   }
   const overriddenRuntimes = new Set(overrideState.rows.filter((row) => row.status === 'selected' && row.runtime).map((row) => row.runtime));
-  const invalid = state.invalid.find((entry) => !only || entry.path.includes(only));
-  if (invalid) fail('runtime-install-failed', `${who}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
+  // An unreadable pins file blocks every install: resolving without it would move pinned runtimes.
+  const invalid = state.invalid.find((entry) => !only || entry.path.includes(only) || entry.path === `${STATE}/${RUNTIME_PINS_FILE}`);
+  if (invalid) fail('runtime-install-failed', `${who}: ${invalid.message}`, { runtime: invalid.path, action: invalidAction(invalid) });
+  const release = catalogReleaseHash({ catalog });
   const installed = [], skipped = [];
   requireContainedInstall(soulDir, root, installCommand(who));
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -875,7 +984,7 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
     const action = installCommand(who, row.name === 'uv' ? null : row.name);
     if (overriddenRuntimes.has(row.name)) { skipped.push(`override:${row.name}`); continue; }
     if (row.status === 'installed') { skipped.push(row.name); continue; }
-    if (row.status === 'unsupported') fail('runtime-unsupported-platform', `${who}: ${row.reason}`, { runtime: row.name, action: `declare runtimes.${row.name} sources for ${platform ?? 'this platform'} in a revision` });
+    if (row.status === 'unsupported') fail(row.code ?? 'runtime-unsupported-platform', `${who}: ${row.reason}`, { runtime: row.name, action: row.action ?? `declare runtimes.${row.name} sources for ${platform ?? 'this platform'} in a revision` });
     const target = path.join(root, row.name, row.version);
     log(`installing ${row.name} ${row.version} into ${target}`);
     await guard(target, () => attempt(row, path.join(root, row.name), async () => {
@@ -883,9 +992,9 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
         const managed = inspect().runtimes.find((entry) => entry.name === 'uv' && entry.status === 'installed');
         const uv = overrideState.overrides.uv?.executable ?? (managed ? path.join(managed.path, managed.bin, 'uv') : null);
         if (!uv) fail('runtime-install-failed', `${who}: uv is not installed, so python cannot be`, { runtime: 'python', action });
-        await installPython(row, target, uv, { root, runImpl, label: `${who} python`, action, now, platform, log });
+        await installPython({ ...row, catalogRelease: row.source === 'catalog' ? release : null }, target, uv, { root, runImpl, label: `${who} python`, action, now, platform, log });
       } else {
-        await installArchive({ name: row.name, version: row.version, archive: row.archive, kind: 'archive', executable: row.name }, target,
+        await installArchive({ name: row.name, version: row.version, archive: row.archive, kind: 'archive', executable: row.name, catalogRelease: row.source === 'catalog' ? release : null }, target,
           { cache, fetchFn, runImpl, label: `${who} ${row.name}`, action, now, platform, log });
       }
     }));
@@ -987,7 +1096,7 @@ export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homed
   }
   const inspection = inspectSoulRuntimes(soulDir, { ...rest, env, home, manifest });
   const invalid = inspection.invalid[0];
-  if (invalid) fail('runtime-install-failed', `${soul.id}: ${invalid.message}`, { runtime: invalid.path, action: `fix soul.json ${invalid.path} in a revision` });
+  if (invalid) fail('runtime-install-failed', `${soul.id}: ${invalid.message}`, { runtime: invalid.path, action: invalidAction(invalid) });
   const overrideState = syncOverrideShims(soulDir, { agentId: soul.id, platform: inspection.platform ?? process.platform });
   if (overrideState.errors.length) {
     const error = overrideState.errors[0];
@@ -1008,7 +1117,7 @@ export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homed
 
 export function formatRuntimes(result) {
   const lines = [`agentId: ${result.agentId}`, `soulDir: ${result.soulDir}`, `platform: ${result.platform ?? 'unsupported'}`, `integrity: ${result.integrity ?? 'not required'}`, `ready: ${result.ready}`, ''];
-  const label = (row) => (row.verification === 'unverified' ? ' [unverified]' : '');
+  const label = (row) => `${row.pin ? ' [pinned]' : ''}${row.verification === 'unverified' ? ' [unverified]' : ''}`;
   for (const row of result.runtimes) {
     lines.push(`${row.name}: ${row.status}${row.version ? ` ${row.version}` : ''}${row.declared ? ` (declared ${row.declared}, ${row.source})` : row.requiredBy.length ? ` (for ${row.requiredBy.join(', ')})` : ''}${label(row)}${row.path ? ` ${row.path}` : ''}${row.reason ? ` - ${row.reason}` : ''}${row.lastError ? ` - last install: ${row.lastError.code}` : ''}`);
   }
