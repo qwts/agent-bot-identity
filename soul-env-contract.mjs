@@ -52,6 +52,7 @@ export const SOUL_LAYOUT = Object.freeze([
   { id: 'workspaces', path: 'worktrees', classification: 'workspace' },
   { id: 'home', path: '.soul-state/home', classification: 'private-home' },
   { id: 'tool-state', path: '.soul-state/tools', classification: 'private-home' },
+  // Identity's subtree: see IDENTITY_OWNED_COMPONENTS below.
   { id: 'credentials', path: '.soul-state/credentials', classification: 'private-home' },
   { id: 'runtimes', path: '.soul-state/runtimes', classification: 'runtime' },
   { id: 'memory', path: '.soul-state/space', classification: 'memory' },
@@ -60,6 +61,15 @@ export const SOUL_LAYOUT = Object.freeze([
   { id: 'temp', path: '.soul-state/tmp', classification: 'temp' },
   { id: 'host-tools', path: null, classification: 'external' },
 ].map((component) => Object.freeze({ ...component, retention: RETENTION_OF[component.classification] })));
+
+// Components whose contents identity owns, though they sit inside the soul's
+// layout (#645, owner decision D7). Credential files stay under
+// `.soul-state/credentials`, where soul-credentials.mjs (credentialsDirectory)
+// writes them, so moving identity to its own repository moves no file. Soul
+// lists, classifies and carries the directory with the soul; only identity
+// reads or writes what is in it, and confinement.mjs keeps a soul's own tools
+// out. Everything else in the layout is soul's.
+export const IDENTITY_OWNED_COMPONENTS = Object.freeze(['credentials']);
 
 // Ordered: the first matching rule wins, so the specific `.soul-state/`
 // children precede the private-home prefix, and working-state prefixes
