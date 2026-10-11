@@ -32,7 +32,7 @@ class AgentBot < Formula
     chmod 0755, libexec/"agent-bot"
     (bin/"agent-bot").write <<~SH
       #!/bin/sh
-      export AGENT_BOT_SYSTEM_NODE_DIRS="#{Formula["node"].opt_bin}${AGENT_BOT_SYSTEM_NODE_DIRS:+ $AGENT_BOT_SYSTEM_NODE_DIRS}"
+      export AGENT_BOT_SYSTEM_NODE_DIRS="#{formula_opt_bin("node")}${AGENT_BOT_SYSTEM_NODE_DIRS:+ $AGENT_BOT_SYSTEM_NODE_DIRS}"
       exec "#{opt_libexec}/agent-bot" "$@"
     SH
     chmod 0755, bin/"agent-bot"
