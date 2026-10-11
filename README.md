@@ -1865,9 +1865,11 @@ install or check hooks, and a session prompt carries no hook check.
 
 The adapters call one vendor-neutral runner. Claude's adapter also serves Devin
 CLI; Codex, Cursor, Copilot, and Devin Desktop receive their native JSON shape.
-A repository hook is not generated. Where a harness gives the project file
-precedence, a committed copy would replace the user hook; one, if ever added,
-stays in addition to the user-level hook and never replaces it.
+No repository hook is generated, because a harness that gives the project
+file precedence would let a committed copy shadow the user-level adapter. A
+repository hook, if one is ever added, must carry only project-specific
+entries alongside the user-level adapter; it is never a copy of it or a
+replacement for it.
 The Git `pre-commit` and `pre-push` hooks provide the common backstop for
 harnesses or cloud surfaces that do not expose every lifecycle event.
 

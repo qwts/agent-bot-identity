@@ -610,16 +610,18 @@ test('machine wiring installs user-level hooks for every known harness once and 
   for (const file of userFiles) assert.equal(existsSync(file), true, file);
   assert.ok(first.userHooks.length >= userFiles.length);
 
-  // Cursor is installed afterwards and writes its own default hooks file;
-  // the next wiring repairs only that drift, keeping the harness's own keys.
+  // Cursor is installed afterwards and rewrites its hooks file with one of
+  // the person's own hooks; the next wiring repairs only that drift, keeping
+  // the harness's own keys and the foreign hook exactly as they were.
   const cursor = join(home, '.cursor', 'hooks.json');
-  writeFileSync(cursor, '{"version":1,"hooks":{}}\n');
+  const ownHook = { command: '/usr/local/bin/my-own-stop-hook' };
+  writeFileSync(cursor, `${JSON.stringify({ version: 1, hooks: { stop: [ownHook] } })}\n`);
   const repaired = await wire();
   assert.deepEqual(repaired.userHooks, [cursor]);
   const cursorHooks = JSON.parse(readFileSync(cursor, 'utf8'));
   assert.equal(cursorHooks.version, 1);
-  assert.ok(Object.keys(cursorHooks.hooks).length > 0);
-  assert.ok(readFileSync(cursor, 'utf8').includes(MANAGED_MARKER));
+  assert.deepEqual(cursorHooks.hooks.stop.filter((entry) => !JSON.stringify(entry).includes(MANAGED_MARKER)), [ownHook]);
+  assert.ok(Object.values(cursorHooks.hooks).flat().some((entry) => JSON.stringify(entry).includes(MANAGED_MARKER)));
 
   // A second run finds every file current and changes nothing.
   const before = snapshot();
