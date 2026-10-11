@@ -316,9 +316,12 @@ are not memory and are ignored.
 with no `projects/` store (the soul's memory may then live in the host's store,
 which is never read), `unavailable` when a project, memory directory or memory file
 is a link or not what its place requires, a delivered file is hardlinked, binary
-or not UTF-8, or a directory listing is over 4096 entries, and `supported` otherwise. Unavailable
+or not UTF-8, changed while it was read, a directory listing is over 4096 entries
+or the whole walk over 16,384, and `supported` otherwise. Unavailable
 memory never fails the run. A memory item is identified by its path in the tool
-home and the digest of the whole file. Items are delivered in path order, at
+home and the digest of the whole file; the excerpt is taken in the same pass
+that hashes it, and the file must show the same size, change times and single
+link afterwards. Items are delivered in path order, at
 most 64 of them, 64 KiB of each from its start and 256 KiB in all; `truncated`
 marks a cut item and `remaining` counts files not delivered. Durable metadata
 names the harness, paths, digests, sizes, excerpt bytes, truncation and

@@ -256,7 +256,7 @@ export function captureDreamConversation(soulDir, session, { afterDirectoryOpen 
 // soul's tool home is. An item is identified by its path in the tool home and
 // the digest of the whole file; the excerpt is its first bytes. A memory earns
 // no processing credit here, and age never makes one disposable.
-export const DREAM_MEMORY_LIMITS = Object.freeze({ items: 64, excerptBytes: 64 * 1024, bytes: 256 * 1024, entries: 4096 });
+export const DREAM_MEMORY_LIMITS = Object.freeze({ items: 64, excerptBytes: 64 * 1024, bytes: 256 * 1024, entries: 4096, visited: 16384 });
 const MEMORY_COVERAGE = ['supported', 'unsupported', 'unavailable'];
 const MEMORY_READERS = Object.freeze({
   claude: Object.freeze({ dir: 'projects', sub: 'memory', matches: name => name.endsWith('.md') && name.length > 3 }),
@@ -278,8 +278,9 @@ const memoryPath = (harness, value) => {
 // `supported`: every memory file was found without a link; the first ones in
 // path order are checked and delivered within the limits, and `remaining`
 // counts the rest.
-// `afterDirectoryOpen` is a test seam, as for conversations.
-export function captureDreamMemory(soulDir, harness, { afterDirectoryOpen = () => {} } = {}) {
+// `afterDirectoryOpen` is a test seam, as for conversations; `afterFileScan`
+// (called once a file is hashed) and `visitedLimit` are test seams too.
+export function captureDreamMemory(soulDir, harness, { afterDirectoryOpen = () => {}, afterFileScan = () => {}, visitedLimit = DREAM_MEMORY_LIMITS.visited } = {}) {
   const reader = typeof harness === 'string' && Object.hasOwn(MEMORY_READERS, harness) ? MEMORY_READERS[harness] : null;
   const unsupported = { coverage: 'unsupported', memory: null }, unavailable = { coverage: 'unavailable', memory: null };
   if (!reader) return unsupported;
@@ -291,7 +292,16 @@ export function captureDreamMemory(soulDir, harness, { afterDirectoryOpen = () =
     const root = path.join(home, reader.dir);
     if (!exists(root)) return unsupported;
     if (realpathSync(root) !== root) return unavailable;
-    const list = directory => listPinned(directory, DREAM_MEMORY_LIMITS.entries, afterDirectoryOpen);
+    // Each listing is bounded, and so is the whole walk: past `visited`
+    // directory entries in all, the store is `unavailable` rather than held
+    // in memory and sorted.
+    let visited = 0;
+    const list = directory => {
+      const names = listPinned(directory, DREAM_MEMORY_LIMITS.entries, afterDirectoryOpen);
+      visited += names.length;
+      if (visited > visitedLimit) throw new Error('limit');
+      return names;
+    };
     // Every project's memory directory, and every memory file in it, is
     // found before any is read. A link where a project, its memory directory
     // or a memory file would be refuses the whole store; other names are not
@@ -322,16 +332,24 @@ export function captureDreamMemory(soulDir, harness, { afterDirectoryOpen = () =
       const opened = openPinnedFile(file);
       if (opened === null) return unavailable;
       try {
-        const hash = createHash('sha256');
-        if (!scanText(opened.fd, opened.size, part => hash.update(part))) return unavailable;
-        const limit = Math.min(DREAM_MEMORY_LIMITS.excerptBytes, DREAM_MEMORY_LIMITS.bytes - supplied, opened.size);
+        // The excerpt is taken in the same pass that hashes the file, and the
+        // descriptor must show the same size, change times and single link
+        // afterwards, so digest, excerpt, size and truncation all describe
+        // one version of the file. A file changed while read is `unavailable`.
+        const before = fstatSync(opened.fd, { bigint: true });
+        if (before.size !== BigInt(opened.size)) return unavailable;
+        const hash = createHash('sha256'), limit = Math.min(DREAM_MEMORY_LIMITS.excerptBytes, DREAM_MEMORY_LIMITS.bytes - supplied, opened.size);
         const head = Buffer.alloc(limit);
         let read = 0;
-        while (read < limit) {
-          const count = readSync(opened.fd, head, read, limit - read, read);
-          if (count === 0) break;
-          read += count;
-        }
+        const scanned = scanText(opened.fd, opened.size, part => {
+          hash.update(part);
+          if (read < limit) read += part.copy(head, read, 0, Math.min(part.length, limit - read));
+        });
+        if (!scanned) return unavailable;
+        afterFileScan(file);
+        const after = fstatSync(opened.fd, { bigint: true });
+        if (after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs || after.nlink !== 1n
+          || after.dev !== before.dev || after.ino !== before.ino) return unavailable;
         // A head cut mid-character drops the partial character.
         const excerpt = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(head.subarray(0, read), { stream: read < opened.size });
         const excerptBytes = Buffer.byteLength(excerpt);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { computePackageRevision, computePackageRevisionFromEntries, readSoulPackageEntries, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
@@ -409,6 +409,21 @@ test('memory coverage is unsupported without a reader or store, and unavailable 
   } });
   assert.deepEqual([swapped, result.coverage], [true, 'unavailable']);
   rmSync(directory); renameSync(`${directory}.real`, directory);
+  // A file changed while it is read is unavailable, so digest, excerpt and
+  // size never describe different versions; so is one hardlinked meanwhile.
+  for (const [name, change] of [['appended', target => appendFileSync(target, 'more\n')],
+    ['rewritten in place', target => { writeFileSync(target, 'MINE\n'); utimesSync(target, new Date(0), new Date(0)); }],
+    ['hardlinked', target => linkSync(target, path.join(outside, 'second-name.md'))]]) {
+    const changed = captureDreamMemory(f.root, 'claude', { afterFileScan: scanned => { if (scanned === realpathSync(file)) change(scanned); } });
+    assert.equal(changed.coverage, 'unavailable', name);
+    rmSync(path.join(outside, 'second-name.md'), { force: true }); writeFileSync(file, 'mine\n');
+    assert.equal(coverage('claude'), 'supported', `${name} undone`);
+  }
+  // The whole walk is bounded, not only each listing.
+  for (const project of ['-q', '-r']) f.remember(`${project}/memory/a.md`, 'x\n');
+  assert.equal(captureDreamMemory(f.root, 'claude', { visitedLimit: 6 }).coverage, 'unavailable');
+  assert.equal(captureDreamMemory(f.root, 'claude', { visitedLimit: 9 }).coverage, 'supported');
+  for (const project of ['-q', '-r']) rmSync(path.join(f.projects, project), { recursive: true });
   // A listing past the bound is unavailable rather than partial.
   for (let index = 0; index <= DREAM_MEMORY_LIMITS.entries; index++) writeFileSync(path.join(f.projects, '-p/memory', `n${index}.txt`), '');
   assert.equal(coverage('claude'), 'unavailable');
