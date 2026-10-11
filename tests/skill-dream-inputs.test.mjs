@@ -221,6 +221,9 @@ test('only the recorded session in the soul store is read; anything else is unsu
   writeFileSync(path.join(outside, '2026', '10', '10', `rollout-x-${THREAD}.jsonl`), '{"secret":true}\n');
   symlinkSync(outside, path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions'));
   assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a linked store is never followed');
+  // A linked store root is refused before it is listed, whatever it holds.
+  writeFileSync(path.join(outside, '2026', '10', '10', `rollout-2026-10-10T10-00-00-${THREAD}.jsonl`), '{"secret":true}\n');
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'a linked store root is never walked');
   rmSync(path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions'));
   f.write('{"bytes":"\u0000"}\n'.replace('\\u0000', '\0'));
   assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'binary content is not delivered');
@@ -237,6 +240,15 @@ test('a long session delivers its newest whole lines within the bound', t => {
   assert.equal(conversation.size, Buffer.byteLength(lines.join('')));
   assert.ok(conversation.excerpt.endsWith(lines.at(-1)) && lines.includes(conversation.excerpt.split('\n')[0] + '\n'), 'whole lines, newest last');
   assert.equal(dreamInputMetadata({ ...captureDreamInputs(f.root, { session: f.session }) }).conversation.truncated, true);
+  // Binary or invalid UTF-8 bytes in the omitted older part still refuse the session.
+  for (const bad of [Buffer.from([0x7b, 0x00, 0x7d, 0x0a]), Buffer.from([0x7b, 0xff, 0x7d, 0x0a])]) {
+    writeFileSync(f.file, Buffer.concat([bad, Buffer.from(lines.join(''))]));
+    assert.equal(captureDreamInputs(f.root, { session: f.session }).coverage.conversations, 'unavailable');
+  }
+  // A multibyte character split across the streaming chunk boundary is still valid text.
+  const edge = Buffer.concat([Buffer.alloc(DREAM_CONVERSATION_LIMITS.excerptBytes - 1, 0x61), Buffer.from('é\n'), Buffer.from(lines.join(''))]);
+  writeFileSync(f.file, edge);
+  assert.equal(captureDreamInputs(f.root, { session: f.session }).coverage.conversations, 'supported');
 });
 
 test('a growing session store never makes the recorded session unavailable, whichever day it started', t => {

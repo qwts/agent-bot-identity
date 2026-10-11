@@ -272,14 +272,17 @@ read and report `conversations: unsupported`. Codex is the first reader: it
 looks under `.soul-state/tools/codex/sessions/` for
 `rollout-*-<session>.jsonl`, newest first by the date-named directories and
 file names, follows no link, and stops at the first match, so a thread with
-several rollout files is read from its newest. No budget spans the whole store,
+several rollout files is read from its newest. The store root itself is checked first: a
+link there, or a root resolving outside the tool home, is never walked. No budget spans the whole store,
 so a growing history never makes a recorded session unreadable; each directory
 listing is bounded to 4096 entries instead. A recorded soul-store session that
 is missing, linked, outside the tool home, binary or not UTF-8, or behind a
 single directory over that bound, reports `unavailable`; it never fails the run.
 
 The excerpt is the newest whole lines within 64 KiB, since the file is a live,
-append-only log, and its digest is of the delivered excerpt; `size` is the file
+append-only log, and its digest is of the delivered excerpt. The whole file is
+first checked for NUL bytes and valid UTF-8 in one streaming pass, so an older
+binary part is refused too; `size` is the file
 size when read and `truncated` says older lines were left out. Durable metadata
 names the harness, session, digest, size, excerpt bytes and truncation, never
 the text. The prompt presents the excerpt as untrusted context for what to

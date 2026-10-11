@@ -132,12 +132,31 @@ export function captureDreamConversation(soulDir, session) {
       }
       return null;
     };
-    const file = walk(path.join(home, reader.dir), 0);
+    // The store root itself is checked before it is listed: a link there,
+    // or a root that resolves elsewhere, is never walked.
+    const root = path.join(home, reader.dir), rootInfo = lstatSync(root);
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || realpathSync(root) !== root) return unavailable;
+    const file = walk(root, 0);
     if (file === null) return unavailable;
     if (!lstatSync(file).isFile() || realpathSync(file) !== file) return unavailable;
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const { size } = fstatSync(fd);
-    if (!fstatSync(fd).isFile()) return unavailable;
+    const info = fstatSync(fd), { size } = info;
+    if (!info.isFile()) return unavailable;
+    // The whole file, not only the delivered tail, must be text: one
+    // streaming pass in excerpt-sized chunks, so memory stays bounded
+    // however long the session grows.
+    {
+      const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }), chunk = Buffer.alloc(DREAM_CONVERSATION_LIMITS.excerptBytes);
+      for (let offset = 0; offset < size;) {
+        const count = readSync(fd, chunk, 0, Math.min(chunk.length, size - offset), offset);
+        if (count === 0) return unavailable;
+        const part = chunk.subarray(0, count);
+        if (part.includes(0)) return unavailable;
+        decoder.decode(part, { stream: true });
+        offset += count;
+      }
+      decoder.decode();
+    }
     const start = Math.max(0, size - DREAM_CONVERSATION_LIMITS.excerptBytes);
     const buffer = Buffer.alloc(size - start);
     let read = 0;
@@ -150,7 +169,6 @@ export function captureDreamConversation(soulDir, session) {
     // A tail that starts mid-file starts after its first line break, so no
     // partial line or split UTF-8 character is delivered.
     if (start > 0) { const newline = bytes.indexOf(0x0a); bytes = newline === -1 ? bytes.subarray(bytes.length) : bytes.subarray(newline + 1); }
-    if (bytes.includes(0)) return unavailable;
     const excerpt = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     return { coverage: 'supported', conversation: { harness: session.harness, sessionId: session.sessionId, digest: digest(bytes), size,
       excerpt, excerptBytes: bytes.length, truncated: bytes.length < size } };
