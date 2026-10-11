@@ -283,22 +283,38 @@ impl Store {
         self.seed(STATEMENT_ACCOUNT, "owner statement key")
     }
 
+    /// The seed under `account`, made on first use. The new seed is only
+    /// ever added, never written over one: two first uses at once (keyd
+    /// serves each connection on a thread) both get the one stored first,
+    /// so no caller hands out a key keyd will not sign with.
     fn seed(&self, account: &str, what: &str) -> Result<[u8; 32], StoreError> {
-        if let Some(mut value) = self.items.read(PIN_SERVICE, account)? {
-            let decoded = STANDARD.decode(value.trim_ascii());
-            value.fill(0);
-            let mut raw = decoded.map_err(|_| format!("{what} is malformed"))?;
-            let seed: Result<[u8; 32], _> = raw.as_slice().try_into();
-            raw.fill(0);
-            return seed.map_err(|_| format!("{what} is malformed").into());
+        if let Some(seed) = self.stored_seed(account, what)? {
+            return Ok(seed);
         }
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).map_err(|_| format!("no randomness for the {what}"))?;
         let mut value = STANDARD.encode(seed).into_bytes();
-        let written = self.items.write(PIN_SERVICE, account, &value);
+        let inserted = self.items.insert(PIN_SERVICE, account, &value);
         value.fill(0);
-        written?;
-        Ok(seed)
+        if inserted? {
+            return Ok(seed);
+        }
+        seed.fill(0);
+        self.stored_seed(account, what)?
+            .ok_or_else(|| format!("the {what} could not be stored").into())
+    }
+
+    fn stored_seed(&self, account: &str, what: &str) -> Result<Option<[u8; 32]>, StoreError> {
+        let Some(mut value) = self.items.read(PIN_SERVICE, account)? else {
+            return Ok(None);
+        };
+        let decoded = STANDARD.decode(value.trim_ascii());
+        value.fill(0);
+        let mut raw = decoded.map_err(|_| format!("{what} is malformed"))?;
+        let seed: Result<[u8; 32], _> = raw.as_slice().try_into();
+        raw.fill(0);
+        seed.map(Some)
+            .map_err(|_| format!("{what} is malformed").into())
     }
 
     /// The digest and generation of the key set the owner last approved;
@@ -983,6 +999,42 @@ pub mod tests {
     }
 
     const AGENT: &str = "agent_ea588a53-c6ce-430b-9d71-89897d843ab6";
+
+    /// Reads nothing once, as if another first use had not stored its seed
+    /// yet, so this one races it to the insert and loses.
+    struct LateRead(Memory, std::sync::atomic::AtomicBool);
+
+    impl Items for LateRead {
+        fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, StoreError> {
+            if !self.1.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Ok(None);
+            }
+            self.0.read(service, account)
+        }
+        fn write(&self, service: &str, account: &str, value: &[u8]) -> Result<(), String> {
+            self.0.write(service, account, value)
+        }
+        fn insert(&self, service: &str, account: &str, value: &[u8]) -> Result<bool, String> {
+            self.0.insert(service, account, value)
+        }
+        fn remove(&self, service: &str, account: &str) -> Result<bool, String> {
+            self.0.remove(service, account)
+        }
+    }
+
+    #[test]
+    fn a_first_use_that_loses_the_race_keeps_the_stored_seed() {
+        let items = Memory::default();
+        let first = Store::new(Box::new(items.clone()))
+            .statement_seed()
+            .unwrap();
+        let racing = Store::new(Box::new(LateRead(
+            items.clone(),
+            std::sync::atomic::AtomicBool::new(false),
+        )));
+        assert_eq!(racing.statement_seed().unwrap(), first);
+        assert_eq!(Store::new(Box::new(items)).statement_seed().unwrap(), first);
+    }
 
     fn exercise(store: &Store) {
         assert!(store

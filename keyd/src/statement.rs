@@ -89,6 +89,16 @@ fn unsafe_char(c: char) -> bool {
         | 0x202a..=0x202e | 0x2066..=0x2069)
 }
 
+/// The verifier's fingerprint shape: `SHA256:` and 43 unpadded base64 characters.
+fn fingerprint_ok(key: &str) -> bool {
+    key.strip_prefix("SHA256:").is_some_and(|rest| {
+        rest.len() == 43
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+    })
+}
+
 fn text_ok(text: &str) -> bool {
     !text.trim().is_empty() && text.len() <= MAX_TEXT_BYTES && !text.chars().any(unsafe_char)
 }
@@ -207,7 +217,9 @@ pub fn parse(segment: &str, now: u64) -> Result<Request, String> {
     if text_field("alg") != Some("ed25519") {
         return Err("keyd signs only the ed25519 alg".into());
     }
-    let key = text_field("key").ok_or("the payload key is not a fingerprint")?;
+    let key = text_field("key")
+        .filter(|key| fingerprint_ok(key))
+        .ok_or("the payload key is not a SHA256 fingerprint")?;
     let text = text_field("text")
         .filter(|t| text_ok(t))
         .ok_or("the text is empty, longer than 500 bytes, or has a control, line-break or bidirectional character")?;

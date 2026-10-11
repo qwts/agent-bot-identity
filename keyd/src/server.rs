@@ -501,12 +501,22 @@ impl Keyd {
     /// checks the payload segment, shows the owner its own words for it, and
     /// signs exactly those bytes with the owner statement key.
     fn owner_sign(&self, id: &Value, params: &Value, now: u64) -> Value {
-        let Some(segment) = params.get("payload").and_then(Value::as_str) else {
-            return failure(id, -32602, "owner/sign needs the payload segment");
-        };
-        let request = match statement::parse(segment, now) {
-            Ok(request) => request,
-            Err(message) => return failure(id, -32602, &message),
+        let supplied = params.get("payload").and_then(Value::as_str);
+        let parsed = supplied
+            .ok_or_else(|| "owner/sign needs the payload segment".to_owned())
+            .and_then(|segment| statement::parse(segment, now).map(|request| (segment, request)));
+        let (segment, request) = match parsed {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                // A refused request leaves a receipt too, naming the payload
+                // by digest only, before anyone is asked.
+                let named = supplied.map_or_else(
+                    || "malformed request".to_owned(),
+                    |segment| format!("malformed payload {}", statement::digest(segment)),
+                );
+                self.owner_sign_receipt("refused", &format!("{named}: {message}"), now);
+                return failure(id, -32602, &message);
+            }
         };
         let _one_prompt_at_a_time = self.owner_lock.lock().unwrap();
         let seed = self.store.statement_seed();
@@ -538,17 +548,7 @@ impl Keyd {
             None => named,
             Some(message) => format!("{named}: {message}"),
         };
-        self.audit.record(
-            Receipt {
-                event: "keyd-owner",
-                agent_id: None,
-                app: None,
-                operation: "owner/sign",
-                decision,
-                detail: Some(&detail),
-            },
-            now,
-        );
+        self.owner_sign_receipt(decision, &detail, now);
         match outcome {
             Ok(signature) => reply(id, json!({ "signature": signature })),
             Err(Refusal::Declined(message)) if malformed => failure(id, -32602, &message),
@@ -558,8 +558,23 @@ impl Keyd {
         }
     }
 
+    fn owner_sign_receipt(&self, decision: &str, detail: &str, now: u64) {
+        self.audit.record(
+            Receipt {
+                event: "keyd-owner",
+                agent_id: None,
+                app: None,
+                operation: "owner/sign",
+                decision,
+                detail: Some(detail),
+            },
+            now,
+        );
+    }
+
     /// The owner statement key's public half, signed with the presence key
-    /// for agent-bot's nonce; no prompt. The key is made on first use.
+    /// for agent-bot's nonce; no prompt. The key is made on first use, and
+    /// a first use racing another keeps whichever seed was stored first.
     fn owner_statement_key(&self, id: &Value, params: &Value, now: u64) -> Value {
         let nonce = params.get("nonce").and_then(Value::as_str);
         let Some(nonce) = nonce.filter(|v| presence::nonce_ok(v)) else {
@@ -2162,7 +2177,11 @@ mod tests {
         use crate::store::tests::UNTRUSTED_VALUE;
         use crate::store::{Items, PIN_SERVICE, STATEMENT_ACCOUNT};
         let consent = Arc::new(Consenting::new(true));
-        let (keyd, items) = statement_keyd(&consent);
+        let (mut keyd, items) = statement_keyd(&consent);
+        let log =
+            std::env::temp_dir().join(format!("keyd-owner-sign-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        keyd.audit = crate::audit::Audit::to(log.clone());
         // Malformed: no payload, not a string, not a payload, expired.
         for params in [
             json!({}),
@@ -2191,6 +2210,25 @@ mod tests {
             .unwrap()
             .contains(FINGERPRINT));
         assert!(consent.asked.lock().unwrap().is_empty(), "nobody is asked");
+        // Each refusal left a receipt, the payload named by digest only.
+        let receipts = std::fs::read_to_string(&log).unwrap();
+        let _ = std::fs::remove_file(&log);
+        let refused: Vec<Value> = receipts
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(refused.len(), 5);
+        assert!(refused
+            .iter()
+            .all(|r| r["operation"] == "owner/sign" && r["decision"] == "refused"));
+        assert!(refused[0]["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("malformed request: "));
+        assert!(refused[2]["detail"].as_str().unwrap().starts_with(&format!(
+            "malformed payload {}: ",
+            crate::statement::digest("e30")
+        )));
 
         // A statement seed keyd does not control signs nothing.
         items
@@ -2199,6 +2237,11 @@ mod tests {
         assert_eq!(
             sign_statement(&keyd, json!(SEGMENT))["error"]["code"],
             UNTRUSTED_ITEM
+        );
+        // A key that is no fingerprint is malformed before the store is read.
+        assert_eq!(
+            sign_statement(&keyd, json!(segment(&statement("not-a-fingerprint"))))["error"]["code"],
+            -32602
         );
         assert_eq!(
             owner_pins(
