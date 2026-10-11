@@ -497,9 +497,11 @@ question in the F9 and F13 design note:
   as they are, then hands the request to identity's handler.
 - **F13 Q1, `cli/identity.mjs`:** it stays in cli and calls `identityOp` for
   each operation.
-- **F13 Q2, the thin wrappers:** `cli/mint-token.mjs`, `cli/principal.mjs`,
-  `cli/owner.mjs` and `cli/identity-apps.mjs` are reassigned to identity in
-  the module map. Dispatch already runs each one as its own process.
+- **F13 Q2, the thin wrappers:** the answer named `cli/mint-token.mjs`,
+  `cli/principal.mjs`, `cli/owner.mjs` and `cli/identity-apps.mjs`. Only
+  `cli/mint-token.mjs` (with `cli/mint-output.mjs`) turned out to be one,
+  and it is reassigned to identity. The other three pass soul into identity,
+  so the owner kept them in cli until after F8 (see F13 step 2 under F13).
 - **F13 Q3, readiness:** an identity entry operation, `doctor-checks`,
   returns identity's checks as JSON, and `readiness.mjs` stays in cli and
   merges them.
@@ -536,7 +538,9 @@ mechanical moves; steps 6 to 10 change how a module reaches identity.
     1. add the `bind-transcript` and `record-evidence` operations, move
        `cli/identity.mjs` onto `identityOp`, and move its pure helpers
        (argument parsing, printing, child env) into cli;
-    2. reassign the thin wrappers in the module map;
+    2. reassign `cli/mint-token.mjs` and `cli/mint-output.mjs` in the
+       module map (`cli/principal.mjs`, `cli/owner.mjs` and
+       `cli/identity-apps.mjs` stay in cli until after F8);
     3. add `doctor-checks` for readiness, doctor, bootstrap and sync-hooks;
     4. move `agent-approvals.mjs` and `cli/soul-dream.mjs` after F8's
        owner-prompt design.
