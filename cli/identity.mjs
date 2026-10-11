@@ -3,20 +3,70 @@
 // composes other modules: a local `spawn --package` hashes a soul package
 // (soul) and `finalize` reconciles the population census. agent-identity.mjs
 // keeps the library and the git hooks' entry (current, show, record) (#645).
+// Identity's record operations run in identity's entry, through identityOp,
+// and `spawn` asks the daemon through daemon-client.mjs (#645, F13).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { bindAgentTranscript, childIdentityEnv, currentAgentId, discoverTranscript, ensureAgentIdentity, harnessForApp,
-  identityFieldsFromEnv, mintAgentIdentity, parseIdentityArgs, printIdentityRecord, readAgentIdentity, recordAgentEvidence,
-  spawnIdentity } from '../agent-identity.mjs';
+import { identityOp, spawnIdentity } from '../daemon-client.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { finalizeIdentityWithPopulation } from '../agent-population.mjs';
-import { isGateEnabled } from '../config.mjs';
+import { harnessForSlug, isGateEnabled, loadConfig } from '../config.mjs';
 import { readAppMetadata } from '../identity-app-store.mjs';
 import { resolveAgentSlug } from '../resolve-agent.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
+
+// The same parsing as the git hooks' entry in agent-identity.mjs.
+function parseIdentityArgs(argv) {
+  const [command = 'current', ...tokens] = argv.slice(2);
+  const positional = [];
+  let childCommand = null;
+  const flags = new Map();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token === '--') { childCommand = tokens.slice(index + 1); break; }
+    if (!token.startsWith('--')) {
+      positional.push(token);
+      continue;
+    }
+    // --reuse-pending is accepted for older launchers; reusing a pinned soul
+    // when no transcript is in view is the default since #192.
+    if (token === '--json' || token === '--reuse-pending') {
+      flags.set(token.slice(2), ['true']);
+      continue;
+    }
+    const value = tokens[++index];
+    if (!value) throw new Error(`${token} requires a value`);
+    const key = token.slice(2);
+    flags.set(key, [...(flags.get(key) ?? []), value]);
+  }
+  const one = (name) => flags.get(name)?.at(-1) ?? null;
+  return { command, childCommand, positional, flags, one, json: flags.has('json') };
+}
+
+function printIdentityRecord(record, json) {
+  if (json) {
+    process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`${record.id}\n`);
+}
+
+function childIdentityEnv(result, env = process.env) {
+  return { ...env, AGENT_BOT_BINDING: result.binding, AGENT_BOT_ID: result.agentId,
+    QWTS_AGENT_ID: result.agentId, AGENT_BOT_PARENT_ID: result.parent, QWTS_AGENT_PARENT_ID: result.parent };
+}
+
+function harnessForApp(appSlug) {
+  return harnessForSlug(appSlug, loadConfig());
+}
+
+// Only the flags given; the entry fills the rest from the environment.
+function definedFields(values) {
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value != null));
+}
 
 function gitConfig(args, { cwd = process.cwd() } = {}) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -33,6 +83,7 @@ function botUidForSlug(slug, home = homedir()) {
 async function main() {
   const args = parseIdentityArgs(process.argv);
   const stateDir = stateDirectory();
+  const currentAgentId = () => identityOp('current', {});
   const targetId = () => args.positional[0] ?? currentAgentId();
 
   switch (args.command) {
@@ -43,7 +94,7 @@ async function main() {
       const githubOn = isGateEnabled('github-identity', { env: process.env, home: homedir() });
       const appSlug = githubOn ? resolveAgentSlug({ explicit: args.one('app') }) : null;
       if (githubOn && !appSlug) throw new Error('no GitHub App identity resolves in this context');
-      const identity = ensureAgentIdentity({
+      const identity = identityOp('ensure', {
         currentId: currentAgentId(),
         appSlug,
         botUid: appSlug ? botUidForSlug(appSlug) : null,
@@ -51,15 +102,15 @@ async function main() {
         useGithub: githubOn,
         transcript: args.one('transcript')
           ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
-          : discoverTranscript(),
-        fields: {
-          ...identityFieldsFromEnv(),
-          team: args.one('team') ?? identityFieldsFromEnv().team,
-          squad: args.one('squad') ?? identityFieldsFromEnv().squad,
-          type: args.one('type') ?? identityFieldsFromEnv().type,
-          level: args.one('level') ?? identityFieldsFromEnv().level,
-          parentId: args.one('parent') ?? identityFieldsFromEnv().parentId,
-        },
+          : identityOp('discover-transcript', {}),
+        fieldsFromEnv: true,
+        fields: definedFields({
+          team: args.one('team'),
+          squad: args.one('squad'),
+          type: args.one('type'),
+          level: args.one('level'),
+          parentId: args.one('parent'),
+        }),
         subjects: args.flags.get('subject') ?? [],
         stateDir,
       });
@@ -86,7 +137,7 @@ async function main() {
         // as before ADR-0008.
         if (args.childCommand) throw new Error('spawn -- requires a parent binding');
         const parentId = args.one('parent') ?? currentAgentId();
-        const parent = parentId ? readAgentIdentity(parentId, { stateDir }) : null;
+        const parent = parentId ? identityOp('read', { id: parentId, stateDir }) : null;
         const requestedApp = args.one('app');
         const parentApp = parent?.github?.appSlug ?? null;
         // A parent with no github field does not gain one by the gate being
@@ -95,14 +146,14 @@ async function main() {
           && (!parent || parent.github != null || Boolean(requestedApp));
         const appSlug = githubOn ? (requestedApp ?? parentApp ?? resolveAgentSlug()) : null;
         if (githubOn && !appSlug) throw new Error('spawn requires an App identity or a resolvable parent');
-        const identity = mintAgentIdentity({
+        const identity = identityOp('mint', {
           appSlug,
           botUid: githubOn ? (parent?.github?.botUid ?? botUidForSlug(appSlug)) : null,
           harness: parent?.harness ?? args.one('harness') ?? (githubOn ? harnessForApp(appSlug) : null),
           useGithub: githubOn,
           transcript: args.one('transcript')
             ? { provider: args.one('provider') ?? 'custom', id: args.one('transcript') }
-            : discoverTranscript(),
+            : identityOp('discover-transcript', {}),
           team: args.one('team') ?? parent?.team,
           squad: args.one('squad') ?? parent?.squad,
           type: args.one('type') ?? 'agent',
@@ -128,17 +179,18 @@ async function main() {
       if (!id) throw new Error('bind requires an Agent ID');
       const transcriptId = args.one('transcript');
       if (!transcriptId) throw new Error('bind requires --transcript');
-      printIdentityRecord(bindAgentTranscript(id, {
-        provider: args.one('provider') ?? 'custom',
-        id: transcriptId,
-        sha256: args.one('sha256'),
-      }, { stateDir }), args.json);
+      printIdentityRecord(identityOp('bind-transcript', {
+        id,
+        transcript: { provider: args.one('provider') ?? 'custom', id: transcriptId, sha256: args.one('sha256') },
+        stateDir,
+      }), args.json);
       break;
     }
     case 'record': {
       const id = targetId();
       if (!id) throw new Error('record requires an Agent ID');
-      printIdentityRecord(recordAgentEvidence(id, {
+      printIdentityRecord(identityOp('record-evidence', {
+        id,
         subjects: args.flags.get('subject') ?? [],
         artifacts: args.flags.get('artifact') ?? [],
         stateDir,
@@ -159,13 +211,13 @@ async function main() {
     case 'show': {
       const id = targetId();
       if (!id) throw new Error('show requires an Agent ID');
-      printIdentityRecord(readAgentIdentity(id, { stateDir }), true);
+      printIdentityRecord(identityOp('read', { id, stateDir }), true);
       break;
     }
     case 'current': {
       const id = currentAgentId();
       if (!id) return;
-      if (args.json) printIdentityRecord(readAgentIdentity(id, { stateDir }), true);
+      if (args.json) printIdentityRecord(identityOp('read', { id, stateDir }), true);
       else process.stdout.write(`${id}\n`);
       break;
     }

@@ -85,6 +85,37 @@ test('ensure reuses the identity bound to the same transcript', (t) => {
   assert.equal(again.id, first.id);
 });
 
+test('ensure with fieldsFromEnv reads the caller environment, and fields override it', (t) => {
+  const { env, stateDir } = sandbox(t);
+  const input = { appSlug: null, useGithub: false, transcript: null, fieldsFromEnv: true, stateDir };
+  const callerEnv = { ...env, AGENT_BOT_TEAM: 'env-team', AGENT_BOT_SQUAD: 'env-squad' };
+  const record = identityOp('ensure', { ...input, fields: { squad: 'flag-squad' } }, { env: callerEnv });
+  assert.equal(record.team, 'env-team');
+  assert.equal(record.squad, 'flag-squad');
+  assert.equal(record.type, 'agent');
+  assert.throws(() => identityOp('ensure', { ...input, fieldsFromEnv: 'yes' }, { env }), { code: 'invalid-input' });
+  assert.throws(() => identityOp('ensure', input, { env: { ...env, AGENT_BOT_PARENT_ID: 'not-an-id' } }), { code: 'operation-failed' });
+});
+
+test('bind-transcript and record-evidence match the in-process run', (t) => {
+  const { env, stateDir } = sandbox(t);
+  const [viaChild, inProcess] = [agentId(), agentId()];
+  for (const id of [viaChild, inProcess]) identityOp('mint', { appSlug: null, useGithub: false, id, now: NOW, stateDir }, { env });
+  const transcript = { provider: 'custom', id: 't-1', sha256: null };
+  const strip = ({ id, updatedAt, ...rest }) => rest;
+  const bound = identityOp('bind-transcript', { id: viaChild, transcript, now: NOW, stateDir }, { env });
+  assert.deepEqual(bound.transcript, { provider: 'custom', id: 't-1', sha256: null });
+  assert.deepEqual(strip(bound), strip(runIdentityOp('bind-transcript', { id: inProcess, transcript, now: NOW, stateDir })));
+  const evidence = { subjects: ['qwts/agent-bot-identity#1'], artifacts: ['commit:abc'], now: NOW, stateDir };
+  const recorded = identityOp('record-evidence', { id: viaChild, ...evidence }, { env });
+  assert.deepEqual(recorded.subjects, ['qwts/agent-bot-identity#1']);
+  assert.deepEqual(recorded.artifacts, ['commit:abc']);
+  assert.deepEqual(strip(recorded), strip(runIdentityOp('record-evidence', { id: inProcess, ...evidence })));
+  assert.throws(() => identityOp('bind-transcript', { id: viaChild, transcript: { provider: 'custom', id: 't-2' }, stateDir }, { env }),
+    { code: 'operation-failed' });
+  assert.throws(() => identityOp('record-evidence', { id: viaChild, extra: 1, stateDir }, { env }), { code: 'invalid-input' });
+});
+
 test('mint-bind-token writes the bind token for the worktree', (t) => {
   const { env, dir } = sandbox(t);
   const gitDir = path.join(dir, 'git');
