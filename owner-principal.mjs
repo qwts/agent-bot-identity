@@ -4,17 +4,19 @@
 // owner-action.mjs wires it for the commands that accept a principal (#645).
 import process from 'node:process';
 import { CommsClient, commsPaths } from './comms-client.mjs';
-import { ownerCredentialRequired } from './identity-format.mjs';
+import { isAgentId, ownerCredentialRequired } from './identity-format.mjs';
 
 const PRINCIPAL = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ACCOUNT = /^[A-Za-z0-9._-]{1,64}$/;
 
-// One authenticated `health` request as the presented principal. Returns the
-// principal ID for the record; the secret never leaves this function.
+// Targeted commands check the broker's current target grant. Other callers
+// retain their existing health check; this does not grant new owner powers.
 export async function verifyPrincipalOwner(credential, {
   env = process.env,
   paths = commsPaths({ env }),
   clientFactory = (options) => new CommsClient(options),
   uid = process.getuid(),
+  target = undefined,
 } = {}) {
   if (!credential || typeof credential !== 'object' || !PRINCIPAL.test(credential.principal ?? '')
     || typeof credential.secret !== 'string' || !credential.secret
@@ -24,12 +26,26 @@ export async function verifyPrincipalOwner(credential, {
   if ((credential.mode ?? 'group') !== 'group' || credential.brokerUid === uid) {
     throw new Error('a broker in this account cannot vouch for the owner; approve with the consent dialog instead');
   }
+  const principal = credential.principal;
+  const auth = { principal, secret: credential.secret };
+  // Snapshot before any asynchronous request. Target comes from the command,
+  // never the credential JSON, action display text, or caller's OS account.
+  const agentId = target?.agentId;
+  if (target !== undefined && (!target || typeof target !== 'object' || Array.isArray(target)
+    || Object.keys(target).length !== 1 || !isAgentId(agentId))) {
+    throw ownerCredentialRequired('the owner action target is invalid');
+  }
   const client = clientFactory({ socketPath: paths.socket, brokerUid: credential.brokerUid, mode: 'group' });
   try {
-    await client.request({ op: 'health', auth: { principal: credential.principal, secret: credential.secret } }, { paths });
+    const result = await client.request(target === undefined ? { op: 'health', auth }
+      : { op: 'principal-target-check', agentId, auth }, { paths });
+    if (target !== undefined && (result?.principal !== principal || result.agentId !== agentId
+      || (result.account !== null && (typeof result.account !== 'string' || !ACCOUNT.test(result.account))))) {
+      throw new Error('target check response does not match');
+    }
   } catch {
     // A broker/transport error can reflect the credential. Never relay it.
     throw ownerCredentialRequired('the broker did not accept the owner principal');
   }
-  return { method: 'principal', principal: credential.principal };
+  return { method: 'principal', principal };
 }

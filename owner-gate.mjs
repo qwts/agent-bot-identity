@@ -183,6 +183,7 @@ export async function assertOwnerAction(action, {
   cwd = process.cwd(),
   detect = true,
   principal = null,
+  target = undefined,
   markers = soulMarkers,
   verifyPrincipal = noPrincipalVerifier,
   consent = presenceOrConsent,
@@ -190,5 +191,5 @@ export async function assertOwnerAction(action, {
 } = {}) {
   const found = markers({ env, cwd, detect });
   if (found.length) throw ownerCredentialRequired(`${action} is owner only; this caller has a soul's ${found.join(', ')}`);
-  return principal ? verifyPrincipal(principal, { env }) : consent(action, { env, listSouls });
+  return principal ? verifyPrincipal(principal, { env, ...(target === undefined ? {} : { target }) }) : consent(action, { env, listSouls });
 }

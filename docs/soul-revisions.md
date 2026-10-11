@@ -93,9 +93,16 @@ owner, because a soul can unset its markers. Each owner action needs both:
 2. **An owner proof.**
    - With `--principal-stdin`, the caller presents the owner's agent-comms
      principal credential as JSON on stdin (`{ principal, secret, brokerUid,
-     mode }`, the shape agent-comms pairs). The CLI checks it with one
-     authenticated `health` request to the broker, after the usual custody
-     checks. The broker must run in a different account from the caller:
+     mode }`, the shape agent-comms pairs). The CLI and daemon revision API
+     send one authenticated `principal-target-check` for the command's
+     immutable soul ID, after the usual custody checks. The broker resolves
+     its registered account and enforces the principal's current target grant;
+     a departed soul retains that binding. Before first join, only an
+     unrestricted or exact soul-ID grant passes; account/address grants cannot
+     establish ownership. Neither credential JSON nor the caller's account
+     selects the target. Missing support, revoked authority or a mismatched
+     response refuses without falling back to `health` or consent.
+     The broker must run in a different account from the caller:
      a broker in the caller's own account (single-account mode, or a group
      broker still in the owner's account) cannot vouch, because any process
      in that account could stand up a socket that answers. The CLI never reads
@@ -123,6 +130,9 @@ ownership. Refusals use `owner-credential-required`
 and append a secret-free `soul-revision` audit receipt. Invalid principals never
 fall back to consent. Daemon clients use the same principal verification via
 the [revision API](daemon-api.md); daemon consent is a reserved contract only.
+Cold-wake on/off/resume/webhook use the same immutable-target principal check.
+Other owner gates retain their existing checks. This query is not a signed
+decision receipt and does not complete agent-comms #77's custody/relay contract.
 
 The record of each owner action carries `authorization`: `{ method:
 "principal", principal }`, `{ method: "presence", via: "agent-bot-keyd" }` or

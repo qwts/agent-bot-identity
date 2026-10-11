@@ -70,7 +70,7 @@ function readSecretFile(file, readStdin) {
 // the owner proves themselves with a presented principal or the consent
 // dialog. Harness detection stays off here, as before: only stated markers
 // count.
-export const ownerGate = (action, { principal, env, cwd }) => assertOwnerAction(action, { principal, env, cwd, detect: false });
+export const ownerGate = (action, { principal, target, env, cwd }) => assertOwnerAction(action, { principal, target, env, cwd, detect: false });
 
 // `agent-bot soul cold-wake`. Every change (on, off, resume, webhook) passes
 // the owner gate; `show` is read-only and only refuses a marked soul. The
@@ -109,7 +109,7 @@ export async function coldWakeCommand(argv, {
       throw new Error('--principal-stdin uses stdin; pass the webhook URL and key as files, not -');
     }
     validateAgentId(id);
-    const authorization = await gate(`soul cold-wake ${id} webhook`, { principal: principal(), env, cwd });
+    const authorization = await gate(`soul cold-wake ${id} webhook`, { principal: principal(), target: Object.freeze({ agentId: id }), env, cwd });
     const { host } = saveWebhook(id, { url: readSecretFile(files['--url-file'], readStdin), key: readSecretFile(files['--key-file'], readStdin) }, { env, home });
     setColdWake(id, { lane: 'webhook' }, { env, home });
     write(`${id} cold wake webhook ${host}\n`);
@@ -134,7 +134,7 @@ export async function coldWakeCommand(argv, {
     return null;
   }
   const change = value === 'resume' ? `resume ${policy}` : value;
-  const authorization = await gate(`soul cold-wake ${id} ${change}`, { principal: principal(), env, cwd });
+  const authorization = await gate(`soul cold-wake ${id} ${change}`, { principal: principal(), target: Object.freeze({ agentId: id }), env, cwd });
   setColdWake(id, value === 'resume' ? { lane: 'resume', policy } : value === 'on', { env, home });
   write(`${id} cold wake ${change}\n`);
   return authorization;
