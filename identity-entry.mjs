@@ -14,8 +14,11 @@
 // always has, and `fields` then overrides them.
 // The child runs with the caller's environment, so the state root, the
 // add-on gate and transcript discovery resolve exactly as they would
-// in-process. Operations that take a callback run under the identity lock
-// (retire, finalize, initialize-app, record-package-revision) are not here.
+// in-process. Retire and finalize take no callback: a caller that keeps a
+// second store in step writes its own store first and this record last
+// (owner decision on #645, revert option 1), so identity never restores a
+// record a caller hands it. Initialize-app and record-package-revision are
+// not here.
 
 import path from 'node:path';
 import process from 'node:process';
@@ -26,10 +29,12 @@ import {
   currentAgentId,
   discoverTranscript,
   ensureAgentIdentity,
+  finalizeAgentIdentity,
   identityFieldsFromEnv,
   mintAgentIdentity,
   readAgentIdentity,
   recordAgentEvidence,
+  retireAgentIdentity,
 } from './agent-identity.mjs';
 import { mintBindToken } from './agent-binding.mjs';
 
@@ -144,6 +149,17 @@ export const IDENTITY_OPS = Object.freeze({
       ...fields(input, ['subjects', 'artifacts']),
       ...stateDirOption(input.stateDir),
       ...nowOption(input.now),
+    });
+  },
+  retire(input) {
+    const { id, stateDir, now } = only(input, ['id', 'stateDir', 'now']);
+    return retireAgentIdentity(text('id', id), { ...stateDirOption(stateDir), ...nowOption(now) });
+  },
+  finalize(input) {
+    const { id, transcriptSha256, stateDir, now } = only(input, ['id', 'transcriptSha256', 'stateDir', 'now']);
+    return finalizeAgentIdentity(text('id', id), {
+      ...(transcriptSha256 === undefined ? {} : { transcriptSha256 }),
+      ...stateDirOption(stateDir), ...nowOption(now),
     });
   },
   'mint-bind-token'(input) {

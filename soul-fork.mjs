@@ -27,7 +27,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { leaveLaunchedSoul } from './comms-membership.mjs';
-import { mintAgentIdentity, retireAgentIdentity } from './agent-identity.mjs';
+import { mintAgentIdentity } from './agent-identity.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
@@ -214,7 +214,7 @@ export async function forkSoul({
       if (joined) { try { rollback.left = await leave({ agentId: identity.id }); } catch { /* reported below */ } }
       if (identity) {
         if (registered) retireIdentityWithPopulation(identity.id, { file, stateDir, now });
-        else retireAgentIdentity(identity.id, { stateDir, now });
+        else identityOp('retire', { id: identity.id, stateDir, now: now().toISOString() });
         rollback.retired = true;
         rollback.archived = archiveSoulDirs(identity.id, { ...options, file, now });
       }

@@ -5,7 +5,8 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
-import { mintAgentIdentity, retireAgentIdentity } from './agent-identity.mjs';
+import { mintAgentIdentity } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { packageManifest, populationFile, recordSoulDisplayName, registerSoulDir, retireIdentityWithPopulation, showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { initSoulSpace } from './agent-space.mjs';
@@ -256,7 +257,7 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     try {
       if (identity) {
         if (registered) retireIdentityWithPopulation(identity.id, { file, ...revisionOptions });
-        else retireAgentIdentity(identity.id, revisionOptions);
+        else identityOp('retire', { id: identity.id, stateDir, ...(options.now ? { now: options.now().toISOString() } : {}) });
       }
     } finally { rmSync(directory, { recursive: true, force: true }); }
     throw error;
