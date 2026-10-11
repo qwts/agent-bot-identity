@@ -812,7 +812,9 @@ async function installLockedUvTool(install, target, uvBin, { env, python, runImp
   const lockFile = path.join(target, 'requirements.lock.txt');
   writeFileSync(lockFile, uvToolRequirements(install), { mode: 0o600 });
   try {
-    await runImpl(uvBin, ['venv', ...python, venv], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
+    // Only the soul's managed Python (or the owner's override): uv may not
+    // fetch an interpreter of its own choosing for a locked tool (#617).
+    await runImpl(uvBin, ['venv', ...(python.length ? python : ['--no-python-downloads']), venv], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
     await runImpl(uvBin, ['pip', 'install', '--python', path.join(venv, 'bin', 'python'), '--require-hashes', '-r', lockFile], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
   } catch (error) { uvFailed(error); }
   const source = path.join(venv, 'bin', install.bin);
