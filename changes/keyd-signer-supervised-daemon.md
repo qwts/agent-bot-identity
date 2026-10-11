@@ -1,1 +1,0 @@
-- `agent-bot daemon install` now writes `AGENT_BOT_KEYD_TEAM_ID` and `AGENT_BOT_KEYD_IDENTIFIER` into the supervised daemon's launchd, systemd or scheduled-task unit when they are set, validated as for direct actions, so the daemon pins keyd under the same signer as the host that installed it instead of falling back to its config (#865).
