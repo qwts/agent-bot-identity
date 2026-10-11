@@ -35,4 +35,4 @@ supersede them instead.
 | [ADR-0603](ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md) | Soul skills have distinct import, install, learn, and dream operations | Accepted |
 | [ADR-0645](ADR-0645-one-runtime-repository-four-owned-modules.md) | Owned modules and contracts first, then identity becomes its own repository | Accepted |
 | [ADR-0753](ADR-0753-owner-signed-statements.md) | Owner-signed statements | Accepted |
-| [ADR-0815](ADR-0815-the-soul-is-the-git-author.md) | The soul is the Git author | Proposed |
+| [ADR-0815](ADR-0815-the-soul-is-a-git-co-author.md) | The soul is a Git co-author; commits stay Verified | Accepted |
