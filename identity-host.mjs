@@ -4,9 +4,9 @@
 // exact exports. It names every identity function host uses today: the
 // binding registry and bind tokens, Agent ID records, principals, keyd, vouch,
 // the inbox, identity Apps, the bot checks agent-hook runs and the publish
-// scan. Later F9 steps move identity's daemon routes behind a handler
-// exported here (host keeps its bearer and proof checks), make /v0/register a
-// soul route and split /v0/spawn.
+// scan. It also exports identity's daemon route handler, createIdentityRoutes
+// (F9 step 2; host keeps its bearer and proof checks). Later F9 steps make
+// /v0/register a soul route and split /v0/spawn.
 //
 // Host may also import the shared contracts identity-format.mjs and
 // daemon-client.mjs directly.
