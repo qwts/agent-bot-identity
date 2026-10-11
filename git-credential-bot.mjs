@@ -21,7 +21,8 @@ import { isGateEnabled, loadConfig, githubHost } from './config.mjs';
 import { presenceOrConsent, soulMarkers } from './owner-gate.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { currentAgentId, readAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { currentAgentId, readAgentIdentity } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 
 // Harness detection alone still leaves an unpinned owner as a delegate.

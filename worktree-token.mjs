@@ -34,7 +34,7 @@ import { ownerApprovalRequired, requireOwnerApproval } from './owner-approval.mj
 import { configuredAccountIdentity, accountName, detectAgentHarness } from './detect-harness.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { stateDirectory } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 
 function git(...args) {
   // stdio pipes throughout: execFileSync otherwise passes git's stderr

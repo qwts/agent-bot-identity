@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDaemonServer } from '../agent-daemon.mjs';
-import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { mintAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { PROOF_HEADER } from '../binding-proof.mjs';
 import { verifyPrincipalOwner } from '../owner-action.mjs';

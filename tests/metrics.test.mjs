@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { mintAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { claudeCallFromLine, collectMetrics, main, metricsDirectory, readNewLines, recordSession, recordSoulSession, showMetrics, worktreeSoul } from '../metrics.mjs';
 
 const SESSION = '0f8e0c52-1b7d-4c1e-9d55-3a1f2b6c7d8e';

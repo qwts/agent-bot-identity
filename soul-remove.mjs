@@ -19,7 +19,8 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
-import { readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
+import { readAgentIdentity, validateAgentId } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import {
   archiveSoulDirs, listSouls, populationFile, retireIdentityWithPopulation, setSoulParent, showSoul, showSoulByName, soulDirectory, soulShownName,
 } from './agent-population.mjs';

@@ -14,7 +14,8 @@ import { credentialStores, resolveAppCredential } from '../soul-credentials.mjs'
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { resolveAgentSlug } from '../resolve-agent.mjs';
 import { main as doctorMain } from '../doctor.mjs';
-import { assignAgentApp, mintAgentIdentity, readAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { assignAgentApp, mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { configuredAppSlugs, buildReadinessReport, renderReadinessJson, readinessCheck } from '../readiness.mjs';
 import { inspectAppCredentials, inspectLocalAppCredential } from '../credential-reconciler.mjs';

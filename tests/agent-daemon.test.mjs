@@ -22,7 +22,8 @@ import {
 import { displayName, recordSoulDisplayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { initSoulSpace } from '../agent-space.mjs';
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
-import { ensureAgentIdentity, readAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { ensureAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { mintBindToken, readBinding } from '../agent-binding.mjs';
 import { RUNTIME_PROFILE_INTERFACE_VERSION, organizationProfileToConfig } from '../organization-profile.mjs';
 import { PROOF_HEADER, signBindingProof } from '../binding-proof.mjs';

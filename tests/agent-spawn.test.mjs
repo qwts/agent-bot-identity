@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { childBindingPath, createBindingRegistry, readBinding } from '../agent-binding.mjs';
-import { mintAgentIdentity, readAgentIdentity, spawnIdentity, stateDirectory } from '../agent-identity.mjs';
+import { mintAgentIdentity, readAgentIdentity, spawnIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { runSpawnHooks } from '../agent-hook.mjs';
 import { fileURLToPath } from 'node:url';
 

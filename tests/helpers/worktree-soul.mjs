@@ -1,4 +1,5 @@
-import { mintAgentIdentity, stateDirectory } from '../../agent-identity.mjs';
+import { mintAgentIdentity } from '../../agent-identity.mjs';
+import { stateDirectory } from '../../state-paths.mjs';
 import { upsertSoul, populationFile, displayName } from '../../agent-population.mjs';
 import { linkWorktree } from '../../soul-worktrees.mjs';
 import { join } from 'node:path';

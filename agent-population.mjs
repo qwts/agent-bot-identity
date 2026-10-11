@@ -33,10 +33,10 @@ import {
   isAgentId,
   readAgentIdentity,
   retireAgentIdentity,
-  stateDirectory,
   validateAgentId,
   withLock,
 } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 
 import { readSoulModes } from './soul-mode.mjs';
 import { readSoulModels } from './soul-model.mjs';

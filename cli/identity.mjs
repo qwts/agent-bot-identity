@@ -10,7 +10,8 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { bindAgentTranscript, childIdentityEnv, currentAgentId, discoverTranscript, ensureAgentIdentity, harnessForApp,
   identityFieldsFromEnv, mintAgentIdentity, parseIdentityArgs, printIdentityRecord, readAgentIdentity, recordAgentEvidence,
-  spawnIdentity, stateDirectory } from '../agent-identity.mjs';
+  spawnIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { finalizeIdentityWithPopulation } from '../agent-population.mjs';
 import { isGateEnabled } from '../config.mjs';
 import { readAppMetadata } from '../identity-app-store.mjs';

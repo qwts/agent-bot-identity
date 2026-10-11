@@ -9,7 +9,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
-import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { readAgentIdentity } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';

@@ -10,7 +10,8 @@ import path from 'node:path';
 
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { daemonClient } from '../daemon-client.mjs';
-import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { ensureAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
 import { createProtonPassAdapter } from '../secret-providers/proton-pass.mjs';
 import { createSecretProviderRegistry } from '../secret-store.mjs';

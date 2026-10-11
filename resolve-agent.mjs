@@ -22,7 +22,8 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { readAgentIdentity } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { accountHarness, accountName, detectHarness } from './detect-harness.mjs';
 import { PROFILE_HARNESSES } from './organization-profile.mjs';
 import { appLifecycleStatus, isGateEnabled, loadConfig, slugForHarness } from './config.mjs';

@@ -6,7 +6,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { readAgentIdentity, stateDirectory } from './agent-identity.mjs';
+import { readAgentIdentity } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { validateAppearanceDeclaration, validateCredentialsDeclaration, validateSkillsDeclaration } from './soul-package.mjs';
 import { listSopDocuments, resolveSop } from './sop.mjs';
 
