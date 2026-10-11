@@ -522,7 +522,7 @@ messages and grant format.
 
 keyd keeps an App ID and key only, so a manifest's webhook secret is kept
 in its own file or Keychain item, `agent-bot.app.<slug>.webhook`
-([credential-names.mjs](../credential-names.mjs)), never in a key item
+([identity-format.mjs](../identity-format.mjs)), never in a key item
 (`webhookSecretKept: true`); `remove` deletes it.
 
 ### Item

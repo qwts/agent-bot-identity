@@ -1,0 +1,1 @@
+- Internal: the credential item names (Keychain services and accounts, pass-cli titles and vault, the host namespace variables, store kinds and the secret-name rule) move from `credential-names.mjs` into the `identity-format.mjs` contract, and `credential-names.mjs` goes away. Every stored name is unchanged (#645).

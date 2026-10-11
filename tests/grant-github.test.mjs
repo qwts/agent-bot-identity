@@ -15,7 +15,7 @@ import { createMcpState, handleMcpMessage } from '../agent-mcp.mjs';
 import { ensureAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
-import { humanTokenItem, itemTitle } from '../credential-names.mjs';
+import { humanTokenItem, itemTitle } from '../identity-format.mjs';
 import { createGrantLedger } from '../delegation-grants.mjs';
 import { GRANT_ACTS, createGrantActor, humanTokenTitle, readHumanToken } from '../grant-github.mjs';
 import { supervisorEnvironment } from '../daemon-supervisor.mjs';

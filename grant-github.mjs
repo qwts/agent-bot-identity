@@ -4,7 +4,7 @@
 // The token is a fine-grained one with Issues and Pull requests write
 // (owner decision on #108). It lives in one pass-cli note the daemon reads
 // fresh for each spend, titled `<namespace>.human/<login>-github-token` in
-// the host's vault (credential-names.mjs). The login is the host's
+// the host's vault (identity-format.mjs). The login is the host's
 // AGENT_BOT_HUMAN_LOGIN; there is no default account.
 //
 // `prepare` runs before the grant is spent: it reads the note and asks
@@ -18,7 +18,7 @@
 // from what pass-cli or GitHub sent back.
 import process from 'node:process';
 
-import { credentialNamespace, humanTokenItem, itemTitle } from './credential-names.mjs';
+import { credentialNamespace, humanTokenItem, itemTitle } from './identity-format.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
 
 export const HUMAN_LOGIN_VARIABLE = 'AGENT_BOT_HUMAN_LOGIN';

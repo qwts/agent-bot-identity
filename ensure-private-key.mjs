@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
-import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './credential-names.mjs';
+import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './identity-format.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';

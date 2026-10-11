@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, itemTitle, managedAppItem, soulAppItem, soulSecretItem } from '../credential-names.mjs';
+import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, itemTitle, managedAppItem, soulAppItem, soulSecretItem } from '../identity-format.mjs';
 import { keychainItem, passCliItem, passCliSecretItem, secretItem } from '../soul-credentials.mjs';
 import { SOUL_CREDENTIAL_VAULT } from '../secret-providers/pass-cli-credentials.mjs';
 import { AGENT_IDENTITIES_VAULT } from '../ensure-private-key.mjs';
@@ -66,11 +66,11 @@ function runtimeSources(dir, rel = '') {
   });
 }
 
-test('no runtime file builds a credential item name outside credential-names.mjs', () => {
+test('no runtime file builds a credential item name outside identity-format.mjs', () => {
   const built = /agent-bot\.(?:soul|app)\.\$\{|['"`]Agent Identities['"`]/u;
   const offenders = runtimeSources(ROOT)
-    .filter(({ name }) => name !== 'credential-names.mjs')
+    .filter(({ name }) => name !== 'identity-format.mjs')
     .filter(({ path }) => built.test(readFileSync(path, 'utf8')))
     .map(({ name }) => name);
-  assert.deepEqual(offenders, [], 'build credential item names with credential-names.mjs');
+  assert.deepEqual(offenders, [], 'build credential item names with identity-format.mjs');
 });
