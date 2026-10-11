@@ -72,20 +72,26 @@ export function stageSkillInstall(skill, agentId, { now = () => new Date(), ...o
   });
 }
 
+const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const recordPath = file => typeof file === 'string' && file.length <= 1024 && !file.startsWith('/') && !/[\\\x00-\x1f\x7f]/.test(file)
+  && file.split('/').every(part => part && part !== '.' && part !== '..');
+// The install record shape stageSkillInstall writes, checked in full.
+const validInstallRecord = record => record?.schemaVersion === 1 && DIGEST.test(record.digest ?? '')
+  && record.files && typeof record.files === 'object' && !Array.isArray(record.files) && Object.keys(record.files).length <= 1000
+  && Object.entries(record.files).every(([file, item]) => recordPath(file) && ['100644', '100755'].includes(item?.mode)
+    && DIGEST.test(item.sha256 ?? '') && Number.isSafeInteger(item.size) && item.size >= 0);
 // What changed in an installed skill since install, from its record alone:
 // `verified` (same files, bytes and modes), `drifted` (with the added,
 // modified and removed paths), `unrecorded` (no install record, e.g. an
-// authored skill), `record-invalid`, or `unverifiable` (the folder is past
+// authored skill), `record-invalid` (not the shape install writes, or the
+// same files under another digest), or `unverifiable` (the folder is past
 // the library's bounds or holds a link). It only reports; uninstall still
 // archives, so an edit is kept in the archive, never lost.
 export function installDrift(directory, recordFile, hasRecord) {
   if (!hasRecord) return { verification: 'unrecorded', changes: null };
   let record;
   try { record = JSON.parse(readFileSync(recordFile, 'utf8')); } catch { record = null; }
-  if (!record?.files || typeof record.files !== 'object' || Array.isArray(record.files) || typeof record.digest !== 'string'
-    || Object.values(record.files).some(file => typeof file?.sha256 !== 'string' || typeof file?.mode !== 'string')) {
-    return { verification: 'record-invalid', changes: null };
-  }
+  if (!validInstallRecord(record)) return { verification: 'record-invalid', changes: null };
   let current;
   try { current = skillDirectoryManifest(directory); }
   catch (error) { return { verification: 'unverifiable', code: error.code ?? 'skill-inventory-failed', changes: null }; }
@@ -99,8 +105,8 @@ export function installDrift(directory, recordFile, hasRecord) {
 /**
  * Stages the removal of `skills/<name>/`: the skill and its install record
  * move to `archive/skills/<name>/<UTC stamp>/` inside the soul, so nothing is
- * deleted. `uninstall --trash` applies this same archive first (see
- * trashSoulSkill).
+ * deleted. `drift` reports what changed since install (see installDrift).
+ * `uninstall --trash` applies this same archive first (see trashSoulSkill).
  */
 export function stageSkillUninstall(name, agentId, { now = () => new Date(), ...options } = {}) {
   if (!validName(name)) fail('skill-name-invalid', 'select an installed skill by its name');
@@ -109,13 +115,28 @@ export function stageSkillUninstall(name, agentId, { now = () => new Date(), ...
     if (!stat) fail('skill-not-installed', `skills/${name} is not in this soul`);
     if (!stat.isDirectory() || stat.isSymbolicLink()) fail('skill-path-unsafe', `skills/${name} is not a real directory`);
     const record = path.join(staging, installRecordPath(name)), hasRecord = Boolean(exists(record));
+    const drift = installDrift(source, record, hasRecord);
     const archive = `${archiveRoot(name)}/${stamp(now)}`;
     if (exists(path.join(staging, archive))) fail('skill-archive-exists', `${archive} already exists; retry`);
     mkdirSync(path.join(staging, archive), { recursive: true, mode: 0o700 });
     renameSync(source, path.join(staging, archive, 'skill'));
     if (hasRecord) renameSync(record, path.join(staging, archive, 'install.json'));
-    return { name, removed: `skills/${name}`, archive, hasRecord };
+    return { name, removed: `skills/${name}`, archive, hasRecord, drift };
   });
+}
+
+/**
+ * Refuses an owner uninstall when the live `skills/<name>/` no longer matches
+ * the copy staged for it: the staged archive (and its drift report) came
+ * from that copy, so applying it would drop an edit made since. Called once
+ * the owner gate passes, just before the edit is applied.
+ */
+export function assertUninstallCurrent(stage, agentId, options = {}) {
+  const staged = path.join(stage.staging, stage.archive, 'skill');
+  let same = false;
+  try { same = skillDirectoryManifest(liveSkillDirectory(stage.name, agentId, options)).digest === skillDirectoryManifest(staged).digest; }
+  catch { same = false; }
+  if (!same) fail('skill-uninstall-stale', `skills/${stage.name} changed after uninstall was prepared; nothing was archived, run uninstall again`);
 }
 
 /**
@@ -189,7 +210,7 @@ export function moveToTrash(file, { platform = process.platform, env = process.e
  *    revision edit records the removal.
  */
 export async function trashSoulSkill(stage, agentId, { commit, trash = moveToTrash, trashOptions = {}, recordRemoval = editSoulRevision, now = () => new Date(), ...options } = {}) {
-  const { name, archive, hasRecord } = stage;
+  const { name, archive, hasRecord, drift } = stage;
   const live = liveSkillDirectory(name, agentId, options), soul = path.dirname(path.dirname(live));
   const target = path.join(soul, archive), record = path.join(soul, installRecordPath(name));
   const before = revisionHistory(agentId, options).at(-1)?.revision;
@@ -216,7 +237,7 @@ export async function trashSoulSkill(stage, agentId, { commit, trash = moveToTra
     warning = `the archive edit was recorded but publication failed (${error.message}); continuing`;
   }
   const result = { name, removed: `skills/${name}`, archive, archiveRevision: revision?.revision ?? revisionHistory(agentId, options).at(-1).revision,
-    ...(warning ? { warning } : {}) };
+    ...(drift ? { drift } : {}), ...(warning ? { warning } : {}) };
   try { result.trashedTo = trash(target, { now, ...trashOptions, originalPath: target, label: `${name} ${path.basename(target)}` }); }
   catch (error) {
     return { ...result, trash: false, trashFailed: { code: error.code ?? 'skill-trash-failed', message: error.message } };

@@ -106,9 +106,71 @@ test('uninstall archives the skill and its record inside the soul without deleti
   const archived = path.join(f.directory, result.json.archive);
   assert.equal(readFileSync(path.join(archived, 'skill/SKILL.md'), 'utf8'), skill);
   assert.equal(JSON.parse(readFileSync(path.join(archived, 'install.json'), 'utf8')).name, 'demo');
+  assert.deepEqual(result.json.drift, { verification: 'verified', changes: { added: [], modified: [], removed: [] } });
   assert.equal(existsSync(path.join(f.home, '.Trash')), false);
   assert.equal(revisionHistory(f.id, f.options).length, 3);
   assert.equal((await f.run(['uninstall', 'demo', '--soul', f.id, '--json'])).json.error.code, 'skill-not-installed');
+});
+
+test('uninstall reports edits since install, and archives the edited bytes', async t => {
+  const f = fixture(t);
+  await f.run(['install', f.imported.id, '--soul', f.id]);
+  const live = path.join(f.directory, 'skills/demo');
+  put(path.join(live, 'SKILL.md'), skill.replace(/\n$/, '\r\n')); // line ending only
+  chmodSync(path.join(live, 'scripts/run'), 0o644); // mode only
+  put(path.join(live, 'notes.md'), 'mine\n');
+  rmSync(path.join(live, 'references/guide.md'));
+  const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--json']);
+  assert.equal(result.code, 0, result.err);
+  assert.deepEqual(result.json.drift, { verification: 'drifted',
+    changes: { added: ['notes.md'], modified: ['SKILL.md', 'scripts/run'], removed: ['references/guide.md'] } });
+  const archived = path.join(f.directory, result.json.archive, 'skill');
+  assert.equal(readFileSync(path.join(archived, 'notes.md'), 'utf8'), 'mine\n');
+  assert.equal(readFileSync(path.join(archived, 'SKILL.md'), 'utf8'), skill.replace(/\n$/, '\r\n'));
+});
+
+test('uninstall says when a skill has no usable install record instead of guessing', async t => {
+  const f = fixture(t);
+  put(path.join(f.directory, 'skills/own/SKILL.md'), '---\nname: own\ndescription: Authored here\n---\n');
+  const authored = await f.run(['uninstall', 'own', '--soul', f.id, '--json']);
+  assert.equal(authored.code, 0, authored.err);
+  assert.deepEqual(authored.json.drift, { verification: 'unrecorded', changes: null });
+  await f.run(['install', f.imported.id, '--soul', f.id]);
+  put(path.join(f.directory, installRecordPath('demo')), '{"name":"demo"}\n');
+  const invalid = await f.run(['uninstall', 'demo', '--soul', f.id, '--json']);
+  assert.equal(invalid.code, 0, invalid.err);
+  assert.deepEqual(invalid.json.drift, { verification: 'record-invalid', changes: null });
+  assert.equal(readFileSync(path.join(f.directory, invalid.json.archive, 'install.json'), 'utf8'), '{"name":"demo"}\n', 'the record is archived as found');
+  await f.run(['install', f.imported.id, '--soul', f.id]);
+  const recordFile = path.join(f.directory, installRecordPath('demo'));
+  const stale = JSON.parse(readFileSync(recordFile, 'utf8'));
+  put(recordFile, JSON.stringify({ ...stale, digest: `sha256:${'0'.repeat(64)}` }));
+  const contradicting = await f.run(['uninstall', 'demo', '--soul', f.id, '--json'], { ...f.owner, now: () => new Date('2026-10-09T13:00:00Z') });
+  assert.equal(contradicting.code, 0, contradicting.err);
+  assert.deepEqual(contradicting.json.drift, { verification: 'record-invalid', changes: null }, 'matching files under another digest');
+  await f.run(['install', f.imported.id, '--soul', f.id]);
+  const sizeless = JSON.parse(readFileSync(recordFile, 'utf8'));
+  delete sizeless.files['SKILL.md'].size;
+  put(recordFile, JSON.stringify(sizeless));
+  const incomplete = await f.run(['uninstall', 'demo', '--soul', f.id, '--json'], { ...f.owner, now: () => new Date('2026-10-09T14:00:00Z') });
+  assert.deepEqual(incomplete.json.drift, { verification: 'record-invalid', changes: null }, 'a file entry without its size');
+});
+
+test('an owner uninstall refuses when the skill changed while the owner gate was open', async t => {
+  const f = fixture(t);
+  await f.run(['install', f.imported.id, '--soul', f.id]);
+  const live = path.join(f.directory, 'skills/demo/references/guide.md'), before = revisionHistory(f.id, f.options).length;
+  for (const flags of [[], ['--trash']]) {
+    const result = await f.run(['uninstall', 'demo', '--soul', f.id, ...flags, '--json'], { ...f.owner,
+      trashOptions: { platform: 'linux', env: { XDG_DATA_HOME: path.join(f.home, 'xdg') }, home: f.home },
+      assertUser: () => { put(live, `edited during the gate ${flags.length}\n`); } });
+    assert.equal(result.code, 1);
+    assert.equal(result.json.error.code, 'skill-uninstall-stale', flags.join(' '));
+    assert.equal(readFileSync(live, 'utf8'), `edited during the gate ${flags.length}\n`, 'the edit is still live');
+    assert.equal(existsSync(path.join(f.directory, 'archive')), false);
+  }
+  assert.equal(revisionHistory(f.id, f.options).length, before, 'nothing was recorded');
+  assert.deepEqual(f.tmpEntries(), []);
 });
 
 test('--trash moves the live skill to the OS trash after the owner gate, and only for the owner', async t => {
@@ -124,6 +186,7 @@ test('--trash moves the live skill to the OS trash after the owner gate, and onl
   const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner, trashOptions: { platform: 'linux', env: { XDG_DATA_HOME: xdg }, home: f.home } });
   assert.equal(result.code, 0, result.err);
   assert.equal(result.json.trash, true);
+  assert.equal(result.json.drift.verification, 'verified');
   const entry = 'demo 20261009T123456Z';
   assert.equal(result.json.trashedTo, path.join(xdg, 'Trash/files', entry));
   assert.equal(readFileSync(path.join(result.json.trashedTo, 'skill/SKILL.md'), 'utf8'), skill);

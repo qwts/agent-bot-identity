@@ -342,7 +342,7 @@ metadata. Imported file contents still preserve the original bytes; this is
 not payload secret redaction. Local-directory import never fetches remote links;
 the explicit HTTPS-document and public GitHub-directory adapters perform the
 bounded remote capture described above. No permission is inferred from a
-reference. Other repository adapters and harness installation remain open;
+reference. Other repository adapters remain open;
 harness retrieval is out of scope, as the next section states.
 
 ## Install into a soul
@@ -367,7 +367,20 @@ when `skills/<name>/` or the record already exists.
 `archive/skills/<name>/<UTC stamp>/skill/` and its install record (if any) to
 `install.json` beside it. Archives sit outside `skills/`, so `soul build`
 renders nothing for them, and nothing is deleted. Any skill directory can be
-archived, installed or authored. `--trash` instead moves the live
+archived, installed or authored.
+
+Uninstall also reports what changed since install as `drift`, comparing the
+folder with its install record the way `verify` compares an import with its
+local baseline: `verified`, or `drifted` with the `added`, `modified` and
+`removed` paths (a mode-only change is a modification). A skill without a
+record (authored in the soul) is `unrecorded`, a record that is not the shape
+install writes, or lists the same files under another digest, is
+`record-invalid`, and a folder past the library's bounds is `unverifiable`.
+Drift never blocks uninstall: the edited bytes go to the archive (or trash)
+with the record as it was, so keep any edit you want through a revision. An
+owner uninstall applies at once, so once the owner gate passes it rechecks the
+live `skills/<name>/` against the copy it staged and refuses
+(`skill-uninstall-stale`, nothing archived) if the skill changed meanwhile. `--trash` instead moves the live
 `skills/<name>/` to the OS trash (`~/.Trash` on macOS, the freedesktop.org
 trash elsewhere; refused on Windows and across volumes) and removes the
 record. It is owner only, and it never holds the skill in a temporary folder:
