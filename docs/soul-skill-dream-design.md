@@ -492,8 +492,10 @@ state, and readers must be upgraded before opening a v6 journal.
 Scheduler state version 9 adds one version-1 processing checkpoint per
 registration (#603, owner decision 4). A source counts as processed only when
 its outcome item carries `verified-change` evidence from the existing
-revision-evidence check: the soul revision it names is an approved change
-that touched that path. Agent-reported, source-identity and not-verified items
+revision-evidence check: the soul revision it names is a verified change
+that touched that path. As in that check, the proposal's status (pending,
+approved, rejected or uncertain) does not affect the verdict, so credit means
+the dream changed the source, not that the owner approved the change. Agent-reported, source-identity and not-verified items
 earn no credit, and notices stay `pending-host-read`.
 
 The checkpoint names the soul and registration generation, its `coverage` is
@@ -505,7 +507,9 @@ entries are ordered newest first, and the checkpoint stays within 8 KiB by
 dropping the oldest entries and counting them in `evicted`. The full list for
 each run is kept in the append-only `processing-advanced` event, published in
 the same transaction as the outcome and selection checkpoint, which it
-requires. The event carries the run's prepared input metadata, bound by digest
+requires. It also carries the checkpoint it advanced from, and the published
+checkpoint must be exactly that one advanced by the run's sources, so a
+processed source cannot vanish without being evicted. The event carries the run's prepared input metadata, bound by digest
 to the selection checkpoint's input receipt, and the outcome is validated
 against those delivered sources, so no path that was never delivered can be
 credited. The checkpoint only reports; selection is unchanged and

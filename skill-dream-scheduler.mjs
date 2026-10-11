@@ -114,6 +114,23 @@ function processingCheckpoint(value) {
 // The sources one outcome credits as processed: its `verified-change` items.
 const verifiedSources = outcome => (outcome?.items ?? []).filter(item => item.verification.evidence === 'verified-change')
   .map(item => ({ path: item.claim.path, digest: item.claim.digest, artifactRevision: item.verification.artifactRevision }));
+// The one checkpoint algorithm, used to publish and to validate: this run's
+// sources replace their paths, newest first; a path too long to fit even
+// alone is evicted first, so it cannot push out every older entry; then the
+// oldest leave until the checkpoint fits. Each is counted in `evicted`.
+function advanceProcessing(prior, processed, { agentId, generation, runId, journalRevision }) {
+  const fresh = new Set(processed.map(source => source.path));
+  const next = { schemaVersion: 1, agentId, generation, coverage: PROCESSING_COVERAGE, evicted: prior?.evicted ?? 0,
+    entries: [...processed.map(source => ({ ...source, runId, journalRevision })),
+      ...(prior?.entries ?? []).filter(item => !fresh.has(item.path))].sort(processingOrder) };
+  // Measured at the largest count this pass can reach while that entry is
+  // kept: every other entry evicted, never the candidate itself.
+  const most = next.evicted + next.entries.length - 1;
+  const alone = item => Buffer.byteLength(JSON.stringify({ ...next, evicted: most, entries: [item] })) > DREAM_PROCESSING_BYTES;
+  next.evicted += next.entries.filter(alone).length; next.entries = next.entries.filter(item => !alone(item));
+  while (next.entries.length && Buffer.byteLength(JSON.stringify(next)) > DREAM_PROCESSING_BYTES) { next.entries.pop(); next.evicted++; }
+  return next;
+}
 function rebindSelection(state, registration) {
   const checkpoint = state.selectionCheckpoints.find(item => item.agentId === registration.agentId);
   if (checkpoint) checkpoint.generation = registration.generation;
@@ -294,7 +311,10 @@ export function validateDreamEvents(events, { state = null } = {}) {
       // to the input receipt in the same transaction's selection checkpoint,
       // so the outcome is checked against the sources actually delivered: a
       // forged item for a path never delivered earns no credit.
-      keys(event, ['kind', 'at', 'run', 'checkpoint', 'processed', 'inputs']);
+      // It also carries the checkpoint it advanced from (`prior`), and the
+      // published checkpoint must be exactly that one advanced by this run's
+      // sources, so no processed source can vanish without being evicted.
+      keys(event, ['kind', 'at', 'run', 'checkpoint', 'processed', 'prior', 'inputs']);
       if (!date(event.at)) invalid();
       runRecord(event.run, true, version(event.run)); processingCheckpoint(event.checkpoint);
       if (!Array.isArray(event.processed) || event.processed.length < 1 || event.processed.length > 100) invalid();
@@ -314,6 +334,18 @@ export function validateDreamEvents(events, { state = null } = {}) {
           && source.artifactRevision === entry.artifactRevision))
         || new Set(current.map(entry => entry.journalRevision)).size > 1
         || !events.some(row => row.kind === 'ended' && isDeepStrictEqual(row.run, event.run))) invalid();
+      // This transaction's revision, from the outcome receipt it publishes with.
+      const journalRevision = events.find(row => row.kind === 'outcome-recorded' && isDeepStrictEqual(row.run, event.run)).receipt.journalRevision;
+      if (event.prior !== null) {
+        keys(event.prior, ['evicted', 'entries']);
+        processingCheckpoint({ schemaVersion: 1, agentId: event.checkpoint.agentId, generation: event.checkpoint.generation,
+          coverage: PROCESSING_COVERAGE, evicted: event.prior.evicted, entries: event.prior.entries });
+        if (event.prior.entries.some(entry => entry.runId === event.run.runId)) invalid();
+      }
+      if (current.some(entry => entry.journalRevision !== journalRevision)
+        || event.prior?.entries.some(entry => entry.journalRevision >= journalRevision)
+        || !isDeepStrictEqual(event.checkpoint, advanceProcessing(event.prior, event.processed,
+          { agentId: event.run.agentId, generation: event.run.generation, runId: event.run.runId, journalRevision }))) invalid();
       if (state && (state.schemaVersion < 9 || current.some(entry => entry.journalRevision !== state.revision)
         || !state.processingCheckpoints.some(row => isDeepStrictEqual(row, event.checkpoint)))) invalid();
       continue;
@@ -568,22 +600,12 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
           events.push({ kind: 'selection-advanced', at: endedAt, run: result, checkpoint });
           const processed = verifiedSources(entry.outcome);
           if (processed.length) {
-            const journalRevision = current.revision + 1, fresh = new Set(processed.map(source => source.path));
-            const prior = current.processingCheckpoints.find(item => item.agentId === agentId);
-            const next = { schemaVersion: 1, agentId, generation: owner.generation, coverage: PROCESSING_COVERAGE, evicted: prior?.evicted ?? 0,
-              entries: [...processed.map(source => ({ ...source, runId: run.runId, journalRevision })),
-                ...(prior?.entries ?? []).filter(item => !fresh.has(item.path))].sort(processingOrder) };
-            // A path too long to fit the budget even alone is evicted first,
-            // so it cannot push out every older entry. It is measured at the
-            // largest count this pass can reach, not an arbitrary sentinel,
-            // so an entry that fits is kept.
-            const most = next.evicted + next.entries.length;
-            const alone = item => Buffer.byteLength(JSON.stringify({ ...next, evicted: most, entries: [item] })) > DREAM_PROCESSING_BYTES;
-            next.evicted += next.entries.filter(alone).length; next.entries = next.entries.filter(item => !alone(item));
-            while (next.entries.length && Buffer.byteLength(JSON.stringify(next)) > DREAM_PROCESSING_BYTES) { next.entries.pop(); next.evicted++; }
+            const found = current.processingCheckpoints.find(item => item.agentId === agentId);
+            const prior = found ? { evicted: found.evicted, entries: structuredClone(found.entries) } : null;
+            const next = advanceProcessing(prior, processed, { agentId, generation: owner.generation, runId: run.runId, journalRevision: current.revision + 1 });
             current.processingCheckpoints = current.processingCheckpoints.filter(item => item.agentId !== agentId);
             current.processingCheckpoints.push(next);
-            events.push({ kind: 'processing-advanced', at: endedAt, run: result, checkpoint: next, processed, inputs: structuredClone(entry.inputs) });
+            events.push({ kind: 'processing-advanced', at: endedAt, run: result, checkpoint: next, processed, prior, inputs: structuredClone(entry.inputs) });
           }
         }
         noticeRun(current, events, result, entry);

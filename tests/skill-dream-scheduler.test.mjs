@@ -528,6 +528,28 @@ test('a near-limit path that fits the checkpoint alone is kept, measured at the 
   assert.ok(Buffer.byteLength(JSON.stringify(checkpoint)) <= DREAM_PROCESSING_BYTES);
 });
 
+test('the single-entry fit counts only the other entries, across an eviction-count digit boundary', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  // Nine paths too long to fit alone leave an empty checkpoint with evicted 9.
+  const huge = Array.from({ length: 9 }, (_, index) => `skills/demo/references/${index}${'é'.repeat(4000)}.md`);
+  await settle({ inputs: sources(huge), items: huge.map(file => [file, { revision: R1 }]), verify: verifier(R1, huge) });
+  assert.deepEqual([f.state().processingCheckpoints[0].entries, f.state().processingCheckpoints[0].evicted], [[], 9]);
+  // A path whose checkpoint is exactly the budget at evicted 9 (one byte over at 10) is kept.
+  const generation = f.state().registrations[0].generation, revision = f.state().revision + 3;
+  const size = file => Buffer.byteLength(JSON.stringify({ schemaVersion: 1, agentId: A, generation, coverage: 'verified-change-only', evicted: 9,
+    entries: [{ path: file, digest: `sha256:${'0'.repeat(64)}`, artifactRevision: R1, runId: '00000000-0000-4000-8000-000000000000', journalRevision: revision }] }));
+  let n = 1;
+  while (size(`skills/demo/references/${'é'.repeat(n + 1)}.md`) <= DREAM_PROCESSING_BYTES) n++;
+  let file = `skills/demo/references/${'é'.repeat(n)}.md`;
+  if (size(file) < DREAM_PROCESSING_BYTES) file = `skills/demo/references/${'é'.repeat(n)}a.md`;
+  assert.equal(size(file), DREAM_PROCESSING_BYTES);
+  const tail = await settle({ inputs: sources([file]), items: [[file, { revision: R1 }]], verify: verifier(R1, [file]) });
+  const checkpoint = f.state().processingCheckpoints[0];
+  assert.deepEqual([checkpoint.entries.map(entry => entry.path), checkpoint.evicted], [[file], 9]);
+  assert.equal(Buffer.byteLength(JSON.stringify(checkpoint)), DREAM_PROCESSING_BYTES, 'the estimate matched the real checkpoint');
+  assert.deepEqual(tail.find(event => event.kind === 'processing-advanced').prior, { evicted: 9, entries: [] });
+});
+
 test('processing checkpoints and events refuse claims the verified outcome does not back', async () => {
   const { f, R1, sources, verifier, settle } = processingFixture();
   const inputs = sources(['AGENTS.md', 'skills/demo/SKILL.md']);
@@ -544,6 +566,10 @@ test('processing checkpoints and events refuse claims the verified outcome does 
     events => { events.splice(events.findIndex(event => event.kind === 'selection-advanced'), 1); },
     events => { events.find(event => event.kind === 'processing-advanced').inputs.sources.pop(); },
     events => { delete events.find(event => event.kind === 'processing-advanced').inputs; },
+    // A processed source cannot vanish from the checkpoint without being evicted.
+    events => { const advanced = events.find(event => event.kind === 'processing-advanced'); advanced.checkpoint.entries = []; advanced.checkpoint.evicted = 1; },
+    events => { events.find(event => event.kind === 'processing-advanced').checkpoint.evicted = 3; },
+    events => { events.find(event => event.kind === 'processing-advanced').prior = { evicted: 2, entries: [] }; },
   ]) {
     const events = copy(tail); mutate(events); assert.throws(() => validateDreamEvents(events, { state }), { code: 'dream-state-invalid' });
   }
