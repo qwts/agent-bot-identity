@@ -485,8 +485,15 @@ export function createDaemonServer({
   // turn opened; the decision and scope are the ones recorded when the
   // challenge was issued, and the reply goes through the same gate, and is
   // spent the same way, as a statement sent to a decision route. The sender
-  // is told the outcome in one line. Nothing here throws.
+  // is told the outcome in one line. A reply that decides nothing leaves an
+  // `owner-refused` receipt, as a refusal on the route does, with no message
+  // ID or content. Nothing here throws.
   async function ownerReply(soul, message) {
+    const refused = (detail) => {
+      try {
+        appendAuditReceipt({ event: 'approval-decision', agentId: soul.agentId, operation: 'approve', decision: 'owner-refused', detail }, { env, home, now });
+      } catch { /* the sender is still answered */ }
+    };
     const answer = async (body) => {
       try { await asideRelay.reply(soul, { to: senderAddress(message.from), replyTo: message.id, body, correlation: message.correlation ?? null }); } catch { /* the outcome is in the receipts */ }
     };
@@ -496,6 +503,7 @@ export function createDaemonServer({
       token = extractToken(message.body);
       nonce = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'))?.nonce ?? null;
     } catch {
+      refused('inbox reply is not one owner statement block');
       await answer('That is not one signed owner statement block, so nothing was decided.');
       return;
     }
@@ -503,6 +511,7 @@ export function createDaemonServer({
     const proposal = found && interaction.approvalSource(found.request)?.soul.agentId === soul.agentId
       ? interaction.listProposalsForOwner().proposals.find((row) => row.proposalId === found.request) : null;
     if (!proposal || !found.context) {
+      refused('inbox reply matches no pending owner challenge');
       await answer('No owner challenge is pending for that signed reply, so nothing was decided. Ask for the decision again to get a new challenge.');
       return;
     }

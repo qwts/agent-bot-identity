@@ -10,7 +10,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -179,7 +179,13 @@ async function setup() {
     await until(() => relay.sent.some((message) => message.replyTo === id));
     return relay.sent.find((message) => message.replyTo === id).body;
   };
-  return { owner, clock, relay, call, deliver, answer, open, until, challenged, prompts, outcomes, wake, close };
+  // The inbox's own refusals in the audit log: secret-free, no message IDs.
+  const refusals = () => {
+    let lines = [];
+    try { lines = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)); } catch {}
+    return lines.filter((receipt) => receipt.event === 'approval-decision' && receipt.decision === 'owner-refused' && /^inbox reply/.test(receipt.detail ?? ''));
+  };
+  return { owner, clock, relay, call, deliver, answer, open, until, challenged, prompts, outcomes, wake, close, refusals, server };
 }
 
 test('the owner\'s signed reply in the inbox finishes the decision the turn waits on', async () => {
@@ -205,6 +211,8 @@ test('a reply with the wrong nonce decides nothing and leaves the challenge pend
   try {
     const { payload } = await t.challenged();
     assert.match(await t.answer(await t.deliver(reply({ ...payload, nonce: 'A'.repeat(22) }, t.owner))), /^No owner challenge is pending/);
+    assert.deepEqual(t.refusals().map(({ agentId, operation, detail }) => ({ agentId, operation, detail })),
+      [{ agentId: AGENT_ID, operation: 'approve', detail: 'inbox reply matches no pending owner challenge' }]);
     assert.equal(t.open().length, 1);
     assert.equal(t.prompts.length, 1);
     // The real challenge was not spent by the stranger.
@@ -297,6 +305,23 @@ test('a denial challenged from the route is finished as a denial', async () => {
     await t.wake.idle();
     assert.deepEqual(t.outcomes, [{ decision: 'deny' }]);
     assert.equal(await t.answer(answered), 'The owner\'s signed reply denied the request.');
+  } finally {
+    await t.close();
+  }
+});
+
+test('a waking message is registered when the proposal opens, before any challenge can exist', async () => {
+  const t = await setup();
+  try {
+    const source = { soul: { agentId: AGENT_ID, binding }, to: OWNER, replyTo: 'mx', correlation: null };
+    assert.equal(t.server.ownerReply.pending(AGENT_ID), false);
+    const waiting = t.server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash', source });
+    const [row] = t.open();
+    assert.equal(t.server.ownerReply.pending(AGENT_ID), true);
+    assert.deepEqual(t.server.interaction.approvalSource(row.proposalId), source);
+    t.server.interaction.decideProposalAsOwner({ proposalId: row.proposalId, decision: 'deny', digest: row.operationDigest });
+    await waiting;
+    assert.equal(t.server.ownerReply.pending(AGENT_ID), false);
   } finally {
     await t.close();
   }

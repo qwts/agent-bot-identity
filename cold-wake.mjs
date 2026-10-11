@@ -184,7 +184,10 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
       flight.ids.push(...(Array.isArray(messageIds) ? messageIds : []));
       // The turn may be waiting on the owner's decision, so an owner reply
       // that just arrived is taken now, not after the turn. The inbox is read
-      // for it only while the port says this soul awaits one.
+      // for it only while the port says this soul awaits one. A reply cannot
+      // come earlier: its challenge is made by a decide call on the open
+      // proposal, and the proposal's waking message is registered in the
+      // same synchronous step that opens it, so `pending` is already true.
       if (flight.soul && typeof ownerReply === 'function' && (ownerReply.pending?.(agentId) ?? true)) {
         flight.scan = flight.scan.then(async () => {
           if (!isPaused(agentId)) await takeOwnerReplies(flight.soul, await relay.read(flight.soul), { strict: false });

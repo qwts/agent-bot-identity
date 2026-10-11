@@ -204,7 +204,8 @@ replayed reply, a challenge already spent, expired, or dropped by a
 restart), and such a reply spends nothing; a reply that matches but fails to
 verify (another action, text or scope, a later expiry, a key no longer
 pinned) spends the challenge. Either way the owner asks for the decision
-again to get a new challenge. Who carried the reply, and whom it came from,
+again to get a new challenge, and the audit log records `owner-refused`,
+naming the soul but no message ID or content. Who carried the reply, and whom it came from,
 does not matter: only the signature over the challenge decides. The
 challenge message is sent by the daemon, not by a turn, so it is not in the
 soul's thread journal. The waking message is kept with the open proposal in
