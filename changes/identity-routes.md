@@ -1,0 +1,1 @@
+- Identity's daemon routes (bind, binding, credential, inbox take, grants, keyd grant and spawn) move into `identity-routes.mjs`, behind a handler the daemon calls after its own auth checks. Requests, responses and audit receipts are unchanged (#645, F9 step 2).

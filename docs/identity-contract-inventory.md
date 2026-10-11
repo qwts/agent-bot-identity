@@ -196,32 +196,34 @@ without a migration. They are as frozen as the public ones.
 
 ## 3. Daemon routes
 
-Every route is served by `agent-daemon.mjs` (host), which composes identity
-in-process. Each route's class comes from the table in
+Every route is served by `agent-daemon.mjs` (host). Since F9 step 2,
+identity's binding routes are handled in `identity-routes.mjs`, which the
+daemon calls after its own loopback, bearer and binding-proof checks; the
+other routes are still handled in the daemon. Each route's class comes from the table in
 [daemon-api.md](daemon-api.md#route-authorization). These routes carry
 identity semantics:
 
 | Route | Class | Handler | Stability | Callers |
 | --- | --- | --- | --- | --- |
-| `POST /v0/vouch` | binding | `agent-daemon.mjs:520` | **public** | agent-comms `lib/client.mjs:253` (`aud: agent-comms`); the token is checked by the broker against the key paired by `daemon pair-comms` |
-| `POST /v0/bind` | binding (bind token) | `:713` | internal | `daemon-client.mjs:197`, which `setup-worktree` and `soul-join` use |
-| `GET /v0/binding` | binding | `:792` | internal | `daemon-client.mjs:201` |
-| `DELETE /v0/binding` | binding | `:798` | internal | `daemon-client.mjs:212`, `agent-binding.mjs:405` |
-| `POST /v0/binding/app` | binding | `:784` | internal | `daemon-client.mjs:209` |
-| `POST /v0/credential` | binding | `:816` | internal | `daemon-client.mjs:217`, `keyd-client.mjs:173` |
-| `POST /v0/keyd/grant` | binding | `:1002` | **public** | keyd relay (`keyd/src/relay.rs:22`; the same in GeniusBar's snapshot) |
-| `POST /v0/inbox/take` | binding | `:930` | internal | `daemon-client.mjs:222` |
-| `POST /v0/grants/request`, `/spend` | binding | `:969`, `:984` | internal | `daemon-client.mjs:227`, `:230` |
-| `GET /v0/identity/apps` | bearer | `:555` | internal | none outside this repository; GeniusBar uses the CLI |
-| `GET /v0/identity/apps/jobs/{id}` | bearer | `:555` | internal | as above |
-| `POST /v0/identity/apps/{action}` | owner | `:555` | internal | as above |
+| `POST /v0/vouch` | binding | `agent-daemon.mjs:592` | **public** | agent-comms `lib/client.mjs:253` (`aud: agent-comms`); the token is checked by the broker against the key paired by `daemon pair-comms` |
+| `POST /v0/bind` | binding (bind token) | `identity-routes.mjs:35` | internal | `daemon-client.mjs:197`, which `setup-worktree` and `soul-join` use |
+| `GET /v0/binding` | binding | `identity-routes.mjs:99` | internal | `daemon-client.mjs:201` |
+| `DELETE /v0/binding` | binding | `identity-routes.mjs:105` | internal | `daemon-client.mjs:212`, `agent-binding.mjs:405` |
+| `POST /v0/binding/app` | binding | `identity-routes.mjs:91` | internal | `daemon-client.mjs:209` |
+| `POST /v0/credential` | binding | `identity-routes.mjs:123` | internal | `daemon-client.mjs:217`, `keyd-client.mjs:173` |
+| `POST /v0/keyd/grant` | binding | `identity-routes.mjs:309` | **public** | keyd relay (`keyd/src/relay.rs:22`; the same in GeniusBar's snapshot) |
+| `POST /v0/inbox/take` | binding | `identity-routes.mjs:237` | internal | `daemon-client.mjs:222` |
+| `POST /v0/grants/request`, `/spend` | binding | `identity-routes.mjs:276`, `:291` | internal | `daemon-client.mjs:227`, `:230` |
+| `GET /v0/identity/apps` | bearer | `agent-daemon.mjs:627` | internal | none outside this repository; GeniusBar uses the CLI |
+| `GET /v0/identity/apps/jobs/{id}` | bearer | `agent-daemon.mjs:627` | internal | as above |
+| `POST /v0/identity/apps/{action}` | owner | `agent-daemon.mjs:627` | internal | as above |
 
 Two routes straddle identity and soul (F9):
 
-- **`POST /v0/register`** (`:689`) writes the soul census (`upsertIdentitySoul`
+- **`POST /v0/register`** (`agent-daemon.mjs:762`) writes the soul census (`upsertIdentitySoul`
   in `agent-population.mjs`, soul) on behalf of `setup-worktree` and join.
-- **`POST /v0/spawn`** (`:727`) mints a child identity, binds it and runs the
-  spawn hook. It is called from `agent-identity.mjs:832`.
+- **`POST /v0/spawn`** (`identity-routes.mjs:49`) mints a child identity,
+  binds it and runs the spawn hook. It is called from `agent-identity.mjs:832`.
 
 The wire contracts agent-comms depends on are already written down: the binding
 proof (`binding-proof.mjs`; [daemon-api.md](daemon-api.md)) and the soul token

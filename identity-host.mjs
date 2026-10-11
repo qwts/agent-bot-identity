@@ -4,9 +4,9 @@
 // exact exports. It names every identity function host uses today: the
 // binding registry and bind tokens, Agent ID records, principals, keyd, vouch,
 // the inbox, identity Apps, the bot checks agent-hook runs and the publish
-// scan. Later F9 steps move identity's daemon routes behind a handler
-// exported here (host keeps its bearer and proof checks), make /v0/register a
-// soul route and split /v0/spawn.
+// scan. It also exports identity's daemon route handler, createIdentityRoutes
+// (F9 step 2; host keeps its bearer and proof checks). Later F9 steps make
+// /v0/register a soul route and split /v0/spawn.
 //
 // Host may also import the shared contracts identity-format.mjs and
 // daemon-client.mjs directly.
@@ -16,10 +16,10 @@ export { assignAgentApp, bindAgentLineage, ensureAgentIdentity, mintAgentIdentit
 export { assertAuthorized, getPrincipal, listPrincipals, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 export { parseBindingProof, PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
 export { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
-export { validAppSlug } from './identity-app-store.mjs';
 export { createIdentityAppJobs, identityAppFailure, identityAppOperation, listIdentityApps } from './identity-apps.mjs';
-export { boundRepository, createInboxTaker, inboxError } from './inbox-take.mjs';
-export { grantTarget, KEYD_LABEL, KEYD_LABEL_VARIABLE, KEYD_TOOL_NAMES, keydMcpServerEntry, keydPaths, keydPolicyRules, keydRequest, keydStatus, keydVersionAction, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';
+export { createIdentityRoutes } from './identity-routes.mjs';
+export { createInboxTaker, inboxError } from './inbox-take.mjs';
+export { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydMcpServerEntry, keydPaths, keydPolicyRules, keydRequest, keydStatus, keydVersionAction, readKeydRecord } from './keyd-client.mjs';
 export { mint } from './mint-token.mjs';
 export { keydPresence } from './owner-presence.mjs';
 export { extractToken } from './owner-statement.mjs';
