@@ -156,11 +156,42 @@ export function isSoulCoauthorDomain(value) {
   return !value.startsWith('users.noreply.');
 }
 
+// The owner's statement keys an organization accepts (ADR-0753 section 3,
+// #753): each as owner-statement.mjs pins it, by name, store, alg and
+// fingerprint, never the key itself. At most four, as a host pins. Returns
+// a problem, or null when `value` is a valid declaration.
+export const MAX_DECLARED_OWNER_KEYS = 4;
+const OWNER_KEY_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const OWNER_KEY_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/;
+const OWNER_KEY_ALG = Object.freeze({ keyd: 'ed25519', ssh: 'sshsig' });
+
+export function ownerKeysProblem(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_DECLARED_OWNER_KEYS) {
+    return `must list 1 to ${MAX_DECLARED_OWNER_KEYS} owner keys`;
+  }
+  const names = new Set();
+  const prints = new Set();
+  for (const key of value) {
+    if (!key || typeof key !== 'object' || Array.isArray(key)
+      || Object.keys(key).sort().join(',') !== 'alg,fingerprint,name,store') {
+      return 'each owner key is exactly { name, store, alg, fingerprint }';
+    }
+    if (typeof key.name !== 'string' || !OWNER_KEY_NAME.test(key.name)) return 'an owner key name is 1 to 32 lowercase letters, digits and dashes';
+    if (!Object.hasOwn(OWNER_KEY_ALG, key.store)) return `owner key ${key.name} has an unknown store`;
+    if (key.alg !== OWNER_KEY_ALG[key.store]) return `owner key ${key.name} has the wrong alg for its store`;
+    if (typeof key.fingerprint !== 'string' || !OWNER_KEY_FINGERPRINT.test(key.fingerprint)) return `owner key ${key.name} has no SHA256 fingerprint`;
+    if (names.has(key.name) || prints.has(key.fingerprint)) return `owner key ${key.name} is listed twice`;
+    names.add(key.name);
+    prints.add(key.fingerprint);
+  }
+  return null;
+}
+
 function normalizeSettings(value) {
   if (value === undefined) return null;
   const settings = requireObject(value, 'organization profile settings');
   requireExactKeys(settings, {
-    allowed: ['spaces_root', 'daemon_preference', 'unmanaged_authors', 'keyd_team_id', 'keyd_identifier', 'soul_coauthor_domain'],
+    allowed: ['spaces_root', 'daemon_preference', 'unmanaged_authors', 'keyd_team_id', 'keyd_identifier', 'soul_coauthor_domain', 'owner_keys'],
     required: [],
   }, 'organization profile settings');
   const normalized = {};
@@ -214,6 +245,13 @@ function normalizeSettings(value) {
       fail('profile-invalid', 'organization profile soul_coauthor_domain must be a lowercase domain name that is not a GitHub domain');
     }
     normalized.soul_coauthor_domain = settings.soul_coauthor_domain;
+  }
+  // The only owner statement keys this organization's hosts accept (#753),
+  // however keyd vouches for a host's pins.
+  if (settings.owner_keys !== undefined) {
+    const problem = ownerKeysProblem(settings.owner_keys);
+    if (problem) fail('profile-invalid', `organization profile owner_keys ${problem}`);
+    normalized.owner_keys = settings.owner_keys.map(({ name, store, alg, fingerprint }) => ({ name, store, alg, fingerprint }));
   }
   return normalized;
 }
@@ -399,6 +437,7 @@ export function organizationProfileToConfig(value) {
     if (profile.settings.keyd_team_id !== undefined) config.settings.keydTeamId = profile.settings.keyd_team_id;
     if (profile.settings.keyd_identifier !== undefined) config.settings.keydIdentifier = profile.settings.keyd_identifier;
     if (profile.settings.soul_coauthor_domain !== undefined) config.settings.soulCoauthorDomain = profile.settings.soul_coauthor_domain;
+    if (profile.settings.owner_keys !== undefined) config.settings.ownerKeys = profile.settings.owner_keys.map((key) => ({ ...key }));
   }
   return config;
 }
@@ -430,6 +469,7 @@ function profileFromRuntimeConfig(config) {
   if (config.settings?.keydTeamId !== undefined) settings.keyd_team_id = config.settings.keydTeamId;
   if (config.settings?.keydIdentifier !== undefined) settings.keyd_identifier = config.settings.keydIdentifier;
   if (config.settings?.soulCoauthorDomain !== undefined) settings.soul_coauthor_domain = config.settings.soulCoauthorDomain;
+  if (config.settings?.ownerKeys !== undefined) settings.owner_keys = config.settings.ownerKeys;
   return validateOrganizationProfile({
     schema_version: metadata.schemaVersion,
     organization: metadata.organization,

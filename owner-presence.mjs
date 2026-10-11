@@ -31,7 +31,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { appendAuditReceipt } from './identity-format.mjs';
-import { ANY_DEVELOPER_ID, DEFAULT_KEYD_IDENTIFIER, keydSigner } from './config.mjs';
+import { ANY_DEVELOPER_ID, DEFAULT_KEYD_IDENTIFIER, keydSigner, loadConfig, ownerKeysSetting } from './config.mjs';
 import { keydPaths, keydRequest, readKeydRecord } from './keyd-client.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';
 import { ed25519KeyLine, parseSshPublicKey, sshFingerprint } from './owner-statement.mjs';
@@ -442,7 +442,9 @@ const processGenerationFloor = createPinsGenerationFloor();
 // this set's. Anything else is `{ attested: false, code, reason }` and never
 // throws: no keyd, an older keyd (`-32601`), a record keyd cannot read or does
 // not control (`-32002`), a bad signature, another key set, or an older
-// generation than this process has seen. The caller then keeps today's
+// generation than this process has seen, or a pin the organization profile
+// does not declare when it declares any (`pins-unlisted`). The caller then
+// keeps today's
 // behaviour, keyd presence or the administrator dialog, and trusts no pin.
 // Unlike `keydPresence`, an untrusted record is not a refusal here: it only
 // means the pins are not vouched for, which is where every host stood before.
@@ -454,6 +456,8 @@ export async function attestedOwnerKeys(pins, {
   now = () => Date.now(),
   nonce = () => randomBytes(18).toString('base64url'),
   floor = processGenerationFloor,
+  // The organization's declared owner keys (`settings.ownerKeys`), or null.
+  declared = () => ownerKeysSetting(loadConfig({ env, home })),
 } = {}) {
   const refused = (code, reason) => ({ attested: false, code, reason });
   let key;
@@ -482,6 +486,21 @@ export async function attestedOwnerKeys(pins, {
     return refused('pins-mismatch', record.digest === null
       ? 'the owner has not approved any owner keys through agent-bot-keyd'
       : 'the owner keys on file are not the ones the owner approved through agent-bot-keyd');
+  }
+  // Where the organization profile declares the owner's keys, a pin it does
+  // not list is refused, however keyd vouches for it: the profile is the
+  // source of which keys are the owner's, keyd only that this host's file is
+  // the set the owner approved here. A config that cannot be read declares
+  // nothing anyone can check, so it refuses too.
+  let listed;
+  try { listed = declared(); } catch (error) {
+    return refused('pins-unlisted', `the organization's owner keys could not be read (${error.message})`);
+  }
+  if (listed !== null && listed !== undefined) {
+    const unlisted = pins.filter((pin) => !listed.some((key) => key.fingerprint === pin.fingerprint && key.store === pin.store && key.alg === pin.alg));
+    if (unlisted.length > 0) {
+      return refused('pins-unlisted', `the organization profile does not list the owner key${unlisted.length > 1 ? 's' : ''} ${unlisted.map((pin) => `${pin.name} (${pin.fingerprint})`).join(', ')}`);
+    }
   }
   return { attested: true, generation: record.generation };
 }

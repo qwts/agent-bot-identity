@@ -71,7 +71,9 @@ secret and no network. A file must be a regular file, not a
 symbolic link, FIFO or device, and a file or stdin is read up to 1 MiB.
 
 **verify says the owner approved only when agent-bot-keyd vouches for the
-pins.** `<state>/owner/keys.json` is writable by anything running as the
+pins** and, where the organization profile declares the owner's keys
+(`owner_keys`, projected to `settings.ownerKeys`), every pin is listed there;
+an unlisted pin is `pins-unlisted`. `<state>/owner/keys.json` is writable by anything running as the
 owner, a soul included, and a security key made in software looks the same
 as hardware, so a soul could pin its own key and sign its own statement
 (#753). So after the signature checks out, verify asks keyd, on this call,
