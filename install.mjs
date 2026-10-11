@@ -4,10 +4,14 @@ import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   renameSync,
   readFileSync,
   readlinkSync,
@@ -18,7 +22,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
 import { GIT_HOOK_NAMES } from './identity-format.mjs';
@@ -129,6 +133,45 @@ export function isManagedExecutable(path, stat, entrypoint, readlink = readlinkS
   return false;
 }
 
+// The host app's "Install command-line tools" (GeniusBar#41) writes
+// ~/.local/bin/agent-bot as a small wrapper file, not a symlink, that execs
+// the shim inside the app (#968). That file is the app's: it is left in place,
+// never replaced or removed. Only the exact text the app's
+// bridge/cli-tools.mjs writes counts, and only for the app that embeds this
+// runtime, so a checkout or Homebrew install still refuses it. The marker
+// carries the app's own name, so no host app is named here (#752).
+function hostAppCliToolText(app) {
+  const name = basename(app, '.app');
+  const shim = join(app, 'Contents', 'Resources', 'bin', 'agent-bot');
+  return `#!/bin/sh\n# ${name.toLowerCase()}-cli-tool: written by ${name}. "Uninstall command-line tools" removes it.\n`
+    + `exec '${shim.replaceAll("'", `'\\''`)}' "$@"\n`;
+}
+
+// One descriptor answers every question: the path is opened once without
+// following a link (or blocking on a FIFO), and the type, the size bound and
+// the text all come from that handle, so a swap between checking and reading
+// cannot change what is judged.
+const HOST_APP_CLI_TOOL_MAX_BYTES = 4096;
+
+export function isHostAppCliTool(path, app, { open = openSync } = {}) {
+  if (!app) return false;
+  let fd;
+  try {
+    fd = open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch {
+    return false;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size >= HOST_APP_CLI_TOOL_MAX_BYTES) return false;
+    return readFileSync(fd, 'utf8') === hostAppCliToolText(app);
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function inspectExecutableLink(path, stat, { readlink = readlinkSync, statFile = statSync } = {}) {
   if (!stat?.isSymbolicLink()) return null;
   const target = readlink(path);
@@ -155,12 +198,16 @@ export function installExecutable({
   exists = existsSync,
   mkdtemp = mkdtempSync,
   rename = renameSync,
+  openFile = openSync,
+  embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const paths = installationPaths(home);
   const desired = managedEntrypoint(entrypoint, exists);
   mkdir(paths.binDir, { recursive: true });
-  ensureExecutableMode(entrypoint, { stat: statFile, chmod });
   const stat = optionalLstat(paths.executable, lstat);
+  // The embedding app's wrapper runs this runtime; it stays the CLI.
+  if (stat && isHostAppCliTool(paths.executable, embeddingApp, { open: openFile })) return paths.executable;
+  ensureExecutableMode(entrypoint, { stat: statFile, chmod });
   if (stat) {
     const link = inspectExecutableLink(paths.executable, stat, { readlink, statFile });
     if (link?.dangling) {
@@ -348,8 +395,9 @@ export async function installAgentBot({
   ensureCutover = ensureSpacesCutover,
   installTranscriptAdapter = ensureClaudeWorktreeAdapter,
   installUserHooks = syncHooks,
+  embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
-  const executable = installCli({ home });
+  const executable = installCli({ home, embeddingApp });
   const agentHook = installAgentHooks({ home });
   const pathRegistration = installPath({ home });
   const hooksPath = installHooks({ home });
@@ -373,7 +421,11 @@ export async function installAgentBot({
     }
   }
   run(['config', '--global', 'core.hooksPath', hooksPath]);
-  const supervisor = await ensureSupervisor({ home, env, executable });
+  // An app that embeds this runtime supervises its own daemon under its own
+  // label; a second unit from here would run a second daemon (#968).
+  const supervisor = embeddingApp
+    ? { applied: false, reason: 'app-managed', app: embeddingApp }
+    : await ensureSupervisor({ home, env, executable });
   const cutover = ensureCutover({ home, env });
   const transcriptAdapter = installTranscriptAdapter({ home, env });
   const userHooks = installUserHooks({ home, env });
@@ -399,6 +451,8 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`daemon supervisor -> ${result.supervisor.unitPath}\n`);
   } else if (result.supervisor?.reason === 'unsupported-platform') {
     process.stdout.write(`daemon supervisor skipped (${result.supervisor.platform})\n`);
+  } else if (result.supervisor?.reason === 'app-managed') {
+    process.stdout.write(`daemon supervisor skipped (managed by ${basename(result.supervisor.app)})\n`);
   }
   if (result.cutover?.applied) {
     process.stdout.write(
