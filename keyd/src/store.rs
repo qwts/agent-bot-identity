@@ -1,10 +1,12 @@
 //! Where keyd keeps keys: generic passwords in the login keychain, created by
-//! keyd itself. An item a process adds through SecKeychainAddGenericPassword
-//! with no explicit access gets an access list that trusts only that
-//! process's code, by its designated requirement (Team ID and identifier for
-//! a Developer ID build). Any other reader, `security` and `node` included,
-//! gets the system's allow/deny prompt instead of a silent read, and an
-//! update signed by the same team keeps access.
+//! keyd itself with an access whose every entry names keyd's own code, by its
+//! designated requirement (Team ID and identifier for a Developer ID build).
+//! Any other reader, `security` and `node` included, gets the system's
+//! allow/deny prompt instead of a silent read, and an update signed by the
+//! same team keeps access. Leaving an item to the framework's default access
+//! is not enough: that default trusts any application to write the value, so
+//! any process in this account could replace a key without a prompt (#753).
+//! See [`keychain`] for what an access list does and does not stop.
 //!
 //! - a soul's App key: service `agent-bot.keyd.<agentId>`, account
 //!   `github-app/<slug>`, value base64 of `{appId, privateKeyPem}` (the
@@ -259,15 +261,499 @@ pub struct OwnerPins {
     pub generation: u64,
 }
 
+/// Keychain items whose access list names keyd's own code and nothing else.
+/// The crate has no bindings for that, so the Security framework calls are
+/// declared here.
+///
+/// An item made by `SecKeychainAddGenericPassword` — what the crate's
+/// `add_generic_password` and `set_generic_password` use — gets the system's
+/// default access, and the entry of that default for writing the value trusts
+/// *any* application. Any process in this account can then overwrite the item
+/// without a prompt, and no entry governs deleting it at all. keyd therefore
+/// makes every item itself, through `SecKeychainItemCreateFromContent`, with
+/// an access whose every entry is narrowed to keyd's code, and it checks that
+/// access again on every read.
+///
+/// What an access list still cannot do: the legacy file keychain does not gate
+/// every operation on one, so a process in this account can still blank or
+/// delete an item it cannot read. It cannot read one, and it cannot widen the
+/// access list, so what keyd loses to that is availability, not secrecy — and
+/// a value keyd cannot vouch for is refused rather than used. The durable
+/// answer is the data-protection keychain under a keychain-access-groups
+/// entitlement, which only the signed GeniusBar build can carry.
 #[cfg(target_os = "macos")]
 pub mod keychain {
-    use super::Items;
+    use super::{Items, PIN_SERVICE};
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::data::CFData;
+    use core_foundation::string::CFString;
     use security_framework::os::macos::keychain::SecKeychain;
-    use security_framework::os::macos::passwords::find_generic_password;
+    use security_framework::os::macos::keychain_item::SecKeychainItem;
+    use security_framework::os::macos::passwords::{
+        find_generic_password, SecKeychainItemPassword,
+    };
+    use security_framework_sys::base::{
+        SecAccessRef, SecKeychainAttribute, SecKeychainAttributeList, SecKeychainItemRef,
+        SecKeychainRef,
+    };
+    use security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed;
+    use security_framework_sys::keychain_item::{
+        SecKeychainItemFreeContent, SecKeychainItemModifyAttributesAndData,
+    };
+    use std::ffi::c_void;
     use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    // Opaque Core Foundation references the sys crate does not name. The
+    // aliases keep the declarations below readable as the headers they mirror.
+    type CFStringRef = *const c_void;
+    type CFArrayRef = *const c_void;
+    type CFDataRef = *const c_void;
+    type CFTypeRef = *const c_void;
+    type SecACLRef = *mut c_void;
+    type SecTrustedApplicationRef = *mut c_void;
 
     const NOT_FOUND: i32 = -25300; // errSecItemNotFound
     const DUPLICATE: i32 = -25299; // errSecDuplicateItem
+    const GENERIC_PASSWORD: u32 = 0x6765_6e70; // 'genp'
+    const SERVICE: u32 = 0x7376_6365; // 'svce'
+    const ACCOUNT: u32 = 0x6163_6374; // 'acct'
+    /// What an item's access list says in a keychain dialog.
+    const ACCESS_NAME: &str = "agent-bot-keyd";
+
+    extern "C" {
+        fn SecTrustedApplicationCreateFromPath(
+            path: *const std::os::raw::c_char,
+            app: *mut SecTrustedApplicationRef,
+        ) -> i32;
+        fn SecTrustedApplicationCopyData(
+            app: SecTrustedApplicationRef,
+            data: *mut CFDataRef,
+        ) -> i32;
+        fn SecAccessCreate(
+            descriptor: CFStringRef,
+            trusted: CFArrayRef,
+            access: *mut SecAccessRef,
+        ) -> i32;
+        fn SecAccessCopyACLList(access: SecAccessRef, list: *mut CFArrayRef) -> i32;
+        fn SecACLCopyContents(
+            acl: SecACLRef,
+            apps: *mut CFArrayRef,
+            description: *mut CFStringRef,
+            prompt: *mut u16,
+        ) -> i32;
+        fn SecACLSetContents(
+            acl: SecACLRef,
+            apps: CFArrayRef,
+            description: CFStringRef,
+            prompt: u16,
+        ) -> i32;
+        fn SecACLCreateWithSimpleContents(
+            access: SecAccessRef,
+            apps: CFArrayRef,
+            description: CFStringRef,
+            prompt: u16,
+            acl: *mut SecACLRef,
+        ) -> i32;
+        fn SecACLUpdateAuthorizations(acl: SecACLRef, authorizations: CFArrayRef) -> i32;
+        fn SecKeychainItemCreateFromContent(
+            class: u32,
+            attributes: *mut SecKeychainAttributeList,
+            length: u32,
+            data: *const c_void,
+            keychain: SecKeychainRef,
+            access: SecAccessRef,
+            item: *mut SecKeychainItemRef,
+        ) -> i32;
+        fn SecKeychainItemCopyAccess(item: SecKeychainItemRef, access: *mut SecAccessRef) -> i32;
+        fn SecKeychainItemCopyContent(
+            item: SecKeychainItemRef,
+            class: *mut u32,
+            attributes: *mut *mut SecKeychainAttributeList,
+            length: *mut u32,
+            data: *mut *mut c_void,
+        ) -> i32;
+        // The rights the default access has no entry for at all, so nothing
+        // governs them and any process in this account may exercise them.
+        static kSecACLAuthorizationDelete: CFStringRef;
+        static kSecACLAuthorizationKeychainItemDelete: CFStringRef;
+        static kSecACLAuthorizationKeychainItemModify: CFStringRef;
+        static kSecACLAuthorizationChangeOwner: CFStringRef;
+    }
+
+    /// A keychain dialog is never an answer anyone gave: keyd asks the owner
+    /// through LocalAuthentication instead. Turned off once for the process,
+    /// because the framework's own guard re-enables interaction when it drops
+    /// and keyd serves each connection on a thread, so one call finishing
+    /// could open the door again for another in flight.
+    fn no_prompts() -> Result<(), String> {
+        static DISABLED: OnceLock<i32> = OnceLock::new();
+        let status = *DISABLED.get_or_init(|| {
+            // SAFETY: one flag in, one status out.
+            unsafe { SecKeychainSetUserInteractionAllowed(0) }
+        });
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "keychain prompts could not be turned off ({status})"
+            ))
+        }
+    }
+
+    /// This process's own code, as a trusted application an access list can
+    /// name.
+    fn self_application() -> Result<CFType, String> {
+        let mut app: SecTrustedApplicationRef = std::ptr::null_mut();
+        // SAFETY: a NULL path asks for this process's own code, and `app` is a
+        // valid out-pointer.
+        let status = unsafe { SecTrustedApplicationCreateFromPath(std::ptr::null(), &mut app) };
+        if status != 0 || app.is_null() {
+            return Err(format!("keyd's code identity was not available ({status})"));
+        }
+        // SAFETY: the new reference is ours, and CFType releases it.
+        Ok(unsafe { CFType::wrap_under_create_rule(app as CFTypeRef) })
+    }
+
+    /// The record the framework matches a calling process against: keyd's
+    /// designated requirement for a signed build, its path for an unsigned one.
+    fn code_identity(app: CFTypeRef) -> Option<Vec<u8>> {
+        let mut data: CFDataRef = std::ptr::null();
+        // SAFETY: a live reference and a valid out-pointer.
+        if unsafe { SecTrustedApplicationCopyData(app as _, &mut data) } != 0 || data.is_null() {
+            return None;
+        }
+        // SAFETY: the new data is ours, and CFData releases it.
+        Some(unsafe { CFData::wrap_under_create_rule(data as _) }.to_vec())
+    }
+
+    /// An access's entries. The array owns them, so it has to outlive the
+    /// pointers it hands out.
+    fn acl_list(access: SecAccessRef) -> Result<CFArray<*const c_void>, String> {
+        let mut list: CFArrayRef = std::ptr::null();
+        // SAFETY: a live access and a valid out-pointer.
+        let status = unsafe { SecAccessCopyACLList(access, &mut list) };
+        if status != 0 || list.is_null() {
+            return Err(format!("the keychain access could not be read ({status})"));
+        }
+        // SAFETY: the new array is ours, and CFArray releases it.
+        Ok(unsafe { CFArray::wrap_under_create_rule(list as _) })
+    }
+
+    /// Whether one entry names keyd's code and nothing else. An entry open to
+    /// any application fails, and so does one that names nobody: the first is
+    /// the hole, the second is not an item keyd made.
+    fn entry_names_only_keyd(acl: SecACLRef, keyd: &[u8]) -> bool {
+        let mut apps: CFArrayRef = std::ptr::null();
+        let mut description: CFStringRef = std::ptr::null();
+        let mut prompt: u16 = 0;
+        // SAFETY: a live entry and valid out-pointers.
+        if unsafe { SecACLCopyContents(acl, &mut apps, &mut description, &mut prompt) } != 0 {
+            return false;
+        }
+        if !description.is_null() {
+            // SAFETY: the new string is ours, and CFType releases it.
+            drop(unsafe { CFType::wrap_under_create_rule(description as CFTypeRef) });
+        }
+        if apps.is_null() {
+            return false;
+        }
+        // SAFETY: the new array is ours, and CFArray releases it.
+        let apps = unsafe { CFArray::<*const c_void>::wrap_under_create_rule(apps as _) };
+        let trusted = apps.get_all_values();
+        !trusted.is_empty()
+            && trusted
+                .iter()
+                .all(|app| code_identity(*app).as_deref() == Some(keyd))
+    }
+
+    /// keyd's code identity, taken once: it cannot change while the process
+    /// runs, and every read would otherwise ask the framework for it again.
+    fn keyd_identity() -> Option<&'static Vec<u8>> {
+        static IDENTITY: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+        IDENTITY
+            .get_or_init(|| {
+                self_application()
+                    .ok()
+                    .and_then(|app| code_identity(app.as_concrete_TypeRef()))
+            })
+            .as_ref()
+    }
+
+    /// Whether every entry of an item's access list names keyd's code. An item
+    /// that cannot be answered for is not trusted: the check is the whole
+    /// point, so it fails closed.
+    fn access_is_keyd_only(item: &SecKeychainItem) -> bool {
+        let Some(keyd) = keyd_identity() else {
+            return false;
+        };
+        let mut access: SecAccessRef = std::ptr::null_mut();
+        // SAFETY: a live item and a valid out-pointer.
+        let status = unsafe { SecKeychainItemCopyAccess(item.as_concrete_TypeRef(), &mut access) };
+        if status != 0 || access.is_null() {
+            return false;
+        }
+        // SAFETY: the new access is ours, and CFType releases it.
+        let access = unsafe { CFType::wrap_under_create_rule(access as CFTypeRef) };
+        let Ok(list) = acl_list(access.as_concrete_TypeRef() as SecAccessRef) else {
+            return false;
+        };
+        let entries = list.get_all_values();
+        !entries.is_empty()
+            && entries
+                .iter()
+                .all(|acl| entry_names_only_keyd(*acl as SecACLRef, keyd))
+    }
+
+    /// An access for a new item: every entry the system's default
+    /// configuration makes, narrowed to keyd's code, plus one for the rights
+    /// the default leaves ungoverned.
+    fn locked_access() -> Result<CFType, String> {
+        let app = self_application()?;
+        let trusted = CFArray::<*const c_void>::from_copyable(&[app.as_concrete_TypeRef()]);
+        let name = CFString::new(ACCESS_NAME);
+        let mut access: SecAccessRef = std::ptr::null_mut();
+        // SAFETY: live references and a valid out-pointer.
+        let status = unsafe {
+            SecAccessCreate(
+                name.as_concrete_TypeRef() as CFStringRef,
+                trusted.as_concrete_TypeRef() as CFArrayRef,
+                &mut access,
+            )
+        };
+        if status != 0 || access.is_null() {
+            return Err(format!("the keychain access could not be made ({status})"));
+        }
+        // SAFETY: the new access is ours, and CFType releases it.
+        let access = unsafe { CFType::wrap_under_create_rule(access as CFTypeRef) };
+        let raw = access.as_concrete_TypeRef() as SecAccessRef;
+
+        // The default leaves the right to write the value open to any
+        // application, so narrow every entry it made.
+        let made = acl_list(raw)?;
+        for acl in made.get_all_values() {
+            // SAFETY: live references.
+            let status = unsafe {
+                SecACLSetContents(
+                    acl as SecACLRef,
+                    trusted.as_concrete_TypeRef() as CFArrayRef,
+                    name.as_concrete_TypeRef() as CFStringRef,
+                    0,
+                )
+            };
+            if status != 0 {
+                return Err(format!(
+                    "the keychain access could not be locked ({status})"
+                ));
+            }
+        }
+
+        // Deleting and changing an item answer to no entry at all, so add one
+        // for them, keyd's alone.
+        // SAFETY: framework constants, valid for the process lifetime.
+        let rights: Vec<CFStringRef> = unsafe {
+            vec![
+                kSecACLAuthorizationDelete,
+                kSecACLAuthorizationKeychainItemDelete,
+                kSecACLAuthorizationKeychainItemModify,
+                kSecACLAuthorizationChangeOwner,
+            ]
+        };
+        let authorizations = CFArray::<*const c_void>::from_copyable(&rights);
+        let mut entry: SecACLRef = std::ptr::null_mut();
+        // SAFETY: live references and a valid out-pointer.
+        let status = unsafe {
+            SecACLCreateWithSimpleContents(
+                raw,
+                trusted.as_concrete_TypeRef() as CFArrayRef,
+                name.as_concrete_TypeRef() as CFStringRef,
+                0,
+                &mut entry,
+            )
+        };
+        if status != 0 || entry.is_null() {
+            return Err(format!(
+                "the keychain access could not be locked ({status})"
+            ));
+        }
+        // SAFETY: the new entry is ours, and CFType releases it.
+        let entry = unsafe { CFType::wrap_under_create_rule(entry as CFTypeRef) };
+        // SAFETY: live references.
+        let status = unsafe {
+            SecACLUpdateAuthorizations(
+                entry.as_concrete_TypeRef() as SecACLRef,
+                authorizations.as_concrete_TypeRef() as CFArrayRef,
+            )
+        };
+        if status != 0 {
+            return Err(format!(
+                "the keychain access could not be locked ({status})"
+            ));
+        }
+        Ok(access)
+    }
+
+    enum Made {
+        Item,
+        Duplicate,
+    }
+
+    /// Makes an item under a locked access. `SecKeychainItemCreateFromContent`
+    /// refuses an item that is already there, which is what makes `insert`
+    /// atomic.
+    fn create(
+        keychain: &SecKeychain,
+        service: &str,
+        account: &str,
+        value: &[u8],
+    ) -> Result<Made, String> {
+        create_with(keychain, &locked_access()?, service, account, value)
+    }
+
+    /// The same, under an access built beforehand: a caller that has already
+    /// destroyed the item it is replacing wants no failure left before the
+    /// create itself.
+    fn create_with(
+        keychain: &SecKeychain,
+        access: &CFType,
+        service: &str,
+        account: &str,
+        value: &[u8],
+    ) -> Result<Made, String> {
+        let service = service.as_bytes();
+        let account = account.as_bytes();
+        let mut attributes = [
+            SecKeychainAttribute {
+                tag: SERVICE,
+                length: service.len() as u32,
+                data: service.as_ptr() as *mut c_void,
+            },
+            SecKeychainAttribute {
+                tag: ACCOUNT,
+                length: account.len() as u32,
+                data: account.as_ptr() as *mut c_void,
+            },
+        ];
+        let mut list = SecKeychainAttributeList {
+            count: attributes.len() as u32,
+            attr: attributes.as_mut_ptr(),
+        };
+        let mut item: SecKeychainItemRef = std::ptr::null_mut();
+        // SAFETY: live references, our own bytes, and valid out-pointers. The
+        // attribute data outlives the call.
+        let status = unsafe {
+            SecKeychainItemCreateFromContent(
+                GENERIC_PASSWORD,
+                &mut list,
+                value.len() as u32,
+                value.as_ptr() as *const c_void,
+                keychain.as_concrete_TypeRef(),
+                access.as_concrete_TypeRef() as SecAccessRef,
+                &mut item,
+            )
+        };
+        if !item.is_null() {
+            // SAFETY: the new item is ours, and CFType releases it.
+            drop(unsafe { CFType::wrap_under_create_rule(item as CFTypeRef) });
+        }
+        match status {
+            0 => Ok(Made::Item),
+            DUPLICATE => Ok(Made::Duplicate),
+            status => Err(format!("the keychain item could not be added ({status})")),
+        }
+    }
+
+    /// Replaces an item's value in place, keeping its access list. The
+    /// attribute list has to be the one `SecKeychainItemCopyContent` returns: a
+    /// write that carries none is the write any process in this account can
+    /// make, and keyd does not use it.
+    fn modify(item: &SecKeychainItem, value: &[u8]) -> Result<(), i32> {
+        let raw = item.as_concrete_TypeRef();
+        let mut attributes: *mut SecKeychainAttributeList = std::ptr::null_mut();
+        let mut length: u32 = 0;
+        let mut data: *mut c_void = std::ptr::null_mut();
+        // SAFETY: a live item and valid out-pointers.
+        let copied = unsafe {
+            SecKeychainItemCopyContent(
+                raw,
+                std::ptr::null_mut(),
+                &mut attributes,
+                &mut length,
+                &mut data,
+            )
+        };
+        if copied != 0 {
+            return Err(copied);
+        }
+        // SAFETY: a live item, the attribute list just copied, and our bytes.
+        let status = unsafe {
+            SecKeychainItemModifyAttributesAndData(
+                raw,
+                attributes,
+                value.len() as u32,
+                value.as_ptr() as *const c_void,
+            )
+        };
+        // SAFETY: releases what the copy allocated.
+        unsafe { SecKeychainItemFreeContent(attributes, data) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(status)
+        }
+    }
+
+    /// Writes over an item that is already there: in place when keyd controls
+    /// it, and by replacing it when keyd does not.
+    fn replace(
+        keychain: &SecKeychain,
+        service: &str,
+        account: &str,
+        item: SecKeychainItem,
+        value: &[u8],
+    ) -> Result<(), String> {
+        if access_is_keyd_only(&item) {
+            return modify(&item, value)
+                .map_err(|status| format!("the keychain item could not be written ({status})"));
+        }
+        // Never write through an item keyd does not control: its access may let
+        // any process in this account change the value, and writing would leave
+        // that in place. Replace it with one keyd made — building the access
+        // first, since until the create lands this item is the only copy of the
+        // value, and for a legacy App key that value is a key the owner
+        // imported.
+        let access = locked_access()?;
+        item.delete();
+        match create_with(keychain, &access, service, account, value) {
+            Ok(Made::Item) => Ok(()),
+            Ok(Made::Duplicate) => {
+                Err("the keychain item could not be written (another took its place)".into())
+            }
+            Err(error) => {
+                // Put the value back rather than lose it. It goes back
+                // unlocked, which is the state it was found in.
+                let _ = keychain.add_generic_password(service, account, value);
+                Err(error)
+            }
+        }
+    }
+
+    /// An App key is recoverable: its value is a key the owner imported, not
+    /// something agent-bot pinned. Everything under `PIN_SERVICE` — the daemon
+    /// grant key, the presence seed and the owner's statement pins — is what
+    /// agent-bot trusts, so an item keyd does not control is not a value keyd
+    /// may hand back. Keying on the service keeps a pin account added later
+    /// refused by default rather than trusted by default.
+    fn recreatable(service: &str) -> bool {
+        service != PIN_SERVICE
+    }
+
+    fn untrusted(account: &str) -> String {
+        format!(
+            "the keychain item for {account} is not one agent-bot-keyd controls: any process in this account can change it, so its value was refused"
+        )
+    }
 
     /// The login keychain, or (tests) a keychain file of its own.
     pub struct Keychain {
@@ -290,51 +776,94 @@ pub mod keychain {
             }
             .map_err(|error| format!("the keychain could not be opened ({})", error.code()))
         }
-    }
 
-    impl Items for Keychain {
-        fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
-            let keychain = self.open()?;
-            match find_generic_password(Some(std::slice::from_ref(&keychain)), service, account) {
-                Ok((password, _)) => Ok(Some(password.to_owned())),
+        fn find(
+            &self,
+            keychain: &SecKeychain,
+            service: &str,
+            account: &str,
+        ) -> Result<Option<(SecKeychainItemPassword, SecKeychainItem)>, String> {
+            match find_generic_password(Some(std::slice::from_ref(keychain)), service, account) {
+                Ok(found) => Ok(Some(found)),
                 Err(error) if error.code() == NOT_FOUND => Ok(None),
                 Err(error) => Err(format!("the keychain could not be read ({})", error.code())),
             }
         }
 
-        fn write(&self, service: &str, account: &str, value: &[u8]) -> Result<(), String> {
+        /// Whether the item at `service`/`account` is one keyd controls, which
+        /// is what the access-list test asserts.
+        #[cfg(test)]
+        pub(super) fn trusts_only_keyd(
+            &self,
+            service: &str,
+            account: &str,
+        ) -> Result<bool, String> {
+            no_prompts()?;
             let keychain = self.open()?;
-            // An existing item keeps the access list keyd gave it at creation.
-            keychain
-                .set_generic_password(service, account, value)
-                .map_err(|error| {
-                    format!("the keychain item could not be written ({})", error.code())
-                })
+            let Some((_, item)) = self.find(&keychain, service, account)? else {
+                return Ok(false);
+            };
+            Ok(access_is_keyd_only(&item))
+        }
+    }
+
+    impl Items for Keychain {
+        fn read(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
+            no_prompts()?;
+            let keychain = self.open()?;
+            let Some((password, item)) = self.find(&keychain, service, account)? else {
+                return Ok(None);
+            };
+            if access_is_keyd_only(&item) {
+                return Ok(Some(password.to_vec()));
+            }
+            // An item from before the access list was locked, or one another
+            // process planted. Either way keyd did not make it.
+            if !recreatable(service) {
+                return Err(untrusted(account));
+            }
+            let value = password.to_vec();
+            drop(password);
+            replace(&keychain, service, account, item, &value)?;
+            Ok(Some(value))
         }
 
-        fn insert(&self, service: &str, account: &str, value: &[u8]) -> Result<bool, String> {
+        fn write(&self, service: &str, account: &str, value: &[u8]) -> Result<(), String> {
+            no_prompts()?;
             let keychain = self.open()?;
-            // SecKeychainAddGenericPassword refuses an existing item atomically.
-            // Never use set_generic_password here: that replaces a late item.
-            match keychain.add_generic_password(service, account, value) {
-                Ok(()) => Ok(true),
-                Err(error) if error.code() == DUPLICATE => Ok(false),
-                Err(error) => Err(format!(
-                    "the keychain item could not be added ({})",
-                    error.code()
-                )),
+            if let Some((_, item)) = self.find(&keychain, service, account)? {
+                return replace(&keychain, service, account, item, value);
+            }
+            match create(&keychain, service, account, value)? {
+                Made::Item => Ok(()),
+                // Another caller made one between the look-up and the create.
+                Made::Duplicate => match self.find(&keychain, service, account)? {
+                    Some((_, item)) => replace(&keychain, service, account, item, value),
+                    None => Err("the keychain item could not be written".into()),
+                },
             }
         }
 
-        fn remove(&self, service: &str, account: &str) -> Result<bool, String> {
+        fn insert(&self, service: &str, account: &str, value: &[u8]) -> Result<bool, String> {
+            no_prompts()?;
             let keychain = self.open()?;
-            match keychain.find_generic_password(service, account) {
-                Ok((_, item)) => {
+            // Never write over an existing item here: that would replace a late
+            // item another caller made.
+            Ok(matches!(
+                create(&keychain, service, account, value)?,
+                Made::Item
+            ))
+        }
+
+        fn remove(&self, service: &str, account: &str) -> Result<bool, String> {
+            no_prompts()?;
+            let keychain = self.open()?;
+            match self.find(&keychain, service, account)? {
+                Some((_, item)) => {
                     item.delete();
                     Ok(true)
                 }
-                Err(error) if error.code() == NOT_FOUND => Ok(false),
-                Err(error) => Err(format!("the keychain could not be read ({})", error.code())),
+                None => Ok(false),
             }
         }
     }
@@ -581,13 +1110,11 @@ pub mod tests {
 
     /// A real keychain, in a file of its own under a temporary directory: the
     /// login keychain is never opened. Creating a keychain adds it to this
-    /// user's search list, and deleting it removes it again.
+    /// user's search list, and deleting it removes it again — whether or not
+    /// `body` panics, since a keychain left in the search list is a dialog
+    /// waiting for a password nobody owes it.
     #[cfg(target_os = "macos")]
-    #[test]
-    fn keychain_store_round_trips_in_a_temporary_keychain() {
-        if !keychain_tests_enabled() {
-            return;
-        }
+    fn with_temporary_keychain(body: impl FnOnce(&std::path::Path)) {
         use security_framework::os::macos::keychain::CreateOptions;
         let dir = crate::paths::tests::short_temp_dir("kc");
         let path = dir.join("keyd-test.keychain-db");
@@ -597,12 +1124,103 @@ pub mod tests {
             .unwrap();
         let mut unlocked = keychain.clone();
         unlocked.unlock(Some("keyd-test")).unwrap();
-        let result = std::panic::catch_unwind(|| {
-            exercise(&Store::new(Box::new(keychain::Keychain::at(path.clone()))));
-        });
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(path.as_path())));
         delete_keychain(&keychain);
         let _ = std::fs::remove_dir_all(&dir);
         result.unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_store_round_trips_in_a_temporary_keychain() {
+        if !keychain_tests_enabled() {
+            return;
+        }
+        with_temporary_keychain(|path| {
+            exercise(&Store::new(Box::new(keychain::Keychain::at(
+                path.to_path_buf(),
+            ))));
+        });
+    }
+
+    /// Every entry of a keyd item's access list names keyd's own code, so no
+    /// other process in this account can write the value or widen the access
+    /// (agent-bot-identity #753). An item made the way the framework's default
+    /// makes one does not: its write right is open to any application.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_items_trust_only_keyd() {
+        if !keychain_tests_enabled() {
+            return;
+        }
+        with_temporary_keychain(|path| {
+            use security_framework::os::macos::keychain::SecKeychain;
+            let items = keychain::Keychain::at(path.to_path_buf());
+            let keychain = SecKeychain::open(path).unwrap();
+
+            // Every item keyd makes is locked, whichever service it is under.
+            for (service, account) in [
+                (PIN_SERVICE, PRESENCE_ACCOUNT),
+                (PIN_SERVICE, PIN_ACCOUNT),
+                (PIN_SERVICE, OWNER_PINS_ACCOUNT),
+                (APP_SERVICE, "github-app/test-app"),
+            ] {
+                items.write(service, account, b"value").unwrap();
+                assert!(
+                    items.trusts_only_keyd(service, account).unwrap(),
+                    "{service}/{account} should name only keyd"
+                );
+                assert_eq!(
+                    items.read(service, account).unwrap().as_deref(),
+                    Some(b"value".as_slice()),
+                    "keyd still reads what it made"
+                );
+            }
+
+            // An App key from before the lock is one any process in this
+            // account can write. Reading it re-makes it, value and all, so an
+            // owner's imported key survives the upgrade.
+            let legacy_app = "github-app/legacy";
+            keychain
+                .add_generic_password(APP_SERVICE, legacy_app, b"legacy")
+                .unwrap();
+            assert!(
+                !items.trusts_only_keyd(APP_SERVICE, legacy_app).unwrap(),
+                "the framework's default access lets any application write"
+            );
+            assert_eq!(
+                items.read(APP_SERVICE, legacy_app).unwrap().as_deref(),
+                Some(b"legacy".as_slice())
+            );
+            assert!(
+                items.trusts_only_keyd(APP_SERVICE, legacy_app).unwrap(),
+                "re-made under the lock, with the same value"
+            );
+
+            // A pin from before the lock is refused instead: its value is what
+            // agent-bot trusts, so keyd neither hands back one it cannot vouch
+            // for nor quietly makes another. Every account under `PIN_SERVICE`
+            // is such a pin, the owner's statement keys included.
+            for account in [PRESENCE_ACCOUNT, PIN_ACCOUNT, OWNER_PINS_ACCOUNT] {
+                items.remove(PIN_SERVICE, account).unwrap();
+                keychain
+                    .add_generic_password(PIN_SERVICE, account, b"legacy")
+                    .unwrap();
+                assert!(
+                    !items.trusts_only_keyd(PIN_SERVICE, account).unwrap(),
+                    "{account} should be an item keyd did not make"
+                );
+                let refused = items.read(PIN_SERVICE, account);
+                assert!(refused.is_err(), "an untrusted {account} is not read");
+                assert!(
+                    refused
+                        .unwrap_err()
+                        .contains("not one agent-bot-keyd controls"),
+                    "and the refusal says why"
+                );
+            }
+        });
     }
 
     #[cfg(target_os = "macos")]

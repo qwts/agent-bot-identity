@@ -254,7 +254,7 @@ test('an unapproved signer refuses the owner action with its code, never falling
     consent: () => assert.fail('a refusal never falls back'), summarize: (text) => text }), { code: 'keyd-signer-unverified' });
 });
 
-test('the presence key is pinned from the signed binary, once, and never from the socket', (t) => {
+test('the presence key comes from the signed binary every time, and the pin file is only a cache', (t) => {
   const { env } = home(t);
   const key = presenceKey();
   const runs = [];
@@ -264,8 +264,45 @@ test('the presence key is pinned from the signed binary, once, and never from th
   const file = presencePinPath({ env });
   assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`);
   assert.equal(statSync(file).mode & 0o777, 0o600);
-  assert.equal(pinnedPresenceKey({ ...seams, run: () => assert.fail('a pinned key is not asked again') }), key.raw);
-  assert.deepEqual(runs.map(([what]) => what), ['verify', 'run']);
+  // The cache never stands in for the binary: the next call checks the
+  // signature and asks the binary again, so a caller that stops doing either
+  // stops getting a key (#753).
+  assert.equal(pinnedPresenceKey(seams), key.raw);
+  assert.deepEqual(runs.map(([what]) => what), ['verify', 'run', 'verify', 'run']);
+  assert.equal(pinnedPresenceKey({ ...seams, run: () => { throw new Error('keyd did not answer'); } }), null);
+  assert.equal(pinnedPresenceKey({ ...seams, verifyBinary: () => { throw new Error('code object is not signed at all'); },
+    run: () => assert.fail('an unverified binary is never run') }), null);
+  assert.equal(readFileSync(file, 'utf8'), `${key.raw}\n`, 'a failed derivation leaves the cache alone');
+});
+
+// A file in this account is one a soul can write, so a cache that disagrees
+// with the binary means one of the two was replaced. Neither value may answer
+// for the owner, and the disagreement is left where it can be seen (#753).
+test('a pin that disagrees with the signed binary is refused, not used and not replaced', (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  const file = presencePinPath({ env });
+  writeFileSync(file, `${presenceKey().raw}\n`, { mode: 0o644 });
+  const planted = readFileSync(file, 'utf8');
+  const receipts = [];
+  const seams = { env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
+    run: () => `${key.raw}\n`, receipt: (entry) => receipts.push(entry) };
+  assert.throws(() => pinnedPresenceKey(seams), { code: 'presence-pin-mismatch' });
+  assert.equal(readFileSync(file, 'utf8'), planted);
+  assert.deepEqual(receipts.map(({ event, operation, decision }) => [event, operation, decision]),
+    [['keyd-signer', 'pin-presence-key', 'refused']]);
+  assert.match(receipts[0].detail, /does not match the code-signed keyd binary/);
+});
+
+test('a pin mismatch refuses the owner action with its code, never falling back to the dialog', async (t) => {
+  const { env } = home(t);
+  const key = presenceKey();
+  writeFileSync(presencePinPath({ env }), `${presenceKey().raw}\n`, { mode: 0o600 });
+  const presence = (summary, options) => keydPresence(summary, { ...options,
+    pinned: () => pinnedPresenceKey({ env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
+      run: () => `${key.raw}\n`, receipt: () => {} }) });
+  await assert.rejects(presenceOrConsent(`soul comms ${ID} off`, { env, presence,
+    consent: () => assert.fail('a refusal never falls back'), summarize: (text) => text }), { code: 'presence-pin-mismatch' });
 });
 
 test('no keyd, an unsigned keyd or a malformed answer pins nothing', (t) => {

@@ -29,7 +29,7 @@ connect them, one in each direction:
 | Key | Held by | Signs | Verified by | How the verifier learns it |
 | --- | --- | --- | --- | --- |
 | Vouch key (`<state>/vouch-key.pem`, PKCS#8, 0600) | the agent-bot daemon | grants (`v1.`) | keyd | sent with every `owner/import`; keyd-side, keyd pins it on the first one |
-| Presence key | keyd, seed in its Keychain | presence assertions (`p1.`), owner key records (`k1.`) | agent-bot | pinned in `<state>/keyd/presence.pub` from the code-signed keyd binary |
+| Presence key | keyd, seed in its Keychain | presence assertions (`p1.`), owner key records (`k1.`) | agent-bot | derived from the code-signed keyd binary on every call; `<state>/keyd/presence.pub` caches the last pin and a disagreement is refused |
 
 `<state>` is `$XDG_STATE_HOME/agent-bot` or `~/.local/state/agent-bot`.
 
@@ -198,6 +198,8 @@ request and must match.
 | --- | --- | --- |
 | `{ method: 'presence', via: 'agent-bot-keyd' }` | the assertion verifies | approved |
 | `presence-unavailable` | no pinned key and none can be pinned; `keyd-unavailable` (no socket, connection closed); keyd answers RPC error `-32001` | the wired owner gate follows the signed-challenge fallback order below |
+| `keyd-signer-unverified` | the owner refused a loosened keyd signer | refused, nobody else is asked |
+| `presence-pin-mismatch` | the cached presence key disagrees with the code-signed binary | refused, nobody else is asked |
 | `owner-declined` | any other keyd refusal, including `keyd-timeout` | refused, nobody else is asked |
 | `presence-invalid` | the assertion does not verify | refused, nobody else is asked |
 
@@ -226,10 +228,12 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
 
 `pinnedPresenceKey`:
 
-1. If `<state>/keyd/presence.pub` holds a well-formed key (base64 of 32
-   bytes), use it. Nothing else is checked, and the binary is not consulted
-   again.
-2. Otherwise, if the keyd install record (`<state>/keyd/keyd.json`) names an
+1. Read `<state>/keyd/presence.pub` (base64 of 32 bytes) as a cache of the
+   last pin. It is never the pin: a file in this account is one a soul can
+   write, so every call goes on to the binary, and a cache that disagrees
+   with it is refused rather than used or quietly replaced (#753). A cache
+   that does not parse counts as none.
+2. If the keyd install record (`<state>/keyd/keyd.json`) names an
    absolute `bin` and a keyd Team ID is configured, run
    `/usr/bin/codesign --verify --strict -R=<requirement> <bin>`. The
    requirement is a Developer ID Application signature from the configured
@@ -276,21 +280,32 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    owner's approval nothing is run or pinned, and `pinnedPresenceKey` throws
    `keyd-signer-unverified`; the owner gate refuses the action with that
    code and does not fall back to another prompt. Setting a specific Team ID
-   where none was pinned before is not a loosening.
-4. Only then run `<bin> presence-key` (15-second timeout). If the output is
-   a well-formed key, write it to `presence.pub` and the signer to
-   `presence.signer`, and use it. Both files are left at mode 0600, whether
-   new or replacing a pin that did not parse (#746).
+   where none was pinned before is not a loosening. Since #753 every call
+   reaches the binary, so this is asked only where the decision is new: when
+   the signer differs from the one recorded, or when a loosened signer has
+   not been recorded yet. Re-deriving under a signer already on record asks
+   nobody.
+4. Only then run `<bin> presence-key` (15-second timeout). A well-formed
+   answer that disagrees with the cache means one of the two was replaced, so
+   `pinnedPresenceKey` throws `presence-pin-mismatch`, receipts the refusal,
+   and leaves the cache where it can be examined; the owner gate refuses
+   without another prompt. Recovering is the owner's act: remove
+   `presence.pub` and pin again. A well-formed answer that agrees, or a first
+   pin, is written to `presence.pub` with the signer to `presence.signer`.
+   Both files are left at mode 0600, whether new or replacing a pin that did
+   not parse (#746).
 5. Any other failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
-The key is never taken from the socket. A file in `presence.pub` that does
-not parse as a key is treated as no pin, and step 2 runs again.
+The key is never taken from the socket, and never from the cache alone. A
+file in `presence.pub` that does not parse as a key is treated as no pin, and
+step 2 runs again.
 
-The requirement is checked only when a key is pinned. A host that pinned its
-key before #594 keeps that pin, and the Team ID and identifier apply the next
-time it pins, for example after `presence.pub` is removed. Such a pin has no
-`presence.signer`, so its next pin counts as a first pin.
+The requirement is checked on every call, not only when a key is pinned. A
+host that pinned its key before #594 has that pin checked against the binary
+from #753 on, and a host whose Team ID setting was removed after pinning
+falls back to `presence-unavailable` rather than keeping a pin nothing
+verifies any more. A pin with no `presence.signer` counts as a first pin.
 
 ### Known gaps
 
@@ -551,7 +566,8 @@ Tests named here are `node:test` titles, or Rust test functions under
 | Only an explicit `any-developer-id` restores the requirement from before #594 | — | `developerIdRequirement` | `tests/owner-presence.test.mjs`: "only an explicit any-developer-id brings back the requirement from before #594" |
 | A malformed signer is refused and pins nothing; the binary is verified against the configured signer before it runs | — | `keydSigner`, `pinnedPresenceKey`, `loadConfig` | `tests/owner-presence.test.mjs`: "a malformed keyd signer is refused, so nothing reaches the code-signing requirement", "the binary is verified against the configured team and identifier before it is run"; `tests/config.test.mjs`: "loadConfig accepts a keyd Team ID and identifier and rejects anything else (#594)" |
 | Each request carries a fresh agent-bot nonce; a socket without keyd's key, or an assertion for another nonce, is refused | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence asks keyd with the action and a fresh nonce, and checks the answer" |
-| The presence key is pinned from the signed binary once, the pin file 0600, never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key is pinned from the signed binary, once, and never from the socket", "a corrupt pin is replaced from the binary and left owner-only" |
+| The presence key is derived from the signed binary on every call, the pin file 0600 is a cache, never the pin, and never from the socket | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "the presence key comes from the signed binary every time, and the pin file is only a cache", "a corrupt pin is replaced from the binary and left owner-only" |
+| A cached key the binary disagrees with is refused, receipted, left in place, and never falls back to the dialog | — | `pinnedPresenceKey`, `presenceOrConsent` | `tests/owner-presence.test.mjs`: "a pin that disagrees with the signed binary is refused, not used and not replaced", "a pin mismatch refuses the owner action with its code, never falling back to the dialog" |
 | No record, an unsigned binary (never run) or a malformed answer pins nothing | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "no keyd, an unsigned keyd or a malformed answer pins nothing" |
 | An unparseable pin file is pinned again from the signed binary | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "a pin that does not parse as a key is pinned again from the signed binary" |
 | `presence-unavailable` vs `owner-declined` (timeout included) | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence tells \"nobody can be asked\" apart from \"the owner said no\"" |
