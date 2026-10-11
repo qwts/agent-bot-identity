@@ -417,8 +417,9 @@ export function createDaemonServer({
   // owner does not confirm. Tests pass a fake; the default asks keyd, then
   // the dialog. A signed challenge (#753) answers a decision route only on a
   // request where keyd vouches for the owner pin file, which a soul running
-  // as the owner could otherwise write; the ledger asks keyd each time.
-  ownerGate = decisionOwnerGate({ env, challenges: createChallengeLedger({ env }) }),
+  // as the owner could otherwise write; the ledger asks keyd each time, under
+  // this daemon's `home`.
+  ownerGate = decisionOwnerGate({ env, challenges: createChallengeLedger({ env, home }) }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),

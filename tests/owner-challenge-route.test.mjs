@@ -282,6 +282,49 @@ test('a pin file swapped between the ledger read and keyd is never vouched for: 
   await challengesFrom(createChallengeLedger({ env, attest: keyd }).hook({ request: 'p2' }), action);
 });
 
+// The owner removes or replaces the challenged key while keyd is answering:
+// keyd vouched for the pins as they were read, but they are no longer the
+// pins on file, so neither may answer.
+test('a key removed or replaced while keyd is asked never answers: the reply is spent and the dialog asks', async () => {
+  const { root, env } = scratch();
+  const owner = ownerKey(root, env);
+  const replacement = ownerKey(root, env, 'replacement');
+  const action = 'approve x';
+  for (const after of [[], [replacement.pin]]) {
+    writeOwnerKeys([owner.pin], { env });
+    let change = false;
+    const ledger = createChallengeLedger({ env, attest: async () => {
+      if (change) writeOwnerKeys(after, { env });
+      return { attested: true, generation: 1 };
+    } });
+    const [challenge] = await challengesFrom(ledger.hook({ request: 'p1' }), action);
+    change = true;
+    assert.equal(await ledger.hook({ request: 'p1', statement: signed(challenge.payload, owner) })(action, { summary: action }), null);
+    assert.equal(ledger.size, 0, 'the reply is spent');
+    // Nor is a new challenge raised from the snapshot keyd vouched for.
+    writeOwnerKeys([owner.pin], { env });
+    assert.equal(await ledger.hook({ request: 'p2' })(action, { summary: action }), null);
+    assert.equal(ledger.size, 0);
+  }
+});
+
+// A daemon's home need not be env.HOME: the ledger reads the pins and asks
+// keyd under the home it was given.
+test('the ledger reads the pins and asks keyd under its own home, not env.HOME', async () => {
+  const { root, env } = scratch();
+  const elsewhere = scratch();
+  const owner = ownerKey(root, env);
+  writeOwnerKeys([owner.pin], { env });
+  const asked = [];
+  const ledger = createChallengeLedger({ env: { ...env, HOME: elsewhere.root }, home: root,
+    attest: async (pins, options) => { asked.push({ pins, home: options.home }); return { attested: true, generation: 1 }; } });
+  await challengesFrom(ledger.hook({ request: 'p1' }), 'approve x');
+  assert.deepEqual(asked, [{ pins: [owner.pin], home: root }]);
+  // env.HOME's own (empty) state is not read.
+  const theirs = createChallengeLedger({ env: { ...env, HOME: elsewhere.root }, attest: async () => assert.fail('no pins there to ask about') });
+  assert.equal(await theirs.hook({ request: 'p1' })('approve x', { summary: 'x' }), null);
+});
+
 test('a keyd record older than one seen is pins-stale through the ledger: the dialog asks and the reply is spent', async () => {
   const { root, env } = scratch();
   const owner = ownerKey(root, env);
@@ -563,13 +606,21 @@ test('agent-bot approvals prints the challenges to sign and passes a signed stat
 // the default always asks keyd; with any other record it never does, and
 // the dialog (refused here) decides.
 const HELPERS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'helpers');
-for (const [label, vouches] of [['vouches for the pins', true], ['recorded another key set', false]]) {
-  test(`the default daemon asks keyd on every decision: keyd ${label}`, async () => {
+for (const [label, vouches, ownHome] of [
+  ['keyd vouches for the pins', true, false],
+  ['keyd recorded another key set', false, false],
+  ['keyd vouches, under the daemon\'s home rather than env.HOME', true, true],
+]) {
+  test(`the default daemon asks keyd on every decision: ${label}`, async () => {
     // A short HOME: the owner socket path must fit a Unix socket's limit.
     const home = mkdtempSync(path.join('/tmp', 'ocd-'));
     roots.push(home);
+    // With `ownHome`, env.HOME is another, empty directory.
+    const envHome = ownHome ? mkdtempSync(path.join('/tmp', 'oce-')) : home;
+    if (ownHome) roots.push(envHome);
     const env = {
-      PATH: process.env.PATH, HOME: home, AGENT_BOT_KEYD_TEAM_ID: 'ABCDE12345', TEST_AGENT_ID: AGENT_ID,
+      PATH: process.env.PATH, HOME: envHome, AGENT_BOT_KEYD_TEAM_ID: 'ABCDE12345', TEST_AGENT_ID: AGENT_ID,
+      ...(ownHome ? { TEST_DAEMON_HOME: home } : {}),
       AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction'),
       AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json'),
       AGENT_BOT_PRINCIPALS_PATH: path.join(home, 'principals.json'),
@@ -580,7 +631,7 @@ for (const [label, vouches] of [['vouches for the pins', true], ['recorded anoth
       spacePath: `/spaces/${AGENT_ID}`, transcriptLocator: null, lastSeen: '2026-08-12T08:00:00.000Z',
     }, { file: env.AGENT_BOT_POPULATION_PATH });
     const owner = ownerKey(home, env);
-    writeOwnerKeys([owner.pin], { env });
+    writeOwnerKeys([owner.pin], { env, home });
     const keyd = keydPresenceKey();
     env.NO_EXEC_PRESENCE_KEY = keyd.raw;
     const keydDir = path.join(home, '.local', 'state', 'agent-bot', 'keyd');
@@ -609,7 +660,9 @@ for (const [label, vouches] of [['vouches for the pins', true], ['recorded anoth
       const status = await new Promise((resolve) => { child.on('close', resolve); });
       assert.equal(status, 0, err);
       const result = JSON.parse(out.trim().split('\n').at(-1));
-      assert.deepEqual(methods, ['owner/presence', 'owner/pins-status']);
+      // Presence looks under env.HOME, where no keyd is set up when it differs;
+      // the pins and keyd's record are read under the daemon's home.
+      assert.deepEqual(methods, ownHome ? ['owner/pins-status'] : ['owner/presence', 'owner/pins-status']);
       const execs = readFileSync(env.NO_EXEC_LOG, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
       assert.ok(execs.some(({ args }) => args[0] === 'presence-key'), 'the presence key came from the (stubbed) binary');
       const dialogs = execs.filter(({ file }) => file === '/usr/bin/osascript').length;

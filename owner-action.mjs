@@ -24,14 +24,29 @@ export { keydPresenceWithoutDialog } from './owner-presence.mjs';
 
 export const populationSouls = (env = process.env) => () => listSouls({ file: populationFile({ env }) });
 
-// Whether keyd vouches, on this request, for exactly the owner pins just read
-// (#753). An attester that fails is no vouching: the caller keeps the dialog.
-async function vouchedFor(attest, keys, env) {
-  try { return (await attest(keys, { env }))?.attested === true; } catch { return false; }
+// The owner pins on file, only as far as keyd vouches for them on this
+// request (#753): 'none' when none are pinned or the file cannot be read,
+// 'unvouched' when keyd does not vouch for exactly the pins read (an attester
+// that fails included) or the file no longer holds them once keyd has
+// answered, and otherwise those pins. The caller keeps the dialog unless it
+// gets pins. `home` is the caller's state home, so the pins, the presence key
+// and keyd's socket all resolve where its other state does.
+async function vouchedPins(attest, { env, home }) {
+  const read = () => { try { return readOwnerKeys({ env, home }); } catch { return null; } };
+  const keys = read();
+  if (keys === null || keys.length === 0) return 'none';
+  let answer;
+  try { answer = await attest(keys, { env, home }); } catch { return 'unvouched'; }
+  if (answer?.attested !== true) return 'unvouched';
+  // A pin removed or replaced while keyd was asked must not answer with the
+  // snapshot keyd vouched for: both must hold at once.
+  const now = read();
+  return now !== null && JSON.stringify(now) === JSON.stringify(keys) ? keys : 'unvouched';
 }
 
 function sharedGateOptions(options) {
   const env = options.env ?? process.env;
+  const home = options.home;
   const list = populationSouls(env);
   // The terminal's signed-challenge fallback (#822) reads the owner pin
   // file, which anything running as the owner can write: a soul could pin a
@@ -54,10 +69,8 @@ function sharedGateOptions(options) {
     challenge: typeof options.challenge === 'function' ? options.challenge : allowChallenge ? async (pendingAction, { summary }) => {
       // A pin file that cannot be read, or that keyd does not vouch for, is
       // no pins: the dialog asks.
-      let keys;
-      try { keys = readOwnerKeys({ env }); } catch { return null; }
-      if (keys.length === 0) return null;
-      if (!await vouchedFor(attest, keys, env)) return null;
+      const keys = await vouchedPins(attest, { env, home });
+      if (!Array.isArray(keys)) return null;
       const sshKeys = keys.filter((pin) => pin.store === 'ssh');
       if (sshKeys.length === 0) {
         throw statementError('owner-unreachable', 'owner pins exist, but this CLI challenge flow can use only enrolled SSH keys; nothing was changed');
@@ -72,9 +85,9 @@ function sharedGateOptions(options) {
       // A reply is checked against the current store, never the stale snapshot
       // that was used to create the prompt.
       // keyd is asked again, with a new nonce, for the pins as they are now.
-      let currentKeys;
-      try { currentKeys = readOwnerKeys({ env }); } catch { return null; }
-      if (!await vouchedFor(attest, currentKeys, env)) return null;
+      const currentKeys = await vouchedPins(attest, { env, home });
+      if (currentKeys === 'unvouched') return null;
+      if (currentKeys === 'none') throw statementError('owner-unreachable', 'the challenged owner key is no longer enrolled; nothing was changed');
       const stillPinned = currentKeys.some((pin) => pin.store === 'ssh'
         && challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint));
       if (!stillPinned) {
@@ -147,7 +160,7 @@ export function decisionOwnerGate({ env = process.env, challenges = null, ...gat
 // memory: a restart drops them.
 const securityKeyPin = (pin) => pin.store === 'ssh' && pin.softwareKey !== true && /^sk-/.test(pin.publicKey);
 
-export function createChallengeLedger({ env = process.env, now = Date.now, host = localHost, limit = 64, attest = attestedOwnerKeys } = {}) {
+export function createChallengeLedger({ env = process.env, home = undefined, now = Date.now, host = localHost, limit = 64, attest = attestedOwnerKeys } = {}) {
   const pending = new Map();
   const prune = () => {
     const seconds = Math.floor(now() / 1000);
@@ -161,13 +174,13 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
     // `statement` is the caller's signed reply, if any.
     hook({ request, statement = null } = {}) {
       return async (action, { summary }) => {
-        let keys;
-        // A pin file that cannot be read never blocks a decision: the dialog asks.
-        try { keys = readOwnerKeys({ env }); } catch { return null; }
-        if (keys.length === 0) return null;
-        // Pins keyd does not vouch for on this request are no pins: the dialog
-        // asks, and a reply to a pending challenge is spent unused.
-        if (!await vouchedFor(attest, keys, env)) {
+        // A pin file that cannot be read never blocks a decision: the dialog
+        // asks. Pins keyd does not vouch for on this request, or that changed
+        // while it was asked, are no pins either, and a reply to a pending
+        // challenge is spent unused.
+        const keys = await vouchedPins(attest, { env, home });
+        if (keys === 'none') return null;
+        if (keys === 'unvouched') {
           if (statement !== null && statement !== undefined && statement !== '') pending.delete(request);
           return null;
         }
@@ -193,8 +206,8 @@ export function createChallengeLedger({ env = process.env, now = Date.now, host 
         if (!entry || entry.action !== action) {
           throw statementError('statement-scope-mismatch', 'no owner challenge is pending for this decision; repeat it without a statement for a new one');
         }
-        // Checked against the pins as they are now, read and vouched for by
-        // keyd on this request, not when the challenge was made.
+        // Checked against the pins as they are now, read, vouched for by keyd
+        // and read again on this request, not when the challenge was made.
         const currentKeys = securityKeys;
         if (!currentKeys.some((pin) => entry.challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint))) {
           throw statementError('owner-unreachable', 'the challenged owner key is no longer enrolled; nothing was changed');

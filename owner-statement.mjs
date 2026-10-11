@@ -1,6 +1,7 @@
 // Owner-signed statements (ADR-0753, #753): a decision the owner signs with a
-// key no agent can read, which any agent, CI job or subagent can check offline
-// against the keys pinned here.
+// key no agent can read. Any agent, CI job or subagent can check its
+// signature offline against the keys pinned here; it is the owner's approval
+// only where agent-bot-keyd vouches for those pins on that call (below).
 //
 //   s1.<base64url(payload JSON)>.<base64url(signature)>
 //   payload: { v: 1, aud: 'agent-bot-owner-statement', kind, alg, key,
@@ -17,8 +18,10 @@
 // goes through keyd (#753): keyd shows the owner the whole new key set and,
 // only on approval, records it, and enrolling also needs a signature from the
 // new key. With no keyd to ask, the pins do not change. A statement never
-// changes the pins, so the fallback cannot bootstrap itself. Verification reads only those pins: no
-// network, no daemon, no secret.
+// changes the pins, so the fallback cannot bootstrap itself. Checking a
+// signature reads only those pins: no network, no daemon, no secret. Calling
+// it approval also asks keyd, on that call, whether it recorded exactly
+// those pins (`owner/pins-status`); without keyd, as in CI, it never is.
 //
 // This slice ships the format, the verifier (Ed25519 and SSHSIG, including
 // FIDO `sk-ssh-ed25519@openssh.com` keys and their presence flags), the pins,

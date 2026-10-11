@@ -108,7 +108,11 @@ payload: { v: 1, aud: "agent-bot-owner-statement", kind, alg, key,
   or one refusal code (`statement-invalid`, `statement-expired`,
   `statement-unknown-key`, `statement-scope-mismatch` when `--repo` and
   `--issue` are given and differ). It needs no secrets, no network and no
-  daemon, so CI and any agent can run it.
+  daemon, so CI and any agent can run it. *Since "keyd signs pins" (#753):*
+  that offline check proves only the signature against the local pins.
+  `owner verify` reports it as approval only when agent-bot-keyd vouches for
+  those pins on the same call (`owner/pins-status`); anywhere else, CI
+  included, a valid signature answers `owner-pins-unprotected` (section 6).
 
 The verifier is plain `node:crypto`: Ed25519 for `ed25519`, and the SSHSIG
 structure for `sshsig` with `ssh-ed25519` and `sk-ssh-ed25519@openssh.com`
@@ -151,7 +155,10 @@ them into `<state>/owner/keys.json`. A key reaches the profile only after it
 was enrolled with presence on a trusted machine. Verification then reads only
 the local pins, so it works offline. Nothing is fetched from GitHub or any
 other service at verify time, as the runtime must not depend on reaching
-GitHub.
+GitHub. *Since "keyd signs pins" (#753):* offline verification checks the
+signature only. A host without keyd, such as one pinned from the profile,
+can check a statement's signature but cannot treat it as approval, since
+nothing there vouches for its pins.
 
 ### 4. The challenge fallback
 
@@ -163,6 +170,16 @@ The owner gate's order becomes:
 3. the administrator dialog, only when no owner key is enrolled (today's
    behaviour);
 4. otherwise `owner-unreachable`, with the steps to enrol a key.
+
+*As built, since "keyd signs pins" (#753):* "an owner key is enrolled" in
+steps 2 and 3 means pins that agent-bot-keyd vouches for on that request
+(`owner/pins-status` records exactly the pins read, at a generation no older
+than seen, and the file still holds them once keyd has answered). Pins keyd
+does not vouch for count as none, so step 3 applies: the administrator
+dialog, or a refusal where nobody can see it. On a decision route, pins that
+are only software ssh keys also fall to step 3, since a soul could read
+them. Step 4 is left for vouched pins none of which can answer the
+challenge. See [Readers](../keyd-protocol.md#readers).
 
 A refusal at any step (`owner-declined`, `presence-invalid`) is still final
 and asks nobody else.
@@ -290,7 +307,9 @@ not approval, and the agent says so instead of acting.
   Each is a new contract and is reviewed when built; none exists today.
 - The administrator dialog stops being the fallback wherever an owner key is
   enrolled. A host with an enrolled key but no reachable owner now waits for
-  a reply instead of showing a dialog.
+  a reply instead of showing a dialog. *As built (#753):* only where keyd
+  vouches for the enrolled keys on that request; elsewhere the dialog stays
+  the fallback.
 - The verifier must parse SSHSIG and FIDO flags itself to stay free of
   dependencies and of `ssh-keygen`. That is more code to get right than raw
   Ed25519, and needs test vectors from real keys.

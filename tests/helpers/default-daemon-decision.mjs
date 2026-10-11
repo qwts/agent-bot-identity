@@ -5,7 +5,8 @@ import process from 'node:process';
 import { createDaemonServer } from '../../agent-daemon.mjs';
 
 const env = { ...process.env };
-const server = createDaemonServer({ env, home: env.HOME, config: {} });
+// TEST_DAEMON_HOME, when set, is the daemon's home and env.HOME another.
+const server = createDaemonServer({ env, home: env.TEST_DAEMON_HOME ?? env.HOME, config: {} });
 await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
 const base = `http://127.0.0.1:${server.address().port}`;
 const headers = { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' };

@@ -2,8 +2,10 @@
 
 An owner decision that an agent finds in an issue, a PR or a chat is only a
 claim: anything one agent writes, another can forge. An owner-signed
-statement is a decision the owner signs with a key no agent can read, which
-any agent, CI job or subagent can check offline. The design is
+statement is a decision the owner signs with a key no agent can read. Any
+agent, CI job or subagent can check its signature offline against the pinned
+keys; it counts as the owner's approval only where agent-bot-keyd vouches
+for those pins on that call, which needs keyd on the host. The design is
 [ADR-0753](decisions/ADR-0753-owner-signed-statements.md); this page is the
 contract as built.
 
@@ -128,17 +130,20 @@ summary and host scope, then paste its armored output into the waiting prompt.
 The gate accepts one reply only while that request is pending and the signing
 key remains pinned. The prompt requires a TTY, reads at most 1 MiB, and waits
 for at most ten minutes; EOF, blank input, cancellation, timeout, malformed
-input or a bad signature refuses the action. If any owner key is enrolled but
-no enrolled SSH key can answer, a challenge-eligible action refuses instead
-of falling back to administrator consent. The older administrator fallback
-remains for those actions on hosts with no enrolled owner keys. Enrolment and
+input or a bad signature refuses the action. If keyd vouches for the
+enrolled owner keys but no enrolled SSH key can answer, a challenge-eligible
+action refuses instead of falling back to administrator consent. The older
+administrator fallback remains for hosts with no enrolled owner keys and for
+pins keyd does not vouch for on that request. Enrolment and
 removal go through keyd's owner key record (below) and cannot use a signed
 challenge.
 
 **On a decision route.** Deciding a soul's waiting tool request through
 `POST /v0/approvals/decide` (`agent-bot approvals approve|deny`) or
-`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal,
-and today it is answered only by keyd presence or the administrator dialog.
+`POST /v1/proposals/<id>/decision` never prompts on the daemon's terminal.
+It is answered by keyd presence; when keyd cannot ask, by a signed challenge
+on a request where keyd vouches for the owner pins (below); otherwise by the
+administrator dialog.
 The receipt of each decision records how it was authorized (`authorized:
 presence`, `consent`, or `statement <key>`). A missing or malformed pin
 file never blocks a decision.
