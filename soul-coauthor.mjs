@@ -74,8 +74,9 @@ export function prepareSoulTrailers(messageFile, id, { cwd = process.cwd(), env 
 }
 
 // Where a message credits the soul (ADR-0815 matrix row 10): `trailer` in
-// the final block, `body` when only elsewhere (GitHub's multi-commit squash
-// keeps each commit's trailers in the body), `absent` when nowhere. In the
+// the final block, `body` when only elsewhere (a GitHub squash merge appends
+// its own co-author block after the commit's trailers), `absent` when
+// nowhere. In the
 // last two cases the local identity record stays the authority.
 export function soulTrailerStatus(message, id, { cwd = process.cwd() } = {}) {
   validateAgentId(id);
@@ -87,6 +88,7 @@ async function main(argv) {
   const [command, target, id] = argv;
   if (command === 'prepare' && target && id) return prepareSoulTrailers(target, id);
   if (command === 'check' && target && id) {
+    if (target.startsWith('-')) throw new Error('check takes a commit, not an option');
     const message = git(['log', '-1', '--format=%B', target, '--']);
     process.stdout.write(`${soulTrailerStatus(message, id)}\n`);
     return undefined;

@@ -104,10 +104,10 @@ Consumers must therefore:
    another machine, may be genuinely unresolvable — say so rather than
    guessing from branch names.
 
-The soul's co-author trailer (ADR-0815) follows the same rules. A one-commit
-squash keeps it in the final block; a multi-commit squash leaves each
-commit's trailers in the body, above GitHub's own block, so the trailer
-parser misses it there too. `node soul-coauthor.mjs check <sha> <agent-id>`
+The soul's co-author trailer (ADR-0815) follows the same rules. Every
+squash merge, of one commit or many, leaves the commit's trailers in the
+body above GitHub's own co-author block, so the trailer parser misses it
+there too. `node soul-coauthor.mjs check <sha> <agent-id>`
 reports `trailer`, `body` or `absent`; for `body` and `absent`, the identity
 record is the authority. Rename changes the name on new commits only (the
 email is the Agent ID); a fork gets a new Agent ID and so a new email; a

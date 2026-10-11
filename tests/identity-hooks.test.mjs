@@ -149,8 +149,8 @@ test('a fork is a new soul with a new trailer email; a squash body is reported a
   assert.notEqual(soulCoAuthorTrailer(identity.id, 'Same'), soulCoAuthorTrailer(fork, 'Same'));
   assert.throws(() => soulCoAuthorTrailer(identity.id, '<>'), /display name/);
   const credit = soulCoAuthorTrailer(identity.id, 'Genius');
-  // GitHub's multi-commit squash keeps each commit's trailers in the body
-  // and ends with its own co-author block.
+  // A GitHub squash merge keeps the commit's trailers in the body and ends
+  // with its own co-author block.
   const squash = `Title (#1)\n\n* one\n\n${credit}\nAgent-Identity: ${identity.id}\n\n---------\n\n`
     + 'Co-authored-by: you-codex-agent[bot] <1+you-codex-agent[bot]@users.noreply.github.com>\n';
   assert.equal(soulTrailerStatus(squash, identity.id, { cwd: repo }), 'body');

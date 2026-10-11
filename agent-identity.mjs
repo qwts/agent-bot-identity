@@ -88,11 +88,12 @@ export function soulCoAuthorCredits(message) {
 // credited with another soul's work (ADR-0815 §2, matrix row 7). With no
 // bound soul, no soul may be credited.
 export function assertSoulCoAuthor(message, id) {
-  const foreign = soulCoAuthorCredits(message).filter((credited) => credited !== id);
+  const foreign = soulCoAuthorCredits(message).filter((credited) => credited !== id)
+    .map((credited) => credited.replace(/[^\x21-\x7e]/g, '?').slice(0, 64));
   if (foreign.length === 0) return;
   throw new Error(id
-    ? `the message credits another soul as co-author (${foreign[0].slice(0, 64)}); only ${id} may be credited here`
-    : `the message credits a soul as co-author (${foreign[0].slice(0, 64)}), but no soul is bound here`);
+    ? `the message credits another soul as co-author (${foreign[0]}); only ${id} may be credited here`
+    : `the message credits a soul as co-author (${foreign[0]}), but no soul is bound here`);
 }
 
 export { stateDirectory } from './state-paths.mjs';
