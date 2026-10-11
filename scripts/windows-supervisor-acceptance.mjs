@@ -192,6 +192,17 @@ try {
     return { receivedFreshMessage: true, brokerRecordedDaemonReport: true };
   }
   await record('actual daemon receives and reports wake before task restart', () => freshWakeAndReport('before-restart'));
+  await record('production supervisor refresh replaces the running daemon and reports fresh wakes', async () => {
+    const previousPid = (await connected()).pid;
+    phase('refresh-running-native-daemon-supervisor');
+    const refreshed = await services.ensureDaemonSupervisor({ env, home, programArguments: [process.execPath, bootstrap], reloadUnchanged: true });
+    assert.equal(refreshed.applied, true); assert.notEqual(refreshed.pid, previousPid);
+    await until(async () => { const state = await connected(); return state && state.pid !== previousPid; }, 'daemon-production-refresh-timeout');
+    assert.equal(hash(commsCredentialFile({ env, home })), credentialHash);
+    assert.equal(hash(daemonVouchKeyFile({ env, home })), keyHash);
+    firstPid = refreshed.pid;
+    return { previousPid, refreshedPid: refreshed.pid, sameCredential: true, sameVouchKey: true, ...await freshWakeAndReport('after-production-refresh') };
+  });
   await record('Task Scheduler stop removes daemon tree and restart reconnects with unchanged credentials', async () => {
     phase('task-end');
     assert.equal((await command('schtasks.exe', ['/End', '/TN', label])).exit, 0);

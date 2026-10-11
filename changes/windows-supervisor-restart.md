@@ -1,0 +1,1 @@
+- Windows daemon updates wait for the previous scheduled task instance and daemon process to terminate before starting its replacement, and require a new daemon PID before reporting healthy. This fixes successful-looking refreshes that left no daemon running when Task Scheduler ignored an immediate restart (#954).

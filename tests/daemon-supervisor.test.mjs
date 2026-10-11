@@ -24,6 +24,7 @@ import {
   renderSystemdUnit,
   scheduledTaskBytes,
   scheduledTaskRegistered,
+  scheduledTaskInstanceCount,
   scheduledTaskText,
   scheduledTaskUserId,
   stableHomebrewPath,
@@ -582,11 +583,14 @@ const WIN_PROGRAM = ['C:\\App\\node.exe', 'C:\\App\\agent-bot.mjs', 'daemon', 'r
 function fakeSchtasks({ status = 'Ready', deny = null } = {}) {
   const calls = [];
   let registered = null; // the one task name schtasks knows
+  let runs = 0;
   const refuse = (text) => {
     throw Object.assign(new Error(`Command failed: schtasks.exe\n${text}`), { stderr: `${text}\n`, status: 1 });
   };
   const exec = (command, args) => {
+    if (command === 'powershell.exe') return '0\n';
     calls.push([command, ...args]);
+    if (args[0] === '/Run') runs += 1;
     if (command !== 'schtasks.exe') throw new Error(`unexpected command ${command}`);
     if (deny && args[0] === deny) refuse('ERROR: Access is denied.');
     const name = args[args.indexOf('/TN') + 1];
@@ -602,7 +606,7 @@ function fakeSchtasks({ status = 'Ready', deny = null } = {}) {
     }
     return '';
   };
-  return { calls, exec, isRegistered: () => registered !== null };
+  return { calls, exec, isRegistered: () => registered !== null, runNumber: () => runs };
 }
 
 // One element's text, unescaped: enough of an XML reader for a document this
@@ -696,7 +700,8 @@ test('win32 install writes the task under LOCALAPPDATA, registers it with schtas
     platform: 'win32',
     env,
     reloadUnchanged: false,
-    probe: async () => ({ running: true, pid: 9, port: 1, startedAt: '2026-10-08T00:00:00.000Z' }),
+    probe: async () => ({ running: true, pid: 9 + schtasks.runNumber(), port: 1, startedAt: '2026-10-08T00:00:00.000Z' }),
+    processAlive: () => false,
     stopDetached: async () => { stops.push('stopped'); },
     exec: schtasks.exec,
   };
@@ -810,9 +815,9 @@ test('win32 schtasks refusals are typed errors carrying its reason; a task never
   assert.equal(isInactiveSupervisorError({ stderr: 'ERROR: The system cannot find the file specified.\r\n' }), true);
   // The kickstart after an update, on its own: end (whatever that says), run.
   const kicked = fakeSchtasks();
-  kickstartScheduledTask({ label: WIN_LABEL }, { env, exec: kicked.exec });
+  await kickstartScheduledTask({ label: WIN_LABEL }, { env, exec: kicked.exec });
   assert.deepEqual(kicked.calls, [['schtasks.exe', '/End', '/TN', WIN_LABEL], ['schtasks.exe', '/Run', '/TN', WIN_LABEL]]);
-  assert.throws(() => kickstartScheduledTask({ label: WIN_LABEL }, { env, exec: fakeSchtasks({ deny: '/Run' }).exec }), { code: 'supervisor-load-failed' });
+  await assert.rejects(kickstartScheduledTask({ label: WIN_LABEL }, { env, exec: fakeSchtasks({ deny: '/Run' }).exec }), { code: 'supervisor-load-failed' });
   // The status row is the proof of registration, not the exit status.
   assert.equal(scheduledTaskRegistered(`"\\${WIN_LABEL}","N/A","Ready"\r\n`, WIN_LABEL), true);
   assert.equal(scheduledTaskRegistered(`"${WIN_LABEL}","N/A","Running"\n`, WIN_LABEL), true);
@@ -889,4 +894,47 @@ test('supervisor refuses malformed broker locations before installation and keep
       assert.throws(() => supervisorEnvironment({ env: { [key]: value }, home: '/u', platform: 'win32' }), { code: 'usage' });
     }
   }
+});
+
+test('scheduled restart awaits both task termination and old PID disappearance before Run', async () => {
+  const events = []; let clock = 0; let polls = 0;
+  await kickstartScheduledTask({ label: WIN_LABEL }, { oldPid: 123, timeoutMs: 100, pollMs: 10,
+    exec: (file, args, options) => { assert.equal(options.timeout, 100); events.push(args[0]); return ''; },
+    instanceCount: () => { polls++; events.push(`instances:${polls}`); return polls === 1 ? 1 : 0; },
+    processAlive: pid => { assert.equal(pid, 123); return polls < 3; },
+    now: () => clock, delay: async ms => { clock += ms; events.push('wait'); },
+  });
+  assert.deepEqual(events, ['/End', 'instances:1', 'wait', 'instances:2', 'wait', 'instances:3', '/Run']);
+});
+
+test('scheduled restart fails closed on End/query failure or bounded termination timeout', async () => {
+  for (const mode of ['end', 'query', 'timeout', 'old-pid']) {
+    let clock = 0; const calls = [];
+    await assert.rejects(kickstartScheduledTask({ label: WIN_LABEL }, { timeoutMs: 20, pollMs: 10, oldPid: mode === 'old-pid' ? 123 : null,
+      exec: (file, args) => { calls.push(args[0]); if (mode === 'end') throw Object.assign(new Error('denied'), { stderr: 'Access is denied.' }); },
+      instanceCount: () => { if (mode === 'query') throw Object.assign(new Error('query refused'), { code: 'supervisor-query-failed' }); return mode === 'timeout' ? 1 : 0; },
+      processAlive: () => true, now: () => clock, delay: async ms => { clock += ms; },
+    }), { code: mode === 'end' ? 'supervisor-stop-failed' : mode === 'query' ? 'supervisor-query-failed' : 'supervisor-stop-timeout' });
+    assert.ok(!calls.includes('/Run'));
+  }
+});
+
+test('native instance query is numeric, scoped to the exact task and refuses errors/ambiguous output', () => {
+  let captured;
+  assert.equal(scheduledTaskInstanceCount({ label: WIN_LABEL }, { env: { PATH: 'kept', PSModulePath: 'inherited-pwsh' }, exec: (file, args, options) => { captured = { file, args, options }; return '0\r\n'; } }), 0);
+  assert.equal(captured.file, 'powershell.exe');
+  const script = Buffer.from(captured.args.at(-1), 'base64').toString('utf16le');
+  assert.ok(script.includes(`GetTask('${WIN_LABEL}')`)); assert.ok(script.includes('GetInstances(0).Count'));
+  assert.equal(captured.options.env.PSModulePath, undefined); assert.equal(captured.options.env.PATH, 'kept');
+  for (const output of ['', 'unknown', '-1', '0\n1', '1.5']) assert.throws(() => scheduledTaskInstanceCount({ label: WIN_LABEL }, { exec: () => output }), { code: 'supervisor-query-failed' });
+  assert.throws(() => scheduledTaskInstanceCount({ label: WIN_LABEL }, { exec: () => { throw new Error('access denied'); } }), { code: 'supervisor-query-failed' });
+});
+
+test('Windows ensure rejects pre-restart daemon health until a different PID is healthy', async () => {
+  const { home, env } = win32Home('agent-bot-supervisor-old-health-'); const tasks = fakeSchtasks();
+  tasks.exec('schtasks.exe', ['/Create', '/TN', WIN_LABEL]); let probes = 0;
+  const result = await ensureDaemonSupervisor({ home, platform: 'win32', env, programArguments: WIN_PROGRAM, exec: tasks.exec, processAlive: () => false,
+    probe: async () => ({ running: true, pid: ++probes < 3 ? 123 : 456, port: 1 }),
+  });
+  assert.equal(result.pid, 456); assert.equal(probes, 3);
 });
