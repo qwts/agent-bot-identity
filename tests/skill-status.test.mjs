@@ -10,7 +10,7 @@ import { adoptSoulPackage, decideSoulProposal, prepareRevisionEdit, revisionHist
 import { importSkill } from '../skill-library.mjs';
 import { installRecordPath } from '../skill-install.mjs';
 import { learningReceipts, proposeSkillLearning } from '../skill-learning.mjs';
-import { soulSkillStatus } from '../skill-status.mjs';
+import { SKILL_SEARCH_QUERY_BYTES, soulSkillSearch, soulSkillStatus } from '../skill-status.mjs';
 import { readSoulPackageEntries } from '../soul-package.mjs';
 import { main } from '../cli/soul-skill.mjs';
 
@@ -108,6 +108,36 @@ test('status CLI: JSON and text, read-only authorization, usage', async t => {
   assert.equal(refused.code, 1);
   assert.equal(refused.json.error.message, 'not yours');
   for (const argv of [['status'], ['status', '--soul'], ['status', f.id], ['status', '--soul', f.id, '--trash']]) {
+    assert.equal((await f.run(argv)).code, 2, argv.join(' '));
+  }
+});
+
+test('search reports the missing adapter plainly, after checking the caller, the soul and the query', async t => {
+  const f = fixture(t);
+  assert.throws(() => soulSkillSearch(f.id, 'deploy steps', f.options), { code: 'skill-search-no-adapter' });
+  const before = readSoulPackageEntries(f.directory).manifest.revision;
+  const json = await f.run(['search', '--soul', f.id, 'deploy steps', '--json']);
+  assert.equal(json.code, 1);
+  assert.equal(json.json.error.code, 'skill-search-no-adapter');
+  assert.match(json.json.error.message, /no knowledge search adapter is configured/);
+  assert.equal(Object.keys(json.json).join(), 'error', 'no results, citations or service state are reported');
+  const text = await f.run(['search', '--soul', f.id, 'deploy steps']);
+  assert.equal(text.code, 1);
+  assert.equal(text.out, '');
+  assert.match(text.err, /skill-search-no-adapter/);
+  assert.equal(readSoulPackageEntries(f.directory).manifest.revision, before, 'search writes nothing');
+  for (const query of ['', '   ', 'a\0b', 'x'.repeat(SKILL_SEARCH_QUERY_BYTES + 1)]) {
+    assert.throws(() => soulSkillSearch(f.id, query, f.options), { code: 'skill-search-query-invalid' }, JSON.stringify(query.slice(0, 8)));
+  }
+  assert.throws(() => soulSkillSearch(f.id, 'x'.repeat(SKILL_SEARCH_QUERY_BYTES), f.options), { code: 'skill-search-no-adapter' });
+  const unknown = 'agent_00000000-0000-4000-8000-000000000000';
+  assert.throws(() => soulSkillSearch(unknown, 'deploy steps', f.options), error => error.code !== 'skill-search-no-adapter');
+  const soul = { ...f.options, markers: () => ['Agent ID'], assertSoulTarget: target => { if (target !== f.id) throw new Error('not yours'); } };
+  assert.equal((await f.run(['search', '--soul', f.id, 'q', '--json'], soul)).json.error.code, 'skill-search-no-adapter');
+  const refused = await f.run(['search', '--soul', unknown, 'q', '--json'], soul);
+  assert.equal(refused.code, 1);
+  assert.equal(refused.json.error.message, 'not yours');
+  for (const argv of [['search'], ['search', '--soul', f.id], ['search', f.id, 'q'], ['search', '--soul', f.id, '--trash'], ['search', '--soul', f.id, 'q', 'extra']]) {
     assert.equal((await f.run(argv)).code, 2, argv.join(' '));
   }
 });
