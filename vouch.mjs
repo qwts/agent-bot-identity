@@ -175,6 +175,14 @@ export function loadOrCreateVouchKey(stateDir, {
   return describeKey(file, privateKey, true);
 }
 
+// The account vouch key's SPKI public half, as PEM text, for callers that only
+// advertise it: `daemon vouch-key` and the daemon's agent-comms pairing (#645,
+// F11). It creates the key on first use exactly as loadOrCreateVouchKey does,
+// but hands its caller only the public half.
+export function vouchPublicKeyPem({ env = process.env, home = homedir(), ...options } = {}) {
+  return loadOrCreateVouchKey(vouchStateDir({ env, home }), options).publicKeyPem.toString();
+}
+
 function unixSeconds(now) {
   const instant = typeof now === 'function' ? now() : now;
   if (!(instant instanceof Date) || !Number.isFinite(instant.getTime())) {

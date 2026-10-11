@@ -20,10 +20,9 @@
 // 30 s), emits each wake to an injectable in-process handler, and answers
 // through `reportCommsWake` (`wake-report`).
 //
-// Sibling seam: the daemon's Ed25519 vouch key (ADR-0008 decision 3) is owned
-// by the vouch issue. `ensureDaemonKeyPair` below only stewards the key file
-// at its ADR path so pairing can send the SPKI public key, and every function
-// that needs the key accepts an injected provider instead.
+// Sibling seam: the daemon's Ed25519 vouch key (ADR-0008 decision 3) is
+// identity's (vouch.mjs). Pairing sends only its SPKI public half, which the
+// caller passes in; this module never loads the key (#645, F11).
 
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -43,7 +42,6 @@ import net from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { loadOrCreateVouchKey, vouchStateDir } from './vouch.mjs';
 import {
   createWindowsCommsTransport,
   createWindowsTransportCustody,
@@ -571,17 +569,9 @@ export function uidOfAccount(account) {
 
 // --- daemon vouch key seam (ADR-0008 decision 3) ---
 //
-// The vouch key is vouch.mjs's (#254): pairing only needs its SPKI public
-// half, and every caller accepts an injected `keyPairProvider` returning a
-// PEM string instead. vouch.mjs owns custody: it creates the key with `wx`
-// (a racing creator loads the winner, never replaces it), refuses anything
-// but an Ed25519 key in a regular file owned by this account, and tightens
-// an existing key to 0600.
-
-export function ensureDaemonKeyPair({ env = process.env, home = homedir() } = {}) {
-  const key = loadOrCreateVouchKey(vouchStateDir({ env, home }));
-  return { path: key.file, publicKeyPem: key.publicKeyPem.toString() };
-}
+// The vouch key is vouch.mjs's (#254), and custody stays there. Pairing needs
+// only its SPKI public half, so the caller passes `publicKey` (the daemon uses
+// vouchPublicKeyPem) or a `keyPairProvider` returning that PEM string.
 
 // The daemon pairs as its own credential kind (ADR-0008 decision 4): the same
 // kernel-stamped proof file as an account pairing, plus its SPKI public key.
@@ -627,9 +617,7 @@ export async function pairDaemonComms({
     checkBrokerCustody(paths, brokerUid, mode);
     assertCommsOwnedDir(paths.proofs, brokerUid, { mode: mode === 'group' ? 0o1777 : 0o700 });
   }
-  const resolvedPublicKey = publicKey ?? (keyPairProvider
-    ? await keyPairProvider({ env, home })
-    : ensureDaemonKeyPair({ env, home }).publicKeyPem);
+  const resolvedPublicKey = publicKey ?? (keyPairProvider ? await keyPairProvider({ env, home }) : null);
   if (typeof resolvedPublicKey !== 'string' || !resolvedPublicKey.includes('BEGIN PUBLIC KEY')) {
     fail('usage', 'a daemon SPKI public key (PEM) is required for pairing');
   }
