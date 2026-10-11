@@ -29,3 +29,16 @@ test('substage diagnostics retain a fixed phase without copying sensitive error 
   assert.deepEqual(acceptanceFailureEvidence(error, 'native-daemon-pair'), { code: 'usage', substage: 'native-daemon-pair' });
   assert.deepEqual(acceptanceFailureEvidence({ code: 'secret with spaces' }, 'arbitrary output with spaces'), { code: 'assertion-failed' });
 });
+
+test('startup evidence exposes only known module positions and error classes', async () => {
+  const { startupErrorEvidence, startupLogEvidence } = await import('../scripts/windows-supervisor-evidence.mjs');
+  const error = Object.assign(new TypeError('private credential'), {
+    stack: 'TypeError: private credential\n    at run (file:///private/owner/agent-daemon.mjs:1917:3)\n    at secret (file:///private/secret.mjs:12:3)',
+    stdout: 'private output',
+  });
+  const safe = { code: 'assertion-failed', name: 'TypeError', frames: [{ module: 'agent-daemon.mjs', line: 1917, column: 3 }] };
+  assert.deepEqual(startupErrorEvidence(error), safe);
+  assert.deepEqual(startupErrorEvidence(JSON.parse(JSON.stringify(safe))), safe);
+  assert.deepEqual(startupErrorEvidence({ frames: [{ module: 'secret.mjs', line: 1, column: 1 }], name: 'private' }), { code: 'assertion-failed', frames: [] });
+  assert.deepEqual(startupLogEvidence('private ENOENT credential TypeError'), { present: true, bytes: 35, classes: ['ENOENT', 'TypeError'] });
+});

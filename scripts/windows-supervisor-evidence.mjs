@@ -20,3 +20,29 @@ export function acceptanceFailureEvidence(error, substage) {
   return { code: safe(error?.code) ?? 'assertion-failed',
     ...(safe(substage) ? { substage } : {}) };
 }
+
+// Startup diagnostics are classifications, never exception text or arbitrary
+// stack paths. The bootstrap writes this before its process exits; readback
+// passes through the same filter before it reaches the acceptance report.
+export function startupErrorEvidence(error) {
+  const evidence = acceptanceFailureEvidence(error);
+  if (['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'AssertionError'].includes(error?.name)) evidence.name = error.name;
+  const modules = ['agent-daemon.mjs', 'daemon-client.mjs', 'comms-client.mjs', 'daemon-log.mjs',
+    'daemon-supervisor.mjs', 'windows-account-custody.mjs', 'vouch.mjs'];
+  const frames = typeof error?.stack === 'string' ? error.stack.split('\n').flatMap(line => {
+    const match = /\/([^/\\\s]+\.mjs):(\d+):(\d+)\)?$/.exec(line);
+    return match && modules.includes(match[1]) ? [{ module: match[1], line: Number(match[2]), column: Number(match[3]) }] : [];
+  }) : Array.isArray(error?.frames) ? error.frames : [];
+  evidence.frames = frames.filter(frame => modules.includes(frame?.module)
+    && Number.isSafeInteger(frame.line) && frame.line > 0
+    && Number.isSafeInteger(frame.column) && frame.column > 0).slice(0, 8);
+  return evidence;
+}
+
+export function startupLogEvidence(text) {
+  const classes = ['ERR_MODULE_NOT_FOUND', 'ERR_MODULE_NOT_SUPPORTED', 'ERR_INVALID_ARG_TYPE',
+    'ENOENT', 'EACCES', 'EPERM', 'EADDRINUSE', 'SyntaxError', 'TypeError', 'ReferenceError',
+    'Win32Exception', 'Add-Type', 'AssignProcessToJobObject'];
+  return { present: true, bytes: Buffer.byteLength(text),
+    classes: classes.filter(name => new RegExp(`\\b${name}\\b`).test(text)) };
+}

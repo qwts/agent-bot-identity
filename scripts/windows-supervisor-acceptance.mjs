@@ -1,10 +1,10 @@
 // Optional signed-in desktop acceptance for #934. Real adapters and tasks;
 // no platform/transport/process runner is injected. Use a disposable account.
 import assert from 'node:assert/strict';
-import { hasDaemonWakeReport, taskQueryProvesAbsence, acceptanceFailureEvidence } from './windows-supervisor-evidence.mjs';
+import { hasDaemonWakeReport, taskQueryProvesAbsence, acceptanceFailureEvidence, startupErrorEvidence, startupLogEvidence } from './windows-supervisor-evidence.mjs';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -51,6 +51,7 @@ const result = { node: process.version, platform: process.platform, cases: [],
 let failed = false;
 let supervisor;
 let substage;
+let startupDiagnostics;
 const phase = name => { substage = name; };
 const bin = path.join(options.comms, 'bin', 'agent-comms.mjs');
 const hash = file => createHash('sha256').update(readFileSync(file)).digest('hex');
@@ -138,13 +139,41 @@ try {
     return { providerInjected: false };
   });
   const bootstrap = path.join(root, 'run daemon.mjs');
-  writeFileSync(bootstrap, `import {runDaemon} from ${JSON.stringify(pathToFileURL(path.join(repository, 'agent-daemon.mjs')).href)};\nawait runDaemon({env:process.env,home:${JSON.stringify(home)},config:{}});\n`);
+  const startupFailure = path.join(root, 'startup-failure.json');
+  writeFileSync(bootstrap, `import {writeFileSync} from 'node:fs';\nimport {startupErrorEvidence} from ${JSON.stringify(pathToFileURL(path.join(repository, 'scripts/windows-supervisor-evidence.mjs')).href)};\ntry { const {runDaemon} = await import(${JSON.stringify(pathToFileURL(path.join(repository, 'agent-daemon.mjs')).href)}); await runDaemon({env:process.env,home:${JSON.stringify(home)},config:{}}); } catch(error) { writeFileSync(${JSON.stringify(startupFailure)}, JSON.stringify(startupErrorEvidence(error))); process.exitCode=1; }\n`);
   const status = () => daemon.daemonStatus({ env, home });
   const connected = async () => { const state = await status(); return state.running && state.comms?.connected ? state : null; };
+  startupDiagnostics = async () => {
+    const evidence = {};
+    const state = await status();
+    evidence.daemon = { running: state.running === true, connected: state.comms?.connected === true,
+      stateFileExists: existsSync(env.AGENT_BOT_DAEMON_STATE_PATH),
+      ...(Number.isSafeInteger(state.pid) ? { pid: state.pid } : {}) };
+    try { evidence.bootstrapFailure = startupErrorEvidence(JSON.parse(readFileSync(startupFailure, 'utf8'))); } catch { /* bootstrap may not have started */ }
+    const taskPaths = services.supervisorPaths(home, process.platform, env);
+    try {
+      const log = readFileSync(taskPaths.logPath);
+      evidence.log = startupLogEvidence(log.subarray(-65536).toString('utf8'));
+      copyFileSync(taskPaths.logPath, path.join(root, 'supervisor-startup.log'));
+    } catch { evidence.log ??= { present: false }; }
+    // Select only enum/numeric fields; never copy task actions, paths or output.
+    const query = await command('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$t=Get-ScheduledTask -TaskName '${label}' -ErrorAction Stop; $i=$t|Get-ScheduledTaskInfo; @{state=[string]$t.State;lastResult=[long]$i.LastTaskResult}|ConvertTo-Json -Compress`]);
+    evidence.scheduler = { queryExit: query.exit };
+    try {
+      const task = JSON.parse(query.stdout);
+      if (['Unknown', 'Disabled', 'Queued', 'Ready', 'Running'].includes(task.state)) evidence.scheduler.state = task.state;
+      if (Number.isSafeInteger(task.lastResult)) evidence.scheduler.lastResult = task.lastResult;
+    } catch { /* retain exit only */ }
+    return evidence;
+  };
   await record('production supervisor installer starts the actual daemon with custom namespace', async () => {
     phase('install-native-daemon-supervisor');
     const installed = await services.ensureDaemonSupervisor({ env, home, programArguments: [process.execPath, bootstrap], reloadUnchanged: false });
+    phase('verify-supervisor-install-result');
+    assert.equal(installed.applied, true);
     assert.equal(installed.loaded, true);
+    assert.equal(installed.skippedLoad, false);
     await until(async () => { const state = await connected(); firstPid = state?.pid; return !!state; }, 'daemon-watch-start-timeout');
     assert.equal(hash(commsCredentialFile({ env, home })), credentialHash);
     assert.equal(hash(daemonVouchKeyFile({ env, home })), keyHash);
@@ -192,6 +221,9 @@ try {
 } catch (error) {
   failed = true;
   result.failure = acceptanceFailureEvidence(error, substage);
+  if (startupDiagnostics) {
+    try { result.startup = await startupDiagnostics(); } catch (diagnosticError) { result.startup = { collectionFailure: acceptanceFailureEvidence(diagnosticError) }; }
+  }
 } finally {
   const cleanupErrors = [];
   const note = (operation, error) => cleanupErrors.push({ operation, code: safeCode(error?.code) ?? 'cleanup-failed' });
@@ -206,7 +238,10 @@ try {
     try { rmSync(path.join(env.LOCALAPPDATA, task), { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
     catch (error) { note('remove-task-directory', error); }
   }
-  try { rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+  try {
+    if (failed) result.retainedRuntimeDirectory = root;
+    else rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
   catch (error) { note('remove-runtime-directory', error); result.retainedRuntimeDirectory = root; }
   if (cleanupErrors.length) { failed = true; result.cleanupErrors = cleanupErrors; }
   result.cleanup = cleanupErrors.length ? 'failed' : 'namespaced-tasks-absent';

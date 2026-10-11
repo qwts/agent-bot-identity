@@ -153,5 +153,8 @@ logs, population and config without changing `USERPROFILE` or `LOCALAPPDATA`.
 It does not establish CLI default-home installation, packaged host support,
 actual logoff/logon or full harness launch. No OS, process, transport or
 credential provider is injected. Cleanup targets only uniquely named tasks
-and directories; failures retain a sanitized JSON report and identify any
-runtime directory that could not be removed.
+and directories. On failure, the sanitized JSON report includes scheduler
+state and result code, daemon health, and fixed startup error classifications.
+The uniquely named runtime directory is retained with its local startup log
+for diagnosis; that directory can contain credentials and must not be
+published with the report. Successful runs remove their runtime directory.
