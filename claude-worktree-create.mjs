@@ -30,7 +30,6 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { ensureAgentIdentity } from './agent-identity.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { daemonPreference, harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
@@ -263,7 +262,8 @@ async function main() {
     try { currentId = git(['config', '--worktree', '--get', key], baseRepo); } catch { /* no pin */ }
   }
   if (app || currentId) try {
-    const identity = ensureAgentIdentity({ currentId, appSlug: app,
+    // Through identity's record entry (#645, F6), like setup-worktree.
+    const identity = identityOp('ensure', { currentId, appSlug: app,
       harness: app ? harnessForSlug(app, config) : 'claude',
       transcript: { provider: 'claude', id: sessionId },
       useGithub,
