@@ -1,0 +1,1 @@
+- The runtime catalog now keeps the pin a version bump supersedes, so a soul that recorded an older version can still reinstall it from a verified URL and digest. A range still resolves to its newest pin (#617).
