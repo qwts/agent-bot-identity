@@ -1,1 +1,0 @@
-- The settings parity test now covers OpenCode: a declared mode and model apply the same way when OpenCode is opened directly in the soul's home and on a daemon turn, the daemon asks before a package loosens it, and a repo's `opencode.json` model outranks the package's (#379).

@@ -1,1 +1,0 @@
-- `agent-bot soul runtimes upgrade <agentId|name>` shows how each runtime pinned in `.soul-state/runtime-pins.json` would move to the newest catalog pin its declaration allows. `--apply` (owner only) rewrites those pins and installs them, and puts them back if the install fails (#617).

@@ -1,1 +1,0 @@
-- Removing keyd's `presence.pub` cache no longer lets a new presence key pin itself silently when a pin is on record; the re-pin dialog names the old and new keys by fingerprint, and the daemon and a soul's own commands refuse a re-pin instead of raising the administrator dialog (#753).

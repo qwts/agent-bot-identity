@@ -1,1 +1,0 @@
-- Dream maintenance now reads the soul's harness memory (Claude's `projects/*/memory/*.md` inside the soul's own tool home) as input format 3, with the same containment as conversation input; memory text never reaches the journal, and an older daemon must be upgraded before opening a journal written with format 3 (#903).

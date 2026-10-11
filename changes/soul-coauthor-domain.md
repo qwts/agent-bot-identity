@@ -1,2 +1,0 @@
-- An organization profile may set `settings.soul_coauthor_domain` (projected to `settings.soulCoauthorDomain`) to write soul co-author trailers in its own domain; GitHub domains and malformed names are refused, and credits in the default `souls.agent-bot.invalid` domain are still checked (#815).
-- `signed-commit` refuses a range that credits another soul before it mints a token, and the commit hook refuses when the census cannot be read instead of crediting the soul by a guessed name (#815).

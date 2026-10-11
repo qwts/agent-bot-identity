@@ -1,1 +1,0 @@
-- Internal: more of identity's pure format helpers move into the `identity-format.mjs` contract: the git config key names (`PIN_KEYS`, `AGENT_ID_KEYS`), `ownerCredentialRequired`, `classifyRisk` and `isComputerUse` (from `permission-risk.mjs`), and `GIT_HOOK_NAMES` (from `git-hooks.mjs`). Both of those small files go away. Values and behaviour are unchanged (#645).

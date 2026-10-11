@@ -1,1 +1,0 @@
-- Identity has a record entry, `identity-entry.mjs`, that other modules can run as a child process through `identityOp` in `daemon-client.mjs` to read, mint and ensure Agent IDs and mint bind tokens without importing identity. No caller uses it yet, and nothing changes for users (#645).

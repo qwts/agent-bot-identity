@@ -1,1 +1,0 @@
-- The skill library and dream guides now match what shipped for #603: the soul's own conversation as dream input and verified-change processing checkpoints are implemented, while memory input (#903) and knowledge search (#902) are tracked separately (#603).

@@ -1,1 +1,0 @@
-- `agent-bot soul skill search --soul ID QUERY` reports plainly that no knowledge search adapter is configured and exits 1; it sets up no service and returns no results until an adapter is chosen (#902).

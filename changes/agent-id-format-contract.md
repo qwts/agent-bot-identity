@@ -1,1 +1,0 @@
-- Internal: every module now takes `isAgentId` and `validateAgentId` from the `identity-format.mjs` contract, and `agent-identity.mjs` no longer re-exports them. The Agent ID format is unchanged (#645).

@@ -1,1 +1,0 @@
-- The soul environment contract now records `.soul-state/credentials` as identity-owned (`IDENTITY_OWNED_COMPONENTS`): credential files stay where they are, inside the soul, and only identity reads or writes them. Nothing moves, and `soul env` output is unchanged (#645).

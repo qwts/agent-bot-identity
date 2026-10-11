@@ -1,1 +1,0 @@
-- Internal: `windows-account-custody.mjs` moves from identity to the shared module, so the comms Windows transport no longer imports identity. It only checks file ownership and never reads file contents, and its behaviour is unchanged (#645).
