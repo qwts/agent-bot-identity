@@ -1,1 +1,0 @@
-- `agent-bot soul skill search` gains its first adapter, `local-text`, chosen with the host setting `settings.skillSearchAdapter`: it matches words in the soul's own definition and skill files and cites the soul revision, file path, sha256 and line of each match, refusing when the live bytes are not the declared revision; no service is set up (#902).

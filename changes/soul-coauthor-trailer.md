@@ -1,1 +1,0 @@
-- Bot commits now credit their soul as `Co-authored-by: <name> <agent_<uuid>@souls.agent-bot.invalid>` in the same trailer block as `Agent-Identity` and any human co-authors, and the commit hook and `signed-commit` refuse a message that credits another soul; the App stays the author, so commits stay Verified (#815).

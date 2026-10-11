@@ -1,1 +1,0 @@
-- soul and CLI code now reads Agent ID records and the current Agent ID through identity's record entry instead of importing identity. Confinement, SOP resolution and `soul build` check `AGENT_BOT_ID` in the environment first and start the entry only when it is missing. Behavior is unchanged (#645).

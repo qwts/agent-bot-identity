@@ -1,1 +1,0 @@
-- `agent-bot soul build` now renders `.opencode/plugins/agent-bot-soul.js`, a plugin that runs the soul's hooks and agent-bot's identity and confinement guards in OpenCode. A deny, a missing `agent-bot`, a crash or a timeout blocks the tool call or prompt. An unmarked plugin at that path is never overwritten, and `agent-bot doctor` reports the plugin in each soul (#378).

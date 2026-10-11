@@ -1,1 +1,0 @@
-- `docs/soul-builder.md` marks Cursor and Kiro commands, Gemini CLI subagents and every Muse primitive as won't-do for now, with the reason for each (an upstream format for Cursor, Kiro and Gemini CLI; no verified Muse definition adapter in this repo for Muse), and no longer lists OpenCode hooks as missing (#378).

@@ -1,1 +1,0 @@
-- A test now pins `binding-proof.mjs` to the digest of the byte-for-byte copy in agent-comms, so changing it here fails CI until agent-comms's copy is updated to match and the digest is renewed (#645).

@@ -1,1 +1,0 @@
-- Internal: the comms client no longer loads the daemon vouch key. `daemon pair-comms` passes it only the public key, from identity's new `vouchPublicKeyPem`, so the private key stays inside identity. The key file, its custody and the pairing request are unchanged (#645).
