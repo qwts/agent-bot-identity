@@ -119,14 +119,14 @@ test('a memory item is processed only by a verified soul change it cites, within
     attribution: 'not-established', checked: { event: { revision: REVISION, status: null }, changedPaths, changedCount: changedPaths.length } });
   const outcome = (evidence, verifyRevisionEvidence) => interpret(JSON.stringify(report([memoryItem(evidence)])), { inputs: memoryInputs, verifyRevisionEvidence });
   // A change that lands outside the delivered package sources still credits it.
-  let result = outcome({ revision: REVISION }, verdict(['change-outside-delivered'], [{ path: 'skills/notes/SKILL.md', change: 'added' }]));
+  let result = outcome({ revision: REVISION }, verdict(['change-outside-delivered'], [{ path: 'skills/notes/SKILL.md', change: 'added', type: 'file' }]));
   assert.deepEqual([result.items[0].verification.evidence, result.items[0].verification.artifactRevision, result.unreported], ['verified-change', REVISION, 1]);
   assert.equal(validateDreamOutcome(result, { runId: run.runId, inputs: memoryInputs }), result);
-  assert.equal(outcome({ revision: REVISION }, verdict([], [{ path: 'AGENTS.md', change: 'modified' }])).items[0].verification.evidence, 'verified-change');
+  assert.equal(outcome({ revision: REVISION }, verdict([], [{ path: 'AGENTS.md', change: 'modified', type: 'file' }])).items[0].verification.evidence, 'verified-change');
   // Not a change to definition or skill content, any other failed check, or no change at all: no credit.
-  for (const [reasons, changed] of [[['change-outside-delivered'], [{ path: 'policy.json', change: 'modified' }]],
-    [['change-outside-delivered', 'parent-not-start'], [{ path: 'AGENTS.md', change: 'modified' }]], [['author-not-soul'], [{ path: 'AGENTS.md', change: 'modified' }]],
-    [['no-change'], []]]) {
+  for (const [reasons, changed] of [[['change-outside-delivered'], [{ path: 'policy.json', change: 'modified', type: 'file' }]],
+    [['change-outside-delivered', 'parent-not-start'], [{ path: 'AGENTS.md', change: 'modified', type: 'file' }]], [['author-not-soul'], [{ path: 'AGENTS.md', change: 'modified', type: 'file' }]],
+    [['no-change'], []], [['change-outside-delivered'], [{ path: 'skills/notes/empty', change: 'added', type: 'directory' }]]]) {
     const failed = outcome({ revision: REVISION }, verdict(reasons, changed));
     assert.deepEqual([failed.items[0].verification.evidence, failed.items[0].verification.reason], ['not-verified', 'artifact-not-verified'], reasons.join());
   }

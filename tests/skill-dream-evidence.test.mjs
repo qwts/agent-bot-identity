@@ -50,6 +50,15 @@ const filler = (f, count) => {
     proposalId: '00000000-0000-4000-8000-000000000000', author: 'user', reason: 'filler', at: '2026-10-09T12:00:00.000Z' }) + '\n');
 };
 
+test('each changed path says whether it is a file or a directory', t => {
+  const f = fixture(t);
+  f.put('skills/extra/SKILL.md', '---\nname: extra\ndescription: Extra skill\n---\nNew\n');
+  const proposal = f.propose();
+  const rows = f.verify({ reference: { proposalId: proposal.proposalId } }).checked.changedPaths;
+  assert.deepEqual(rows, [{ path: 'skills/extra', change: 'added', type: 'directory' },
+    { path: 'skills/extra/SKILL.md', change: 'added', type: 'file' }]);
+});
+
 test('a pending proposal that changes only delivered sources is verified change evidence, never attribution', t => {
   const f = fixture(t);
   f.put(SKILL, '---\nname: example\ndescription: Example skill\n---\nRefined instructions\n');
@@ -63,7 +72,7 @@ test('a pending proposal that changes only delivered sources is verified change 
     parentRevision: f.start, author: 'soul', at: '2026-10-09T12:00:00.000Z', status: 'pending' });
   assert.equal(result.checked.journalExtent, 'proven');
   assert.deepEqual(result.checked.objects, { parent: 'verified', candidate: 'verified' });
-  assert.deepEqual(result.checked.changedPaths, [{ path: SKILL, change: 'modified' }]);
+  assert.deepEqual(result.checked.changedPaths, [{ path: SKILL, change: 'modified', type: 'file' }]);
   assert.equal(result.checked.journalDiffMatches, true);
   assert.deepEqual(result.checked.outsideDelivered, []);
   assert.deepEqual(result.checked.deliveredMatchParent, { matched: ['AGENTS.md', SKILL, 'soul.md'].sort(), mismatched: [], missing: [] });

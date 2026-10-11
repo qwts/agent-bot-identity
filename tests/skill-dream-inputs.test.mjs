@@ -450,6 +450,16 @@ test('memory is delivered within item and byte limits, with truncation and the r
   assert.ok(dreamInputMetadata(captureDreamInputs(f.root, { memory: { harness: 'claude' } })));
 });
 
+test('memory a report could not cite (a backslash or control character in its name) is not delivered', t => {
+  const f = memoryFixture(t);
+  f.remember('-p/memory/a.md', 'a\n');
+  f.remember('-p/memory/b\\c.md', 'b\n');
+  f.remember('-p/memory/tab\there.md', 't\n');
+  f.remember('-q\\r/memory/d.md', 'd\n');
+  const result = captureDreamMemory(f.root, 'claude');
+  assert.deepEqual([result.coverage, result.memory.items.map(item => item.path), result.memory.remaining], ['supported', ['projects/-p/memory/a.md'], 0]);
+});
+
 test('memory listed through an ancestor swapped for a link is unavailable, not silently skipped', t => {
   const f = memoryFixture(t);
   f.remember('-b/memory/notes.txt', 'not memory');

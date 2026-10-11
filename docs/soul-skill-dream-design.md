@@ -347,8 +347,10 @@ only by a verified soul change it cites (owner decision on #903, 2026-10-11):
 its evidence names a revision or proposal, and the revision-evidence check must
 pass on everything except that the change may land outside the delivered
 package sources, because memory itself is never in the package. Every changed
-path must be definition or skill content, and the change must be non-empty and
-fully listed. Its digest alone is source identity; an agent claim, an external
+path must be definition or skill content, the change must be non-empty and
+fully listed, and at least one changed path must be a file (directories alone
+are not content). A memory file whose name a report could not cite (a
+backslash or control character) is not delivered. Its digest alone is source identity; an agent claim, an external
 receipt or a memory's age or removal processes nothing.
 
 Inventory entries identify the source, revision/checksum or adapter cursor, and
@@ -835,7 +837,7 @@ A gap or a larger directory leaves it `unproven`. Only a whole scan of a proven
 journal reports `reference-not-found`.
 The result reports the validated record fields (never journal reasons or
 approval text), whether its parent is the starting revision, both object states,
-the recomputed change set, whether a proposal's recorded diff matches it, which
+the recomputed change set (each path marked file or directory), whether a proposal's recorded diff matches it, which
 changed paths were not delivered, how delivered digests compare with the parent
 bytes, which changed sources were delivered truncated, and whether the record
 falls inside the run window when one is given.

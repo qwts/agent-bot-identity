@@ -919,7 +919,7 @@ test('a memory item verified by a cited soul change is processed under its memor
   const reply = JSON.stringify({ schemaVersion: 1, runId: call.run.runId, startingRevision: inputs.revision,
     items: [{ path: key, digest: MEMORY, outcome: 'completed', reason: 'consolidated', evidence: { revision: R1 } }] });
   const verify = () => ({ verdict: 'not-verified', reasons: ['change-outside-delivered'], attribution: 'not-established',
-    checked: { event: { revision: R1, status: 'approved' }, changedPaths: [{ path: 'skills/notes/SKILL.md', change: 'added' }], changedCount: 1 } });
+    checked: { event: { revision: R1, status: 'approved' }, changedPaths: [{ path: 'skills/notes/SKILL.md', change: 'added', type: 'file' }], changedCount: 1 } });
   call.stageOutcome(interpretDreamReport({ run: call.run, inputs, reply, endedAt: new Date().toISOString(), verifyRevisionEvidence: verify }));
   call.resolve(); await started.done;
   const state = f.state();

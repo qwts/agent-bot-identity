@@ -153,14 +153,16 @@ export function interpretDreamReport({ reply = '', replyTruncated = false, run, 
       // A memory item (#903) is processed by a verified soul change its item
       // cites: the same checks, except that the change may land outside the
       // delivered package sources, as long as every changed path is
-      // definition or skill content. Age or deletion never processes one.
+      // definition or skill content and at least one is a file (a change of
+      // directories alone is not content). Age or deletion never processes one.
       const memory = sources.get(item.path).memory;
       const event = result?.attribution === 'not-established' && hash(result.checked?.event?.revision)
         && [null, 'pending', 'approved', 'rejected', 'uncertain'].includes(result.checked.event.status) && Array.isArray(result.checked?.changedPaths);
       const verifiedMemory = memory && event && (result.verdict === 'verified-change'
         || Array.isArray(result.reasons) && result.reasons.length === 1 && result.reasons[0] === 'change-outside-delivered')
         && result.checked.changedCount > 0 && result.checked.changedCount === result.checked.changedPaths.length
-        && result.checked.changedPaths.every(change => isDreamSourcePath(change.path));
+        && result.checked.changedPaths.every(change => isDreamSourcePath(change.path))
+        && result.checked.changedPaths.some(change => change.type === 'file');
       if (verifiedMemory || !memory && event && result.verdict === 'verified-change'
         && result.checked.changedPaths.some(change => change.path === item.path)) {
         verification.evidence = 'verified-change'; verification.reason = null;

@@ -272,6 +272,8 @@ const MEMORY_READERS = Object.freeze({
 });
 const segment = name => typeof name === 'string' && name.length > 0 && name.length <= 255 && name !== '.' && name !== '..'
   && !name.includes('/') && !name.includes('\0');
+// The characters a dream report path refuses (skill-dream-outcomes claim).
+const reportable = name => !/[\\\x00-\x1f\x7f]/.test(name);
 const memoryPath = (harness, value) => {
   const reader = MEMORY_READERS[harness];
   if (typeof value !== 'string' || value.length > 4096) return false;
@@ -334,18 +336,20 @@ export function captureDreamMemory(soulDir, harness, { cursor = null, afterDirec
     // Every project's memory directory, and every memory file in it, is
     // found before any is read. A link where a project, its memory directory
     // or a memory file would be refuses the whole store; other names are not
-    // memory and are ignored.
+    // memory and are ignored. So is a name a report could not cite (a
+    // backslash or control character), since a delivered item must be one
+    // a dream report can name.
     const files = [];
     for (const project of list(root).reverse()) {
       if (project.isSymbolicLink()) throw new Error('linked project');
-      if (!project.isDirectory()) continue;
+      if (!project.isDirectory() || !reportable(project.name)) continue;
       const projectDir = path.join(root, project.name);
       const entry = list(projectDir).find(item => item.name === reader.sub);
       if (!entry) continue;
       if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('unsafe memory directory');
       const memoryDir = path.join(projectDir, reader.sub);
       for (const item of list(memoryDir).reverse()) {
-        if (!reader.matches(item.name)) continue;
+        if (!reader.matches(item.name) || !reportable(item.name)) continue;
         if (!item.isFile()) throw new Error('unsafe memory file');
         const relative = `${reader.dir}/${project.name}/${reader.sub}/${item.name}`;
         if (!memoryPath(harness, relative)) throw new Error('unsafe memory name');
