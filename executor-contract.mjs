@@ -53,8 +53,7 @@
 //    re-exports the shape so engines validate references they pass onward.
 
 import { SOUL_MODES } from './soul-mode.mjs';
-import { classifyRisk, isComputerUse } from './permission-risk.mjs';
-import { validateAgentId } from './identity-format.mjs';
+import { classifyRisk, isComputerUse, validateAgentId } from './identity-format.mjs';
 
 export const EXECUTOR_CONTRACT_VERSION = 1;
 

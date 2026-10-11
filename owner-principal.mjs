@@ -4,7 +4,7 @@
 // owner-action.mjs wires it for the commands that accept a principal (#645).
 import process from 'node:process';
 import { CommsClient, commsPaths } from './comms-client.mjs';
-import { ownerCredentialRequired } from './owner-gate.mjs';
+import { ownerCredentialRequired } from './identity-format.mjs';
 
 const PRINCIPAL = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 

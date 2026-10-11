@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GIT_HOOK_NAMES } from '../git-hooks.mjs';
+import { GIT_HOOK_NAMES } from '../identity-format.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const MODULES = new Map([

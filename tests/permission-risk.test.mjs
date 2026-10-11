@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyRisk, isComputerUse } from '../permission-risk.mjs';
+import { classifyRisk, isComputerUse } from '../identity-format.mjs';
 
 for (const toolName of ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'TodoWrite', 'TodoRead', 'Task', 'Agent',
   'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'mcp__files__get_file', 'mcp__files__list_files',

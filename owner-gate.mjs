@@ -39,12 +39,9 @@ import { requireOwnerApproval } from './owner-approval.mjs';
 import { keydPresence } from './owner-presence.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { boundedOwnerSummary } from './owner-text.mjs';
+import { ownerCredentialRequired } from './identity-format.mjs';
 
 const AGENT_ID = /agent_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
-
-export function ownerCredentialRequired(message = 'an authenticated owner principal or explicit owner consent is required') {
-  return Object.assign(new Error(message), { code: 'owner-credential-required', statusCode: 403 });
-}
 
 // The soul markers this caller carries. A marker that cannot be read counts,
 // so a broken binding or config refuses rather than reading as the owner.

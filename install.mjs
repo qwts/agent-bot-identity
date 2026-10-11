@@ -21,7 +21,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
-import { GIT_HOOK_NAMES } from './git-hooks.mjs';
+import { GIT_HOOK_NAMES } from './identity-format.mjs';
 import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
 import { ensureClaudeWorktreeAdapter, syncHooks } from './sync-hooks.mjs';

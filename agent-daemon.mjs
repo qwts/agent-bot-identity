@@ -77,9 +77,8 @@ import { boundRepository, createInboxTaker, inboxError } from './inbox-take.mjs'
 import { createGrantLedger } from './delegation-grants.mjs';
 import { createGrantActor } from './grant-github.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
-import { isComputerUse } from './permission-risk.mjs';
 import { assertAuthorized, principalsFile, resolvePrincipal } from './agent-principals.mjs';
-import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
+import { appendAuditReceipt, isComputerUse, validateAgentId } from './identity-format.mjs';
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
 import {

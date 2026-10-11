@@ -25,7 +25,6 @@ import { inspectAppCredentials } from './credential-reconciler.mjs';
 import { appKeyStores } from './soul-credentials.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
-import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { OPENCODE_PLUGIN_PATH, opencodeHookPlugin } from './soul-builder.mjs';
 import { GENERATED_HARNESS_MARKER } from './soul-harness-contract.mjs';
@@ -47,13 +46,12 @@ import {
   runtimeProfileInfo,
 } from './organization-profile.mjs';
 import {
-  AGENT_ID_KEYS,
-  PIN_KEYS,
   pinnedSlug,
   readGitConfig,
   resolveAgentSlug,
   territoryHarness,
 } from './resolve-agent.mjs';
+import { AGENT_ID_KEYS, GIT_HOOK_NAMES, PIN_KEYS } from './identity-format.mjs';
 import { credentialHelperCommand } from './setup-worktree.mjs';
 import { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
 import { createSecretProviderRegistry, probeSecretStore } from './secret-store.mjs';

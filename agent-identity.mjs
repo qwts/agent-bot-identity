@@ -27,10 +27,9 @@ import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { AGENT_ID_KEYS } from './resolve-agent.mjs';
 import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } from './config.mjs';
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
-import { isAgentId, validateAgentId } from './identity-format.mjs';
+import { AGENT_ID_KEYS, isAgentId, validateAgentId } from './identity-format.mjs';
 
 const SCHEMA_VERSION = 1;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;

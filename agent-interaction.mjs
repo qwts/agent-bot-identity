@@ -65,9 +65,8 @@ import {
 import {
   assertAuthorized,
 } from './agent-principals.mjs';
-import { appendAuditReceipt, validateAgentId, validateTransport } from './identity-format.mjs';
+import { appendAuditReceipt, classifyRisk, validateAgentId, validateTransport } from './identity-format.mjs';
 import { assertSoulUnpaused, listSouls, populationFile, showSoul } from './agent-population.mjs';
-import { classifyRisk } from './permission-risk.mjs';
 import { readAsides } from './soul-asides.mjs';
 
 // Bounded message size (#55 req 6). Kept below the daemon's 64 KiB request
