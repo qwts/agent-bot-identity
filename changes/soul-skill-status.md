@@ -1,1 +1,0 @@
-- `agent-bot soul skill status --soul ID` reports a soul's skills read-only: installed files rechecked against their install record, learning receipts with agent-reported knowledge outcomes, and knowledge coverage as unknown until a retrieval adapter exists (#603).

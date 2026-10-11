@@ -1,1 +1,0 @@
-- A soul's declared Gemini model is now written to `model.name` in `.gemini/settings.json`, where current Gemini CLI reads it, instead of a flat `model` string it ignores; the daemon reads either form from a repo (#379).

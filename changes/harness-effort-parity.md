@@ -1,1 +1,0 @@
-- A soul's declared reasoning effort is now checked to apply the same way in a directly opened Claude Code or Codex session and in a daemon-run turn, with a repo's own setting outranking the soul on both paths (#379).

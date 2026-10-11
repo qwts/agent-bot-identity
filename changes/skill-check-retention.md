@@ -1,1 +1,0 @@
-- `agent-bot soul skill check` now keeps the newest 50 source-check receipts per import instead of growing `.checks/` forever, and never removes one that an update record names; the dream journal stays append-only and is archived by hand (#603).

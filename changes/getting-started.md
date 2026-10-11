@@ -1,1 +1,0 @@
-- [Getting started](docs/getting-started.md) walks a newcomer through installing agent-bot and agent-comms, giving an agent its own GitHub App identity, a first signed commit and PR, two agents messaging each other, souls, and troubleshooting with `doctor`, and the README links it at the top (#752).
