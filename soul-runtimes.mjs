@@ -58,7 +58,7 @@ const OVERRIDE_RECORD_MAX_BYTES = 16 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
 const ORDER = Object.freeze(['node', 'uv', 'python', 'go']);
-const USAGE = 'usage: agent-bot soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable> [--json] [--principal-stdin] | soul runtimes override <agentId|name> <name> --clear [--json] [--principal-stdin]';
+const USAGE = 'usage: agent-bot soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin] | soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable> [--json] [--principal-stdin] | soul runtimes override <agentId|name> <name> --clear [--json] [--principal-stdin]';
 const run = promisify(execFile);
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value) => typeof value === 'string' && value.trim() ? value : null;
@@ -375,12 +375,55 @@ function recordRuntimePins(soulDir, inspect, release) {
     };
     for (const row of state.runtimes) keep('runtimes', row, provenance(row));
     for (const row of state.harnesses) keep('harnesses', row, null);
-    if (!changed) return;
-    const staged = `${file}.${randomUUID()}.tmp`;
-    try {
-      writeFileSync(staged, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-      renameSync(staged, file);
-    } finally { rmSync(staged, { force: true }); }
+    if (changed) writePins(file, next);
+  });
+}
+
+function writePins(file, next) {
+  const staged = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(staged, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    renameSync(staged, file);
+  } finally { rmSync(staged, { force: true }); }
+}
+
+/**
+ * What `soul runtimes upgrade` would change: each pinned catalog runtime
+ * whose declaration now resolves to another catalog pin, as `{ name, from,
+ * to }`. Unpinned runtimes already follow the current catalog; a package's
+ * own sources and harness installs move only by a soul.json revision. A
+ * pinned version this catalog no longer has moves to the newest pin its
+ * declaration allows. Pure reads.
+ */
+export function planRuntimeUpgrade(soulDir, { only = null, catalog, ...options } = {}) {
+  // What the plan was made from, so an apply can refuse a soul.json revised after the owner saw it.
+  const manifest = readSoulManifest(soulDir);
+  const declarations = createHash('sha256').update(JSON.stringify([manifest?.revision ?? null, manifest?.runtimes ?? null, manifest?.harnesses ?? null])).digest('hex');
+  const state = inspectSoulRuntimes(soulDir, { ...options, manifest, catalog });
+  const problem = state.invalid[0] ?? null;
+  const changes = [];
+  for (const row of state.runtimes) {
+    if (!row.pin || row.source !== 'catalog' || (only && row.name !== only)) continue;
+    const newest = row.name === 'uv' ? newestPin('uv', { catalog }) : resolveCatalogPin(row.name, row.declared, { catalog });
+    if (newest && newest.version !== row.pin.version) changes.push({ name: row.name, from: row.pin.version, to: newest.version, previous: row.pin });
+  }
+  return { changes, problem, release: catalogReleaseHash({ catalog }), declarations };
+}
+
+// Moves the planned entries, under the pins lock, only if each still
+// records the version the plan showed (`from`); `back` restores them.
+function moveRuntimePins(soulDir, plan, { back = false } = {}) {
+  const file = pinsFile(soulDir);
+  withLock(`${file}.lock`, 'runtime pins', () => {
+    const current = readRuntimePins(soulDir);
+    if (current.problem) throw new Error(current.problem);
+    const next = { schemaVersion: PINS_SCHEMA_VERSION, runtimes: { ...current.pins.runtimes }, harnesses: { ...current.pins.harnesses } };
+    for (const change of plan.changes) {
+      const [from, to] = back ? [change.to, change.from] : [change.from, change.to];
+      if (next.runtimes[change.name]?.version !== from) fail('runtime-install-failed', `${STATE}/${RUNTIME_PINS_FILE} changed since the upgrade was shown (${change.name} is no longer ${from}); run the upgrade again`, { runtime: change.name });
+      next.runtimes[change.name] = back ? change.previous : { version: to, catalogRelease: plan.release };
+    }
+    writePins(file, next);
   });
 }
 
@@ -1179,9 +1222,83 @@ export function formatRuntimes(result) {
   return `${lines.join('\n')}\n`;
 }
 
+const upgradeSummary = (changes) => changes.map((change) => `${change.name} ${change.from} -> ${change.to}`).join(', ');
+
+export function formatRuntimeUpgrade(result) {
+  const lines = [`agentId: ${result.agentId}`, `soulDir: ${result.soulDir}`, ''];
+  if (!result.changes.length) lines.push('up to date: every pinned runtime is on the newest catalog pin its declaration allows');
+  for (const change of result.changes) lines.push(`${change.name}: ${change.from} -> ${change.to}`);
+  if (result.changes.length) lines.push('', result.applied ? 'upgraded and installed' : 'nothing changed; run again with --apply to upgrade');
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * `soul runtimes upgrade`: shows how each pinned runtime would move to the
+ * newest catalog pin its declaration allows; with `--apply` (owner gate,
+ * whose prompt names the same changes) rewrites those pins and installs
+ * them. A failed install restores the previous pins, so the soul keeps
+ * running what it had. The only command that moves a pin forward (#617).
+ */
+async function soulRuntimesUpgradeCommand(argv, { gate, readStdin, write, env, home, cwd, now, ...rest }) {
+  let id = null, json = false, presented = false, apply = false, only = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--json' && !json) json = true;
+    else if (arg === '--apply' && !apply) apply = true;
+    else if (arg === '--principal-stdin' && !presented) presented = true;
+    else if (arg === '--runtime' && only === null && typeof argv[i + 1] === 'string' && !argv[i + 1].startsWith('-')) { only = argv[i + 1]; i += 1; }
+    else if (!arg.startsWith('-') && id === null) id = arg;
+    else throw new Error(USAGE);
+  }
+  if (!id || (presented && !apply)) throw new Error(USAGE);
+  if (only !== null && !RUNTIME_NAMES.includes(only) && !PROVIDER_NAMES.includes(only)) throw new Error(`--runtime must be one of ${[...RUNTIME_NAMES, ...PROVIDER_NAMES].join(', ')}`);
+  const options = { env, home, now, ...rest };
+  const soul = resolveSoul(id, options);
+  const soulDir = soulRoot(soul, options);
+  const plan = planRuntimeUpgrade(soulDir, { env, home, platform: rest.platform, catalog: rest.catalog, registry: rest.registry, only });
+  if (plan.problem) fail('runtime-install-failed', `${soul.id}: ${plan.problem.message}`, { runtime: plan.problem.path, action: invalidAction(plan.problem) });
+  const changes = plan.changes.map(({ name, from, to }) => ({ name, from, to }));
+  const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, soulDir, changes, applied: false };
+  if (apply && changes.length) {
+    let principal = null;
+    if (presented) {
+      try { principal = JSON.parse(readStdin()); }
+      catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
+    }
+    await gate(`upgrade ${soul.id}'s pinned runtimes (${upgradeSummary(changes)})`, { principal, env, cwd });
+    // The owner approved this plan: refuse if soul.json or the pins moved while the gate was open.
+    const again = planRuntimeUpgrade(soulDir, { env, home, platform: rest.platform, catalog: rest.catalog, registry: rest.registry, only });
+    if (again.problem || again.declarations !== plan.declarations || upgradeSummary(again.changes) !== upgradeSummary(changes)) {
+      fail('runtime-install-failed', `${soul.id}: soul.json or ${STATE}/${RUNTIME_PINS_FILE} changed while the upgrade was being approved; nothing was changed`,
+        { runtime: `${STATE}/${RUNTIME_PINS_FILE}`, action: `agent-bot soul runtimes upgrade ${soul.id}${only ? ` --runtime ${only}` : ''}` });
+    }
+    moveRuntimePins(soulDir, plan);
+    // Exactly the approved runtimes, in catalog order (uv before python), nothing else that happens to be missing.
+    const installed = { runtimes: [], installed: [] };
+    try {
+      for (const change of changes) {
+        const step = await provisionSoulRuntimes(soul.id, { ...options, only: change.name });
+        Object.assign(installed, { runtimes: step.runtimes, installed: [...installed.installed, ...step.installed] });
+      }
+    } catch (error) {
+      try { moveRuntimePins(soulDir, plan, { back: true }); error.message = `${error.message}; the upgrade was undone, ${soulDir} keeps its previous runtimes`; }
+      catch (undoError) { error.message = `${error.message}; also could not undo the upgrade in ${STATE}/${RUNTIME_PINS_FILE} (${undoError.message})`; }
+      // Versions and the error code only: no paths, messages or credentials.
+      appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: 'upgrade', decision: 'failed',
+        detail: `not upgraded: ${upgradeSummary(changes)}; ${error.code ?? 'runtime-install-failed'}` }, { env, home, now });
+      throw error;
+    }
+    appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: 'upgrade', decision: 'upgraded', detail: `upgraded: ${upgradeSummary(changes)}` }, { env, home, now });
+    Object.assign(result, { applied: true, runtimes: installed.runtimes, installed: installed.installed });
+  }
+  write(json ? `${JSON.stringify(result)}\n` : formatRuntimeUpgrade(result));
+  return result;
+}
+
 export async function soulRuntimesCommand(argv, { gate = ownerGate, readStdin = () => readFileSync(0, 'utf8'), write = (value) => process.stdout.write(value),
   env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), ...rest } = {}) {
   if (argv[0] === 'override') return soulRuntimeOverrideCommand(argv.slice(1), { gate, readStdin, write, env, home, cwd, now, ...rest });
+  if (argv[0] === 'upgrade') return soulRuntimesUpgradeCommand(argv.slice(1), { gate, readStdin, write, env, home, cwd, now, ...rest });
   let install = false, id = null, json = false, presented = false, only = null;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];

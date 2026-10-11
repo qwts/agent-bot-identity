@@ -125,8 +125,8 @@ pin on its own (#617, owner decision "the new pins file"):
   `.lock` is transient and excluded), while `.soul-state/runtimes` is
   reconstructible and is not carried. A fresh host installs the recorded
   versions.
-- Only an explicit upgrade (`soul runtimes upgrade`, a later #617 slice) is
-  meant to move a recorded version forward. `catalogRelease` is provenance and
+- Only `soul runtimes upgrade --apply` moves a recorded version forward (see
+  Commands). `catalogRelease` is provenance and
   is not enforced: a recorded version installs from the running agent-bot's
   verified pin for it.
 - The file is soul-writable state, like the rest of `.soul-state`. It holds
@@ -140,6 +140,7 @@ pin on its own (#617, owner decision "the new pins file"):
 ```sh
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+agent-bot soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin]
 agent-bot soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> /absolute/path/to/executable [--json] [--principal-stdin]
 agent-bot soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> --clear [--json] [--principal-stdin]
 ```
@@ -153,6 +154,26 @@ audit receipt (`soul-runtimes`, no secrets). The daemon runs the same
 install at launch when a declared runtime is missing, as the `runtimes`
 launch stage, and a launch whose install fails reports the coded error
 instead of starting the harness.
+
+`soul runtimes upgrade` shows the diff first: for each runtime recorded in
+`.soul-state/runtime-pins.json` from the catalog, the move to the newest
+catalog pin its declaration allows (`node: 24.21.0 -> 24.22.1`), uv
+included, or `up to date`. It reads only and asks nobody. `--runtime` limits
+it to one runtime. `--apply` is the owner action: the owner gate's prompt
+names the same changes. After the gate it plans again and refuses, changing
+nothing, if `soul.json` (its revision or declarations) or the pins moved while
+the prompt was open. Then, under the pins lock and only if each entry still
+records the version shown, it rewrites those entries (with the current
+catalog release), installs exactly those runtimes (nothing else that happens
+to be missing; uv first when python needs it), and leaves an audit receipt
+(`soul-runtimes`, operation `upgrade`). If the install fails, the entries are
+put back, so the soul keeps running what it had, the error says the upgrade
+was undone, and a `failed` receipt records the versions and error code only.
+Unrecorded runtimes already follow the current catalog; a package's own
+`sources` and harness installs move by a `soul.json` revision. A recorded
+version this catalog no longer pins moves to the newest pin its declaration
+allows, which is how a soul refused for a dropped pin recovers. A malformed
+pins file is refused like an install.
 
 `--json` prints one object with every key present:
 

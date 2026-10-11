@@ -24,6 +24,7 @@ agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
 agent-bot soul revision prepare --discard STAGING
 agent-bot soul runtimes <agentId|name> [--json]
 agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+agent-bot soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin]
 agent-bot soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin]
 agent-bot soul secret <agentId|name> status [--json]
 ```

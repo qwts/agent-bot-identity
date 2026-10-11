@@ -12,7 +12,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, catalogPin, catalogReleaseHash, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
-import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, readJson, readRuntimePins, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimeUpgrade, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, planRuntimeUpgrade, readJson, readRuntimePins, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
@@ -992,6 +992,94 @@ test('soul runtimes and soul runtimes install report by Agent ID or name with --
   const help = spawnSync(process.execPath, [path.join(ROOT, 'agent-bot.mjs'), 'soul', '--help'], { encoding: 'utf8', timeout: 20000 });
   assert.match(help.stdout, /agent-bot soul runtimes install <agentId\|name> \[--json\] \[--runtime NAME\] \[--principal-stdin\]/);
   assert.ok(RUNTIME_NAMES.every((name) => help.stdout.includes(name)));
+});
+
+test('soul runtimes upgrade shows how pinned runtimes would move, and only --apply behind the owner gate moves and installs them (#617)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24', python: '3.12' } }, census: true });
+  const d = doubles({ archives: f.archives });
+  const gates = [];
+  const options = { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl, cwd: f.home, file: f.env.AGENT_BOT_POPULATION_PATH,
+    gate: async (action, { principal }) => { gates.push([action, principal]); return { method: 'consent' }; } };
+  const pinsPath = path.join(f.dir, '.soul-state', 'runtime-pins.json');
+  await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  const before = readFileSync(pinsPath, 'utf8');
+  let out = '';
+  const write = (value) => { out += value; };
+  // On the catalog it was installed from, there is nothing to upgrade.
+  const same = await soulRuntimesCommand(['upgrade', 'billy'], { ...options, write });
+  assert.deepEqual([same.changes, same.applied], [[], false]);
+  assert.match(out, /up to date: every pinned runtime is on the newest catalog pin its declaration allows/);
+  // A newer agent-bot pins a newer node 24 and uv; python's line has nothing newer.
+  const bumped = structuredClone(f.catalog);
+  // The newer node is new bytes, so installing it downloads.
+  const nextNode = archive({ 'node-v24.99.0-darwin-arm64/bin/node': '#!/bin/sh\n', 'node-v24.99.0-darwin-arm64/bin/npm': '#!/bin/sh\n' });
+  const nextUv = archive({ 'uv-aarch64-apple-darwin/uv': '#!/bin/sh\n', 'uv-aarch64-apple-darwin/uvx': '#!/bin/sh\n', 'uv-aarch64-apple-darwin/NEWS': '9.9.9' });
+  const pinOf = (version, file) => ({ version, sources: Object.fromEntries(RUNTIME_PLATFORMS.map((p) => [p, { url: `https://example.test/${p}/${file}`, sha256: sha(file === 'uv.tgz' ? nextUv : nextNode), bin: file === 'uv.tgz' ? '.' : 'bin' }])) });
+  bumped.node.push(pinOf('24.99.0', 'node.tgz'));
+  bumped.uv.push(pinOf('9.9.9', 'uv.tgz'));
+  const archives = { ...f.archives, [`https://example.test/${PLATFORM}/node.tgz`]: nextNode, [`https://example.test/${PLATFORM}/uv.tgz`]: nextUv };
+  const upgrading = { ...options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn };
+  out = '';
+  const shown = await soulRuntimesCommand(['upgrade', ID, '--json'], { ...upgrading, write });
+  assert.deepEqual(JSON.parse(out), shown);
+  assert.deepEqual(shown, { schemaVersion: 1, agentId: ID, soulDir: f.dir, changes: [{ name: 'node', from: NODE.version, to: '24.99.0' }, { name: 'uv', from: UV.version, to: '9.9.9' }], applied: false });
+  assert.equal(readFileSync(pinsPath, 'utf8'), before, 'showing changes nothing');
+  assert.deepEqual(gates, [], 'showing is not an owner action');
+  out = '';
+  await soulRuntimesCommand(['upgrade', 'billy', '--runtime', 'node'], { ...upgrading, write });
+  assert.equal(out, `agentId: ${ID}\nsoulDir: ${f.dir}\n\nnode: ${NODE.version} -> 24.99.0\n\nnothing changed; run again with --apply to upgrade\n`);
+  assert.equal(formatRuntimeUpgrade({ agentId: ID, soulDir: f.dir, changes: [], applied: false }).includes('up to date'), true);
+  // A failed install undoes the upgrade: the pins and the running runtimes stay as they were.
+  const offline = await soulRuntimesCommand(['upgrade', 'billy', '--apply', '--runtime', 'node'], { ...upgrading, fetchFn: doubles({ archives: f.archives, fail: { [`https://example.test/${PLATFORM}/node.tgz`]: 'offline' } }).fetchFn, write: () => {} }).then(() => null, (e) => e);
+  assert.equal(offline?.code, 'runtime-download-failed');
+  assert.match(offline.message, /; the upgrade was undone, .* keeps its previous runtimes/);
+  const lastReceipt = () => JSON.parse(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8').split('\n').filter((line) => line.includes('soul-runtimes')).at(-1));
+  const failedReceipt = lastReceipt();
+  assert.deepEqual([failedReceipt.operation, failedReceipt.decision, failedReceipt.detail], ['upgrade', 'failed', `not upgraded: node ${NODE.version} -> 24.99.0; runtime-download-failed`], 'an undone upgrade is audited, with versions and the code only');
+  assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')), JSON.parse(before));
+  assert.equal(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.find((r) => r.name === 'node').status, 'installed');
+  // Partway: node installs at its new version, then uv fails. Both pins go back, and the old node is what runs.
+  const partway = await soulRuntimesCommand(['upgrade', 'billy', '--apply'], { ...upgrading, fetchFn: doubles({ archives, fail: { [`https://example.test/${PLATFORM}/uv.tgz`]: 'offline' } }).fetchFn, write: () => {} }).then(() => null, (e) => e);
+  assert.match(partway?.message ?? '', /uv.*ENOTFOUND.*; the upgrade was undone/);
+  assert.ok(existsSync(path.join(f.runtimes, 'node', '24.99.0')), 'node 24.99.0 did install');
+  assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')), JSON.parse(before));
+  assert.deepEqual(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.map((r) => [r.name, r.version, r.status]), [['node', NODE.version, 'installed'], ['uv', UV.version, 'installed'], ['python', PYTHON.version, 'installed']]);
+  // soul.json revised while the gate was open: the approved plan no longer holds, so nothing changes.
+  const pinsBefore = readFileSync(pinsPath, 'utf8');
+  const revising = { ...upgrading, gate: async () => { f.writeManifest((m) => { m.runtimes.node = '24.99.0'; }); return { method: 'consent' }; } };
+  const revised = await soulRuntimesCommand(['upgrade', 'billy', '--apply'], { ...revising, write: () => {} }).then(() => null, (e) => e);
+  assert.deepEqual([revised?.code, revised?.action], ['runtime-install-failed', `agent-bot soul runtimes upgrade ${ID}`]);
+  assert.match(revised.message, /changed while the upgrade was being approved; nothing was changed/);
+  assert.equal(readFileSync(pinsPath, 'utf8'), pinsBefore);
+  f.writeManifest((m) => { m.runtimes.node = '24'; });
+  // Something else missing (go, declared after the install) is not installed by an upgrade the owner did not approve for it.
+  f.writeManifest((m) => { m.runtimes.go = '1'; });
+  // --apply asks the owner, naming the changes, then rewrites only those pins and installs them.
+  gates.length = 0;
+  out = '';
+  const applied = await soulRuntimesCommand(['upgrade', 'billy', '--apply', '--json', '--principal-stdin'], { ...upgrading, write, readStdin: () => '{"principalId":"p1"}' });
+  assert.deepEqual(gates, [[`upgrade ${ID}'s pinned runtimes (node ${NODE.version} -> 24.99.0, uv ${UV.version} -> 9.9.9)`, { principalId: 'p1' }]]);
+  assert.deepEqual([applied.applied, applied.installed], [true, ['uv']], 'node 24.99.0 is already on disk from the undone attempt');
+  const release = catalogReleaseHash({ catalog: bumped });
+  assert.deepEqual(readRuntimePins(f.dir).pins.runtimes, { node: { version: '24.99.0', catalogRelease: release }, uv: { version: '9.9.9', catalogRelease: release }, python: JSON.parse(before).runtimes.python });
+  assert.deepEqual(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.map((r) => [r.name, r.version, r.status]), [['node', '24.99.0', 'installed'], ['uv', '9.9.9', 'installed'], ['python', PYTHON.version, 'installed'], ['go', GO.version, 'missing']]);
+  assert.equal(readRuntimePins(f.dir).pins.runtimes.go, undefined);
+  f.writeManifest((m) => { delete m.runtimes.go; });
+  assert.match(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8').split('\n').filter((line) => line.includes('soul-runtimes')).at(-1), /"operation":"upgrade","decision":"upgraded"/);
+  // Applying again has nothing to do and asks nobody.
+  gates.length = 0;
+  const again = await soulRuntimesCommand(['upgrade', 'billy', '--apply'], { ...upgrading, write: () => {} });
+  assert.deepEqual([again.changes, again.applied, gates], [[], false, []]);
+  // A pinned version the catalog dropped is moved to the newest pin its declaration allows.
+  const dropped = { ...bumped, node: [pinOf('24.98.0', 'node.tgz')] };
+  assert.deepEqual(planRuntimeUpgrade(f.dir, { ...f.options, catalog: dropped }).changes.map(({ name, from, to }) => [name, from, to]), [['node', '24.99.0', '24.98.0']]);
+  // A malformed pins file is reported, never upgraded over.
+  writeFileSync(pinsPath, 'not json');
+  await assert.rejects(soulRuntimesCommand(['upgrade', 'billy'], { ...upgrading, write: () => {} }), (e) => e.code === 'runtime-install-failed' && e.action === 'fix or delete .soul-state/runtime-pins.json');
+  for (const args of [['upgrade'], ['upgrade', 'billy', '--principal-stdin'], ['upgrade', 'billy', 'extra'], ['upgrade', 'billy', '--runtime']]) {
+    await assert.rejects(soulRuntimesCommand(args, { ...options, write: () => {} }), /usage:/, args.join(' '));
+  }
+  await assert.rejects(soulRuntimesCommand(['upgrade', 'billy', '--runtime', 'opencode'], { ...options, write: () => {} }), /--runtime must be one of/);
 });
 
 test('owner-managed executable overrides use one-name shims, satisfy only the selected runtime, and fail closed when stale', async (t) => {
