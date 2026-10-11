@@ -7,14 +7,15 @@ This implements local-directory, HTTPS-document and public GitHub-directory acqu
 for #603/#312. Learning guides selected adaptations through the existing soul
 revision/proposal policy. Explicit source updates merge a reviewed candidate into
 the standalone library. Install, uninstall, workspace or global loading and a
-read-only `status` are described below; other repository adapters and
-knowledge search remain unimplemented.
+read-only `status` are described below. Other repository adapters are not
+implemented; knowledge search is deferred to #902.
 
 The [dream maintenance guide](soul-skill-dream-design.md) describes the implemented
-owner CLI, daemon scheduling, bounded definition/learned-skill inputs, recovery
-and reported outcomes. Register maintenance explicitly; importing or learning a
-skill creates no schedule. Maintenance coverage remains unverified, and the guide
-identifies the remaining processing, notice and retrieval work.
+owner CLI, daemon scheduling, bounded definition/learned-skill inputs, the soul's
+own conversation as input, recovery, reported outcomes and verified-change
+processing checkpoints. Register maintenance explicitly; importing or learning a
+skill creates no schedule. Other maintenance coverage stays unverified, notices
+stay `pending-host-read`, and the guide notes what is deferred.
 
 ```sh
 agent-bot soul skill import /path/to/skill --json
@@ -342,7 +343,7 @@ metadata. Imported file contents still preserve the original bytes; this is
 not payload secret redaction. Local-directory import never fetches remote links;
 the explicit HTTPS-document and public GitHub-directory adapters perform the
 bounded remote capture described above. No permission is inferred from a
-reference. Other repository adapters remain open;
+reference. Other repository adapters are not implemented;
 harness retrieval is out of scope, as the next section states.
 
 ## Install into a soul
@@ -713,9 +714,10 @@ may say `reported-completed`, `skipped` or `blocked`; reported completion needs
 one or more existing package-file evidence paths. The runtime hashes those
 evidence files but labels the external operation **agent-reported**. It does not
 claim verified embedding, indexing, graph updates or retrieval, and provisions
-no service or maintenance schedule. Retrieval adapters and verified
-semantic-processing coverage, including memory and conversation inputs, remain
-open requirements in #603. Daemon scheduling and owner controls are implemented;
-see [Implemented scheduling core](soul-skill-dream-design.md#implemented-scheduling-core).
+no service or maintenance schedule. Daemon scheduling and owner controls are
+implemented; see [Implemented scheduling core](soul-skill-dream-design.md#implemented-scheduling-core).
+Dream reads the soul's own conversation (#887) and keeps a processing checkpoint
+that credits only `verified-change` evidence (#886); other coverage stays
+`unverified`. Memory input is deferred to #903 and search adapters to #902.
 
 Learning receipts enumerate retained source paths, byte hashes and modes. Relearning refuses extra or changed provenance material, including material beside an otherwise valid receipt. Read-only learning history reports malformed receipts as `invalid-receipt` and continues; recording still refuses an invalid current candidate receipt. Default prepared paths may traverse an alias of the soul root, but staging leaves and internal state directories must remain real directories.
