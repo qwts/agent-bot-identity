@@ -5,10 +5,12 @@
 // host. agent-daemon.mjs re-exports daemonClient and daemonStateFile for
 // existing importers.
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import { readBinding } from './agent-binding.mjs';
 import { PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
@@ -26,6 +28,10 @@ const GRANT_SPEND_TIMEOUT_MS = 45_000;
 const INBOX_TAKE_TIMEOUT_MS = 30_000;
 // Longer than keyd's presence prompt, so the owner has time to answer.
 const OWNER_DECISION_TIMEOUT_MS = 180_000;
+// A record operation is local file work under a lock; the lock's own stale
+// reclaim bounds the wait well inside this.
+const IDENTITY_OP_TIMEOUT_MS = 60_000;
+const IDENTITY_ENTRY = fileURLToPath(new URL('./identity-entry.mjs', import.meta.url));
 
 export function daemonStateFile({ env = process.env, home = homedir() } = {}) {
   if (env.AGENT_BOT_DAEMON_STATE_PATH) return path.resolve(env.AGENT_BOT_DAEMON_STATE_PATH);
@@ -293,4 +299,50 @@ export function daemonClient({
       return request('GET', `/v1/invocations/${encodeURIComponent(invocationId)}/artifacts?${new URLSearchParams({ transport, providerId })}`);
     },
   };
+}
+
+// Runs one of identity's record operations in a child process (#645, F6;
+// owner answers Q1 and Q2): node identity-entry.mjs <op>, with the input as
+// JSON on stdin. It needs no daemon. The child gets the caller's environment
+// and working directory, so the state root and the gate resolve as they would
+// in-process. Returns the operation's result; a failure throws an Error that
+// carries the entry's `code` (invalid-input, unknown-op or operation-failed).
+export function identityOp(op, input = {}, {
+  env = process.env,
+  cwd = process.cwd(),
+  timeoutMs = IDENTITY_OP_TIMEOUT_MS,
+  execFile = execFileSync,
+} = {}) {
+  let stdout;
+  let failure = null;
+  try {
+    stdout = execFile(process.execPath, [IDENTITY_ENTRY, op], {
+      input: JSON.stringify(input),
+      env,
+      cwd,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: timeoutMs,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch (error) {
+    failure = error;
+    stdout = error.stdout;
+  }
+  let payload = null;
+  try {
+    payload = JSON.parse(String(stdout ?? ''));
+  } catch {
+    payload = null;
+  }
+  if (payload?.error) {
+    const { code, message, statusCode } = payload.error;
+    throw Object.assign(new Error(String(message)), { code: String(code) },
+      Number.isInteger(statusCode) ? { statusCode } : {});
+  }
+  if (failure || !payload || !Object.hasOwn(payload, 'result')) {
+    const detail = String(failure?.stderr ?? '').trim() || failure?.message || 'no result';
+    throw Object.assign(new Error(`identity ${op} failed: ${detail}`), { code: 'operation-failed' });
+  }
+  return payload.result;
 }
