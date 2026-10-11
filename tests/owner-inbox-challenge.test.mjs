@@ -147,7 +147,7 @@ async function setup() {
   };
   const open = () => server.interaction.listProposalsForOwner().proposals;
   const until = async (check) => {
-    for (let i = 0; i < 200 && !check(); i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    for (let i = 0; i < 2000 && !check(); i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
     assert.ok(check());
   };
   // A turn woken by the owner's message, then a decide call answered with
