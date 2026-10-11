@@ -32,7 +32,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
 import { mintBindToken, readBinding } from './agent-binding.mjs';
-import { initializeAgentApp, mintAgentIdentity, readAgentIdentity } from './agent-identity.mjs';
+import { initializeAgentApp, mintAgentIdentity } from './agent-identity.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, setSoulApp, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
@@ -158,7 +159,7 @@ function pinnedSoul(worktree) {
 }
 
 function activeIdentity(id, stateDir) {
-  try { return readAgentIdentity(id, { stateDir }).status === 'active'; } catch { return false; }
+  try { return identityOp('read', { id: id, stateDir }).status === 'active'; } catch { return false; }
 }
 
 // The soul's own checkout for agents that start outside any repository.
@@ -226,7 +227,7 @@ export async function joinSoul({
   if (agentId && !activeIdentity(agentId, stateDir)) throw new Error(`${agentId} is not an active soul`);
   // A wake runs the soul's stored harness, not --harness: an existing soul
   // must be joined with its own harness before it can wake.
-  const existing = agentId ? readAgentIdentity(agentId, { stateDir }) : null;
+  const existing = agentId ? identityOp('read', { id: agentId, stateDir }) : null;
   // Joining is deliberate onboarding. Resolve through the same configured
   // markers as mint-token, before creating a soul or changing checkout state.
   // Hook-driven setup still never claims a human checkout through detection.
@@ -324,7 +325,7 @@ export async function joinSoul({
   // conversation on record keeps it; one with none is bound to its join.
   if (wake === 'acp' && !readBinding({ env: {}, gitDir })) {
     if (!token) throw new Error('--wake acp needs a daemon binding, and no bind token could be minted in this checkout');
-    const identity = readAgentIdentity(agentId, { stateDir });
+    const identity = identityOp('read', { id: agentId, stateDir });
     let bound;
     try {
       bound = await client.bind({ gitDir, token, harness: identity.harness ?? harness,
@@ -336,7 +337,7 @@ export async function joinSoul({
     bind = 'bound';
   }
   const adapter = wake === 'acp'
-    ? await ensureAcpHarness(agentId, readAgentIdentity(agentId, { stateDir }).harness ?? harness, worktree, { env, options: { ...options, file }, installHarness })
+    ? await ensureAcpHarness(agentId, identityOp('read', { id: agentId, stateDir }).harness ?? harness, worktree, { env, options: { ...options, file }, installHarness })
     : null;
 
   // 6. Wake, turned on before agent-comms registers the soul: a message

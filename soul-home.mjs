@@ -9,8 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { readAgentIdentity } from './agent-identity.mjs';
 import { validateAgentId } from './identity-format.mjs';
+import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, recordSoulSighting, registerSoulDir, setSoulSpacePath, showSoul, soulDirectory } from './agent-population.mjs';
 import { initSoulSpace } from './agent-space.mjs';
@@ -197,7 +197,7 @@ function recordedHarness(agentId, options) {
   const stateDir = options.stateDir ?? stateDirectory(options);
   // Old census-only homes may have no identity file yet.
   if (!existsSync(path.join(stateDir, `${validateAgentId(agentId)}.json`))) return null;
-  return readAgentIdentity(agentId, { stateDir }).harness ?? null;
+  return identityOp('read', { id: agentId, stateDir }).harness ?? null;
 }
 
 // Keep npm ci's exact pins and package locations, including nested versions,
