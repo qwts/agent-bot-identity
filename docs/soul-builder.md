@@ -46,19 +46,23 @@ A native consumer receives no duplicate configuration folder.
 | Harness | Instructions | Skills / generated folder | MCP (#378) | Subagents | Commands | Hooks |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | Marked `CLAUDE.md` with `@AGENTS.md` | `.claude/skills/<name>/` | `.mcp.json` | `.claude/agents/<name>.md` | `.claude/commands/<name>.md` | `.claude/settings.json` `hooks` |
-| Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Unsupported | `.gemini/commands/<name>.toml` | Unsupported |
+| Gemini CLI | Marked `GEMINI.md` with `@AGENTS.md` | `.gemini/skills/<name>/` | `.gemini/settings.json` | Won't do: experimental upstream | `.gemini/commands/<name>.toml` | Unsupported |
 | Codex | Native `AGENTS.md` | None yet (Codex reads `.codex/skills/` and `.agents/skills/`, not `.claude/skills/`) | `.codex/config.toml` | `.codex/agents/<name>.toml` (agents without `tools`) | `.agents/skills/source-command-<name>/SKILL.md` (commands without arguments, shell or `@` includes; only when the soul targets Codex) | `.codex/hooks.json` |
 | OpenCode | Native `AGENTS.md` | Uses shared `.claude/skills/` | `opencode.json` | `.opencode/agent/<name>.md` | `.opencode/command/<name>.md` | `.opencode/plugins/agent-bot-soul.js` |
-| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Unsupported (replaced by skills) | `.cursor/hooks.json` |
+| Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Won't do: replaced by skills upstream | `.cursor/hooks.json` |
 | Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
 | Devin CLI | Claude-compatible consumer | Shared Claude skills; `.devin/` only for agents | Shared `.mcp.json` | `.devin/agents/<name>.md` | Shared `.claude/commands/<name>.md` (imported as skills) | Shared `.claude/settings.json` |
-| Muse | No verified definition adapter in this repo | No dedicated output; follow-up | None yet | Unsupported | Unsupported | Unsupported |
-| Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | `.kiro/settings/mcp.json` | `.kiro/agents/<name>.md` | Unsupported (format undocumented) | Unsupported |
+| Muse | Won't do: no verified definition adapter | Won't do | Won't do | Won't do | Won't do | Won't do |
+| Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | `.kiro/settings/mcp.json` | `.kiro/agents/<name>.md` | Won't do: format undocumented upstream | Unsupported |
 | Qwen Code | Native `AGENTS.md` | `.qwen/skills/<name>/` (marked files only) | `.qwen/settings.json` | `.qwen/agents/<name>.md` | `.qwen/commands/<name>.md` | Unsupported |
 
 "None yet" and "Unsupported" describe adapters in this slice, not a claim
-that a harness lacks the capability. Subagents and commands without adapters
-are explicitly listed under `unsupported` in the build report. A "Shared" cell
+that a harness lacks the capability. "Won't do" cells are closed for now by
+owner decision on #378 (2026-10-11), because the upstream format they would
+target is missing, replaced or experimental (see [Won't do for now](#wont-do-for-now));
+they are revisited only when that upstream changes. Either way, subagents and
+commands without adapters are explicitly listed under `unsupported` in the
+build report. A "Shared" cell
 is a file another harness's adapter writes that this harness's docs say it reads
 natively; it is filled only on that evidence (below), never inferred from shared
 skills.
@@ -392,7 +396,8 @@ Other top-level manifest extensions retain their existing opaque behavior.
 | Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported | `model_provider` + `[model_providers.<id>]` |
 | Gemini / `.gemini/settings.json` | `model.name` | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 | OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` | `provider.<id>` with `{env:KEY}` |
-| Cursor, Copilot, Devin, Muse, Kiro | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| Cursor, Copilot, Devin, Kiro | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| Muse | Won't do: no adapter | Won't do | Won't do | Won't do | Won't do | Won't do |
 
 `provider` (`harnesses.<h>.provider`, [soul-providers.md](soul-providers.md))
 renders the non-secret half only; the secret itself is stored with
@@ -746,7 +751,8 @@ uses for the lifecycle adapters.
 | Cursor | `.cursor/hooks.json` | `version: 1`; blocking events carry `failClosed: true` |
 | Copilot CLI | `.github/hooks/agent-bot-soul.json` | A dedicated file; other `.github/hooks/*.json` files stay the soul's |
 | OpenCode | `.opencode/plugins/agent-bot-soul.js` | A generated plugin, rendered for every soul; see [OpenCode](#opencode) below. `session-end` and `agent-stop` have no OpenCode event and are listed under `unsupported.hooks` |
-| Gemini CLI, Muse, Kiro | None | No dialect row yet; every hook is listed under `unsupported.hooks` |
+| Gemini CLI, Kiro | None | No dialect row yet; every hook is listed under `unsupported.hooks` |
+| Muse | None | Won't do: no adapter (see [Won't do for now](#wont-do-for-now)); every hook is listed under `unsupported.hooks` |
 
 Cursor's and Copilot's project hook files, like their `hook-dialects.mjs` rows,
 assume the harness tolerates the leading `_comment` marker key; Cursor's row is
@@ -871,16 +877,30 @@ revision (stably — a rebuild reproduces it byte for byte). Letting
 `readSoulPackageEntries` pass generated-path entries into the pure builder would
 close that gap.
 
+## Won't do for now
+
+By owner decision on #378 (2026-10-11), these stay unsupported until the
+upstream harness changes. The build report keeps listing every declaration
+they would carry, by name, under that harness's `unsupported` (`subagents`,
+`commands`, `settings`, `permissions`, `hooks`), so nothing is dropped in
+silence:
+
+| Harness | Primitive | Why |
+| --- | --- | --- |
+| Cursor | Commands | Cursor replaced commands with skills: its commands page now redirects to [migrating commands to skills](https://cursor.com/help/customization/skills#how-do-i-migrate-commands-to-skills), so there is no current command format to write. Cursor already reads the shared skills. |
+| Kiro | Commands | [Prompts](https://kiro.dev/docs/cli/chat/manage-prompts/) live in `.kiro/prompts/`, but their file name and metadata format is not documented. |
+| Gemini CLI | Subagents | [`.gemini/agents/*.md`](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md) is switched on only by `experimental.enableAgents`, so it is not a stable format. |
+| Muse | Everything but launch | This repo has no verified Muse definition adapter, so it renders no instructions, skills, MCP, subagents, commands, settings or hooks for Muse. Muse keeps its ACP launch row. |
+
 ## Follow-ups
 
-Not yet covered: Muse (MCP, subagents, commands, hooks); Codex subagents
-that declare `tools` (no per-role allowlist); subagents for Gemini CLI (until
-`.gemini/agents/` is documented as stable); Codex commands that take
-arguments, run shell or include files; commands for Cursor (replaced by
-skills) and Kiro (`.kiro/prompts/` file format
-undocumented); hooks for Gemini CLI, OpenCode (plugins), Muse and Kiro; and a
-signed-in check that Cursor and Kiro accept the `_comment` marker key. Soul
-skills do not reach Codex yet: it reads `.codex/skills/` and
+Not yet covered: Codex subagents that declare `tools` (no per-role
+allowlist); Codex commands that take arguments, run shell or include files;
+hooks for Gemini CLI and Kiro (OpenCode hooks shipped in #893 and #898; see
+[OpenCode](#opencode)); and a signed-in check that Cursor and Kiro accept the
+`_comment` marker key.
+
+Soul skills do not reach Codex yet: it reads `.codex/skills/` and
 `.agents/skills/`, not `.claude/skills/`.
 
 The renderer, injected entry and `reachPolicyRules()` now share the
