@@ -29,7 +29,7 @@ import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { withLock } from './agent-identity.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
-import { PROVIDER_NAMES, RUNTIME_NAMES, harnessInstallSource, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, supportedMajors, uvToolRequirements } from './runtime-catalog.mjs';
+import { PROVIDER_NAMES, RUNTIME_NAMES, harnessInstallSource, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, uvToolRequirements } from './runtime-catalog.mjs';
 
 export const RUNTIMES_SCHEMA_VERSION = 1;
 // Stable failure codes (ADR-0322 decision 5): each names the declared
@@ -135,7 +135,10 @@ function readOverrideRecord(soulDir, name, { agentId, platform = process.platfor
   return { executable, verification: 'unverified-external' };
 }
 
-export function inspectRuntimeOverrides(soulDir, { agentId, platform = process.platform } = {}) {
+// A soul that requires integrity (#617) refuses every override: an external
+// executable has no evidence, and ADR-0322 decision 4 says an override cannot
+// bypass a required policy. Clearing one, or the policy, is the owner's way out.
+export function inspectRuntimeOverrides(soulDir, { agentId, platform = process.platform, integrity = declaredRuntimes(readSoulManifest(soulDir)).integrity } = {}) {
   const overrides = {}, rows = [], errors = [];
   for (const name of Object.keys(OVERRIDE_NAMES)) {
     let present = false;
@@ -148,6 +151,14 @@ export function inspectRuntimeOverrides(soulDir, { agentId, platform = process.p
     if (!present) continue;
     try {
       const record = readOverrideRecord(soulDir, name, { agentId, platform });
+      if (integrity === 'required') {
+        const row = { name, runtime: OVERRIDE_RUNTIME_NAMES[name], status: 'invalid', executable: record.executable, verification: record.verification, code: 'runtime-override-invalid',
+          reason: `soul.json requires runtime integrity, and the ${name} override at ${safeOverridePath(record.executable)} is unverified-external; clear it, or remove runtimes.integrity in a revision`,
+          action: `agent-bot soul runtimes override ${agentId} ${name} --clear` };
+        rows.push(row);
+        errors.push(row);
+        continue;
+      }
       overrides[name] = record;
       rows.push({ name, runtime: OVERRIDE_RUNTIME_NAMES[name], status: 'selected', executable: record.executable, verification: record.verification, code: null, action: null });
     } catch (error) {
@@ -277,10 +288,17 @@ export function readSoulManifest(soulDir) {
  */
 export function declaredRuntimes(manifest, { registry = ACP_SPAWN_REGISTRY } = {}) {
   const runtimes = {}, harnesses = {}, invalid = [];
+  let integrity = null;
   if (manifest?.runtimes !== undefined) {
     if (!object(manifest.runtimes)) invalid.push({ path: 'runtimes', message: 'soul.json runtimes must be an object' });
     else {
       for (const [name, value] of Object.entries(manifest.runtimes)) {
+        // An unreadable policy is invalid, which already keeps the soul from being ready.
+        if (name === 'integrity') {
+          try { integrity = normalizeRuntimeIntegrity(value, 'soul.json runtimes.integrity'); }
+          catch (error) { invalid.push({ path: 'runtimes.integrity', message: error.message }); }
+          continue;
+        }
         try { runtimes[name] = normalizeRuntimeDeclaration(name, value, `soul.json runtimes.${name}`); }
         catch (error) { invalid.push({ path: `runtimes.${name}`, message: error.message }); }
       }
@@ -295,7 +313,7 @@ export function declaredRuntimes(manifest, { registry = ACP_SPAWN_REGISTRY } = {
       } catch (error) { invalid.push({ path: `harnesses.${name}.install`, message: error.message }); }
     }
   }
-  return { runtimes, harnesses, invalid };
+  return { runtimes, harnesses, invalid, integrity };
 }
 
 /** Whether a soul directory's manifest declares a download for this harness. */
@@ -348,7 +366,10 @@ function receiptProblem(stamp, { name, kind, version, platform, archive = null, 
     || stamp.version !== version || stamp.platform !== platform) return 'install receipt does not match the selected runtime, version, kind or platform';
   if (!stamp.bin || path.isAbsolute(stamp.bin) || /^[A-Za-z]:/.test(stamp.bin) || stamp.bin.includes('\\')
     || stamp.bin.split('/').some(part => !part || part === '..') || /[\x00-\x1f\x7f]/.test(stamp.bin)) return 'install receipt has an unsafe executable directory';
-  if (archive && (stamp.sha256 !== archive.sha256 || stamp.bin !== archive.bin)) return 'install receipt does not match the selected archive digest or executable directory';
+  if (archive && kind !== 'uv-python' && (stamp.sha256 !== archive.sha256 || stamp.bin !== archive.bin)) return 'install receipt does not match the selected archive digest or executable directory';
+  // uv lays Python out itself, so only the digest is compared; a receipt from
+  // before the catalog pinned it has none and stands, unverified (#617).
+  if (archive && kind === 'uv-python' && stamp.sha256 != null && stamp.sha256 !== archive.sha256) return 'install receipt does not match the pinned Python archive digest; reinstall it';
   // A receipt from before locks has no lockSha256 and stands for an unlocked install.
   if (kind === 'uv-tool' && (stamp.lockSha256 ?? null) !== lockSha256) return 'install receipt does not match the declared lock; reinstall to rebuild it from the lock';
   return null;
@@ -426,7 +447,8 @@ function resolveRuntime(name, declaration, { platform, catalog }) {
 export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulDir), platform = hostPlatform(), catalog, env = process.env, home = env.HOME ?? homedir(), registry = ACP_SPAWN_REGISTRY } = {}) {
   const root = runtimesRoot(soulDir);
   const declared = declaredRuntimes(manifest, { registry });
-  const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, platform, root, cache: downloadCacheDir({ env, home }), runtimes: [], harnesses: [], invalid: declared.invalid, ready: true };
+  const result = { schemaVersion: RUNTIMES_SCHEMA_VERSION, platform, root, cache: downloadCacheDir({ env, home }), integrity: declared.integrity, runtimes: [], harnesses: [], invalid: declared.invalid, ready: true };
+  const required = declared.integrity === 'required';
   const needsUv = Object.hasOwn(declared.runtimes, 'python') || Object.values(declared.harnesses).some((install) => install.kind === 'uv-tool');
   const requiredBy = [...(Object.hasOwn(declared.runtimes, 'python') ? ['python'] : []),
     ...Object.entries(declared.harnesses).filter(([, install]) => install.kind === 'uv-tool').map(([name]) => name)];
@@ -443,12 +465,19 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     const stamp = directory ? readStamp(directory) : null;
     const executable = row.name === 'python' ? (platform?.startsWith('win32-') ? 'python' : 'python3') : row.name;
     const problem = receiptProblem(stamp, { name: row.name, kind: row.name === 'python' ? 'uv-python' : 'archive', version: row.version, platform, archive: row.archive });
-    const installed = stamp && !problem && containedExecutable(soulDir, directory, stamp.bin, executable, platform);
+    const usable = stamp && !problem && containedExecutable(soulDir, directory, stamp.bin, executable, platform);
+    // Only a Python receipt can lack its digest; a soul that requires
+    // integrity reinstalls it rather than run it (#617).
+    const unverified = usable && !stamp.sha256;
+    const installed = usable && !(unverified && required);
     const last = lastInstall(path.join(root, row.name));
     const entry = { name: row.name, declared: row.declared, requiredBy: row.requiredBy, version: row.version, source: row.source,
-      status: row.status ?? (installed ? 'installed' : 'missing'), reason: row.reason ?? problem ?? (stamp && !installed ? `the installed ${executableName(executable, platform)} is missing or not executable` : null), path: installed ? directory : null, bin: installed ? stamp.bin : null,
+      status: row.status ?? (installed ? 'installed' : 'missing'),
+      reason: row.reason ?? problem ?? (usable && !installed ? `${row.name} ${row.version} was installed without its archive digest, and soul.json requires integrity; reinstall it`
+        : stamp && !installed ? `the installed ${executableName(executable, platform)} is missing or not executable` : null),
+      path: installed ? directory : null, bin: installed ? stamp.bin : null, verification: installed ? (unverified ? 'unverified' : 'verified') : null,
       lastError: !installed && last?.status === 'failed' && last.version === row.version ? { code: last.code ?? 'runtime-install-failed', message: last.message ?? '', at: last.at ?? null } : null,
-      archive: row.archive, via: row.via };
+      code: null, action: null, archive: row.archive, via: row.via };
     if (entry.status !== 'installed') result.ready = false;
     result.runtimes.push(entry);
   }
@@ -459,8 +488,12 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
     const lock = install.kind === 'uv-tool' ? install.lock ?? null : null;
     // A locked tool links one executable out of its venv; Windows needs a
     // launcher for that which isn't specified or verified yet (#617).
+    // An unlocked uv tool has no dependency evidence: refused where the soul
+    // requires integrity, reported unverified elsewhere (#617).
+    const refused = required && install.kind === 'uv-tool' && !lock;
     const unsupported = install.kind === 'archive' && !archive ? `${name} ${install.version} has no sha256 for ${platform ?? 'this platform'}`
-      : lock && platform?.startsWith('win32-') ? `${name} ${install.version} is a locked uv tool, which is not supported on Windows yet` : null;
+      : lock && platform?.startsWith('win32-') ? `${name} ${install.version} is a locked uv tool, which is not supported on Windows yet`
+      : refused ? `${name} ${install.version} is a uv tool without a lock, and soul.json requires integrity` : null;
     const problem = receiptProblem(stamp, { name, kind: install.kind, version: install.version, platform, archive, lockSha256: install.kind === 'uv-tool' ? uvToolLockDigest(install) : null });
     const installed = stamp && !problem && !existsSync(`${directory}.installing`) && containedExecutable(soulDir, directory, stamp.bin, install.bin, platform);
     const last = lastInstall(path.join(root, 'harnesses', name));
@@ -468,7 +501,9 @@ export function inspectSoulRuntimes(soulDir, { manifest = readSoulManifest(soulD
       status: unsupported ? 'unsupported' : installed ? 'installed' : 'missing',
       reason: unsupported ?? problem,
       path: installed ? directory : null, bin: installed ? stamp.bin : null,
+      verification: installed && !unsupported ? (install.kind === 'uv-tool' && !lock ? 'unverified' : 'verified') : null,
       lastError: !installed && last?.status === 'failed' && last.version === install.version ? { code: last.code ?? 'runtime-install-failed', message: last.message ?? '', at: last.at ?? null } : null,
+      code: refused ? 'runtime-install-failed' : null, action: refused ? `add harnesses.${name}.install.lock in a revision` : null,
       archive, lock };
     if (entry.status !== 'installed') result.ready = false;
     result.harnesses.push(entry);
@@ -674,15 +709,44 @@ async function installArchive({ name, version, archive, kind, executable = null 
   }
 }
 
-// uv installs the pinned CPython itself (python-build-standalone, verified
-// by uv) into an exclusive staging directory, never into ~/.local/bin.
-async function installPython({ version }, target, uvBin, { root, runImpl, label, action, now, platform, log = () => {} }) {
+// uv's name for each platform in a python downloads list.
+const UV_PYTHON_PLATFORMS = Object.freeze({
+  'darwin-arm64': { os: 'darwin', arch: 'aarch64', libc: 'none' },
+  'darwin-x64': { os: 'darwin', arch: 'x86_64', libc: 'none' },
+  'linux-x64': { os: 'linux', arch: 'x86_64', libc: 'gnu' },
+  'linux-arm64': { os: 'linux', arch: 'aarch64', libc: 'gnu' },
+  'win32-x64': { os: 'windows', arch: 'x86_64', libc: 'none' },
+});
+
+/**
+ * The one-entry python downloads list (uv's `--python-downloads-json-url`
+ * format) that makes uv install exactly the catalog's archive: uv knows no
+ * other download for the request and refuses bytes that do not hash to
+ * `archive.sha256` (#617).
+ */
+export function uvPythonDownloads(version, archive, platform) {
+  const host = UV_PYTHON_PLATFORMS[platform];
+  if (!host || !archive) return null;
+  const [major, minor, patch] = version.split('.').map(Number);
+  return { [`cpython-${version}-${host.os}-${host.arch}-${host.libc}`]: { name: 'cpython', arch: { family: host.arch, variant: null }, os: host.os, libc: host.libc,
+    major, minor, patch, prerelease: '', url: archive.url, sha256: archive.sha256, variant: null, build: null } };
+}
+
+// uv installs the pinned CPython (python-build-standalone) from the one
+// download the catalog pins, into an exclusive staging directory, never into
+// ~/.local/bin. The receipt records that archive's URL and digest.
+async function installPython({ version, archive }, target, uvBin, { root, runImpl, label, action, now, platform, log = () => {} }) {
+  const downloads = uvPythonDownloads(version, archive, platform);
+  if (!downloads) fail('runtime-unsupported-platform', `${label}: python ${version} has no pinned download for ${platform ?? 'this platform'}`, { runtime: label, action });
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const staging = path.join(path.dirname(target), `.installing-${randomUUID()}`);
   mkdirSync(staging, { recursive: true, mode: 0o700 });
   try {
     const env = { ...minimalChildEnv(process.env), UV_CACHE_DIR: path.join(root, 'uv', 'cache'), UV_PYTHON_INSTALL_DIR: staging, UV_NO_PROGRESS: '1' };
-    try { await runImpl(uvBin, ['python', 'install', version, '--install-dir', staging, '--no-bin'], { env, timeout: INSTALL_TIMEOUT_MS }); }
+    // Beside the staging directory, so it is never part of the install.
+    const list = `${staging}.downloads.json`;
+    writeFileSync(list, `${JSON.stringify(downloads)}\n`, { mode: 0o600 });
+    try { await runImpl(uvBin, ['python', 'install', version, '--install-dir', staging, '--no-bin', '--python-downloads-json-url', list], { env, timeout: INSTALL_TIMEOUT_MS }); }
     catch (error) { fail('runtime-install-failed', `${label}: uv could not install python ${version} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network and retry`, { runtime: label, action }); }
     const dirs = readdirSync(staging, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith('cpython-'));
     if (dirs.length !== 1) fail('runtime-install-failed', `${label}: uv installed ${dirs.length} interpreters, expected one`, { runtime: label, action });
@@ -690,16 +754,19 @@ async function installPython({ version }, target, uvBin, { root, runImpl, label,
     if (!containedExecutable(staging, staging, bin, platform?.startsWith('win32-') ? 'python' : 'python3', platform)) {
       fail('runtime-install-failed', `${label}: uv installed no contained Python executable`, { runtime: label, action });
     }
-    writeFileSync(path.join(staging, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name: 'python', kind: 'uv-python', version, platform, url: null, sha256: null, bin, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
+    writeFileSync(path.join(staging, INSTALL_STAMP), `${JSON.stringify({ schemaVersion: RUNTIMES_SCHEMA_VERSION, name: 'python', kind: 'uv-python', version, platform, url: archive.url, sha256: archive.sha256, bin, installedAt: now().toISOString() })}\n`, { mode: 0o600 });
+    // Only an install with this digest wins; one without (from before #617) is replaced.
     const retained = publish(staging, staging, target, { usable: () => {
       const stamp = readStamp(target);
-      return stamp && !receiptProblem(stamp, { name: 'python', kind: 'uv-python', version, platform })
+      return stamp && stamp.sha256 === archive.sha256 && !receiptProblem(stamp, { name: 'python', kind: 'uv-python', version, platform, archive })
         && containedExecutable(target, target, stamp.bin, platform?.startsWith('win32-') ? 'python' : 'python3', platform);
     } });
     if (retained) log(`retained conflicting install at ${retained}`);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });
     throw error;
+  } finally {
+    rmSync(`${staging}.downloads.json`, { force: true });
   }
 }
 
@@ -827,8 +894,8 @@ export async function installSoulRuntimes(soulDir, { only = null, agentId = null
     if (only && only !== entry.name) continue;
     const action = installCommand(who, entry.name);
     if (entry.status === 'installed') { skipped.push(entry.name); continue; }
-    if (entry.status === 'unsupported') fail('runtime-unsupported-platform', `${who}: ${entry.reason}`, { runtime: entry.name, action: entry.kind === 'uv-tool'
-      ? `run ${entry.name} on macOS or Linux, or remove harnesses.${entry.name}.install.lock in a revision` : `declare harnesses.${entry.name}.install.sha256 for ${platform ?? 'this platform'} in a revision` });
+    if (entry.status === 'unsupported') fail(entry.code ?? 'runtime-unsupported-platform', `${who}: ${entry.reason}`, { runtime: entry.name, action: entry.action ?? (entry.kind === 'uv-tool'
+      ? `run ${entry.name} on macOS or Linux, or remove harnesses.${entry.name}.install.lock in a revision` : `declare harnesses.${entry.name}.install.sha256 for ${platform ?? 'this platform'} in a revision`) });
     const target = path.join(root, 'harnesses', entry.name, entry.version);
     log(`installing harness ${entry.name} ${entry.version} into ${target}`);
     await guard(target, () => attempt(entry, path.join(root, 'harnesses', entry.name), async () => {
@@ -866,7 +933,7 @@ function soulRoot(soul, options) {
 }
 
 const strip = ({ archive: _archive, ...rest }) => rest;
-const report = (soul, soulDir, state, overrides = []) => ({ schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, soulDir, platform: state.platform, root: state.root, cache: state.cache,
+const report = (soul, soulDir, state, overrides = []) => ({ schemaVersion: RUNTIMES_SCHEMA_VERSION, agentId: soul.id, soulDir, platform: state.platform, root: state.root, cache: state.cache, integrity: state.integrity,
   runtimes: state.runtimes.map(strip), harnesses: state.harnesses.map(strip), overrides, invalid: state.invalid, ready: state.ready,
   ...(state.installed ? { installed: state.installed, skipped: state.skipped } : {}) });
 
@@ -930,7 +997,7 @@ export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homed
     const label = isHarness ? name.slice('harness:'.length) : name;
     const row = (isHarness ? inspection.harnesses : inspection.runtimes).find((entry) => entry.name === label);
     if (row.status === 'unsupported') {
-      fail('runtime-unsupported-platform', `${soul.id}: ${row.reason}`, { runtime: name, action: `fix soul.json ${isHarness ? 'harnesses' : 'runtimes'}.${label} for ${inspection.platform ?? 'this platform'} in a revision` });
+      fail(row.code ?? 'runtime-unsupported-platform', `${soul.id}: ${row.reason}`, { runtime: name, action: row.action ?? `fix soul.json ${isHarness ? 'harnesses' : 'runtimes'}.${label} for ${inspection.platform ?? 'this platform'} in a revision` });
     }
     fail('runtime-install-failed', `${soul.id}: declared ${name} ${row.version} is not installed${row.reason ? ` (${row.reason})` : ''}; refusing host fallback`, { runtime: name, action: installCommand(soul.id, label === 'uv' ? null : label) });
   }
@@ -938,12 +1005,13 @@ export function soulRuntimeEnv(id, { env = process.env, home = env.HOME ?? homed
 }
 
 export function formatRuntimes(result) {
-  const lines = [`agentId: ${result.agentId}`, `soulDir: ${result.soulDir}`, `platform: ${result.platform ?? 'unsupported'}`, `ready: ${result.ready}`, ''];
+  const lines = [`agentId: ${result.agentId}`, `soulDir: ${result.soulDir}`, `platform: ${result.platform ?? 'unsupported'}`, `integrity: ${result.integrity ?? 'not required'}`, `ready: ${result.ready}`, ''];
+  const label = (row) => (row.verification === 'unverified' ? ' [unverified]' : '');
   for (const row of result.runtimes) {
-    lines.push(`${row.name}: ${row.status}${row.version ? ` ${row.version}` : ''}${row.declared ? ` (declared ${row.declared}, ${row.source})` : row.requiredBy.length ? ` (for ${row.requiredBy.join(', ')})` : ''}${row.path ? ` ${row.path}` : ''}${row.reason ? ` - ${row.reason}` : ''}${row.lastError ? ` - last install: ${row.lastError.code}` : ''}`);
+    lines.push(`${row.name}: ${row.status}${row.version ? ` ${row.version}` : ''}${row.declared ? ` (declared ${row.declared}, ${row.source})` : row.requiredBy.length ? ` (for ${row.requiredBy.join(', ')})` : ''}${label(row)}${row.path ? ` ${row.path}` : ''}${row.reason ? ` - ${row.reason}` : ''}${row.lastError ? ` - last install: ${row.lastError.code}` : ''}`);
   }
   for (const row of result.harnesses) {
-    lines.push(`harness ${row.name}: ${row.status} ${row.version} (${row.kind}${row.package ? ` ${row.package}` : ''})${row.path ? ` ${row.path}` : ''}${row.reason ? ` - ${row.reason}` : ''}${row.lastError ? ` - last install: ${row.lastError.code}` : ''}`);
+    lines.push(`harness ${row.name}: ${row.status} ${row.version} (${row.kind}${row.package ? ` ${row.package}` : ''})${label(row)}${row.path ? ` ${row.path}` : ''}${row.reason ? ` - ${row.reason}` : ''}${row.lastError ? ` - last install: ${row.lastError.code}` : ''}`);
   }
   for (const row of result.overrides ?? []) lines.push(`override ${row.name}: ${row.status}${row.executable ? ` ${row.executable}` : ''}${row.status === 'selected' ? ' (unverified-external)' : row.reason ? ` - ${row.reason}` : ''}${row.code ? ` [${row.code}]` : ''}${row.action ? ` -> ${row.action}` : ''}`);
   for (const entry of result.invalid) lines.push(`invalid ${entry.path}: ${entry.message}`);
