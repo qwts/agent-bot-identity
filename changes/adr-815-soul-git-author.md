@@ -1,0 +1,1 @@
+- ADR-0815 names a soul on its commits with a `Co-authored-by:` trailer next to `Agent-Identity`, while the App stays the author and GitHub the signer, so commits stay Verified; a live proof showed GitHub does not sign an API commit with a custom author (#815).
