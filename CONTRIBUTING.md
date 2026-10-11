@@ -37,10 +37,12 @@ env -u AGENT_BOT_ID -u QWTS_AGENT_ID -u AGENT_BOT_BINDING npm test
 ```
 
 The tests work in temporary directories and need no GitHub App credentials,
-no installed or configured agent-bot, and nothing under your `~/.config`; they
-pass with `HOME` pointed at an empty directory. Unsetting the variables above stops a shell
-that already runs agent-bot from leaking its identity into the tests. To run
-one file, use `node --test tests/<name>.test.mjs`.
+no installed or configured agent-bot, and nothing under your `~/.config`.
+`npm test` preloads `tests/helpers/scratch-home.mjs`, which points `HOME` at an
+empty scratch directory and unsets the XDG directories so they follow it, so
+your own profile cannot change results. Unsetting the variables above stops a shell that already runs
+agent-bot from leaking its identity into the tests. To run one file, use
+`node --test --import ./tests/helpers/scratch-home.mjs tests/<name>.test.mjs`.
 
 `keyd/` is a separate Rust crate. If you change it, also run
 `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked`
