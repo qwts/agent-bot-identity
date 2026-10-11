@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -337,8 +337,14 @@ test('Windows native binding registry and secret use owner-only custody across r
   // Hosted-runner scratch directories may allow other accounts to mutate
   // ancestors. Binding state belongs under the real account's local data.
   assert.ok(process.env.LOCALAPPDATA && path.isAbsolute(process.env.LOCALAPPDATA));
-  const root = mkdtempSync(path.join(process.env.LOCALAPPDATA, 'agent-bot-native-binding-'));
+  const root = path.join(process.env.LOCALAPPDATA, `agent-bot-native-binding-${randomUUID()}`);
+  const custody = createWindowsAccountCustody();
+  const sid = custody.currentSid();
   try {
+    // An elevated runner's default owner can be Administrators. Create only
+    // these new fixture directories with the actual account's native custody.
+    custody.createOwnedDirectory(root, sid);
+    custody.createOwnedDirectory(path.join(root, '.git'), sid);
     const git = spawnSync('git', ['init', '-q', root]);
     assert.equal(git.status, 0);
     assertPrivateGitDir(path.join(root, '.git'), root);
@@ -349,8 +355,6 @@ test('Windows native binding registry and secret use owner-only custody across r
     const secret = store.bind({ agentId: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', parent: null,
       gitDir: path.join(root, '.git'), worktree: root });
     const bindingFile = path.join(root, '.git', 'agent-binding.json');
-    const custody = createWindowsAccountCustody();
-    const sid = custody.currentSid();
     // A privileged volume owner is eligible only above the account-owned
     // immediate parent; a claim directly under the volume root is refused.
     assert.throws(() => custody.assertSafeBindingParents(path.join(path.parse(root).root, 'uncreated-binding.json'), sid), /parent custody/);

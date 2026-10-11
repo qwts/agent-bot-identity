@@ -10,4 +10,5 @@
   fixed Windows Modules Installer SID only as a privileged ancestor owner.
   Refusals expose only a fixed failure class and ancestor position; native
   binding fixtures use the actual account's local data instead of shared
-  runner scratch directories.
+  runner scratch directories, with explicitly account-owned fixture parents
+  even when an elevated runner would assign its administrator group by default.
