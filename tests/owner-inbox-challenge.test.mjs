@@ -25,6 +25,7 @@ import {
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OWNER = 'principal_00000000-0000-4000-8000-0000000000aa';
+const OTHER_SOUL = 'agent_22222222-2222-4222-8222-222222222222';
 const OPERATION = { permission: { toolName: 'Bash', input: { command: 'git push' } } };
 const binding = { worktree: '/work/tree', file: '/work/tree/.git/agent-bindings/child.json' };
 const roots = [];
@@ -94,7 +95,7 @@ function mailbox() {
   const acked = [];
   return {
     inbox, sent, acked,
-    read: async () => inbox.filter((message) => !acked.includes(message.id)),
+    read: async (soul) => inbox.filter((message) => (message.soul ?? AGENT_ID) === soul.agentId && !acked.includes(message.id)),
     ack: async (soul, ids) => { acked.push(...ids); return { ok: true }; },
     reply: async (soul, message) => { sent.push({ agentId: soul.agentId, ...message }); return { messageId: `sent_${sent.length}` }; },
   };
@@ -130,7 +131,7 @@ async function setup() {
       outcomes.push(await server.interaction.requestTurnApproval({ agentId: AGENT_ID, operation: OPERATION, summary: 'push', tool: 'Bash', source }));
       return { reply: 'pushed' };
     },
-    settings: { [AGENT_ID]: true },
+    settings: { [AGENT_ID]: true, [OTHER_SOUL]: true },
     lookupBinding: async () => binding,
     identities: async () => ({ harness: 'codex' }),
     receipt() {},
@@ -139,10 +140,10 @@ async function setup() {
     log() {},
   });
   let seq = 0;
-  const deliver = async (body) => {
+  const deliver = async (body, soul = AGENT_ID) => {
     seq += 1;
-    relay.inbox.push({ id: `m${seq}`, from: { principal: OWNER }, body, correlation: 'thread-1' });
-    await wake({ agentId: AGENT_ID, count: 1, messageIds: [`m${seq}`] });
+    relay.inbox.push({ id: `m${seq}`, soul, from: { principal: OWNER }, body, correlation: 'thread-1' });
+    await wake({ agentId: soul, count: 1, messageIds: [`m${seq}`] });
     return `m${seq}`;
   };
   const open = () => server.interaction.listProposalsForOwner().proposals;
@@ -246,7 +247,20 @@ test('a replayed reply decides nothing a second time', async () => {
   }
 });
 
-test('a reply signed for a different action or scope is refused and spends the challenge', async () => {
+// Any messaging peer that saw the challenge knows its nonce. A reply that
+// does not verify against the pending entry, under a vouched pin, spends
+// nothing: the owner's true reply still decides.
+async function stillPending(t, payload, refusalDetail) {
+  assert.equal(t.open().length, 1);
+  assert.deepEqual(t.outcomes, []);
+  assert.equal(t.refusals().at(-1)?.detail, refusalDetail);
+  const answered = await t.deliver(reply(payload, t.owner));
+  await t.wake.idle();
+  assert.deepEqual(t.outcomes, [{ decision: 'approve' }]);
+  assert.equal(await t.answer(answered), 'The owner\'s signed reply approved the request.');
+}
+
+test('a reply signed for a different action or scope is refused and leaves the challenge pending', async () => {
   for (const change of [
     { action: createHash('sha256').update('deny Bash for the soul: push', 'utf8').digest('hex') },
     { scope: { host: 'another-host' } },
@@ -254,15 +268,36 @@ test('a reply signed for a different action or scope is refused and spends the c
     const t = await setup();
     try {
       const { payload } = await t.challenged();
-      assert.match(await t.answer(await t.deliver(forged({ ...payload, ...change }, t.owner))), /^The signed reply did not decide the request: /);
-      assert.equal(t.open().length, 1);
-      assert.deepEqual(t.outcomes, []);
-      // Checking it spent the challenge: its true answer now finds nothing.
-      assert.match(await t.answer(await t.deliver(reply(payload, t.owner))), /^No owner challenge is pending/);
-      assert.equal(t.open().length, 1);
+      assert.match(await t.answer(await t.deliver(forged({ ...payload, ...change }, t.owner))), /^That signed reply does not answer the pending owner challenge/);
+      await stillPending(t, payload, 'inbox reply does not verify against its pending owner challenge');
     } finally {
       await t.close();
     }
+  }
+});
+
+test('an unsigned block carrying the right nonce decides nothing and leaves the challenge pending', async () => {
+  const t = await setup();
+  try {
+    const { payload } = await t.challenged();
+    const junk = armorStatement(`s1.${encodePayload(payload)}.${Buffer.from('not a signature').toString('base64url')}`);
+    assert.match(await t.answer(await t.deliver(junk)), /^That signed reply does not answer the pending owner challenge/);
+    await stillPending(t, payload, 'inbox reply does not verify against its pending owner challenge');
+  } finally {
+    await t.close();
+  }
+});
+
+test('a valid reply in another soul\'s inbox decides nothing and leaves the challenge pending', async () => {
+  const t = await setup();
+  try {
+    const { payload } = await t.challenged();
+    const elsewhere = await t.deliver(reply(payload, t.owner), OTHER_SOUL);
+    assert.match(await t.answer(elsewhere), /^No owner challenge is pending/);
+    assert.equal(t.relay.sent.find((message) => message.replyTo === elsewhere).agentId, OTHER_SOUL);
+    await stillPending(t, payload, 'inbox reply matches no pending owner challenge');
+  } finally {
+    await t.close();
   }
 });
 

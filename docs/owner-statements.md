@@ -196,16 +196,20 @@ the same inbox. A message whose body holds an `AGENT-BOT OWNER STATEMENT`
 block is never a turn's prompt: the daemon takes it as soon as it arrives,
 also while the turn that asked is still waiting, and acks it. The nonce in
 the signed payload finds the pending challenge, which must be for a proposal
-that soul's turn opened, and the decision and scope recorded when it was
-issued go through the same gate as a `statement` sent to the route, spent
-the same way. The sender is told the outcome in one line. Nothing is
-decided when the nonce matches no pending challenge (a wrong nonce, a
-replayed reply, a challenge already spent, expired, or dropped by a
-restart), and such a reply spends nothing; a reply that matches but fails to
-verify (another action, text or scope, a later expiry, a key no longer
-pinned) spends the challenge. Either way the owner asks for the decision
-again to get a new challenge, and the audit log records `owner-refused`,
-naming the soul but no message ID or content. Who carried the reply, and whom it came from,
+that soul's turn opened. Any messaging peer that saw the challenge could
+send a block with its nonce, so the reply must first verify against that
+pending challenge under a pin keyd vouches for, before anything is spent or
+anyone is asked. Only then do the decision and scope recorded when it was
+issued go through the same gate as a `statement` sent to the route, and the
+challenge is spent once the reply verifies there. The sender is told the
+outcome in one line. Nothing is decided, and nothing is spent, when the
+nonce matches no pending challenge (a wrong nonce, a replayed reply, a
+challenge already spent, expired, or dropped by a restart), when the reply
+lands in another soul's inbox, or when it does not verify (unsigned or
+badly signed, another action, text or scope, a later expiry, a key no
+longer pinned); the challenge stays pending until it expires. Each such
+reply leaves an `owner-refused` receipt naming the soul but no message ID
+or content. Who carried the reply, and whom it came from,
 does not matter: only the signature over the challenge decides. The
 challenge message is sent by the daemon, not by a turn, so it is not in the
 soul's thread journal. The waking message is kept with the open proposal in

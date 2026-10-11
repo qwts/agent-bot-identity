@@ -437,7 +437,7 @@ export function createDaemonServer({
   // first (#438): the daemon token proves only a process in this account, and
   // a transport principal only its provider login. The owner is asked about
   // the open proposal by soul and tool; a refusal decides nothing.
-  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null, statement = null }) {
+  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null, statement = null, verifiedOnly = false }) {
     if (decision !== 'approve' && decision !== 'deny') {
       throw Object.assign(new Error('decision must be approve or deny'), { statusCode: 400 });
     }
@@ -451,7 +451,7 @@ export function createDaemonServer({
     }
     let proof;
     try {
-      proof = await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement, context: { decision, scope } });
+      proof = await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement, context: { decision, scope }, verifiedOnly });
     } catch (error) {
       const challenged = error.code === 'owner-challenge-required';
       appendAuditReceipt({
@@ -482,9 +482,11 @@ export function createDaemonServer({
   }
   // A signed owner reply that arrived in `soul`'s inbox (#753). Its nonce
   // finds the pending challenge, which must be for a proposal this soul's
-  // turn opened; the decision and scope are the ones recorded when the
-  // challenge was issued, and the reply goes through the same gate, and is
-  // spent the same way, as a statement sent to a decision route. The sender
+  // turn opened, and the reply must verify against it under a pin keyd
+  // vouches for before anything is spent or anyone is asked: any messaging
+  // peer that saw the plaintext nonce could send one. The decision and scope
+  // are the ones recorded when the challenge was issued, and the reply goes
+  // through the same gate as a statement sent to a decision route. The sender
   // is told the outcome in one line. A reply that decides nothing leaves an
   // `owner-refused` receipt, as a refusal on the route does, with no message
   // ID or content. Nothing here throws.
@@ -515,13 +517,21 @@ export function createDaemonServer({
       await answer('No owner challenge is pending for that signed reply, so nothing was decided. Ask for the decision again to get a new challenge.');
       return;
     }
+    // Checked before the gate, which could otherwise ask keyd presence or
+    // the dialog: a reply that does not verify spends nothing.
+    if (!(await challengeLedger.verifiesPending({ request: proposal.proposalId, statement: token }))) {
+      refused('inbox reply does not verify against its pending owner challenge');
+      await answer('That signed reply does not answer the pending owner challenge, so nothing was decided; the challenge is still pending.');
+      return;
+    }
     const { decision, scope } = found.context;
     try {
-      const authorization = await confirmDecision({ proposalId: proposal.proposalId, decision, scope, statement: token });
+      // Spent only once it verifies: a peer that saw the nonce cannot burn it.
+      const authorization = await confirmDecision({ proposalId: proposal.proposalId, decision, scope, statement: token, verifiedOnly: true });
       interaction.decideProposalAsOwner({ proposalId: proposal.proposalId, decision, scope, digest: proposal.operationDigest, authorization });
       await answer(`The owner's signed reply ${decision === 'approve' ? 'approved' : 'denied'} the request.`);
     } catch (error) {
-      await answer(`The signed reply did not decide the request: ${error?.message ?? 'refused'}. Ask for the decision again to get a new challenge.`);
+      await answer(`The signed reply did not decide the request: ${error?.message ?? 'refused'}. The challenge is still pending until it expires.`);
     }
   }
   const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });

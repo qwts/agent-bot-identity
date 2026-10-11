@@ -137,9 +137,9 @@ export function ownerActionSummary(action, options = {}) {
 // request where keyd vouches for the pin file (#753): the file is writable by
 // anything running as the owner, a soul included.
 export function decisionOwnerGate({ env = process.env, challenges = null, ...gateOptions } = {}) {
-  return (action, { principal = null, request = null, statement = null, context = null } = {}) => {
+  return (action, { principal = null, request = null, statement = null, context = null, verifiedOnly = false } = {}) => {
     const route = request === null ? {}
-      : challenges ? { challenge: challenges.hook({ request, statement, context }) } : { allowChallenge: false };
+      : challenges ? { challenge: challenges.hook({ request, statement, context, verifiedOnly }) } : { allowChallenge: false };
     return confirmOwnerPresence(action, { ...gateOptions, env, principal, ...route });
   };
 }
@@ -194,9 +194,30 @@ export function createChallengeLedger({ env = process.env, home = undefined, now
       }
       return null;
     },
+    // Whether `statement` verifies, under the pins keyd vouches for now,
+    // against the challenges pending for `request`. Spends nothing and asks
+    // nobody: an inbox reply that fails here never reaches the gate, so a
+    // peer cannot make the owner's Mac prompt or burn the challenge.
+    async verifiesPending({ request, statement } = {}) {
+      const entry = pending.get(request);
+      if (!entry || typeof statement !== 'string') return false;
+      const keys = await vouchedPins(attest, { env, home });
+      if (!Array.isArray(keys)) return false;
+      try {
+        verifyOwnerChallenge(statement, { challenges: entry.challenges, keys: keys.filter(securityKeyPin), now: now() });
+        return pending.get(request) === entry;
+      } catch {
+        return false;
+      }
+    },
     // The gate hook for one request: `request` names it (a proposal ID) and
     // `statement` is the caller's signed reply, if any.
-    hook({ request, statement = null, context = null } = {}) {
+    // With `verifiedOnly` (a reply read from an inbox, which any messaging
+    // peer that saw the plaintext nonce could send), a reply spends the
+    // challenge only once it verifies, under a current vouched pin, against
+    // the pending entry; anything else leaves the challenge pending.
+    hook({ request, statement = null, context = null, verifiedOnly = false } = {}) {
+      const spend = () => { if (!verifiedOnly) pending.delete(request); };
       return async (action, { summary }) => {
         // A pin file that cannot be read never blocks a decision: the dialog
         // asks. Pins keyd does not vouch for on this request, or that changed
@@ -205,7 +226,7 @@ export function createChallengeLedger({ env = process.env, home = undefined, now
         const keys = await vouchedPins(attest, { env, home });
         if (keys === 'none') return null;
         if (keys === 'unvouched') {
-          if (statement !== null && statement !== undefined && statement !== '') pending.delete(request);
+          if (statement !== null && statement !== undefined && statement !== '') spend();
           return null;
         }
         const securityKeys = keys.filter(securityKeyPin);
@@ -225,7 +246,7 @@ export function createChallengeLedger({ env = process.env, home = undefined, now
           { challenges: challenges.map(({ name, fingerprint, payload }) => ({ name, fingerprint, payload })) });
         }
         const entry = pending.get(request);
-        pending.delete(request);
+        spend();
         if (typeof statement !== 'string') throw statementError('statement-invalid', 'the statement is not a token');
         if (!entry || entry.action !== action) {
           throw statementError('statement-scope-mismatch', 'no owner challenge is pending for this decision; repeat it without a statement for a new one');
@@ -236,7 +257,11 @@ export function createChallengeLedger({ env = process.env, home = undefined, now
         if (!currentKeys.some((pin) => entry.challenges.some(({ fingerprint }) => fingerprint === pin.fingerprint))) {
           throw statementError('owner-unreachable', 'the challenged owner key is no longer enrolled; nothing was changed');
         }
-        return verifyOwnerChallenge(statement, { challenges: entry.challenges, keys: currentKeys, now: now() });
+        const proof = verifyOwnerChallenge(statement, { challenges: entry.challenges, keys: currentKeys, now: now() });
+        // Verified: spent here, in the same step as the check, so a second
+        // copy of the reply finds nothing.
+        if (pending.get(request) === entry) pending.delete(request);
+        return proof;
       };
     },
   };
