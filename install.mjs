@@ -371,8 +371,9 @@ export async function installAgentBot({
   ensureCutover = ensureSpacesCutover,
   installTranscriptAdapter = ensureClaudeWorktreeAdapter,
   installUserHooks = syncHooks,
+  embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
-  const executable = installCli({ home });
+  const executable = installCli({ home, embeddingApp });
   const agentHook = installAgentHooks({ home });
   const pathRegistration = installPath({ home });
   const hooksPath = installHooks({ home });
@@ -396,7 +397,11 @@ export async function installAgentBot({
     }
   }
   run(['config', '--global', 'core.hooksPath', hooksPath]);
-  const supervisor = await ensureSupervisor({ home, env, executable });
+  // An app that embeds this runtime supervises its own daemon under its own
+  // label; a second unit from here would run a second daemon (#968).
+  const supervisor = embeddingApp
+    ? { applied: false, reason: 'app-managed', app: embeddingApp }
+    : await ensureSupervisor({ home, env, executable });
   const cutover = ensureCutover({ home, env });
   const transcriptAdapter = installTranscriptAdapter({ home, env });
   const userHooks = installUserHooks({ home, env });
@@ -422,6 +427,8 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`daemon supervisor -> ${result.supervisor.unitPath}\n`);
   } else if (result.supervisor?.reason === 'unsupported-platform') {
     process.stdout.write(`daemon supervisor skipped (${result.supervisor.platform})\n`);
+  } else if (result.supervisor?.reason === 'app-managed') {
+    process.stdout.write(`daemon supervisor skipped (managed by ${basename(result.supervisor.app)})\n`);
   }
   if (result.cutover?.applied) {
     process.stdout.write(

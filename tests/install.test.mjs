@@ -759,6 +759,42 @@ test('install writes the supervisor through the injected helper and does not dis
   ]);
 });
 
+test('inside an app, install leaves the daemon to the app; outside, it installs it (#968)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-app-supervisor-'));
+  const run = (args) => {
+    if (args.includes('--get')) throw Object.assign(new Error('unset'), { status: 1 });
+    return '';
+  };
+  const install = (embeddingApp, calls) => installAgentBot({
+    home,
+    run,
+    embeddingApp,
+    installCli: (options) => {
+      calls.push(['cli', options.embeddingApp]);
+      return installationPaths(home).executable;
+    },
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async (options) => {
+      calls.push(['ensure', options.executable]);
+      return { applied: true, loaded: true, unitPath: 'unit' };
+    },
+    ensureCutover: () => ({ applied: false, reason: 'nothing-to-move' }),
+    installTranscriptAdapter: () => ({ status: 'not_applicable' }),
+  });
+
+  const inside = [];
+  const app = await install(GENIUSBAR, inside);
+  assert.deepEqual(inside, [['cli', GENIUSBAR]]);
+  assert.deepEqual(app.supervisor, { applied: false, reason: 'app-managed', app: GENIUSBAR });
+  // The hooks still install.
+  assert.equal(app.hooksPath, installationPaths(home).hooksDir);
+
+  const outside = [];
+  const checkout = await install(null, outside);
+  assert.deepEqual(outside, [['cli', null], ['ensure', installationPaths(home).executable]]);
+  assert.equal(checkout.supervisor.applied, true);
+});
+
 test('install provisions the account transcript adapter from the installed runtime config', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-adapter-install-'));
   const configPath = join(home, '.config', 'agent-bot', 'config.json');
