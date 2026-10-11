@@ -434,11 +434,12 @@ export function renderSupervisorUnit({ kind, executable, programArguments, envir
   throw new Error(`unsupported supervisor kind: ${kind}`);
 }
 
-function runCommand(command, args, { env = process.env } = {}) {
+function runCommand(command, args, { env = process.env, timeout } = {}) {
   return execFileSync(command, args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env,
+    ...(timeout === undefined ? {} : { timeout }),
   });
 }
 
@@ -548,15 +549,15 @@ function commandErrorText(error) {
 export function isInactiveSupervisorError(error) {
   // "cannot find the file specified" is schtasks's answer for a task that is
   // not registered.
-  return /not (?:found|loaded|enabled|installed|been started)|could not find|cannot find the file|no such process|inactive|does not exist/i
+  return /task is (?:not (?:currently )?running|currently not running)|not (?:found|loaded|enabled|installed|been started)|could not find|cannot find the file|no such process|inactive|does not exist/i
     .test(commandErrorText(error));
 }
 
 // schtasks says why it refused on stderr ("ERROR: Access is denied."); the
 // typed error carries that reason and nothing else.
-function schtasks(args, { env, exec }, code, what) {
+function schtasks(args, { env, exec, timeout }, code, what) {
   try {
-    return exec('schtasks.exe', args, { env });
+    return exec('schtasks.exe', args, { env, ...(timeout === undefined ? {} : { timeout }) });
   } catch (error) {
     return fail(code, `${what}: ${commandErrorText(error).trim()}`);
   }
@@ -568,16 +569,51 @@ function schtasks(args, { env, exec }, code, what) {
  * is not an answer that matters), then `/Run` starts it now rather than at
  * the next logon.
  */
-export function kickstartScheduledTask(paths, { env = process.env, exec = runCommand } = {}) {
+export function scheduledTaskInstanceCount(paths, { env = process.env, exec = runCommand, timeout = 10_000 } = {}) {
+  const literal = `'${paths.label.replaceAll("'", "''")}'`;
+  // COM uses numeric task state, independently of the OS display language.
+  // GetInstances includes an instance still terminating after schtasks /End.
+  const script = `$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); $t=$s.GetFolder('\\').GetTask(${literal}); [Console]::Out.WriteLine($t.GetInstances(0).Count)`;
+  const powershellEnv = { ...env };
+  for (const key of Object.keys(powershellEnv)) if (key.toLowerCase() === 'psmodulepath') delete powershellEnv[key];
+  let output;
   try {
-    exec('schtasks.exe', ['/End', '/TN', paths.label], { env });
-  } catch {
-    /* nothing was running */
-  }
-  schtasks(['/Run', '/TN', paths.label], { env, exec }, 'supervisor-load-failed', `schtasks would not start ${paths.label}`);
+    output = exec('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: powershellEnv, timeout });
+  } catch { fail('supervisor-query-failed', 'could not verify scheduled task instance termination'); }
+  if (!/^\d+\s*$/.test(String(output))) fail('supervisor-query-failed', 'scheduled task instance query returned an invalid count');
+  const count = Number(String(output).trim());
+  if (!Number.isSafeInteger(count)) fail('supervisor-query-failed', 'scheduled task instance query returned an invalid count');
+  return count;
 }
 
-function loadSupervisor(paths, { env, exec, skipLoad }) {
+function processIsAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error; }
+}
+
+export async function kickstartScheduledTask(paths, { env = process.env, exec = runCommand, oldPid = null, processAlive = processIsAlive, instanceCount = scheduledTaskInstanceCount, timeoutMs = 30_000, pollMs = 100, now = Date.now, delay = sleep } = {}) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000 || !Number.isInteger(pollMs) || pollMs < 1 || pollMs > 1000) fail('usage', 'invalid scheduled task stop deadline');
+  if (oldPid !== null && (!Number.isSafeInteger(oldPid) || oldPid <= 0)) fail('usage', 'invalid previous daemon PID');
+  const deadline = now() + timeoutMs;
+  try {
+    exec('schtasks.exe', ['/End', '/TN', paths.label], { env, timeout: timeoutMs });
+  } catch (error) {
+    if (!isInactiveSupervisorError(error)) fail('supervisor-stop-failed', 'schtasks would not stop the scheduled daemon');
+  }
+  for (;;) {
+    const remaining = deadline - now();
+    if (remaining <= 0) fail('supervisor-stop-timeout', 'scheduled daemon did not terminate before restart');
+    const count = instanceCount(paths, { env, exec, timeout: Math.min(10_000, remaining) });
+    if (count === 0 && (oldPid === null || !processAlive(oldPid))) {
+      if (now() >= deadline) fail('supervisor-stop-timeout', 'scheduled daemon did not terminate before restart');
+      break;
+    }
+    await delay(Math.min(pollMs, Math.max(0, deadline - now())));
+  }
+  schtasks(['/Run', '/TN', paths.label], { env, exec, timeout: timeoutMs }, 'supervisor-load-failed', `schtasks would not start ${paths.label}`);
+}
+
+async function loadSupervisor(paths, { env, exec, skipLoad, oldPid, processAlive, restartOptions }) {
   if (skipLoad) return { loaded: true, skipped: true };
   if (paths.kind === 'launchd') {
     try {
@@ -600,7 +636,7 @@ function loadSupervisor(paths, { env, exec, skipLoad }) {
     // /Create /F replaces a registered task, but a running instance keeps the
     // arguments it was started with, so the kickstart follows every time.
     schtasks(['/Create', '/XML', paths.unitPath, '/TN', paths.label, '/F'], { env, exec }, 'supervisor-load-failed', `schtasks would not register ${paths.label}`);
-    kickstartScheduledTask(paths, { env, exec });
+    await kickstartScheduledTask(paths, { ...restartOptions, env, exec, oldPid, processAlive });
     return { loaded: true, skipped: false };
   }
   exec('systemctl', ['--user', 'daemon-reload'], { env });
@@ -658,12 +694,12 @@ function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-async function waitHealthy({ env, home, probe, timeoutMs = HEALTH_WAIT_MS }) {
+async function waitHealthy({ env, home, probe, timeoutMs = HEALTH_WAIT_MS, rejectedPid = null }) {
   const deadline = Date.now() + timeoutMs;
   let status;
   while (Date.now() < deadline) {
     status = await probe({ env, home });
-    if (status.running) return status;
+    if (status.running && (rejectedPid === null || status.pid !== rejectedPid)) return status;
     await sleep(HEALTH_POLL_MS);
   }
   throw new Error(status?.reason ?? 'daemon did not become healthy after supervisor load');
@@ -685,6 +721,8 @@ export async function ensureDaemonSupervisor({
   write = writeFileSync,
   mkdir = mkdirSync,
   exec = runCommand,
+  processAlive = processIsAlive,
+  restartOptions,
 } = {}) {
   const paths = supervisorPaths(home, platform, env);
   if (!paths.kind) {
@@ -741,7 +779,8 @@ export async function ensureDaemonSupervisor({
   }
   // Always reload/restart. The installed symlink path is stable, so an
   // unchanged unit body still means the checkout behind it may have moved.
-  loadSupervisor(paths, { env, exec, skipLoad });
+  const oldPid = task && current.running && Number.isSafeInteger(current.pid) && current.pid > 0 ? current.pid : null;
+  await loadSupervisor(paths, { env, exec, skipLoad, oldPid, processAlive, restartOptions });
   if (skipLoad) {
     return {
       applied: true,
@@ -755,7 +794,7 @@ export async function ensureDaemonSupervisor({
       statePath: environment.AGENT_BOT_DAEMON_STATE_PATH,
     };
   }
-  const healthy = await waitHealthy({ env: supervisorEnv, home, probe });
+  const healthy = await waitHealthy({ env: supervisorEnv, home, probe, rejectedPid: oldPid });
   return {
     applied: true,
     loaded: true,
