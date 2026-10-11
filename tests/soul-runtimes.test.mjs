@@ -467,7 +467,7 @@ test('a locked uv tool installs into its own venv with uv pip --require-hashes a
   assert.deepEqual([muse.status, muse.bin], ['installed', 'bin']);
   assert.equal(d.commands.some((c) => c.args[0] === 'tool'), false, 'uv tool install cannot require hashes, so it is never used for a locked tool');
   const venv = d.commands.find((c) => c.args[0] === 'venv'), pip = d.commands.find((c) => c.args[0] === 'pip');
-  assert.deepEqual(venv.args, ['venv', path.join(muse.path, 'venv')]);
+  assert.deepEqual(venv.args, ['venv', '--no-python-downloads', path.join(muse.path, 'venv')], 'the venv uses the soul\'s installed Python and never downloads another');
   assert.deepEqual(pip.args, ['pip', 'install', '--python', path.join(muse.path, 'venv', 'bin', 'python'), '--require-hashes', '-r', path.join(muse.path, 'requirements.lock.txt')]);
   assert.equal(pip.env.UV_PYTHON_PREFERENCE, 'only-managed');
   assert.equal(readFileSync(path.join(muse.path, 'requirements.lock.txt'), 'utf8'), `goose-ai==1.9.0 --hash=sha256:${A} --hash=sha256:${B}\nrequests==2.32.3 --hash=sha256:${B}\n`);
