@@ -6,7 +6,7 @@ import { constants, closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, ope
 import path from 'node:path';
 import { readSkillMaterial } from './skill-library.mjs';
 import { projectSkillSourceProvenance, validateSkillSourceProvenance } from './skill-source-provenance.mjs';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { soulDirectory } from './agent-population.mjs';
 import { readSoulPackageEntries } from './soul-package.mjs';
 import { proposeSoulRevision, revisionHistory, revisionPackagePath } from './soul-revisions.mjs';

@@ -27,7 +27,7 @@
 //
 // keyd's `agent-bot.keyd.*` items are named by keyd itself (#594).
 import process from 'node:process';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 
 export const CREDENTIAL_NAMESPACE = 'agent-bot';
 export const CREDENTIAL_VAULT = 'Agent Identities';

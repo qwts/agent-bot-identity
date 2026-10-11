@@ -16,7 +16,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, copyFileSync, chmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { populationFile, setSoulSpacePath, showSoul } from './agent-population.mjs';
 import { initAgentSpace, inspectAgentSpace, showAgentSpace, spacePath } from './agent-space.mjs';

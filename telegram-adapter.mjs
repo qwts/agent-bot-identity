@@ -47,10 +47,9 @@ import { pathToFileURL } from 'node:url';
 
 import { daemonStatus } from './agent-daemon.mjs';
 import { daemonClient } from './daemon-client.mjs';
-import { validateAgentId } from './agent-identity.mjs';
 import { MAX_MESSAGE_BYTES } from './agent-interaction.mjs';
 import { principalsFile, resolvePrincipal } from './agent-principals.mjs';
-import { appendAuditReceipt } from './identity-format.mjs';
+import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { loadConfig } from './config.mjs';
 import { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 import { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';

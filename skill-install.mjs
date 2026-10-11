@@ -10,7 +10,7 @@ import path from 'node:path';
 import { listSkills, readSkillMaterial, skillDirectoryManifest } from './skill-library.mjs';
 import { diffSkillManifest } from './skill-manifest.mjs';
 import { projectSkillSourceProvenance } from './skill-source-provenance.mjs';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { soulDirectory } from './agent-population.mjs';
 import { discardRevisionStaging, editSoulRevision, prepareRevisionEdit, revisionHistory } from './soul-revisions.mjs';
 

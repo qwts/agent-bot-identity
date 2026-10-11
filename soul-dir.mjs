@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { constants, openSync, fstatSync, readFileSync, closeSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { duplicateSoulDirs, locateSoulDir, soulDirectory } from './agent-population.mjs';
 import { soulsHome } from './souls-root.mjs';
 

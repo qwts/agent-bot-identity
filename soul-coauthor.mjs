@@ -15,7 +15,8 @@ import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { assertSoulCoAuthor, soulCoAuthorCredits, soulCoAuthorDomains, soulCoAuthorTrailer, validateAgentId } from './agent-identity.mjs';
+import { assertSoulCoAuthor, soulCoAuthorCredits, soulCoAuthorDomains, soulCoAuthorTrailer } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { loadConfig } from './config.mjs';
 import { displayName, populationFile, showSoul, soulDirectory, soulShownName } from './agent-population.mjs';
 

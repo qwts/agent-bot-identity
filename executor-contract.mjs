@@ -54,7 +54,7 @@
 
 import { SOUL_MODES } from './soul-mode.mjs';
 import { classifyRisk, isComputerUse } from './permission-risk.mjs';
-import { validateAgentId } from './agent-identity.mjs';
+import { validateAgentId } from './identity-format.mjs';
 
 export const EXECUTOR_CONTRACT_VERSION = 1;
 

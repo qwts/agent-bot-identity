@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, opendirSync,
   readSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import path from 'node:path';
-import { isAgentId } from './agent-identity.mjs';
+import { isAgentId } from './identity-format.mjs';
 import { DREAM_OUTCOME_LIMITS, dreamPreviewDigest } from './skill-dream-outcomes.mjs';
 
 export const DREAM_PREVIEW_RETAIN = 20;

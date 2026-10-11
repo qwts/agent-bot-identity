@@ -18,8 +18,8 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { appendAuditReceipt } from './identity-format.mjs';
-import { readAgentIdentity, validateAgentId } from './agent-identity.mjs';
+import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
+import { readAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import {
   archiveSoulDirs, listSouls, populationFile, retireIdentityWithPopulation, setSoulParent, showSoul, showSoulByName, soulDirectory, soulShownName,

@@ -22,7 +22,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { randomUUID } from 'node:crypto';
 
-import { isAgentId } from './agent-identity.mjs';
+import { isAgentId } from './identity-format.mjs';
 import { populationFile, relocateSoulSpaces } from './agent-population.mjs';
 import {
   inspectAgentSpace,

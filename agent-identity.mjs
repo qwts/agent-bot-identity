@@ -32,10 +32,6 @@ import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } 
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
 import { isAgentId, validateAgentId } from './identity-format.mjs';
 
-// The Agent ID format lives in the identity-format contract (#645, F1). These
-// re-exports keep identity's existing importers working until they move to it.
-export { isAgentId, validateAgentId };
-
 const SCHEMA_VERSION = 1;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 

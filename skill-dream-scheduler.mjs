@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { isAgentId } from './agent-identity.mjs';
+import { isAgentId } from './identity-format.mjs';
 import { dreamInputMetadataDigest, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
 import { detachDreamPreview, dreamOutcomeDigest, validateDreamOutcome } from './skill-dream-outcomes.mjs';
 import { validProcessOwnership } from './process-ownership.mjs';

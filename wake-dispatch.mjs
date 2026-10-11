@@ -41,7 +41,7 @@
 // soul and a count, never message content, a cursor, or anything a socket
 // carried — the audit trail must not become a second copy of the mailbox.
 
-import { isAgentId } from './agent-identity.mjs';
+import { isAgentId } from './identity-format.mjs';
 
 export const WAKE_OUTCOMES = Object.freeze(['warm', 'cold', 'waiting', 'failed']);
 export const WAKE_FRAME_EVENT = 'wake';

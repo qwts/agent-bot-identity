@@ -39,8 +39,7 @@ import {
   operationDigest,
   validateProposalId,
 } from './agent-jobs.mjs';
-import { appendAuditReceipt } from './identity-format.mjs';
-import { validateAgentId } from './agent-identity.mjs';
+import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { keydPresence } from './owner-presence.mjs';
 
 // The named operations (owner decision on #108). Each is an account write

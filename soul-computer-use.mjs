@@ -2,8 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { appendAuditReceipt } from './identity-format.mjs';
-import { validateAgentId } from './agent-identity.mjs';
+import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { soulMarkers } from './owner-gate.mjs';
 import { setSoulComputerUse } from './agent-population.mjs';
