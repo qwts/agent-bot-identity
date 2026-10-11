@@ -396,7 +396,10 @@ function writePins(file, next) {
  * declaration allows. Pure reads.
  */
 export function planRuntimeUpgrade(soulDir, { only = null, catalog, ...options } = {}) {
-  const state = inspectSoulRuntimes(soulDir, { ...options, catalog });
+  // What the plan was made from, so an apply can refuse a soul.json revised after the owner saw it.
+  const manifest = readSoulManifest(soulDir);
+  const declarations = createHash('sha256').update(JSON.stringify([manifest?.revision ?? null, manifest?.runtimes ?? null, manifest?.harnesses ?? null])).digest('hex');
+  const state = inspectSoulRuntimes(soulDir, { ...options, manifest, catalog });
   const problem = state.invalid[0] ?? null;
   const changes = [];
   for (const row of state.runtimes) {
@@ -404,7 +407,7 @@ export function planRuntimeUpgrade(soulDir, { only = null, catalog, ...options }
     const newest = row.name === 'uv' ? newestPin('uv', { catalog }) : resolveCatalogPin(row.name, row.declared, { catalog });
     if (newest && newest.version !== row.pin.version) changes.push({ name: row.name, from: row.pin.version, to: newest.version, previous: row.pin });
   }
-  return { changes, problem, release: catalogReleaseHash({ catalog }) };
+  return { changes, problem, release: catalogReleaseHash({ catalog }), declarations };
 }
 
 // Moves the planned entries, under the pins lock, only if each still
@@ -1263,12 +1266,26 @@ async function soulRuntimesUpgradeCommand(argv, { gate, readStdin, write, env, h
       catch { throw new Error('--principal-stdin needs the principal credential as JSON on stdin'); }
     }
     await gate(`upgrade ${soul.id}'s pinned runtimes (${upgradeSummary(changes)})`, { principal, env, cwd });
+    // The owner approved this plan: refuse if soul.json or the pins moved while the gate was open.
+    const again = planRuntimeUpgrade(soulDir, { env, home, platform: rest.platform, catalog: rest.catalog, registry: rest.registry, only });
+    if (again.problem || again.declarations !== plan.declarations || upgradeSummary(again.changes) !== upgradeSummary(changes)) {
+      fail('runtime-install-failed', `${soul.id}: soul.json or ${STATE}/${RUNTIME_PINS_FILE} changed while the upgrade was being approved; nothing was changed`,
+        { runtime: `${STATE}/${RUNTIME_PINS_FILE}`, action: `agent-bot soul runtimes upgrade ${soul.id}${only ? ` --runtime ${only}` : ''}` });
+    }
     moveRuntimePins(soulDir, plan);
-    let installed;
-    try { installed = await provisionSoulRuntimes(soul.id, { ...options, only }); }
-    catch (error) {
+    // Exactly the approved runtimes, in catalog order (uv before python), nothing else that happens to be missing.
+    const installed = { runtimes: [], installed: [] };
+    try {
+      for (const change of changes) {
+        const step = await provisionSoulRuntimes(soul.id, { ...options, only: change.name });
+        Object.assign(installed, { runtimes: step.runtimes, installed: [...installed.installed, ...step.installed] });
+      }
+    } catch (error) {
       try { moveRuntimePins(soulDir, plan, { back: true }); error.message = `${error.message}; the upgrade was undone, ${soulDir} keeps its previous runtimes`; }
       catch (undoError) { error.message = `${error.message}; also could not undo the upgrade in ${STATE}/${RUNTIME_PINS_FILE} (${undoError.message})`; }
+      // Versions and the error code only: no paths, messages or credentials.
+      appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: 'upgrade', decision: 'failed',
+        detail: `not upgraded: ${upgradeSummary(changes)}; ${error.code ?? 'runtime-install-failed'}` }, { env, home, now });
       throw error;
     }
     appendAuditReceipt({ event: 'soul-runtimes', agentId: soul.id, operation: 'upgrade', decision: 'upgraded', detail: `upgraded: ${upgradeSummary(changes)}` }, { env, home, now });

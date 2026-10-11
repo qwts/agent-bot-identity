@@ -160,11 +160,15 @@ instead of starting the harness.
 catalog pin its declaration allows (`node: 24.21.0 -> 24.22.1`), uv
 included, or `up to date`. It reads only and asks nobody. `--runtime` limits
 it to one runtime. `--apply` is the owner action: the owner gate's prompt
-names the same changes; then, under the pins lock and only if each entry
-still records the version shown, it rewrites those entries (with the current
-catalog release), installs them, and leaves an audit receipt (`soul-runtimes`,
-operation `upgrade`). If the install fails, the entries are put back, so the
-soul keeps running what it had, and the error says the upgrade was undone.
+names the same changes. After the gate it plans again and refuses, changing
+nothing, if `soul.json` (its revision or declarations) or the pins moved while
+the prompt was open. Then, under the pins lock and only if each entry still
+records the version shown, it rewrites those entries (with the current
+catalog release), installs exactly those runtimes (nothing else that happens
+to be missing; uv first when python needs it), and leaves an audit receipt
+(`soul-runtimes`, operation `upgrade`). If the install fails, the entries are
+put back, so the soul keeps running what it had, the error says the upgrade
+was undone, and a `failed` receipt records the versions and error code only.
 Unrecorded runtimes already follow the current catalog; a package's own
 `sources` and harness installs move by a `soul.json` revision. A recorded
 version this catalog no longer pins moves to the newest pin its declaration

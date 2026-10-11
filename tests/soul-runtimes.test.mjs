@@ -1033,6 +1033,9 @@ test('soul runtimes upgrade shows how pinned runtimes would move, and only --app
   const offline = await soulRuntimesCommand(['upgrade', 'billy', '--apply', '--runtime', 'node'], { ...upgrading, fetchFn: doubles({ archives: f.archives, fail: { [`https://example.test/${PLATFORM}/node.tgz`]: 'offline' } }).fetchFn, write: () => {} }).then(() => null, (e) => e);
   assert.equal(offline?.code, 'runtime-download-failed');
   assert.match(offline.message, /; the upgrade was undone, .* keeps its previous runtimes/);
+  const lastReceipt = () => JSON.parse(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8').split('\n').filter((line) => line.includes('soul-runtimes')).at(-1));
+  const failedReceipt = lastReceipt();
+  assert.deepEqual([failedReceipt.operation, failedReceipt.decision, failedReceipt.detail], ['upgrade', 'failed', `not upgraded: node ${NODE.version} -> 24.99.0; runtime-download-failed`], 'an undone upgrade is audited, with versions and the code only');
   assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')), JSON.parse(before));
   assert.equal(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.find((r) => r.name === 'node').status, 'installed');
   // Partway: node installs at its new version, then uv fails. Both pins go back, and the old node is what runs.
@@ -1041,6 +1044,16 @@ test('soul runtimes upgrade shows how pinned runtimes would move, and only --app
   assert.ok(existsSync(path.join(f.runtimes, 'node', '24.99.0')), 'node 24.99.0 did install');
   assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')), JSON.parse(before));
   assert.deepEqual(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.map((r) => [r.name, r.version, r.status]), [['node', NODE.version, 'installed'], ['uv', UV.version, 'installed'], ['python', PYTHON.version, 'installed']]);
+  // soul.json revised while the gate was open: the approved plan no longer holds, so nothing changes.
+  const pinsBefore = readFileSync(pinsPath, 'utf8');
+  const revising = { ...upgrading, gate: async () => { f.writeManifest((m) => { m.runtimes.node = '24.99.0'; }); return { method: 'consent' }; } };
+  const revised = await soulRuntimesCommand(['upgrade', 'billy', '--apply'], { ...revising, write: () => {} }).then(() => null, (e) => e);
+  assert.deepEqual([revised?.code, revised?.action], ['runtime-install-failed', `agent-bot soul runtimes upgrade ${ID}`]);
+  assert.match(revised.message, /changed while the upgrade was being approved; nothing was changed/);
+  assert.equal(readFileSync(pinsPath, 'utf8'), pinsBefore);
+  f.writeManifest((m) => { m.runtimes.node = '24'; });
+  // Something else missing (go, declared after the install) is not installed by an upgrade the owner did not approve for it.
+  f.writeManifest((m) => { m.runtimes.go = '1'; });
   // --apply asks the owner, naming the changes, then rewrites only those pins and installs them.
   gates.length = 0;
   out = '';
@@ -1049,7 +1062,9 @@ test('soul runtimes upgrade shows how pinned runtimes would move, and only --app
   assert.deepEqual([applied.applied, applied.installed], [true, ['uv']], 'node 24.99.0 is already on disk from the undone attempt');
   const release = catalogReleaseHash({ catalog: bumped });
   assert.deepEqual(readRuntimePins(f.dir).pins.runtimes, { node: { version: '24.99.0', catalogRelease: release }, uv: { version: '9.9.9', catalogRelease: release }, python: JSON.parse(before).runtimes.python });
-  assert.deepEqual(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.map((r) => [r.name, r.version, r.status]), [['node', '24.99.0', 'installed'], ['uv', '9.9.9', 'installed'], ['python', PYTHON.version, 'installed']]);
+  assert.deepEqual(inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped }).runtimes.map((r) => [r.name, r.version, r.status]), [['node', '24.99.0', 'installed'], ['uv', '9.9.9', 'installed'], ['python', PYTHON.version, 'installed'], ['go', GO.version, 'missing']]);
+  assert.equal(readRuntimePins(f.dir).pins.runtimes.go, undefined);
+  f.writeManifest((m) => { delete m.runtimes.go; });
   assert.match(readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8').split('\n').filter((line) => line.includes('soul-runtimes')).at(-1), /"operation":"upgrade","decision":"upgraded"/);
   // Applying again has nothing to do and asks nobody.
   gates.length = 0;
