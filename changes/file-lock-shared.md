@@ -1,0 +1,1 @@
+- Internal: the directory lock (`withLock`, `reclaimStaleLock`) moves from `agent-identity.mjs` to the shared `file-lock.mjs`, so soul, comms and host modules no longer import identity to guard their state files. Lock paths and behaviour are unchanged (#645).

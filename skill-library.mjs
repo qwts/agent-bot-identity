@@ -3,7 +3,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, chmodSync, closeSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { withLock } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 import { canonicalJson } from './canonical-json.mjs';
 import { skillField, validateSkill } from './soul-package.mjs';
 import { diffSkillManifest } from './skill-manifest.mjs';

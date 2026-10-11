@@ -6,7 +6,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from './agent-principals.mjs';
-import { validateAgentId, withLock } from './agent-identity.mjs';
+import { validateAgentId } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { harnessSettings } from './soul-builder.mjs';
 

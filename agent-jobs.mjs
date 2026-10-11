@@ -30,7 +30,8 @@ import { interactionHome } from './state-paths.mjs';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { validateAgentId, withLock } from './agent-identity.mjs';
+import { validateAgentId } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 
 const SCHEMA_VERSION = 1;
 

@@ -34,8 +34,8 @@ import {
   readAgentIdentity,
   retireAgentIdentity,
   validateAgentId,
-  withLock,
 } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 
 import { readSoulModes } from './soul-mode.mjs';

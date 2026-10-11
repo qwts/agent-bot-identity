@@ -28,10 +28,9 @@ import {
   mintAgentIdentity,
   readAgentIdentity,
   recordAgentEvidence,
-  reclaimStaleLock,
   validateIdentity,
-  withLock,
 } from '../agent-identity.mjs';
+import { reclaimStaleLock, withLock } from '../file-lock.mjs';
 import { displayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
 

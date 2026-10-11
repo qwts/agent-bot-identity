@@ -14,7 +14,8 @@ import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSyn
 import { userInfo } from 'node:os';
 import path from 'node:path';
 import { appendAuditReceipt } from './agent-principals.mjs';
-import { validateAgentId, withLock } from './agent-identity.mjs';
+import { validateAgentId } from './agent-identity.mjs';
+import { withLock } from './file-lock.mjs';
 import { soulDirectory } from './agent-population.mjs';
 import { harnessSkillsDirectory } from './soul-builder.mjs';
 import { interactionHome } from './state-paths.mjs';
