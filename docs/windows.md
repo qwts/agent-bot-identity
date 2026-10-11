@@ -1,9 +1,9 @@
 # Windows
 
-What agent-bot does on `win32`, per GeniusBar
-[ADR-0046](https://github.com/qwts/GeniusBar/blob/main/docs/decisions/ADR-0046-windows-pipe-transport-dpapi-store-and-logon-tasks.md)
-(qwts/GeniusBar#46). Windows support currently covers the identity daemon as
-a per-user scheduled task, the DPAPI-protected file credential store,
+What agent-bot does on `win32`: a named pipe where macOS and Linux use a
+Unix socket, a DPAPI-protected file where macOS uses the Keychain, and a
+per-user scheduled task where macOS uses a LaunchAgent. Windows support
+currently covers the identity daemon as a per-user scheduled task, the DPAPI-protected file credential store,
 identity-owned vouch-key custody, and the daemon's single-account comms
 client over a named pipe. Cross-platform tests use fakes for Windows account
 and ACL calls; a separate Windows CI preflight exercises native custody and

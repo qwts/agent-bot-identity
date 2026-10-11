@@ -1,0 +1,1 @@
+- The keyd protocol and Windows docs no longer link to the private host-app repository: keyd-side behaviour now points at `keyd/src/` in this repository, and the Windows design is described in place (#752).
