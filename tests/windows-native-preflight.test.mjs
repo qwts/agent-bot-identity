@@ -334,7 +334,10 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
 test('Windows native binding registry and secret use owner-only custody across restart', {
   skip: process.platform !== 'win32', timeout: 180_000,
 }, () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'agent-bot-native-binding-'));
+  // Hosted-runner scratch directories may allow other accounts to mutate
+  // ancestors. Binding state belongs under the real account's local data.
+  assert.ok(process.env.LOCALAPPDATA && path.isAbsolute(process.env.LOCALAPPDATA));
+  const root = mkdtempSync(path.join(process.env.LOCALAPPDATA, 'agent-bot-native-binding-'));
   try {
     const git = spawnSync('git', ['init', '-q', root]);
     assert.equal(git.status, 0);

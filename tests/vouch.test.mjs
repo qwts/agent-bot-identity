@@ -537,3 +537,21 @@ test('Windows binding parent stdin script terminates its compound block with a b
   assert.ok(script.endsWith('\n\n'), 'classic PowerShell stdin needs a blank line to execute the closing compound block');
   assert.ok(script.includes("worktree''s .git"), 'the literal path still escapes apostrophes');
 });
+
+test('Windows binding parent refusal reports only a fixed reason and ancestor position', () => {
+  const custody = createWindowsAccountCustody({ run: () => ({ status: 0,
+    stdout: 'refused|foreign-mutation|2', stderr: 'private path and credential data' }) });
+  assert.throws(() => custody.assertSafeBindingParents('C:\\private\\binding.json', WINDOWS_SID), error => {
+    assert.equal(error.code, 'binding-parent-untrusted');
+    assert.deepEqual(error.details, { reason: 'foreign-mutation', ancestor: 2 });
+    assert.doesNotMatch(error.message, /private|credential/);
+    return true;
+  });
+  const malformed = createWindowsAccountCustody({ run: () => ({ status: 0,
+    stdout: 'refused|C:\\private-path|secret', stderr: '' }) });
+  assert.throws(() => malformed.assertSafeBindingParents('C:\\private\\binding.json', WINDOWS_SID), error => {
+    assert.equal(error.details, undefined);
+    assert.doesNotMatch(error.message, /private-path|secret/);
+    return true;
+  });
+});

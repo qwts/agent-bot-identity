@@ -8,3 +8,6 @@
   accepting Git/Node path spelling differences without case-folding paths.
   Native parent inspection executes its complete stdin block and recognizes the
   fixed Windows Modules Installer SID only as a privileged ancestor owner.
+  Refusals expose only a fixed failure class and ancestor position; native
+  binding fixtures use the actual account's local data instead of shared
+  runner scratch directories.

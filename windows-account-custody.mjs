@@ -154,6 +154,8 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
       "$ErrorActionPreference = 'Stop'",
       `$file = ${quoteForPowerShell(file)}`,
       `$owner = '${sid}'`,
+      "  $reason = 'metadata'",
+      "  $depth = 0",
       "try {",
       "  $trusted = @($owner, 'S-1-5-18', 'S-1-5-32-544')",
       // The Windows Modules Installer can own normal volume roots. This SID
@@ -163,24 +165,25 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
       "  $first = $true",
       "  while ($p) {",
       "    $item = Get-Item -LiteralPath $p -Force",
-      "    if (-not $item.PSIsContainer -or [int]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'object' }",
+      "    if (-not $item.PSIsContainer -or [int]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { $reason = 'object'; throw 'object' }",
       "    $acl = Get-Acl -LiteralPath $p",
       "    $actualOwner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
       "    $trustedOwner = $trusted -contains $actualOwner -or (-not $first -and $actualOwner -eq $installer)",
-      "    if (-not $trustedOwner -or ($first -and $actualOwner -ne $owner)) { throw 'owner' }",
+      "    if (-not $trustedOwner -or ($first -and $actualOwner -ne $owner)) { $reason = 'owner'; throw 'owner' }",
       "    $rights = [System.Security.AccessControl.FileSystemRights]",
       "    $mutation = [long]$rights::Write -bor [long]$rights::Delete -bor [long]$rights::DeleteSubdirectoriesAndFiles -bor [long]$rights::ChangePermissions -bor [long]$rights::TakeOwnership",
       "    if (-not $first -and $actualOwner -ne $owner) { $mutation = $mutation -band (-bnot ([long]$rights::WriteData -bor [long]$rights::AppendData)) }",
       "    foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {",
       "      if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }",
-      "      if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $trusted -notcontains $rule.IdentityReference.Value -and ([long]$rule.FileSystemRights -band $mutation) -ne 0) { throw 'foreign mutation' }",
+      "      if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $trusted -notcontains $rule.IdentityReference.Value -and ([long]$rule.FileSystemRights -band $mutation) -ne 0) { $reason = 'foreign-mutation'; throw 'foreign mutation' }",
       "    }",
       "    $parent = [System.IO.Directory]::GetParent($p)",
       "    $p = if ($parent) { $parent.FullName } else { $null }",
       "    $first = $false",
+      "    $depth++",
       "  }",
       "  [Console]::Out.Write('safe')",
-      "} catch { [Console]::Out.Write('refused') }",
+      "} catch { [Console]::Out.Write(('refused|{0}|{1}' -f $reason, $depth)) }",
       "",
       "",
     ].join('\n');
@@ -188,7 +191,11 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
       input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: legacyPowerShellEnv(env),
     });
     if (result?.status !== 0 || String(result.stdout ?? '').trim() !== 'safe') {
-      throw new Error('Windows binding parent custody could not be verified');
+      const refusal = /^refused\|(metadata|object|owner|foreign-mutation)\|([0-9]{1,3})$/.exec(String(result?.stdout ?? '').trim());
+      throw Object.assign(new Error(`Windows binding parent custody could not be verified${refusal ? ` (${refusal[1]}, ancestor ${refusal[2]})` : ''}`), {
+        code: 'binding-parent-untrusted',
+        ...(refusal ? { details: { reason: refusal[1], ancestor: Number(refusal[2]) } } : {}),
+      });
     }
   }
 
