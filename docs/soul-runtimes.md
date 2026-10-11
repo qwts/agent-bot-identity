@@ -97,9 +97,11 @@ pin on its own (#617, owner decision "the new pins file"):
   version came from; it is null for a package's own `sources` and for harness
   installs, whose version `soul.json` already names exactly. uv is recorded
   when python or a uv tool needs it.
-- An entry that still matches what is installed is never changed. An entry is
-  added when none exists, and replaced when the declaration no longer allows
-  its version (the revision changed it). Inspection never writes the file, so
+- An entry that still matches what is installed (its version, and whether it
+  came from the catalog) is never changed, even when the catalog release moved.
+  An entry is added when none exists, and replaced when the declaration no
+  longer allows its version or moved it between the catalog and its own
+  `sources` (the revision changed it). Inspection never writes the file, so
   a soul installed before #617 has none until its next install.
 - Resolution reuses a recorded version the declaration still allows, from the
   catalog's own pin for it, instead of the newest pin. Removing
@@ -108,7 +110,8 @@ pin on its own (#617, owner decision "the new pins file"):
   `runtime-install-failed` and the action `update agent-bot to a release whose
   catalog pins <name> <version>`; it is never silently moved.
 - With no file, resolution uses the current catalog, as before #617. A file
-  that is not valid JSON of this shape is reported under `invalid` and blocks
+  that is not valid JSON of this shape (both maps present; runtime versions
+  exact `x.y.z`) is reported under `invalid` and blocks
   every install and launch with the action `fix or delete
   .soul-state/runtime-pins.json`; deleting it re-resolves.
 - It is durable soul state: `soul env export` and transfer carry it (its
@@ -226,9 +229,11 @@ custody boundary or different record format/location.
 ```
 
 Every completed install directory carries `.agent-bot-install.json`: the name,
-kind, version, platform, URL, `sha256`, `bin`, `catalogRelease` (the catalog
-release a catalog runtime was installed from, else null; absent before #617)
-and `installedAt`. Archive stamps
+kind, version, platform, URL, `sha256`, `bin` and `installedAt`. `archive`
+and `uv-python` stamps also record `catalogRelease`: the catalog release a
+catalog runtime was installed from, else null (a package's own `sources`, a
+harness archive); it is absent before #617. `uv-tool` and npm adapter stamps
+do not carry it. Archive stamps
 record the digest verified by agent-bot. A `uv-python` stamp records the
 python-build-standalone archive's URL and `sha256` from the catalog: uv is
 given a one-entry downloads list (`--python-downloads-json-url`) naming only

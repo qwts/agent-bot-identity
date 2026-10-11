@@ -29,7 +29,7 @@ import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { withLock } from './agent-identity.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
-import { PROVIDER_NAMES, RUNTIME_NAMES, SHA256_HEX, catalogPin, catalogReleaseHash, harnessInstallSource, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, versionMatches, uvToolRequirements } from './runtime-catalog.mjs';
+import { PROVIDER_NAMES, RUNTIME_NAMES, SHA256_HEX, catalogPin, catalogReleaseHash, harnessInstallSource, isExactVersion, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, versionMatches, uvToolRequirements } from './runtime-catalog.mjs';
 
 export const RUNTIMES_SCHEMA_VERSION = 1;
 // Stable failure codes (ADR-0322 decision 5): each names the declared
@@ -311,12 +311,13 @@ export function readRuntimePins(soulDir) {
   if (record.schemaVersion !== PINS_SCHEMA_VERSION || Object.keys(record).some((key) => !['schemaVersion', 'runtimes', 'harnesses'].includes(key))) return bad('has an unknown schema');
   const pins = { runtimes: {}, harnesses: {} };
   for (const area of ['runtimes', 'harnesses']) {
-    const entries = record[area] ?? {};
-    if (!object(entries)) return bad(`has a malformed ${area} map`);
+    const entries = record[area];
+    if (!object(entries)) return bad(`has a missing or malformed ${area} map`);
     for (const [name, entry] of Object.entries(entries)) {
       const known = area === 'runtimes' ? [...RUNTIME_NAMES, ...PROVIDER_NAMES].includes(name) : PIN_NAME.test(name);
-      if (!known || !object(entry) || Object.keys(entry).some((key) => !['version', 'catalogRelease'].includes(key))
-        || typeof entry.version !== 'string' || !PIN_VERSION.test(entry.version)
+      // A runtime version must be one the catalog could pin, or resolution would skip it and move the runtime.
+      const versionOk = typeof entry?.version === 'string' && (area === 'runtimes' ? isExactVersion(entry.version) : PIN_VERSION.test(entry.version));
+      if (!known || !object(entry) || Object.keys(entry).some((key) => !['version', 'catalogRelease'].includes(key)) || !versionOk
         || !(entry.catalogRelease === null || (typeof entry.catalogRelease === 'string' && SHA256_HEX.test(entry.catalogRelease)))) return bad(`has a malformed ${area}.${name} entry`);
       pins[area][name] = { version: entry.version, catalogRelease: entry.catalogRelease };
     }
@@ -325,10 +326,11 @@ export function readRuntimePins(soulDir) {
 }
 
 // Records what is installed now, under a lock, as one atomic replace. An
-// entry that still matches what is installed is never changed: only an
-// explicit upgrade moves a soul to a newer pin. A missing entry, or one for
-// a version no longer installed because the declaration changed, records
-// the current install.
+// entry that still matches what is installed (version, and catalog or not)
+// is never changed, even when the catalog release moved: only an explicit
+// upgrade moves a soul to a newer pin. A missing entry, or one for a version
+// or source no longer installed because the declaration changed, records the
+// current install.
 function recordRuntimePins(soulDir, state, release) {
   const file = pinsFile(soulDir);
   withLock(`${file}.lock`, 'runtime pins', () => {
@@ -337,7 +339,8 @@ function recordRuntimePins(soulDir, state, release) {
     const next = { schemaVersion: PINS_SCHEMA_VERSION, runtimes: { ...current.pins.runtimes }, harnesses: { ...current.pins.harnesses } };
     let changed = false;
     const keep = (area, row, catalogRelease) => {
-      if (row.status !== 'installed' || next[area][row.name]?.version === row.version) return;
+      const entry = next[area][row.name];
+      if (row.status !== 'installed' || (entry?.version === row.version && (entry.catalogRelease === null) === (catalogRelease === null))) return;
       next[area][row.name] = { version: row.version, catalogRelease };
       changed = true;
     };
@@ -932,7 +935,11 @@ export async function installSoulRuntimes(soulDir, options = {}) {
   let result;
   try { result = await installDeclared(soulDir, options); }
   catch (error) {
-    try { pinInstalled(); } catch { /* the install's own error is the one to report */ }
+    // The install's error is the one reported; a failure to record what did install rides along with it.
+    try { pinInstalled(); } catch (pinsError) {
+      error.message = `${error.message}; also could not record ${STATE}/${RUNTIME_PINS_FILE} (${pinsError.message})`;
+      error.pinsError = pinsError;
+    }
     throw error;
   }
   pinInstalled();

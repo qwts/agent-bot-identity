@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -421,6 +421,11 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   assert.deepEqual([moved.version, moved.status, moved.pin], ['24.99.0', 'installed', null]);
   await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl });
   assert.deepEqual(JSON.parse(readFileSync(pinsPath, 'utf8')).runtimes.node, { version: '24.99.0', catalogRelease: catalogReleaseHash({ catalog: bumped }) });
+  // Moving a version between the catalog and the package's own sources replaces its entry.
+  f.writeManifest((m) => { m.runtimes = { node: { version: '24.99.0', sources: { [PLATFORM]: { url: next.sources[PLATFORM].url, sha256: sha(NODE_ARCHIVE) } } } }; });
+  await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives }).fetchFn, runImpl: d.runImpl });
+  assert.deepEqual(readRuntimePins(f.dir).pins.runtimes.node, { version: '24.99.0', catalogRelease: null });
+  f.writeManifest((m) => { m.runtimes = { node: '24.99.0' }; });
   // A failed install still records what did install before it.
   rmSync(pinsPath);
   f.writeManifest((m) => { m.runtimes.go = '1'; });
@@ -428,8 +433,18 @@ test('the pins file records what each runtime installed as; reinstall and a newe
   const partial = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives, fail: { [goUrl]: '404' } }).fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
   assert.equal(partial?.code, 'runtime-download-failed');
   assert.deepEqual(Object.keys(readRuntimePins(f.dir).pins.runtimes), ['node'], 'node is recorded, the failed go is not');
+  // A failure to record the pins is reported with the install error, not swallowed.
+  rmSync(pinsPath);
+  mkdirSync(`${pinsPath}.lock`);
+  utimesSync(`${pinsPath}.lock`, new Date(), new Date());
+  const unrecorded = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: doubles({ archives, fail: { [goUrl]: '404' } }).fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+  assert.equal(unrecorded?.code, 'runtime-download-failed');
+  assert.match(unrecorded.message, /answered 404.*; also could not record \.soul-state\/runtime-pins\.json/);
+  assert.ok(unrecorded.pinsError);
+  rmSync(`${pinsPath}.lock`, { recursive: true });
   // A corrupt file is reported and blocks every install, --runtime included, and is left as it is.
-  for (const contents of ['{"schemaVersion":2,"runtimes":{},"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24; rm -rf /","catalogRelease":null}},"harnesses":{}}', 'not json']) {
+  for (const contents of ['{"schemaVersion":2,"runtimes":{},"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24; rm -rf /","catalogRelease":null}},"harnesses":{}}', 'not json',
+    '{"schemaVersion":1}', '{"schemaVersion":1,"runtimes":null,"harnesses":{}}', '{"schemaVersion":1,"runtimes":{"node":{"version":"24foo","catalogRelease":null}},"harnesses":{}}']) {
     writeFileSync(pinsPath, contents);
     const state = inspectSoulRuntimes(f.dir, { ...f.options, catalog: bumped });
     assert.equal(state.invalid.at(-1).path, '.soul-state/runtime-pins.json');
