@@ -1,6 +1,6 @@
 # Identity public-contract inventory
 
-**Status:** Draft for the owner's review
+**Status:** Reviewed; owner decisions recorded in §8 (2026-10-11)
 **Date:** 2026-10-11
 **Issue:** [#645](https://github.com/qwts/agent-bot-identity/issues/645)
 **Measured at:** `bea2fcf` (main)
@@ -21,9 +21,14 @@ path, format or behavior changes, because of it.
 3. a reviewed extraction plan exists, covering history, CI, release, pinning
    and bundling, the `agent-bot` facade and rollback.
 
-This inventory covers the first two: §7 lists what still crosses the
-boundary, and §1 to §6 are the surface the contract has to settle. agent-comms
-stays its own repository, and #737 stays on hold.
+This inventory covers the first two:
+
+- §1 to §6 are the surface the contract has to settle;
+- §7 lists what still crosses the boundary;
+- §8 records the owner's decisions;
+- §9 orders the work.
+
+agent-comms stays its own repository, and #737 stays on hold.
 
 ## How to read it
 
@@ -298,35 +303,37 @@ All of these are public.
 
 ## 7. Boundary crossings that block extraction
 
-Each of these is a follow-up PR or decision. A follow-up that needs a
-decision names an owner question (Q), listed in §8.
+Each of these is a follow-up. The owner's decisions in §8 (D1 to D7) settle
+how each one is done, and §9 puts them in order.
 
-- **F1. Shared identity-format contract file.** Move the pure format
-  helpers into one contract file, owned by identity and listed under
-  `contracts` in the module map. Owner answer 2 says it is kept
-  byte-identical by a test. The helpers are:
+- **F1. Shared identity-format contract file.** The pure format helpers move
+  into one contract file, owned by identity and listed under `contracts` in
+  the module map. Owner answer 2 says a test keeps it byte-identical. The
+  helpers are:
   - `validateAgentId` and `isAgentId`, imported 37 and 11 times, from soul,
     host, cli and comms;
   - `AGENT_ID_KEYS`, `PIN_KEYS` and `pinnedSlug`;
   - the binding file readers `readBinding` and `readBindToken`;
   - the credential name rules (`SECRET_NAME`, `CREDENTIAL_STORES`, the
     item-name builders);
-  - `ownerCredentialRequired`;
+  - `ownerCredentialRequired` and `soulMarkers`;
   - `GIT_HOOK_NAMES`;
-  - `classifyRisk` and `isComputerUse`.
+  - `classifyRisk` and `isComputerUse`;
+  - the audit receipt writer (D2, F4).
 - **F2. Drop the `stateDirectory` re-export** from `agent-identity.mjs:63`.
   Its 23 importers (soul 19, host 2, cli 2) switch to `state-paths.mjs`
   (shared), which already owns it. This is mechanical, changes no behavior,
   and is the one item that is plainly to-be-removed.
-- **F3. Move `withLock`.** It is a filesystem mutex, not an identity concern,
-  and 19 files import it (soul 17, host 1, comms 1). See Q1.
-- **F4. Audit receipts from other modules.** `appendAuditReceipt` has 24
-  importers (soul 18, host 4, cli 2), and owner CLI actions must receipt
-  even while the daemon is down. See Q2.
-- **F5. `daemon-client.mjs`.** It is identity-owned but carries every daemon
-  call: soul revisions, pause and stop, comms status, as well as identity's
-  own. Under answer 2 it is the transport that soul, host and cli would use
-  to reach identity. See Q3.
+- **F3. Move `withLock` to `shared` (D1).** It is a filesystem mutex, not an
+  identity concern, and 19 files import it (soul 17, host 1, comms 1). The
+  lock layout (`<record>.lock/owner`) stays as it is.
+- **F4. Audit receipts through a shared writer (D2).** `appendAuditReceipt`
+  has 24 importers (soul 18, host 4, cli 2). The writer moves into the F1
+  contract file. It appends the same `audit.jsonl` lines to the same path,
+  so owner CLI actions still receipt while the daemon is down.
+- **F5. `daemon-client.mjs` becomes a shared daemon contract (D3).** It
+  carries every daemon call: soul revisions, pause and stop, comms status,
+  as well as identity's own. `daemon.json` keeps its format.
 - **F6. Identity record operations from soul.** Soul modules call these
   directly:
   - `readAgentIdentity` (16 imports), `mintAgentIdentity` (6),
@@ -336,12 +343,13 @@ decision names an owner question (Q), listed in §8.
   - `mintBindToken`, from `setup-worktree.mjs:11` and `soul-join.mjs:34`.
 
   Callers include join, fork, templates, remove, env export, revisions and
-  population. Each needs a daemon route, or a call to the `agent-bot identity`
-  subcommand, and the contract has to name those routes. Several of these
-  callers run while the daemon is down (join and `setup-worktree` before the
-  first bind), so a route alone is not enough for them. That is part of Q4.
+  population. Under D4, each goes through a daemon route where the daemon is
+  up, or runs the bundled identity entry file as a child process. The
+  daemon-down paths, join and `setup-worktree` before the first bind, always
+  use the child process. The contract names each route and entry file.
 - **F7. Credential custody reached from outside identity.** These callers
-  should go through identity operations instead of importing the stores:
+  move onto identity operations (D4), or onto the name rules in the F1 file,
+  instead of importing the stores:
   - **soul:**
     - `soul-credential-migration.mjs:14` to `:22` reads and writes raw keys;
     - `soul-secrets.mjs:20` and `soul-env.mjs:17` use the secret stores;
@@ -362,37 +370,38 @@ decision names an owner question (Q), listed in §8.
   composes `owner-gate`, `owner-statement` and `owner-presence` to ask the
   owner (`owner-action.mjs:9` to `:22`). `soulMarkers` is imported by
   `agent-approvals.mjs:21`, `cli/soul-dream.mjs:8`, `soul-computer-use.mjs:8`,
-  `soul-stop.mjs:8` and `soul-asides.mjs:275`. Either the owner prompt moves
-  into identity behind a route, or `soulMarkers` becomes a format helper (F1)
-  and the challenge flow goes through the daemon.
-- **F9. Host composes identity in-process.** These host files do it:
-  - `agent-daemon.mjs`: the binding registry, minting, vouch, keyd, principals,
-    inbox, identity apps and session approvals;
-  - `agent-hook.mjs:34` to `:38`: the bot checks and the publish scan;
-  - `agent-mcp.mjs` and `daemon-mcp.mjs`;
-  - `keyd-supervisor.mjs`, `wake-plane.mjs`, `agent-interaction.mjs`,
-    `agent-web.mjs` and `telegram-adapter.mjs`.
-
-  One daemon serves both identity and soul routes, and ADR-0645 §1 creates
-  no new process. So host has to load identity somehow. See Q5.
-  `/v0/register` and `/v0/spawn` mix soul and identity work (Q6).
+  `soul-stop.mjs:8` and `soul-asides.mjs:275`; it becomes a format helper
+  (F1). The challenge flow goes through an identity entry file (D4).
+- **F9. Host loads identity through one published entry (D5).**
+  - These host files compose identity in-process today:
+    - `agent-daemon.mjs`: the binding registry, minting, vouch, keyd,
+      principals, inbox, identity apps and session approvals;
+    - `agent-hook.mjs:34` to `:38`: the bot checks and the publish scan;
+    - `agent-mcp.mjs` and `daemon-mcp.mjs`;
+    - `keyd-supervisor.mjs`, `wake-plane.mjs`, `agent-interaction.mjs`,
+      `agent-web.mjs` and `telegram-adapter.mjs`.
+  - They move onto one identity entry, holding the route handler and the
+    binding registry, listed as a contract importable by host only.
+  - **Route ownership (D6):**
+    - `/v0/register` becomes a soul route;
+    - `/v0/spawn` splits: identity mints and binds, then host runs the spawn
+      hook.
 - **F10. Binding-proof parity test.** `binding-proof.mjs:13` says agent-comms
   carries a byte-for-byte copy of the client half, but no test checks it.
-  Add one before the file becomes the pattern for F1.
+  Add one before the F1 file follows the same pattern.
 - **F11. comms reaches identity custody.** These comms files do:
   - `comms-client.mjs:582` loads the vouch *private* key only to pair its
     public half;
   - `comms-windows.mjs:8` uses `windows-account-custody`;
-  - `wake-listen.mjs:28` signs proofs, which is fine as an F1 contract;
-  - `daemon-status.mjs:10` reads `daemon.json` (F5).
+  - `wake-listen.mjs:28` signs proofs, which the F1 file covers;
+  - `daemon-status.mjs:10` reads `daemon.json`, which F5 covers.
 
-  The key load could read the public key only, through
-  `daemon vouch-key` or a public-key export.
-- **F12. Identity data inside soul's layout.** Credential files live under
-  `<soul>/.soul-state/credentials` (`soul-credentials.mjs:128`), which
-  ADR-0645 §3 gives to soul. They can't move without a migration, so the
-  layout contract (`soul-env-contract.mjs`) should record that subtree as
-  identity's. This is Q7.
+  The key load should read the public key only, through `daemon vouch-key`
+  or a public-key export.
+- **F12. Record identity's subtree of the soul layout (D7).** Credential
+  files stay under `<soul>/.soul-state/credentials`
+  (`soul-credentials.mjs:128`). The layout contract (`soul-env-contract.mjs`)
+  records that subtree as identity-owned. Nothing moves.
 - **F13. CLI facade files.** These cli files import identity internals:
   - `cli/identity.mjs:11`, `cli/mint-token.mjs:7` to `:11`,
     `cli/principal.mjs:7`, `cli/owner.mjs:7` to `:10` and
@@ -401,55 +410,64 @@ decision names an owner question (Q), listed in §8.
     `GIT_HOOK_NAMES`;
   - `sync-hooks.mjs:27`.
 
-  After the extraction, the facade reaches identity through whatever Q4
-  decides.
+  Under D4, dispatch runs the bundled identity entry files as child
+  processes. Command names and arguments don't change.
 - **F14. Assign the non-`.mjs` identity assets.** The extraction plan has to
   cover `keyd/`, `hooks/*`, `scripts/ensure-identity.sh`, `wrangler.toml`
   and the 120 test files that import identity, including history, CI and
   release. The hooks run soul and shared files too (§6), so they need an
   owner, or a split, before they move.
 
-## 8. Questions for the owner
+## 8. Owner decisions
 
-Each question has a recommendation, marked "(recommended)".
+The owner answered all seven questions on 2026-10-11, each as recommended
+([#645 comment](https://github.com/qwts/agent-bot-identity/issues/645#issuecomment-6107132817)).
 
-- **Q1. Where does `withLock` go?**
-  - (a) `shared` (recommended): a lock reads no credential, and soul uses it
-    for its own files.
-  - (b) A soul-owned copy.
-  - (c) A daemon lock route.
-- **Q2. How do soul, host and cli write audit receipts?**
-  - (a) A receipt writer in the F1 contract file (recommended): it appends to
-    the same `audit.jsonl` in the same format and works while the daemon is
-    down.
-  - (b) A daemon route.
-  - (c) Callers keep importing identity.
-- **Q3. Who owns `daemon-client.mjs`?**
-  - (a) It becomes a shared daemon wire contract, as it carries every module's
-    routes (recommended).
-  - (b) It stays identity's and is the one sanctioned import.
-- **Q4. How does the `agent-bot` facade reach identity after the
-  extraction, for commands and for the daemon-down paths in join and
-  `setup-worktree`?**
-  - (a) Dispatch spawns the pinned, bundled identity entry files as child
-    processes (recommended). It already runs each command as a child Node
-    process.
-  - (b) It imports a public JavaScript entry of the pinned package.
-- **Q5. How does the one daemon load identity?**
-  - (a) host alone imports one published identity entry, a route handler plus
-    the binding registry, listed as a contract (recommended).
-  - (b) Identity runs as a second daemon process. That conflicts with ADR-0645
-    §1.
-- **Q6. Who owns `/v0/register` and `/v0/spawn`?**
-  - (a) `register` becomes a soul route. `spawn` splits: identity mints and
-    binds, then host runs the spawn hook (recommended).
-  - (b) Both stay host routes that compose identity.
-- **Q7. Where do the credential files under `.soul-state/credentials`
-  belong?**
-  - (a) They stay where they are, recorded as an identity-owned subtree of
-    the soul layout (recommended).
-  - (b) They move to identity's state directory, with a migration and
-    rollback.
+- **D1. `withLock`** moves to the shared module.
+- **D2. Audit receipts** use a shared receipt writer in the shared format
+  file. It keeps the same `audit.jsonl` format, so it works while the daemon
+  is down.
+- **D3. `daemon-client.mjs`** becomes a shared daemon contract.
+- **D4. The `agent-bot` facade** reaches identity by running the pinned,
+  bundled identity entry files as child processes, including in join and
+  `setup-worktree`.
+- **D5. The one daemon** loads identity by having host import one published
+  identity entry (the route handler and binding registry), listed as a
+  contract.
+- **D6. Routes:** `/v0/register` becomes a soul route. `/v0/spawn` splits:
+  identity mints and binds, then host runs the spawn hook.
+- **D7. Credential files** stay under `<soul>/.soul-state/credentials`,
+  recorded as an identity-owned part of the soul layout.
+
+None of these changes a state path, file format, command name, service label
+or credential name.
+
+## 9. Order of work
+
+There is one PR per step. Each step keeps observable behavior, and each one
+that removes edges also removes them from the count here. Steps 1 to 5 are
+mechanical moves; steps 6 to 10 change how a module reaches identity.
+
+1. **F2:** drop the `stateDirectory` re-export.
+2. **F3 (D1):** move `withLock` to `shared`.
+3. **F10:** add the binding-proof parity test.
+4. **F1 and F4 (D2):** create the shared identity-format contract file,
+   including the receipt writer, and move its callers onto it. This is the
+   largest drop in edges.
+5. **F5 (D3):** make `daemon-client.mjs` the shared daemon contract.
+6. **F12 (D7):** record identity's subtree in `soul-env-contract.mjs`.
+7. **F11:** comms reads the vouch public key only; decide where the Windows
+   custody helpers live.
+8. **F6, F7 and F8 (D4):** define the identity entry files and daemon routes
+   for record operations, credential custody and the owner prompt, then
+   move soul's and cli's callers onto them.
+9. **F9 (D5, D6):** the published host entry, the `/v0/register` move and
+   the `/v0/spawn` split.
+10. **F13 (D4):** the CLI facade runs the identity entry files.
+11. **F14:** assign the remaining assets.
+
+After step 11, the boundary has no identity imports outside identity. The
+reviewed contract (ADR-0645 step 7) and the extraction plan (step 8) follow.
 
 ## Appendix: every import of an identity file from outside identity
 
