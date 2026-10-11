@@ -314,7 +314,7 @@ test('a pin the owner will not re-pin is refused, not used and not replaced', (t
   const seams = { env, record: { bin: '/x/agent-bot-keyd' }, verifyBinary: () => {},
     run: () => `${key.raw}\n`, receipt: (entry) => receipts.push(entry),
     approveRepin: (detail) => { asked.push(detail); throw new Error('owner approval was cancelled'); } };
-  assert.throws(() => pinnedPresenceKey(seams), { code: 'presence-pin-mismatch' });
+  assert.throws(() => pinnedPresenceKey(seams), { code: 'presence-pin-mismatch', message: /does not match the code-signed keyd binary/ });
   assert.equal(readFileSync(file, 'utf8'), planted);
   assert.deepEqual(asked, [{ cached: planted.trim(), key: key.raw }], 'the owner is shown both keys');
   assert.deepEqual(receipts.map(({ event, operation, decision }) => [event, operation, decision]),
@@ -372,7 +372,7 @@ test('a removed cache with a pin on record goes to the owner, not to a silent fi
   const asked = [];
   const refusing = { ...seams, run: () => `${planted.raw}\n`,
     approveRepin: (detail) => { asked.push(detail); throw new Error('owner approval was cancelled'); } };
-  assert.throws(() => pinnedPresenceKey(refusing), { code: 'presence-pin-mismatch' });
+  assert.throws(() => pinnedPresenceKey(refusing), { code: 'presence-pin-mismatch', message: /is missing or damaged although a keyd presence key was pinned before/ });
   assert.deepEqual(asked, [{ cached: null, key: planted.raw }]);
   assert.throws(() => readFileSync(file), { code: 'ENOENT' }, 'nothing is pinned without the owner');
   // A cache that does not parse is no better than none.

@@ -122,9 +122,12 @@ function approveRepinnedKey({ cached, key }) {
   });
 }
 
-function pinMismatch(file, cause) {
+function pinMismatch(file, cached, cause) {
+  const what = cached
+    ? `the keyd presence key in ${file} does not match the code-signed keyd binary`
+    : `${file} is missing or damaged although a keyd presence key was pinned before`;
   return Object.assign(new Error(
-    `the keyd presence key in ${file} does not match the code-signed keyd binary and the owner did not re-pin it; run the owner command again from the Mac and approve the re-pin`),
+    `${what}, and the owner did not re-pin it; run the owner command again from the Mac and approve the re-pin`),
   { code: 'presence-pin-mismatch', cause });
 }
 
@@ -248,7 +251,7 @@ export function pinnedPresenceKey({
       approveRepin({ cached, key });
     } catch (error) {
       try { record_('refused'); } catch { /* the refusal stands without its receipt */ }
-      throw pinMismatch(file, error);
+      throw pinMismatch(file, cached, error);
     }
     record_('approved');
   }
