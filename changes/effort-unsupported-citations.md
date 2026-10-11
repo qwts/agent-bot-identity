@@ -1,0 +1,1 @@
+- The soul builder docs now cite the pinned OpenCode and Gemini CLI formats behind reasoning effort staying unsupported for those harnesses, per the owner's decision (#379).
