@@ -1,0 +1,1 @@
+- `agent-hook` now speaks OpenCode's plugin hooks: tool calls, shell commands, file writes, prompts and session start map onto the usual hook events, a deny or a broken hook blocks the call, and the identity guard judges a shell command by the directory OpenCode actually runs it in. The plugin that calls it comes next (#378).

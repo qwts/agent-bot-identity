@@ -10,6 +10,8 @@
 // would silently mean two things. A vendor spelling appears only in a `events`
 // map below.
 
+import { isAbsolute, resolve } from 'node:path';
+
 // Events a hook can subscribe to, by creating agent-hooks/<event>/.
 export const CANONICAL_EVENTS = [
   'spawn',
@@ -286,6 +288,83 @@ export const DIALECTS = [
     verifiedOn: '2026-08-02',
   },
   {
+    // OpenCode has no hook config file. It loads every `.opencode/plugin/*.js`
+    // as a plugin module and awaits its hooks inside its own process, so the
+    // adapter is a generated plugin (#378, a later slice) rather than a JSON
+    // entry, and this row is the contract that plugin speaks. Checked against
+    // OpenCode 1.18.34 (anomalyco/opencode@aec0b9a6): `Hooks` in
+    // packages/plugin/src/index.ts, and the call sites in session/tools.ts,
+    // session/prompt.ts and plugin/index.ts. Subagents run the same prompt
+    // loop, so their tool calls reach the same hooks.
+    //
+    // Stdin is the hook's own `input` and `output` objects merged into one,
+    // plus the plugin's `directory`: `{tool, sessionID, callID, args}` around
+    // a tool call, `{sessionID, model, message, parts, …}` on chat.message,
+    // and `{event}` from the bus. The plugin renames nothing; `fields` below
+    // is the whole translation, so a hook reads the same envelope as anywhere.
+    key: 'opencode',
+    file: null,
+    format: 'opencode-plugin',
+    events: {
+      // From the `event` bus, which OpenCode fires without awaiting: right for
+      // an advisory event. A subagent's child session is created there too.
+      'session-start': { event: 'event', matcher: '^session\\.created$' },
+      // No session-end: the bus has `session.deleted` (the user removed the
+      // session) and `session.idle` (one turn finished), and neither is the
+      // end of a session. A declared gap beats a hook that fires on deletion.
+      'prompt-submit': 'chat.message',
+      'pre-tool-use': 'tool.execute.before',
+      // ShellID.ToolID is literally "bash", whatever shell actually runs.
+      'pre-command': { event: 'tool.execute.before', matcher: '^bash$' },
+      // Some models get apply_patch in place of write and edit. Its argument
+      // is patch text with no single path, so `file_path` stays null for it.
+      'pre-file-write': { event: 'tool.execute.before', matcher: '^(write|edit|apply_patch)$' },
+      'post-tool-use': 'tool.execute.after',
+    },
+    // Where this row's payload keeps each envelope field. A list here replaces
+    // the generic one for that field rather than extending it, so nothing a
+    // tool's own `args` happen to contain is mistaken for another harness's key.
+    fields: {
+      sessionId: [['sessionID'], ['event', 'properties', 'sessionID'], ['event', 'properties', 'info', 'id']],
+      cwd: [['directory']],
+      toolName: [['tool']],
+      command: [['args', 'command']],
+      filePath: [['args', 'filePath']],
+      // chat.message sends the model as `{providerID, modelID}`.
+      model: [['model', 'modelID']],
+    },
+    // The prompt is the user's text parts, not one string.
+    promptParts: ['parts'],
+    // bash runs in `args.workdir` resolved against the instance directory
+    // (tool/shell.ts), not in `directory`. The identity guard places a
+    // `git push` by the envelope's cwd, so cwd must be where the shell runs,
+    // or a bound session could push from an unbound checkout unseen.
+    shellWorkdir: { tool: 'bash', keys: ['args', 'workdir'] },
+    // The verdict is the exit code, and the plugin is what reads it: exit 2
+    // is a deny with the reason on stderr; any other nonzero exit, a crash or
+    // the plugin's own timeout is an error. The plugin throws on a deny, and
+    // on an error for a blocking event, which is how OpenCode aborts a tool
+    // call or a prompt. A hook can only throw or return, so `ask` closes.
+    decision: 'exit-code',
+    contextChannel: {},
+    contextNote: 'a plugin hook can only throw or return — nothing carries context to the model',
+    nativeFailMode: 'closed',
+    // OpenCode awaits a plugin hook with no clock of its own, so the only
+    // timeout is the plugin's, and the plugin denies on it.
+    timeoutFailMode: 'closed',
+    timeoutCapMs: null,
+    status: 'verified',
+    evidence: [
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/plugin/src/index.ts#L222-L281',
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/plugin/index.ts#L255-L297',
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/session/tools.ts#L103-L125',
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/session/prompt.ts#L999-L1009',
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/tool/shell.ts#L612-L614',
+      'https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/opencode/src/tool/shell/id.ts#L15-L17',
+    ],
+    verifiedOn: '2026-10-11',
+  },
+  {
     // The universal backstop. No vendor, no drift, 100% availability, and an
     // exit-code channel that cannot fail open. Blocking policy that must hold
     // everywhere lives here as well as in a harness event.
@@ -362,6 +441,8 @@ export function nativeHookEntry(dialectKey, event, run) {
     };
   }
   if (row.format === 'windsurf') return { vendorEvent: mapped.event, entry: { command: run, show_output: false } };
+  // OpenCode's adapter is one generated plugin, not an entry in a config file.
+  if (row.format === 'opencode-plugin') throw new Error(`${dialectKey} hooks are a generated plugin, not a config entry`);
   throw new Error(`unsupported hook format: ${row.format}`);
 }
 
@@ -398,23 +479,58 @@ export function budgetMs(dialectKey, event, requested = 10000) {
   return Math.min(requested, Math.max(250, limit - 500));
 }
 
+// The user's text from a list of message parts, skipping what the harness
+// added on its own (`synthetic`) or set aside (`ignored`).
+function textParts(payload, keys) {
+  let node = payload;
+  for (const key of keys) node = node && typeof node === 'object' ? node[key] : undefined;
+  if (!Array.isArray(node)) return undefined;
+  const text = node
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string' && !part.synthetic && !part.ignored)
+    .map((part) => part.text)
+    .join('\n');
+  return text === '' ? undefined : text;
+}
+
+// Where a shell tool actually runs, the way the harness resolves it: an
+// absolute workdir as is, a relative one against an absolute base. A workdir
+// that cannot be placed leaves the base, never a relative path. (OpenCode's
+// Windows cygpath translation is not modelled.)
+function shellCwd(row, payload, toolName, base) {
+  const spec = row.shellWorkdir;
+  if (!spec || toolName !== spec.tool) return base;
+  const workdir = dig(payload, spec.keys);
+  if (workdir === undefined) return base;
+  if (isAbsolute(workdir)) return resolve(workdir);
+  return base && isAbsolute(base) ? resolve(base, workdir) : base;
+}
+
 // One shape for every dialect. `raw` is always the verbatim vendor payload, so
 // a hook can reach past this normalization the day a vendor ships a field the
-// table does not model yet.
+// table does not model yet. A row's own `fields` list, where it has one, is
+// the whole translation for that field.
 export function normalizeEnvelope({ dialectKey, event, payload = {} }) {
+  const row = dialect(dialectKey);
   const vendor = vendorEvent(dialectKey, event);
+  const own = row.fields ?? {};
+  const field = (name, generic) => (own[name] ? firstPath(payload, own[name]) : generic());
+  const toolName = field('toolName', () => firstKey(payload, FIELD_KEYS.toolName)) ?? null;
+  const cwd = field('cwd', () => firstKey(payload, FIELD_KEYS.cwd)) ?? null;
+  const prompt = row.promptParts
+    ? textParts(payload, row.promptParts)
+    : firstKey(payload, FIELD_KEYS.prompt);
   return {
     schema_version: 1,
     event,
     harness: dialectKey,
     vendor_event: vendor?.event ?? null,
-    session_id: firstKey(payload, FIELD_KEYS.sessionId) ?? null,
-    cwd: firstKey(payload, FIELD_KEYS.cwd) ?? null,
-    tool_name: firstKey(payload, FIELD_KEYS.toolName) ?? null,
-    command: firstPath(payload, COMMAND_KEYS) ?? null,
-    file_path: firstPath(payload, PATH_KEYS) ?? null,
-    prompt: firstKey(payload, FIELD_KEYS.prompt) ?? null,
-    model: firstKey(payload, FIELD_KEYS.model) ?? null,
+    session_id: field('sessionId', () => firstKey(payload, FIELD_KEYS.sessionId)) ?? null,
+    cwd: shellCwd(row, payload, toolName, cwd) ?? null,
+    tool_name: toolName,
+    command: field('command', () => firstPath(payload, COMMAND_KEYS)) ?? null,
+    file_path: field('filePath', () => firstPath(payload, PATH_KEYS)) ?? null,
+    prompt: prompt ?? null,
+    model: field('model', () => firstKey(payload, FIELD_KEYS.model)) ?? null,
     blocking: isBlocking(event),
     raw: payload,
   };
