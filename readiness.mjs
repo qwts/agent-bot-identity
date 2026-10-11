@@ -32,7 +32,7 @@ import { GENERATED_HARNESS_MARKER } from './soul-harness-contract.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { keydStatus, keydVersionAction } from './keyd-client.mjs';
 import { readBindToken, readBinding } from './agent-binding.mjs';
-import { identityOp } from './daemon-client.mjs';
+import { readAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { readSopPolicyState } from './sop.mjs';
 import { isSoulBound } from './git-credential-bot.mjs';
@@ -2361,7 +2361,7 @@ function worktreeChecks({ cwd, env, home, config, git, inspectSpace }) {
       }));
       if (!primary) checks.push(worktreePinOriginCheck({ gitDir: resolve(gitDir), agentId }));
       const appRecord = appRecordCheck({ agentId, slug, config,
-        readIdentity: (id) => identityOp('read', { id, stateDir: stateDirectory({ env, home }) }) });
+        readIdentity: (id) => readAgentIdentity(id, { stateDir: stateDirectory({ env, home }) }) });
       if (appRecord) checks.push(appRecord);
     } catch {
       checks.push(readinessCheck({

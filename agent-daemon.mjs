@@ -82,7 +82,7 @@ import { appendAuditReceipt, isComputerUse, validateAgentId } from './identity-f
 import { validateApprovalScope } from './session-approvals.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
 import {
-  confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, keydPresenceWithoutDialog, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner,
+  confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, ownerChallengeMessage, keydPresenceWithoutDialog, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner,
 } from './owner-action.mjs';
 import { runSpawnHooks } from './agent-hook.mjs';
 import { createWebLayer } from './agent-web.mjs';
@@ -129,6 +129,7 @@ import { acpExecutorFor, composeTurnEnv, createWakePlane, createTurnRegistry } f
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
 import { createCommsRelay, senderAddress } from './comms-relay.mjs';
+import { extractToken } from './owner-statement.mjs';
 import { recordDeliveredAside } from './soul-asides.mjs';
 import { createResumeExecutor, createWakeSessions, resumePath, wakeSessionsFile } from './wake-resume.mjs';
 import { migratePreGateConfig } from './config-migration.mjs';
@@ -418,7 +419,9 @@ export function createDaemonServer({
   // request where keyd vouches for the owner pin file, which a soul running
   // as the owner could otherwise write; the ledger asks keyd each time, under
   // this daemon's `home`.
-  ownerGate = decisionOwnerGate({ env, challenges: createChallengeLedger({ env, home }) }),
+  // A signed reply in a soul's inbox (#753) finds its decision here by nonce.
+  challengeLedger = createChallengeLedger({ env, home }),
+  ownerGate = decisionOwnerGate({ env, challenges: challengeLedger }),
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential) => verifyPrincipalOwner(credential, { env }),
@@ -434,7 +437,7 @@ export function createDaemonServer({
   // first (#438): the daemon token proves only a process in this account, and
   // a transport principal only its provider login. The owner is asked about
   // the open proposal by soul and tool; a refusal decides nothing.
-  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null, statement = null }) {
+  async function confirmDecision({ proposalId, decision, scope = 'once', principal = null, transport = null, credential = null, statement = null, verifiedOnly = false }) {
     if (decision !== 'approve' && decision !== 'deny') {
       throw Object.assign(new Error('decision must be approve or deny'), { statusCode: 400 });
     }
@@ -448,7 +451,7 @@ export function createDaemonServer({
     }
     let proof;
     try {
-      proof = await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement });
+      proof = await ownerGate(approvalAction(shown(proposal, { env, home }), decision, scope), { principal: credential, request: proposalId, statement, context: { decision, scope }, verifiedOnly });
     } catch (error) {
       const challenged = error.code === 'owner-challenge-required';
       appendAuditReceipt({
@@ -458,11 +461,78 @@ export function createDaemonServer({
         decision: challenged ? 'owner-challenged' : 'owner-refused',
         ...(principal ? { principalId: principal.principalId, transport } : {}),
       }, { env, home, now });
-      // Nothing is decided yet: the caller gets the challenges to have signed.
+      // Nothing is decided yet: the caller gets the challenges to have signed,
+      // and so does whoever sent the message that woke the turn (#753).
+      if (challenged) await deliverChallenges(proposalId, error.challenges);
       if (challenged) throw Object.assign(new Error(error.message), { statusCode: 409, code: error.code, challenges: error.challenges });
       throw Object.assign(new Error(`the owner did not confirm this decision: ${error.message}`), { statusCode: 403 });
     }
     return authorizedBy(proof);
+  }
+  // Sends a cold turn's challenges, as its soul, in reply to the agent-comms
+  // message that woke it. Sending is best effort: the route's answer stands.
+  async function deliverChallenges(proposalId, challenges) {
+    const source = interaction.approvalSource(proposalId);
+    if (!source || !Array.isArray(challenges) || challenges.length === 0) return;
+    try {
+      await asideRelay.reply(source.soul, { to: source.to, replyTo: source.replyTo, body: ownerChallengeMessage(challenges), correlation: source.correlation ?? null });
+    } catch (error) {
+      process.stderr.write(`agent-daemon: owner challenge for ${source.soul.agentId} not sent: ${error?.code ?? error?.message ?? 'failed'}\n`);
+    }
+  }
+  // A signed owner reply that arrived in `soul`'s inbox (#753). Its nonce
+  // finds the pending challenge, which must be for a proposal this soul's
+  // turn opened, and the reply must verify against it under a pin keyd
+  // vouches for before anything is spent or anyone is asked: any messaging
+  // peer that saw the plaintext nonce could send one. The decision and scope
+  // are the ones recorded when the challenge was issued, and the reply goes
+  // through the same gate as a statement sent to a decision route. The sender
+  // is told the outcome in one line. A reply that decides nothing leaves an
+  // `owner-refused` receipt, as a refusal on the route does, with no message
+  // ID or content. Nothing here throws.
+  async function ownerReply(soul, message) {
+    const refused = (detail) => {
+      try {
+        appendAuditReceipt({ event: 'approval-decision', agentId: soul.agentId, operation: 'approve', decision: 'owner-refused', detail }, { env, home, now });
+      } catch { /* the sender is still answered */ }
+    };
+    const answer = async (body) => {
+      try { await asideRelay.reply(soul, { to: senderAddress(message.from), replyTo: message.id, body, correlation: message.correlation ?? null }); } catch { /* the outcome is in the receipts */ }
+    };
+    let token = null;
+    let nonce = null;
+    try {
+      token = extractToken(message.body);
+      nonce = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'))?.nonce ?? null;
+    } catch {
+      refused('inbox reply is not one owner statement block');
+      await answer('That is not one signed owner statement block, so nothing was decided.');
+      return;
+    }
+    const found = challengeLedger.pendingByNonce(nonce);
+    const proposal = found && interaction.approvalSource(found.request)?.soul.agentId === soul.agentId
+      ? interaction.listProposalsForOwner().proposals.find((row) => row.proposalId === found.request) : null;
+    if (!proposal || !found.context) {
+      refused('inbox reply matches no pending owner challenge');
+      await answer('No owner challenge is pending for that signed reply, so nothing was decided. Ask for the decision again to get a new challenge.');
+      return;
+    }
+    // Checked before the gate, which could otherwise ask keyd presence or
+    // the dialog: a reply that does not verify spends nothing.
+    if (!(await challengeLedger.verifiesPending({ request: proposal.proposalId, statement: token }))) {
+      refused('inbox reply does not verify against its pending owner challenge');
+      await answer('That signed reply does not answer the pending owner challenge, so nothing was decided; the challenge is still pending.');
+      return;
+    }
+    const { decision, scope } = found.context;
+    try {
+      // Spent only once it verifies: a peer that saw the nonce cannot burn it.
+      const authorization = await confirmDecision({ proposalId: proposal.proposalId, decision, scope, statement: token, verifiedOnly: true });
+      interaction.decideProposalAsOwner({ proposalId: proposal.proposalId, decision, scope, digest: proposal.operationDigest, authorization });
+      await answer(`The owner's signed reply ${decision === 'approve' ? 'approved' : 'denied'} the request.`);
+    } catch (error) {
+      await answer(`The signed reply did not decide the request: ${error?.message ?? 'refused'}. The challenge is still pending until it expires.`);
+    }
   }
   const bindings = createBindingRegistry({ now, file: path.join(vouchStateDir({ env, home }), 'bindings.json'), account: env.USER ?? process.env.USER ?? 'unknown' });
   const findBinding = lookupBindingOverride
@@ -1248,6 +1318,10 @@ export function createDaemonServer({
   server.warmPool = warmPool;
   server.bindings = bindings;
   server.interaction = interaction;
+  // The cold waker reads a busy soul's inbox for a reply only while one of
+  // its turns waits on a proposal.
+  ownerReply.pending = (agentId) => interaction.awaitsApproval(agentId);
+  server.ownerReply = ownerReply;
   return server;
 }
 
@@ -2236,6 +2310,8 @@ export async function runDaemon({
     // A policy `approval` outcome in a cold turn waits on a proposal the
     // owner can decide (#85: `agent-bot approvals`, GeniusBar's panel).
     approvals: (request) => server.interaction.requestTurnApproval(request),
+    // The owner's signed reply to a challenge, read from the soul's inbox (#753).
+    ownerReply: server.ownerReply,
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);

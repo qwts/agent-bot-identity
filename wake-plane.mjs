@@ -36,13 +36,15 @@ export function wakeReporter(report) {
 // call, which the cold waker's relay sends back, and `denied`: the tools the
 // policy refused, so a turn that stopped on one is not answered with silence.
 // `onSession` hears the harness session the turn's prompt goes into (#404).
+// `source` names the agent-comms message that woke the turn, so a proposal it
+// opens can send the owner's challenge back to that message's sender (#753).
 // A maintenance caller can supply its cancellation signal and a facts-only
 // history ID/kind. Neither creates an interaction-store or broker invocation.
 // Its timeout may shorten the host bound, never extend it.
 export const DREAM_REPLY_MAX_BYTES = 256 * 1024;
 
 export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onEvent = () => {}, approvals = null, turns = createTurnRegistry() }) {
-  return async ({ invocation, message, attachments, env, onSession = null, onProcess = null, signal = null, kind = 'wake', historyId = null,
+  return async ({ invocation, message, attachments, env, onSession = null, onProcess = null, signal = null, kind = 'wake', historyId = null, source = null,
     timeoutMs = turnTimeoutMs, replyByteLimit = kind === 'dream' ? DREAM_REPLY_MAX_BYTES : null }) => {
     signal?.throwIfAborted(); // do not resolve runtime/provider credentials after a caller already cancelled
     if (!['wake', 'dream'].includes(kind)) throw new Error('cold turn kind must be wake or dream');
@@ -98,6 +100,7 @@ export function coldTurnExecutor({ executorFor, turnTimeoutMs = 30 * 60_000, onE
           summary,
           tool: typeof operation?.permission?.toolName === 'string' ? operation.permission.toolName : null,
           ...(ttlMs === undefined ? {} : { ttlMs }),
+          ...(source ? { source } : {}),
           signal,
         })
         : async () => ({ decision: 'deny' }),
@@ -277,7 +280,7 @@ export function laneExecutor({ acpTurn = null, resumeTurn = null }) {
 // onWake for createCommsSupervisor. `coldWake` is null when the daemon has
 // no ACP executor, no resume executor, and no webhook waker, which leaves
 // every soul without a warm socket `waiting`.
-export function createWakePlane({ isPaused = () => false, pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null, turns = createTurnRegistry() }) {
+export function createWakePlane({ isPaused = () => false, pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null, ownerReply = null, turns = createTurnRegistry() }) {
   const coldWake = executorFor || resumeExecutor || webhookWaker
     ? createColdWaker({
       isPaused,
@@ -291,6 +294,7 @@ export function createWakePlane({ isPaused = () => false, pool, settings, lookup
       webhook: webhookWaker,
       authStatus,
       receipt,
+      ownerReply,
     })
     : null;
   // The dispatcher asks the cold path only when no socket is warm. A cold

@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
-import { identityOp } from './daemon-client.mjs';
+import { readAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { validateAppearanceDeclaration, validateCredentialsDeclaration, validateSkillsDeclaration } from './soul-package.mjs';
 import { listSopDocuments, resolveSop } from './sop.mjs';
@@ -167,7 +167,7 @@ function readProfile(id, { env = process.env, home = env.HOME ?? homedir() } = {
   const profile = { name: soul.name ?? null, displayName: soul.displayName ?? null, description: null,
     harness: null, package: null, revision: null, template: null, appearance: null, skillsDisabled: [], parentId: soul.parentId ?? null, status: soul.status ?? null };
   const result = { agentId: soul.id, profile, files: [], skills: [], credentials: [], sop: { resolved: null, override: null }, errors };
-  try { profile.harness = text(identityOp('read', { id: soul.id, stateDir: stateDirectory(options) }).harness); }
+  try { profile.harness = text(readAgentIdentity(soul.id, { stateDir: stateDirectory(options) }).harness); }
   catch { errors.push({ area: 'profile', message: 'Execution identity unavailable; harness may be unknown.' }); }
   let root;
   try {

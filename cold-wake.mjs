@@ -8,6 +8,12 @@
 // runs one turn per message, and sends each turn's answer back as the reply,
 // because a cold turn cannot get a tool call approved.
 //
+// A message carrying the owner's signed statement block (#753) is never a
+// turn's prompt: with an `ownerReply` port the waker hands it to the daemon,
+// which finishes the decision whose pending challenge holds its nonce, and
+// acks it. It does so as soon as the message arrives, also while the turn
+// that asked is still waiting on that decision.
+//
 // A webhook soul (#334) runs no turn here: its harness's routine reads and
 // acks its own inbox, so the waker only calls the webhook.
 //
@@ -104,13 +110,16 @@ function recordInbound(agentId, message, threads) {
 // One line's worth of a turn error for the daemon log: its code (or class)
 // and a bounded message. The audit receipt never carries this (a turn's
 // error can quote the model or a message); the log is where it is read.
+const OWNER_STATEMENT_BLOCK = /-----BEGIN AGENT-BOT OWNER STATEMENT-----/u;
+const OWNER_REPLIES_KEPT = 256;
+
 function describeError(error) {
   const code = typeof error?.code === 'string' ? error.code : (error?.name ?? 'Error');
   const message = String(error?.message ?? error).replace(/\s+/g, ' ').trim();
   return `${code}: ${message.length > 200 ? `${message.slice(0, 200)}…` : message}`;
 }
 
-export function createColdWaker({ isPaused = () => false, executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
+export function createColdWaker({ isPaused = () => false, executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, ownerReply = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
@@ -124,6 +133,35 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
     return { outcome: 'waiting', detail: 'soul is paused' };
   };
   const active = new Map();
+  // Owner replies already handed to the daemon, per soul ('handled', then
+  // 'acked'), so a reply read by both the turn's loop and a merged wake is
+  // decided, and acked, once.
+  const taken = new Map();
+  const ownerReplyIn = (message) => typeof ownerReply === 'function' && message?.kind !== 'task-event'
+    && typeof message?.body === 'string' && OWNER_STATEMENT_BLOCK.test(message.body);
+  // Hands each owner reply in `messages` to the daemon and acks it. Inside
+  // the turn's loop (`strict`) an ack that fails fails the flight, as for
+  // any other message; a merged wake's scan only logs it.
+  const takeOwnerReplies = async (soul, messages, { strict = true } = {}) => {
+    const seen = taken.get(soul.agentId) ?? new Map();
+    taken.set(soul.agentId, seen);
+    for (const message of messages) {
+      if (!ownerReplyIn(message)) continue;
+      if (!seen.has(message.id)) {
+        seen.set(message.id, 'handled');
+        if (seen.size > OWNER_REPLIES_KEPT) seen.delete(seen.keys().next().value);
+        try { await ownerReply(soul, message); } catch (error) { log(`owner reply for ${soul.agentId} failed: ${describeError(error)}`); }
+      }
+      if (seen.get(message.id) === 'acked') continue;
+      try {
+        await relay.ack(soul, [message.id]);
+        if (seen.has(message.id)) seen.set(message.id, 'acked');
+      } catch (error) {
+        if (strict) throw error;
+        log(`owner reply ack for ${soul.agentId} failed: ${describeError(error)}`);
+      }
+    }
+  };
   // Messages already told about a sign-in failure, per soul, until a turn runs.
   const noticed = new Map();
   // A failing recorder never fails the turn.
@@ -142,15 +180,27 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
     const wake = wakeSetting(currentSettings?.[agentId]);
     if (wake === null) return { outcome: 'waiting', detail: 'cold wake is disabled' };
     if (active.has(agentId)) {
-      active.get(agentId).ids.push(...(Array.isArray(messageIds) ? messageIds : []));
+      const flight = active.get(agentId);
+      flight.ids.push(...(Array.isArray(messageIds) ? messageIds : []));
+      // The turn may be waiting on the owner's decision, so an owner reply
+      // that just arrived is taken now, not after the turn. The inbox is read
+      // for it only while the port says this soul awaits one. A reply cannot
+      // come earlier: its challenge is made by a decide call on the open
+      // proposal, and the proposal's waking message is registered in the
+      // same synchronous step that opens it, so `pending` is already true.
+      if (flight.soul && typeof ownerReply === 'function' && (ownerReply.pending?.(agentId) ?? true)) {
+        flight.scan = flight.scan.then(async () => {
+          if (!isPaused(agentId)) await takeOwnerReplies(flight.soul, await relay.read(flight.soul), { strict: false });
+        }).catch((error) => log(`owner reply scan for ${agentId} failed: ${describeError(error)}`));
+      }
       return { outcome: 'cold', detail: 'merged into the active turn' };
     }
     // `done` covers the whole flight, setup included, so idle() never
     // returns while a wake is still resolving its binding.
     let settle;
-    const flight = { ids: Array.isArray(messageIds) ? [...messageIds] : [], done: new Promise((resolve) => { settle = resolve; }) };
+    const flight = { ids: Array.isArray(messageIds) ? [...messageIds] : [], soul: null, scan: Promise.resolve(), done: new Promise((resolve) => { settle = resolve; }) };
     active.set(agentId, flight);
-    const land = () => { active.delete(agentId); settle(); };
+    const land = () => { active.delete(agentId); flight.scan.then(settle); };
     let binding;
     let identity;
     try {
@@ -185,6 +235,7 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
     const invocation = { agentId, harness: identity.harness, cwd: binding.worktree, cursor };
     const env = binding.file ? { AGENT_BOT_BINDING: binding.file } : {};
     const soul = { agentId, binding };
+    if (relay) flight.soul = soul;
     // Each read returns everything still unacked, so messages that merge
     // into this flight are answered before it lands.
     const reply = async (message, to, body, correlation) => {
@@ -208,8 +259,13 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
     };
     const relayed = async () => {
       for (let messages = await relay.read(soul); messages.length; messages = await relay.read(soul)) {
+        // Owner replies first: one later in this batch may decide the turn
+        // an earlier message is about to start.
+        assertSoulUnpaused(isPaused(agentId));
+        await takeOwnerReplies(soul, messages);
         for (const message of messages) {
           assertSoulUnpaused(isPaused(agentId));
+          if (ownerReplyIn(message)) continue;
           if (signedOut) { await tell(message); continue; }
           if (message.kind === 'task-event') {
             const brief = await relay.brief?.(soul, message.id);
@@ -263,8 +319,10 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
           };
           const waitingOn = pendingReplies(agentId, { correlation, now: threadNow(threads) }, threads).map((entry) => entry.to);
           let result;
+          let source = null;
+          try { source = { soul, to: senderAddress(message.from), replyTo: message.id, correlation }; } catch { /* no sender to answer */ }
           try {
-            result = await runTurn({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake, onSession: deliver });
+            result = await runTurn({ invocation: turn, message: relayPrompt(message, thread, waitingOn), attachments: [], env, wake, onSession: deliver, ...(source ? { source } : {}) });
           } catch (error) {
             // A signed-out harness never read the prompt, so no aside (#84).
             signedOut = harnessAuthFailure(error);

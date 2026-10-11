@@ -15,9 +15,10 @@ prompt (#822) and the daemon's decision routes. Each trusts the owner pins
 only on a request where agent-bot-keyd vouches for them (see below); on any
 other request the owner gate is answered by keyd presence or the
 administrator dialog, as before. The keyd store signs statements and
-enrolment on a Mac (below). **Not yet:** inbox delivery of challenges,
-answering a challenge with the keyd store, and installing pins from the
-organization profile.
+enrolment on a Mac (below). A decision route's challenge also reaches the
+inbox of whoever woke the waiting turn, and a signed reply there finishes
+the decision (below). **Not yet:** answering a challenge with the keyd
+store, and installing pins from the organization profile.
 
 ## The statement
 
@@ -182,7 +183,37 @@ with no owner key at all, and so does a pin file that cannot be read.
 Anything holding the daemon token can ask for a
 fresh challenge or send a bad reply, which replaces or spends the pending
 one for that proposal; that can only make the owner sign again, never
-decide.
+decide. For a cold turn's proposal (below), each fresh challenge is also
+sent to whoever woke the turn.
+
+**Through the inbox.** When the proposal is a cold turn's, opened while it
+answered an agent-comms message, a decide call that gets
+`owner-challenge-required` also sends the challenges, as the soul, in reply
+to that message's sender: one line naming the host, the action's text and
+the expiry, then one fenced JSON block per challenge, which is what
+`owner sign --challenge` takes. The owner replies with the signed block in
+the same inbox. A message whose body holds an `AGENT-BOT OWNER STATEMENT`
+block is never a turn's prompt: the daemon takes it as soon as it arrives,
+also while the turn that asked is still waiting, and acks it. The nonce in
+the signed payload finds the pending challenge, which must be for a proposal
+that soul's turn opened. Any messaging peer that saw the challenge could
+send a block with its nonce, so the reply must first verify against that
+pending challenge under a pin keyd vouches for, before anything is spent or
+anyone is asked. Only then do the decision and scope recorded when it was
+issued go through the same gate as a `statement` sent to the route, and the
+challenge is spent once the reply verifies there. The sender is told the
+outcome in one line. Nothing is decided, and nothing is spent, when the
+nonce matches no pending challenge (a wrong nonce, a replayed reply, a
+challenge already spent, expired, or dropped by a restart), when the reply
+lands in another soul's inbox, or when it does not verify (unsigned or
+badly signed, another action, text or scope, a later expiry, a key no
+longer pinned); the challenge stays pending until it expires. Each such
+reply leaves an `owner-refused` receipt naming the soul but no message ID
+or content. Who carried the reply, and whom it came from,
+does not matter: only the signature over the challenge decides. The
+challenge message is sent by the daemon, not by a turn, so it is not in the
+soul's thread journal. The waking message is kept with the open proposal in
+daemon memory only.
 
 **enroll** pins a public key in `<state>/owner/keys.json` (0600, in a 0700
 directory; `<state>` is `$XDG_STATE_HOME/agent-bot` or

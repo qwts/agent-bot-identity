@@ -27,8 +27,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { leaveLaunchedSoul } from './comms-membership.mjs';
-import { mintAgentIdentity, retireAgentIdentity } from './agent-identity.mjs';
-import { identityOp } from './daemon-client.mjs';
+import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { archiveSoulDirs, locateSoulDir, populationFile, recordSoulDisplayName, registerSoulDir,
@@ -149,7 +148,7 @@ export async function forkSoul({
   const original = located.agentId;
   validateSoulPackage(folder);
   const { manifest } = readSoulPackageEntries(folder);
-  const runs = harness ?? identityOp('read', { id: original, stateDir }).harness ?? manifest.preferredHarnesses?.[0];
+  const runs = harness ?? readAgentIdentity(original, { stateDir }).harness ?? manifest.preferredHarnesses?.[0];
   if (typeof runs !== 'string' || !HARNESS_KEY_PATTERN.test(runs)) throw new Error(`soul ${original} has no harness to copy; name one with --harness`);
 
   const authorization = await gate(`soul fork ${original} ${name}`, { principal });

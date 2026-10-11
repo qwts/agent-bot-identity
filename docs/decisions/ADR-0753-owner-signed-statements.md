@@ -216,6 +216,15 @@ a subagent, an SSH session or a CI log can relay it, but none can forge it.
 A challenge-bound reply is the same authority as a presence assertion: it
 satisfies `confirmOwnerPresence` and `assertOwnerAction`, never more.
 
+*As built (#753), the owner having chosen it:* the inbox carries a decision
+route's challenge only for a cold turn woken by an agent-comms message. The
+decide call that is answered `owner-challenge-required` also sends the
+challenges, as the soul, in reply to the waking message, and the challenge
+records the decision and scope it was asked for. A signed reply block in
+that soul's inbox is matched to the pending challenge by its nonce and
+finishes that decision through the same gate; it is never a turn's prompt.
+See [Owner statements](../owner-statements.md).
+
 ### 5. Pluggable stores
 
 A store has two operations: return its public key, and sign a payload segment
