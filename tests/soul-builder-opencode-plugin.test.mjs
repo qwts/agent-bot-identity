@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -286,6 +286,21 @@ test('doctor reports each soul\'s plugin as current, missing, stale or unmarked'
   assert.equal(unmarked.status, 'warning');
   assert.equal(unmarked.code, 'opencode-plugin-unmarked');
   assert.deepEqual(unmarked.evidence.unmarked, ['agent_mine']);
+  // A symlink on the path is never followed, even to the expected bytes.
+  put(root, 'expected.js', opencodeHookPlugin());
+  const linked = soul('agent_linked');
+  mkdirSync(join(linked.soulDir, '.opencode/plugins'), { recursive: true });
+  symlinkSync(join(root, 'expected.js'), join(linked.soulDir, OPENCODE_PLUGIN_PATH));
+  const linkedDir = soul('agent_linked_dir');
+  mkdirSync(join(root, 'real/plugins'), { recursive: true });
+  put(join(root, 'real'), 'plugins/agent-bot-soul.js', opencodeHookPlugin());
+  symlinkSync(join(root, 'real'), join(linkedDir.soulDir, '.opencode'));
+  const unsafe = opencodePluginCheck({ souls: [linked, linkedDir] });
+  assert.equal(unsafe.status, 'warning');
+  assert.equal(unsafe.code, 'opencode-plugin-unmarked');
+  assert.deepEqual(unsafe.evidence.current, []);
+  assert.deepEqual(unsafe.evidence.unmarked, ['agent_linked', 'agent_linked_dir']);
+  assert.match(unsafe.message, /non-regular file/);
   // Reporting never touches the soul's own file.
   assert.equal(readFileSync(join(root, 'agent_mine', OPENCODE_PLUGIN_PATH), 'utf8'), 'export const Mine = async () => ({});\n');
 });

@@ -1829,8 +1829,10 @@ function coverageCheck(now) {
 // carries the runner's identity and confinement guards, and the soul's own
 // hooks, into OpenCode. A soul with no AGENTS.md renders nothing, so it is not
 // expected to have one. An unmarked file at the path is the soul's own plugin:
-// the build refuses to replace it, so it is reported, never touched.
-export function opencodePluginCheck({ souls, read = readFileSync }) {
+// the build refuses to replace it, so it is reported, never touched. So is a
+// symlink or other non-regular entry on the path, which the build refuses too:
+// it is never followed, so a link to the right bytes does not read as current.
+export function opencodePluginCheck({ souls, read = readFileSync, lstat = lstatSync }) {
   const expected = opencodeHookPlugin();
   const marker = `// ${GENERATED_HARNESS_MARKER}`;
   const found = { current: [], missing: [], stale: [], unmarked: [] };
@@ -1842,6 +1844,15 @@ export function opencodePluginCheck({ souls, read = readFileSync }) {
     let bytes;
     try {
       if (readOptional('AGENTS.md') === null) continue;
+      const parts = OPENCODE_PLUGIN_PATH.split('/');
+      const irregular = parts.some((_, index) => {
+        const info = optionalLstat(join(soul.soulDir, ...parts.slice(0, index + 1)), lstat);
+        return info && (info.isSymbolicLink() || !(index < parts.length - 1 ? info.isDirectory() : info.isFile()));
+      });
+      if (irregular) {
+        found.unmarked.push(soul.id);
+        continue;
+      }
       bytes = readOptional(OPENCODE_PLUGIN_PATH);
     } catch {
       found.stale.push(soul.id);
@@ -1866,7 +1877,7 @@ export function opencodePluginCheck({ souls, read = readFileSync }) {
   const parts = [];
   if (found.missing.length) parts.push(`missing in ${found.missing.join(', ')}`);
   if (found.stale.length) parts.push(`out of date or unreadable in ${found.stale.join(', ')}`);
-  if (found.unmarked.length) parts.push(`replaced by an unmarked plugin in ${found.unmarked.join(', ')}`);
+  if (found.unmarked.length) parts.push(`replaced by an unmarked plugin or a non-regular file in ${found.unmarked.join(', ')}`);
   return readinessCheck({
     id: 'hooks.opencode_plugin',
     status: 'warning',
