@@ -1,0 +1,1 @@
+- `agent-bot agent-hook --dialect qwen` speaks Qwen Code's hooks (v0.24.6), answering in exit codes so a deny blocks tool calls, prompts and stops, with the identity guard following `run_shell_command`'s `directory` and confinement covering `write_file`, `edit` and `notebook_edit` (#378).

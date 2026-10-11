@@ -111,7 +111,8 @@ and Devin Desktop's legacy `pre_write_code` path. For dialects exposing
 `pre-tool-use`, that event performs the built-in check; their overlapping
 `pre-file-write` adapter does not duplicate the report. Legacy dialects use
 `pre-file-write`. OpenCode's `write`, `edit` and `apply_patch` are checked on
-both events, because its plugin adapter may send either (#378). Unsupported or missing paths cannot be evaluated; in warn
+both events, because its plugin adapter may send either (#378). Qwen Code's
+`write_file`, `edit` and `notebook_edit` are checked on `pre-tool-use` (#378). Unsupported or missing paths cannot be evaluated; in warn
 they allow, and in explicit deny they refuse recognized file tools.
 
 `apply_patch` (Codex sends the patch as `tool_input.command`, OpenCode as

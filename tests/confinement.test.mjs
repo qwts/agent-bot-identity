@@ -503,3 +503,16 @@ test('OpenCode write, edit and apply_patch are confined on whichever event they 
   // Reads and the shell are not file writes on either event.
   assert.equal(confinementCheck(opencode('pre-tool-use', 'read', { filePath: path.join(home, 'outside.txt') }), opts).decision, 'allow');
 });
+
+// Qwen Code (#378): write_file, edit and notebook_edit are confined on
+// pre-tool-use, the event its runner entries carry.
+test('Qwen Code file tools are confined on pre-tool-use', async (t) => {
+  const { home, soul, opts } = fixture(t);
+  await setConfinementMode(id, 'deny', { ...opts, gate: owner });
+  const qwen = (tool, tool_input) => normalizeEnvelope({ dialectKey: 'qwen', event: 'pre-tool-use', payload: { session_id: 's', cwd: soul, tool_name: tool, tool_input } });
+  for (const [tool, key] of [['write_file', 'file_path'], ['edit', 'file_path'], ['notebook_edit', 'notebook_path']]) {
+    assert.equal(confinementCheck(qwen(tool, { [key]: path.join(home, 'outside.txt') }), opts).decision, 'deny', tool);
+    assert.equal(confinementCheck(qwen(tool, { [key]: path.join(soul, 'in.txt') }), opts).decision, 'allow', tool);
+  }
+  assert.equal(confinementCheck(qwen('read_file', { file_path: path.join(home, 'outside.txt') }), opts).decision, 'allow');
+});

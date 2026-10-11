@@ -632,3 +632,57 @@ test('opencode: the built-in guard runs with no project hooks, and a broken hook
   assert.equal(run.status, 2, run.stderr);
   assert.match(run.stderr, /unparseable/);
 });
+
+// Qwen Code (#378): Claude-shaped entries, and its shell's `directory` is
+// where a push runs, so the guard judges that checkout.
+function runQwen(event, { cwd, env, payload }) {
+  return spawnSync(process.execPath, [join(ROOT, 'agent-hook.mjs'), '--dialect', 'qwen', '--event', event], {
+    cwd, env: { ...env, AGENT_BOT_HOOKS_DIR: join(ROOT, 'agent-hooks') }, input: JSON.stringify(payload), encoding: 'utf8',
+  });
+}
+
+test('qwen: the identity guard refuses the stated unbound bot on either event, including through the shell directory', () => {
+  const unbound = primaryCheckout();
+  const bound = primaryCheckout(`${SLUG}[bot]`);
+  const payload = (cwd, tool_input) => ({ session_id: 'q', cwd, tool_name: 'run_shell_command', tool_input });
+  for (const event of ['pre-command', 'pre-tool-use']) {
+    for (const command of ['git commit -m x', 'git push origin HEAD']) {
+      denied('qwen', runQwen(event, { cwd: unbound.repo, env: baseEnv(STATED), payload: payload(unbound.repo, { command }) }));
+      allowed('qwen', runQwen(event, { cwd: unbound.repo, env: baseEnv(DELEGATE), payload: payload(unbound.repo, { command }) }));
+      allowed('qwen', runQwen(event, { cwd: unbound.repo, env: baseEnv(), payload: payload(unbound.repo, { command }) }));
+    }
+    const reach = runQwen(event, { cwd: bound.repo, env: baseEnv(STATED), payload: payload(bound.repo, { command: 'git push origin HEAD', directory: unbound.repo }) });
+    assert.equal(reach.status, 2, `${event}: ${reach.stderr}`);
+    assert.match(reach.stderr, new RegExp(`stated bot identity ${SLUG}`));
+    const own = runQwen(event, { cwd: bound.repo, env: baseEnv(STATED), payload: payload(bound.repo, { command: 'git push origin HEAD', directory: bound.repo }) });
+    assert.equal(own.status, 0, `${event}: ${own.stderr}`);
+  }
+  // Only the shell tool's command is scanned on the generic event.
+  allowed('qwen', runQwen('pre-tool-use', { cwd: unbound.repo, env: baseEnv(STATED),
+    payload: { cwd: unbound.repo, tool_name: 'web_fetch', tool_input: { command: 'git push' } } }));
+});
+
+test('qwen: the built-in guard runs with no project hooks, and a broken hook denies a blocking event with exit 2', () => {
+  const { repo } = primaryCheckout();
+  const empty = join(root, 'qwen-no-hooks');
+  mkdirSync(empty, { recursive: true });
+  const verdict = runHooks({ dialectKey: 'qwen', event: 'pre-tool-use', dir: empty, env: baseEnv(STATED),
+    payload: { cwd: repo, tool_name: 'run_shell_command', tool_input: { command: 'git push' } } });
+  assert.equal(verdict.decision, 'deny');
+  assert.match(verdict.reason, /^identity: /);
+  const broken = join(root, 'qwen-broken-hooks');
+  for (const event of ['pre-tool-use', 'prompt-submit']) {
+    mkdirSync(join(broken, event), { recursive: true });
+    writeFileSync(join(broken, event, '10-garbled'), '#!/bin/sh\necho "agent-hook: {not json"\nexit 0\n');
+    chmodSync(join(broken, event, '10-garbled'), 0o755);
+  }
+  for (const [event, payload] of [['pre-tool-use', { cwd: repo, tool_name: 'read_file', tool_input: { file_path: join(repo, 'README.md') } }],
+    ['prompt-submit', { cwd: repo, prompt: 'hello' }]]) {
+    const run = spawnSync(process.execPath, [join(ROOT, 'agent-hook.mjs'), '--dialect', 'qwen', '--event', event], {
+      cwd: repo, env: { ...baseEnv(), AGENT_BOT_HOOKS_DIR: broken }, input: JSON.stringify(payload), encoding: 'utf8',
+    });
+    assert.equal(run.status, 2, `${event}: ${run.stderr}`);
+    assert.equal(run.stdout, '');
+    assert.match(run.stderr, /unparseable/);
+  }
+});

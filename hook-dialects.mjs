@@ -378,6 +378,77 @@ export const DIALECTS = [
     verifiedOn: '2026-10-11',
   },
   {
+    // Qwen Code reads Claude-shaped hooks from the `hooks` key of its
+    // `.qwen/settings.json` (project; `~/.qwen/settings.json` for the user),
+    // with Claude's PascalCase events and the same `{matcher, hooks: [{type,
+    // command, timeout}]}` entry. They are on by default; only
+    // `disableAllHooks`, safe mode or bare mode turn them off, and project hooks
+    // need a trusted folder only once `security.folderTrust` is enabled.
+    // Checked against Qwen Code v0.24.6 (QwenLM/qwen-code@753bd075), the newest
+    // stable release at least two weeks old on 2026-10-11: docs/users/features/
+    // hooks.md, hooks/hookRunner.ts and core/toolHookTriggers.ts.
+    //
+    // No `homeFile`: sync-hooks writes no user-level Qwen adapter. The soul's
+    // own `.qwen/settings.json` is where these entries go (a later slice).
+    key: 'qwen',
+    file: '.qwen/settings.json',
+    format: 'claude',
+    events: {
+      'session-start': 'SessionStart',
+      'session-end': 'SessionEnd',
+      'prompt-submit': 'UserPromptSubmit',
+      'pre-tool-use': 'PreToolUse',
+      // A plain or `|`-separated matcher is compared exactly, entry by entry,
+      // against the runtime tool id (an anchored regex would be read as a
+      // regex, so these stay plain). Claude's `Bash`/`Write`/`Edit` are also
+      // accepted there as aliases, but only as exact entries.
+      'pre-command': { event: 'PreToolUse', matcher: 'run_shell_command' },
+      'pre-file-write': { event: 'PreToolUse', matcher: 'write_file|edit|notebook_edit' },
+      'post-tool-use': 'PostToolUse',
+      'agent-stop': 'Stop',
+    },
+    // The payload is Claude's: `session_id`, `cwd`, `tool_name` (the runtime
+    // id), `tool_input.command` / `tool_input.file_path`, `prompt`, so the
+    // generic field lists read it with no row of its own.
+    shellTool: 'run_shell_command',
+    // run_shell_command runs in its optional absolute `directory`, else the
+    // project directory (tools/shell.ts). The identity guard places a `git
+    // push` by the envelope's cwd, so cwd must be where the shell runs.
+    shellWorkdir: ['tool_input', 'directory'],
+    // Exit 2 blocks on every event, with stderr as the reason: Qwen turns it
+    // into `decision: "deny"`, which PreToolUse, UserPromptSubmit and Stop all
+    // honour. Its `hookSpecificOutput.permissionDecision` is read on PreToolUse
+    // only, so the exit code is the one channel that blocks a prompt too. An
+    // `ask` on a blocking event therefore closes.
+    decision: 'exit-code',
+    // SessionStart reads `hookSpecificOutput.additionalContext` (exit 0).
+    contextChannel: { 'session-start': 'claude-json' },
+    // Qwen fails OPEN: any exit other than 0 or 2, a crash, a timeout or a
+    // hook error lets the tool call proceed ("Hook errors should not block
+    // tool execution"). The runner answers on its own clock inside the cap
+    // below, and a rendered entry must turn a runner failure on a blocking
+    // event into exit 2 itself, as the soul builder's entries already do when
+    // agent-bot is missing.
+    nativeFailMode: 'open',
+    timeoutFailMode: 'open',
+    // Seconds in the entry; 60 is Qwen's own default for a command hook.
+    timeoutCapMs: { default: 60000 },
+    status: 'verified',
+    evidence: [
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L352-L409',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L457-L575',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L692-L703',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L831-L860',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/docs/users/features/hooks.md#L1473-L1508',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/hooks/hookRunner.ts#L1507-L1597',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/hooks/hookRunner.ts#L1661-L1702',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/core/toolHookTriggers.ts#L114-L210',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/tools/shell.ts#L5806-L5808',
+      'https://github.com/QwenLM/qwen-code/blob/753bd075a24ca886b7d0119ca53d97bd65c09e4a/packages/core/src/tools/tool-names.ts#L20-L60',
+    ],
+    verifiedOn: '2026-10-11',
+  },
+  {
     // The universal backstop. No vendor, no drift, 100% availability, and an
     // exit-code channel that cannot fail open. Blocking policy that must hold
     // everywhere lives here as well as in a harness event.
