@@ -49,6 +49,8 @@ const CARRIED = Object.freeze({
   '.soul-state/tools/claude/.claude.json': `{"theme":"dark","note":"${LIFE} claude state"}`,
   '.soul-state/runs/turns.jsonl': `{"id":"inv-1","note":"${LIFE} history"}\n`, '.soul-state/home-harness': '"codex"',
   '.soul-state/confinement.log': `${LIFE} confinement\n`,
+  // What each runtime was installed as travels, so a fresh host reinstalls the same versions (#617).
+  '.soul-state/runtime-pins.json': `${JSON.stringify({ schemaVersion: 1, runtimes: { node: { version: '24.0.0', catalogRelease: null } }, harnesses: {} }, null, 2)}\n`,
 });
 const NEVER = Object.freeze({
   '.soul-state/credentials/github-app-billy.json': `${SECRET} credential`, '.soul-state/credentials/secrets/github-models': `${SECRET} provider secret`,
@@ -57,7 +59,7 @@ const NEVER = Object.freeze({
   '.soul-state/runtimes/node/24.0.0/bin/node': `#!/bin/sh\n# ${SECRET} runtime\n`, [`.soul-state/runtimes/node/24.0.0/${INSTALL_STAMP}`]: JSON.stringify({ name: 'node', version: '24.0.0', bin: 'bin' }),
   '.soul-state/cache/index.db': `${SECRET} cache`, '.soul-state/tmp/scratch.txt': `${SECRET} temp`,
   '.soul-state/home/node_modules/@agentclientprotocol/codex-acp/package.json': `{"version":"2.1.1","note":"${SECRET} install"}`,
-  '.soul-state/.space-migrate.lock': 'lock', 'CLAUDE.md': `<!-- agent-bot soul-builder: generated -->\n# Billy ${GENERATED}\n`,
+  '.soul-state/.space-migrate.lock': 'lock', '.soul-state/runtime-pins.json.lock/owner': 'lock', 'CLAUDE.md': `<!-- agent-bot soul-builder: generated -->\n# Billy ${GENERATED}\n`,
 });
 
 // One soul under a scratch HOME: identity record, census row, a soul
@@ -230,6 +232,7 @@ test('the capabilities name the slice and the plan lists every classification wi
   assert.equal(excluded['.soul-state/home/node_modules'], 'harness install (reconstructible; the next launch installs it again)');
   assert.equal(excluded['.soul-state/agent-id'], 'the marker; the import writes it for the imported identity');
   assert.equal(excluded['.soul-state/.space-migrate.lock'], 'transient (a lock or a staging of a run under way)');
+  assert.equal(excluded['.soul-state/runtime-pins.json.lock'], 'transient (a lock or a staging of a run under way)');
   for (const relative of Object.keys(NEVER)) assert.ok(!relatives.includes(relative), `${relative} never travels`);
   // A link elsewhere is a pointer, never followed.
   assert.deepEqual(m.components.find((row) => row.relative === 'host-link'), { area: 'root', entry: null, relative: 'host-link', classification: 'definition', retention: 'durable', kind: 'pointer',

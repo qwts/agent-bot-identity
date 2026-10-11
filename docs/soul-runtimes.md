@@ -76,12 +76,64 @@ the new pin and keeps the one it supersedes, so a soul that recorded the older
 version can still reinstall it from a verified source (#617, "Pin per
 install"); `catalogPin(name, version)` finds a pin by exact version. An exact
 version the catalog does not pin is unsupported unless the soul declares its
-own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1. Inspection
-resolves against the currently supplied catalog; it does not lock a range to an older install
-receipt. If a new matching pin becomes current, that version can be reported
-missing and the existing launch provisioning path can install it. A prior
-installed directory is retained, but retention alone does not select it.
-Owner-visible upgrade and retained-resolution guarantees remain #617.
+own `sources`. The catalog version is `RUNTIME_CATALOG_VERSION` 1, and
+`catalogReleaseHash()` is the SHA-256 of `{ version: RUNTIME_CATALOG_VERSION,
+catalog }` in canonical JSON (sorted keys, no whitespace).
+
+### Pins
+
+`.soul-state/runtime-pins.json` records the exact version each runtime and
+each `harnesses.<name>.install` harness was installed as (npm ACP adapters are
+pinned by their own package lock and are not listed), so a newer agent-bot does not move a soul to a newer
+pin on its own (#617, owner decision "the new pins file"):
+
+```json
+{ "schemaVersion": 1,
+  "runtimes": { "node": { "version": "24.21.0", "catalogRelease": "<64 hex>" } },
+  "harnesses": { "opencode": { "version": "1.2.3", "catalogRelease": null } } }
+```
+
+- Install writes it, under a lock and as one atomic replace (mode 0600), after
+  every `soul runtimes install` and launch provisioning, a failed one included,
+  for what is installed then, inspected under that lock so a concurrent
+  installer's pin is seen and kept. `catalogRelease` follows the install's
+  receipt: the catalog release its bytes came from, null for a package's own
+  `sources` (the same bytes moved into `sources` keep the catalog install and
+  its release). Harness installs record null; `soul.json` already names their
+  exact version. uv is recorded when python or a uv tool needs it. A failure
+  to record is `runtime-install-failed` naming the pins file, with the action
+  to retry the install (after fixing or deleting a malformed file).
+- An entry changes only when the installed version, or its catalog-versus-
+  package provenance per the receipt, changes; otherwise it keeps its original
+  `catalogRelease`, even after a reinstall from a newer catalog whose stamp
+  names that newer release. An entry is added when none exists. A revision
+  that moves a version into `sources` with the same bytes keeps the catalog
+  install, so its entry stays as it was. Inspection never writes the file, so
+  a soul installed before #617 has none until its next install.
+- Resolution reuses a recorded version the declaration still allows, from the
+  catalog's own pin for it, instead of the newest pin. Removing
+  `.soul-state/runtimes` and installing again brings back the same versions.
+  A recorded version this catalog no longer pins is `unsupported` with
+  `runtime-install-failed` and the action `update agent-bot to a release whose
+  catalog pins <name> <version>`; it is never silently moved.
+- With no file, resolution uses the current catalog, as before #617. A file
+  that is not valid JSON of this shape (both maps present; runtime versions
+  exact `x.y.z`) is reported under `invalid` and blocks
+  every install and launch with the action `fix or delete
+  .soul-state/runtime-pins.json`; deleting it re-resolves.
+- It is durable soul state: `soul env export` and transfer carry it (its
+  `.lock` is transient and excluded), while `.soul-state/runtimes` is
+  reconstructible and is not carried. A fresh host installs the recorded
+  versions.
+- Only an explicit upgrade (`soul runtimes upgrade`, a later #617 slice) is
+  meant to move a recorded version forward. `catalogRelease` is provenance and
+  is not enforced: a recorded version installs from the running agent-bot's
+  verified pin for it.
+- The file is soul-writable state, like the rest of `.soul-state`. It holds
+  only versions, and a catalog version installs only from the catalog's
+  verified URL and digest, so an edit can select another verified pin and
+  nothing else. It can select a superseded pin, which is an older but
+  verified version.
 
 ## Commands
 
@@ -184,7 +236,11 @@ custody boundary or different record format/location.
 ```
 
 Every completed install directory carries `.agent-bot-install.json`: the name,
-kind, version, platform, URL, `sha256`, `bin` and `installedAt`. Archive stamps
+kind, version, platform, URL, `sha256`, `bin` and `installedAt`. `archive`
+and `uv-python` stamps also record `catalogRelease`: the catalog release a
+catalog runtime was installed from, else null (a package's own `sources`, a
+harness archive); it is absent before #617, and any other value makes the receipt invalid, so the install is repaired. `uv-tool` and npm adapter stamps
+do not carry it. Archive stamps
 record the digest verified by agent-bot. A `uv-python` stamp records the
 python-build-standalone archive's URL and `sha256` from the catalog: uv is
 given a one-entry downloads list (`--python-downloads-json-url`) naming only
