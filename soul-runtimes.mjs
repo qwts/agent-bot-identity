@@ -17,7 +17,7 @@
 import { minimalChildEnv } from './child-env.mjs';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { accessSync, closeSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, readSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -277,14 +277,20 @@ export function downloadCacheDir({ env = process.env, home = env.HOME ?? homedir
 // Soul-writable files (soul.json, receipts, the pins file) are opened once,
 // never through a link and never blocking on a FIFO, and checked on that
 // descriptor, so a swap after the check cannot redirect or stall the read.
-function readJson(file, limit = 64 * 1024) {
+// `stat` is injectable only so a test can stand in for a file that grows after the check.
+export function readJson(file, limit = 64 * 1024, { stat: statFd = fstatSync } = {}) {
   let fd;
   try { fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)); }
   catch { return null; }
   try {
-    const stat = fstatSync(fd);
+    const stat = statFd(fd);
     if (!stat.isFile() || stat.size > limit) return null;
-    const parsed = JSON.parse(readFileSync(fd, 'utf8'));
+    // Read at most limit + 1 bytes: a file grown after the fstat is refused, never read without bound.
+    const buffer = Buffer.alloc(limit + 1);
+    let length = 0;
+    for (let n; length < buffer.length && (n = readSync(fd, buffer, length, buffer.length - length, null)) > 0;) length += n;
+    if (length > limit) return null;
+    const parsed = JSON.parse(buffer.toString('utf8', 0, length));
     return object(parsed) ? parsed : null;
   } catch { return null; } finally { closeSync(fd); }
 }

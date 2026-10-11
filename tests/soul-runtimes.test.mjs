@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, catalogPin, catalogReleaseHash, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
-import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, readRuntimePins, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, readJson, readRuntimePins, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
@@ -502,6 +502,19 @@ test('the pins file records what each runtime installed as; reinstall and a newe
     assert.match(readRuntimePins(f.dir).problem, /is not a small regular JSON file/);
     rmSync(pinsPath);
   }
+});
+
+test('soul JSON reads stop at the cap even when the file grew after its size was checked (#617)', (t) => {
+  const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'soul-json-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'runtime-pins.json');
+  writeFileSync(file, JSON.stringify({ pad: 'x'.repeat(200) }));
+  // The descriptor reports a small file, as it did before a soul appended to it.
+  const stale = (fd) => Object.assign(fstatSync(fd), { size: 10 });
+  assert.equal(readJson(file, 100, { stat: stale }), null, 'more than the cap is refused');
+  assert.deepEqual(readJson(file, 1024, { stat: stale }), { pad: 'x'.repeat(200) }, 'within the cap it reads whole');
+  writeFileSync(file, JSON.stringify({ a: 1 }));
+  assert.deepEqual(readJson(file, '{"a":1}'.length), { a: 1 }, 'exactly the cap is accepted');
 });
 
 test('fetchArchive verifies before sharing and never leaves a partial file', async (t) => {
