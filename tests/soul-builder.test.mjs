@@ -171,7 +171,7 @@ test('Codex soul skills touch only marked files in .agents/skills/, and rebuilds
   for (const path of own) assert.equal(readFileSync(join(root, path), 'utf8'), 'authored\n', path);
 });
 
-test('doctor reports each soul\'s Codex skills as current, out of date or blocked by an unmarked file (#378)', (t) => {
+test('doctor reports each soul\'s Codex skills as current, out of date, blocked by an unmarked file or unchecked (#378)', (t) => {
   const soul = (id) => {
     const root = fixture(t);
     put(root, 'skills/hello/SKILL.md', '---\nname: hello\ndescription: Say hello\n---\nHello\n');
@@ -205,6 +205,17 @@ test('doctor reports each soul\'s Codex skills as current, out of date or blocke
   // The check never writes: the unmarked file and the stale copy stay as they are.
   assert.equal(readFileSync(join(unmarked.soulDir, '.agents/skills/hello/SKILL.md'), 'utf8'), 'authored\n');
   assert.match(readFileSync(join(stale.soulDir, '.agents/skills/hello/SKILL.md'), 'utf8'), /Old/);
+
+  // A build that fails elsewhere is unchecked with the build's error, not Codex drift.
+  const other = soul('agent_other');
+  writeFileSync(join(other.soulDir, 'CLAUDE.md'), 'authored\n');
+  const unchecked = codexSkillsCheck({ souls: [current, other] });
+  assert.equal(unchecked.status, 'warning');
+  assert.equal(unchecked.code, 'codex-skills-unchecked');
+  assert.deepEqual(unchecked.evidence.unchecked, ['agent_other']);
+  assert.match(unchecked.evidence.errors.agent_other, /CLAUDE\.md/);
+  assert.match(unchecked.message, /fails before it reaches them.*CLAUDE\.md/);
+  assert.doesNotMatch(unchecked.message, /older or no copy/);
 });
 
 test('Codex soul skills render only for a soul that targets Codex, and Qwen and OpenCode report them as duplicates (#378)', () => {

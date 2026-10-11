@@ -190,7 +190,8 @@ Adapter evidence (official docs read 2026-10-07):
   `.agents/skills/`. `agent-bot doctor` reports each active soul's Codex
   skills as `skills.codex`: a marked copy that is out of date or should be
   gone, or an unmarked file where one would render, is a warning, found by
-  the build's own `--check` and never written.
+  the build's own `--check` and never written. A build that fails for
+  another reason is reported as unchecked with its error, not as drift.
 - Gemini CLI: [subagents](https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md)
   are documented in `.gemini/agents/*.md`, but their only switch is
   `experimental.enableAgents`, so they are not documented as stable and stay

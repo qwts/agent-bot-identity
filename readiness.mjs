@@ -1903,6 +1903,7 @@ const CODEX_SKILLS = '.agents/skills/';
 export function codexSkillsCheck({ souls, build = buildSoulDirectory, exists = existsSync }) {
   const found = { current: [], stale: [], unmarked: [], unchecked: [] };
   const paths = {};
+  const errors = {};
   for (const soul of souls) {
     if (!exists(join(soul.soulDir, 'AGENTS.md'))) continue;
     let drift;
@@ -1910,13 +1911,13 @@ export function codexSkillsCheck({ souls, build = buildSoulDirectory, exists = e
     catch (error) {
       const conflicts = String(error?.message ?? '').match(/\.agents\/skills\/[^,\s)]+/g);
       if (/generated path conflict/.test(error?.message) && conflicts) { found.unmarked.push(soul.id); paths[soul.id] = conflicts; }
-      else found.unchecked.push(soul.id);
+      else { found.unchecked.push(soul.id); errors[soul.id] = String(error?.message ?? error); }
       continue;
     }
     if (drift.length) { found.stale.push(soul.id); paths[soul.id] = drift; }
     else found.current.push(soul.id);
   }
-  const evidence = { path: CODEX_SKILLS, ...found, paths };
+  const evidence = { path: CODEX_SKILLS, ...found, paths, errors };
   if (!found.stale.length && !found.unmarked.length && !found.unchecked.length) {
     return readinessCheck({
       id: 'skills.codex',
@@ -1931,14 +1932,22 @@ export function codexSkillsCheck({ souls, build = buildSoulDirectory, exists = e
   if (found.stale.length) parts.push(`out of date in ${found.stale.join(', ')}`);
   if (found.unmarked.length) parts.push(`blocked by an unmarked file in ${found.unmarked.join(', ')}`);
   if (found.unchecked.length) parts.push(`could not be checked in ${found.unchecked.join(', ')}`);
+  // A build that fails for another reason (an unmarked CLAUDE.md, a bad
+  // declaration) says nothing about this folder, so it is reported as
+  // unchecked with the build's own error, never as Codex skill drift.
+  const drifted = found.stale.length || found.unmarked.length;
   return readinessCheck({
     id: 'skills.codex',
     status: 'warning',
-    code: found.unmarked.length ? 'codex-skills-unmarked' : 'codex-skills-stale',
-    message: `Codex skills in ${CODEX_SKILLS} are ${parts.join('; ')}: Codex sessions there see an older or no copy of the soul's skills`,
+    code: found.unmarked.length ? 'codex-skills-unmarked' : found.stale.length ? 'codex-skills-stale' : 'codex-skills-unchecked',
+    message: drifted
+      ? `Codex skills in ${CODEX_SKILLS} are ${parts.join('; ')}: Codex sessions there see an older or no copy of the soul's skills`
+      : `Codex skills in ${CODEX_SKILLS} ${parts.join('; ')}: the soul build fails before it reaches them (${found.unchecked.map((id) => errors[id]).join('; ')})`,
     action: found.unmarked.length
       ? `rename the unmarked skill under ${CODEX_SKILLS} or the soul's skill, then run: agent-bot soul build <soul folder>`
-      : 'run: agent-bot soul build <soul folder>',
+      : found.stale.length
+        ? 'run: agent-bot soul build <soul folder>'
+        : 'run: agent-bot soul build <soul folder> --check, fix the error it reports, then build again',
     evidence,
   });
 }
