@@ -1,0 +1,1 @@
+- `docs/identity-contract-inventory.md` lists everything the identity module exposes to the rest of agent-bot, GeniusBar and agent-comms (modules, commands, daemon routes, persisted files, environment variables), how stable each one is, and the boundary crossings left before identity can move to its own repository, for the owner's review (#645).
