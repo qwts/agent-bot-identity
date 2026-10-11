@@ -666,7 +666,9 @@ most 8 MiB. A history page contains at most 16 transactions. At capacity, new
 commits refuse and status reports `full`; there is no automatic pruning or
 retention cleanup of journal records. Status reports `automaticPruning: false`
 for the journal and `previews: { location: 'outside-journal', retainPerSoul: 20 }`
-for the separate preview store. An explicit archive/retention procedure remains future work.
+for the separate preview store. By owner decision on #603 (2026-10-10) the
+journal stays append-only and is never pruned automatically: archiving it is
+a manual owner step, and no command performs it.
 The directory inventory at startup and status is bounded by those limits but
 still grows with the number of transactions.
 
