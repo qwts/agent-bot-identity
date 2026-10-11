@@ -472,6 +472,24 @@ The owner answered all seven questions on 2026-10-11, each as recommended
 None of these changes a state path, file format, command name, service label
 or credential name.
 
+**F9 and F13 (2026-10-11).** The owner picked the recommended option on each
+question in the F9 and F13 design note:
+
+- **F9 Q1, the entry's width:** the host entry, `identity-host.mjs`, holds
+  the route handler and the binding registry, plus the named functions host
+  needs in-process (bot checks, principals, approvals, keyd, vouch). The
+  module map lists each export.
+- **F9 Q2, auth on identity's routes:** host keeps its bearer and proof checks
+  as they are, then hands the request to identity's handler.
+- **F13 Q1, `cli/identity.mjs`:** it stays in cli and calls `identityOp` for
+  each operation.
+- **F13 Q2, the thin wrappers:** `cli/mint-token.mjs`, `cli/principal.mjs`,
+  `cli/owner.mjs` and `cli/identity-apps.mjs` are reassigned to identity in
+  the module map. Dispatch already runs each one as its own process.
+- **F13 Q3, readiness:** an identity entry operation, `doctor-checks`,
+  returns identity's checks as JSON, and `readiness.mjs` stays in cli and
+  merges them.
+
 ## 9. Order of work
 
 There is one PR per step. Each step keeps observable behavior, and each one
@@ -492,8 +510,22 @@ mechanical moves; steps 6 to 10 change how a module reaches identity.
    for record operations, credential custody and the owner prompt, then
    move soul's and cli's callers onto them.
 9. **F9 (D5, D6):** the published host entry, the `/v0/register` move and
-   the `/v0/spawn` split.
-10. **F13 (D4):** the CLI facade runs the identity entry files.
+   the `/v0/spawn` split, in four PRs:
+   1. add `identity-host.mjs`, re-exporting what host uses, and move host's
+      imports onto it (no behavior change);
+   2. move identity's daemon routes (binding, credential, inbox take, grants,
+      keyd grant, and the identity half of spawn) behind a handler exported
+      from it;
+   3. make `/v0/register` a soul route;
+   4. split `/v0/spawn`.
+10. **F13 (D4):** the CLI facade runs the identity entry files, in four PRs:
+    1. add the `bind-transcript` and `record-evidence` operations, move
+       `cli/identity.mjs` onto `identityOp`, and move its pure helpers
+       (argument parsing, printing, child env) into cli;
+    2. reassign the thin wrappers in the module map;
+    3. add `doctor-checks` for readiness, doctor, bootstrap and sync-hooks;
+    4. move `agent-approvals.mjs` and `cli/soul-dream.mjs` after F8's
+       owner-prompt design.
 11. **F14:** assign the remaining assets.
 
 After step 11, nothing outside identity imports identity internals. What

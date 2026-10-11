@@ -19,7 +19,7 @@
 import process from 'node:process';
 
 import { credentialNamespace, humanTokenItem, itemTitle } from './identity-format.mjs';
-import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
+import { createPassCredentialStore } from './identity-host.mjs';
 
 export const HUMAN_LOGIN_VARIABLE = 'AGENT_BOT_HUMAN_LOGIN';
 // The granted writes this module performs. Anything else refuses before the

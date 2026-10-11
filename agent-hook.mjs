@@ -31,11 +31,12 @@ import {
   scansCommand,
 } from './hook-dialects.mjs';
 
-import { readBinding } from './agent-binding.mjs';
+import {
+  expandAlias, hookBypassReason, readBinding, scanGitPublish, statedBotSlug, unboundBotReason,
+  unboundBotSlug, unprovableBotReason
+} from './identity-host.mjs';
 import { minimalChildEnv } from './child-env.mjs';
 import { confinementCheck } from './confinement.mjs';
-import { hookBypassReason, statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason } from './resolve-agent.mjs';
-import { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 

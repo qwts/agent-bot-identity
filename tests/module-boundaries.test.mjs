@@ -119,6 +119,18 @@ test('the baseline is empty', () => {
   assert.deepEqual(MAP.baseline, []);
 });
 
+// F9 step 1 (#645, owner decision D5): host loads identity only through the
+// contracts host may import (identity-host.mjs, plus the shared
+// identity-format.mjs and daemon-client.mjs), never through another
+// identity file. may_import still lists identity for host; this narrows it.
+test('host imports identity only through its listed contracts', () => {
+  const reached = moduleEdges(ROOT, runtimeFiles())
+    .filter(({ from, to }) => MAP.files[from] === 'host' && MAP.files[to] === 'identity')
+    .filter(({ to }) => !MAP.contracts?.[to]?.importable_by?.includes('host'))
+    .map(({ from, to }) => `${from} -> ${to}`);
+  assert.deepEqual(reached, [], 'import these through identity-host.mjs');
+});
+
 // A contract is a narrow, reviewed exception to may_import: its surface is
 // exactly the exports the map lists, so widening it is a map change too.
 test('each contract exports exactly the names the map lists', () => {
