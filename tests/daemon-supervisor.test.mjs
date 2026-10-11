@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { commsPaths, commsCredentialFile, daemonVouchKeyFile } from '../comms-client.mjs';
+import { windowsTaskJobCommandLine } from '../windows-task-job.mjs';
 import { keydSigner } from '../config.mjs';
 import {
   LAUNCHD_LABEL,
@@ -345,8 +347,8 @@ test('a host keyd signer is written into the daemon unit on every platform', () 
   assert.match(unit, /^Environment=AGENT_BOT_KEYD_TEAM_ID=Z5DM34QS5U$/m);
   assert.match(unit, /^Environment=AGENT_BOT_KEYD_IDENTIFIER=app\.geniusbar\.keyd$/m);
   const task = renderScheduledTask({ programArguments: ['C:\\App\\node.exe', 'C:\\App\\agent-bot.mjs', 'daemon', 'run'], environment, label: 'app.geniusbar.agent-bot', logPath: 'C:\\Logs\\daemon.log', userId: 'DESK\\owner' });
-  assert.ok(task.includes('set &quot;AGENT_BOT_KEYD_TEAM_ID=Z5DM34QS5U&quot; &amp;&amp;'));
-  assert.ok(task.includes('set &quot;AGENT_BOT_KEYD_IDENTIFIER=app.geniusbar.keyd&quot; &amp;&amp;'));
+  assert.ok(taskScript(task).includes('set "AGENT_BOT_KEYD_TEAM_ID=Z5DM34QS5U" &&'));
+  assert.ok(taskScript(task).includes('set "AGENT_BOT_KEYD_IDENTIFIER=app.geniusbar.keyd" &&'));
   // Trimmed like the direct path; unset or blank leaves the daemon on its config.
   assert.equal(supervisorEnvironment({ env: { AGENT_BOT_KEYD_TEAM_ID: ' Z5DM34QS5U ' }, home: '/u' }).AGENT_BOT_KEYD_TEAM_ID, 'Z5DM34QS5U');
   for (const unset of [{}, { AGENT_BOT_KEYD_TEAM_ID: '', AGENT_BOT_KEYD_IDENTIFIER: ' ' }]) {
@@ -568,6 +570,8 @@ test('a soul leaves agent-comms with its binding, or by ID without one', async (
 // Windows (GeniusBar ADR-0046 decision 4): a per-user scheduled task. Nothing
 // here runs schtasks.exe; the fake below stands in through the `exec` seam.
 
+const taskScript = xml => Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)[1], 'base64').toString('utf16le');
+
 const WIN_LABEL = 'app.geniusbar.agent-bot';
 const WIN_PROGRAM = ['C:\\App\\node.exe', 'C:\\App\\agent-bot.mjs', 'daemon', 'run'];
 
@@ -656,16 +660,16 @@ test('win32 task XML runs this node and entry at logon, hidden, restarted every 
   assert.equal(element(xml, 'StartWhenAvailable'), 'true');
   // cmd.exe carries the environment and the log redirect; an empty value is
   // not pinned, as in the plist.
-  assert.equal(element(xml, 'Command'), '%SystemRoot%\\System32\\cmd.exe');
-  assert.equal(element(xml, 'Arguments'),
-    `/S /C "set "AGENT_BOT_DAEMON_STATE_PATH=C:\\state\\daemon.json" && set "AGENT_BOT_SERVICE_LABEL=${WIN_LABEL}" && "C:\\App\\node.exe" "C:\\App\\agent-bot.mjs" "daemon" "run" >> "${logPath}" 2>&1"`);
+  assert.equal(element(xml, 'Command'), '%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.ok(taskScript(xml).includes(
+    `/S /C "set "AGENT_BOT_DAEMON_STATE_PATH=C:\\state\\daemon.json" && set "AGENT_BOT_SERVICE_LABEL=${WIN_LABEL}" && "C:\\App\\node.exe" "C:\\App\\agent-bot.mjs" "daemon" "run" >> "${logPath}" 2>&1"`));
   assert.equal(element(xml, 'WorkingDirectory'), dirname(logPath));
   assert.doesNotMatch(xml, /token|BEGIN |127\.0\.0\.1|AGENT_BOT_DAEMON_HOST|AGENT_BOT_DAEMON_PORT/);
   // Markup in a label or path is text, never structure; a quote or a
   // percent sign has no faithful form on a cmd.exe line.
   const marked = renderScheduledTask({ programArguments: ['/x/a&b<c>.exe'], label: 'a&b', logPath: '/l/d.log', userId: 'u' });
   assert.ok(marked.includes('<URI>\\a&amp;b</URI>'));
-  assert.ok(marked.includes('&quot;/x/a&amp;b&lt;c&gt;.exe&quot;'));
+  assert.ok(taskScript(marked).includes('"/x/a&b<c>.exe"'));
   for (const bad of ['C:\\Program "Files"\\node.exe', '%TEMP%\\node.exe']) {
     assert.throws(() => renderScheduledTask({ programArguments: [bad], logPath: '/l/d.log', userId: 'u' }), { code: 'usage' });
   }
@@ -719,7 +723,7 @@ test('win32 install writes the task under LOCALAPPDATA, registers it with schtas
   assert.equal(xml, renderScheduledTask({
     programArguments: WIN_PROGRAM, environment: supervisorEnvironment({ env, home }), label: WIN_LABEL, logPath, userId: 'DESK\\owner',
   }));
-  assert.ok(element(xml, 'Arguments').includes(`set "AGENT_BOT_SERVICE_LABEL=${WIN_LABEL}" && "C:\\App\\node.exe" "C:\\App\\agent-bot.mjs" "daemon" "run" >> "${logPath}" 2>&1`));
+  assert.ok(taskScript(xml).includes(`set "AGENT_BOT_SERVICE_LABEL=${WIN_LABEL}" && "C:\\App\\node.exe" "C:\\App\\agent-bot.mjs" "daemon" "run" >> "${logPath}" 2>&1`));
   assert.equal(statSync(dirname(logPath)).isDirectory(), true);
 
   schtasks.calls.length = 0;
@@ -731,7 +735,7 @@ test('win32 install writes the task under LOCALAPPDATA, registers it with schtas
   schtasks.calls.length = 0;
   const moved = await ensureDaemonSupervisor({ ...options, programArguments: ['C:\\New\\node.exe', 'C:\\New\\agent-bot.mjs', 'daemon', 'run'] });
   assert.equal(moved.refreshed, true);
-  assert.ok(element(scheduledTaskText(readFileSync(unitPath)), 'Arguments').includes('"C:\\New\\agent-bot.mjs"'));
+  assert.ok(taskScript(scheduledTaskText(readFileSync(unitPath))).includes('"C:\\New\\agent-bot.mjs"'));
   assert.deepEqual(schtasks.calls.slice(1).map((row) => row[1]), ['/Create', '/End', '/Run'], 'an update re-registers and kickstarts');
   assert.deepEqual(stops, ['stopped'], 'a supervised daemon is restarted by the task, not stopped by hand');
 
@@ -839,5 +843,50 @@ test('the credential names a unit pins read back from every unit kind', (t) => {
     const names = { AGENT_BOT_CREDENTIAL_NAMESPACE: 'app.geniusbar', AGENT_BOT_CREDENTIAL_VAULT: 'GeniusBar & Co Identities' };
     write({ AGENT_BOT_DAEMON_STATE_PATH: join(home, 'state.json'), ...names });
     assert.deepEqual(supervisorUnitCredentialNames({ home, env, platform }), names, `${platform}: names read back`);
+  }
+});
+
+
+test('supervised services preserve the broker and credential namespace without passing arbitrary caller variables (#934)', () => {
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const base = platform === 'win32' ? "C:\\Host's state" : "/host's state";
+    const env = {
+      AGENT_COMMS_SERVICE_LABEL: 'app.custom.broker',
+      AGENT_COMMS_SHARED_DIR: `${base}/shared & public`,
+      AGENT_COMMS_BROKER_STATE_DIR: `${base}/broker`,
+      XDG_STATE_HOME: `${base}/identity`,
+      AGENT_BOT_COMMS_DAEMON_PATH: `${base}/daemon-credential.json`,
+      UNKNOWN_SECRET: 'not-to-be-persisted',
+    };
+    const environment = supervisorEnvironment({ env, home: '/scratch-home', platform });
+    for (const key of Object.keys(env).filter(key => key !== 'UNKNOWN_SECRET')) assert.equal(environment[key], env[key], `${platform}: ${key}`);
+    assert.equal(environment.UNKNOWN_SECRET, undefined);
+    assert.deepEqual(commsPaths({ env: environment, home: '/scratch-home' }), commsPaths({ env, home: '/scratch-home' }));
+    assert.equal(commsCredentialFile({ env: environment, home: '/scratch-home' }), commsCredentialFile({ env, home: '/scratch-home' }));
+    assert.equal(daemonVouchKeyFile({ env: environment, home: '/scratch-home' }), daemonVouchKeyFile({ env, home: '/scratch-home' }));
+    const unit = platform === 'win32'
+      ? windowsTaskJobCommandLine(element(renderScheduledTask({ programArguments: WIN_PROGRAM, environment, label: WIN_LABEL, logPath: `${base}/daemon.log`, userId: 'DESK\\owner' }), 'Arguments'))
+      : platform === 'darwin' ? renderLaunchdPlist({ executable: '/host/node', environment })
+        : renderSystemdUnit({ executable: '/host/node', environment });
+    for (const key of Object.keys(env).filter(key => key !== 'UNKNOWN_SECRET')) assert.ok(unit.includes(key), `${platform} renderer: ${key}`);
+    assert.ok(!unit.includes('not-to-be-persisted'));
+    if (platform === 'win32') for (const [key, value] of Object.entries(env).filter(([key]) => key !== 'UNKNOWN_SECRET')) assert.ok(unit.includes(`set "${key}=${value}" &&`));
+  }
+});
+
+test('supervisor refuses malformed broker locations before installation and keeps unset defaults (#934)', () => {
+  const keys = ['AGENT_COMMS_SERVICE_LABEL', 'AGENT_COMMS_SHARED_DIR', 'AGENT_COMMS_BROKER_STATE_DIR', 'XDG_STATE_HOME', 'AGENT_BOT_COMMS_DAEMON_PATH'];
+  const defaults = supervisorEnvironment({ env: {}, home: '/u' });
+  for (const key of keys) assert.equal(Object.hasOwn(defaults, key), false);
+  for (const label of ['../broker', 'label with space', 'ok\nBAD', 123]) {
+    assert.throws(() => supervisorEnvironment({ env: { AGENT_COMMS_SERVICE_LABEL: label }, home: '/u' }), { code: 'usage' });
+  }
+  for (const key of keys.slice(1)) {
+    for (const value of ['relative', '/absolute\nsecret', '/absolute\0secret', 123]) {
+      assert.throws(() => supervisorEnvironment({ env: { [key]: value }, home: '/u' }), { code: 'usage' });
+    }
+    for (const value of ['C:\\%TEMP%\\state', 'C:\\bad"state']) {
+      assert.throws(() => supervisorEnvironment({ env: { [key]: value }, home: '/u', platform: 'win32' }), { code: 'usage' });
+    }
   }
 });
