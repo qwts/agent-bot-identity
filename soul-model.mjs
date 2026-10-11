@@ -101,7 +101,11 @@ export function repoModel(directory, harness) {
   if (harness === 'codex') return codexRootModel(readSettingsText(path.join(directory, '.codex', 'config.toml')) ?? '');
   for (const name of JSON_MODEL_FILES[harness] ?? []) {
     let model = null;
-    try { model = declaredModel(JSON.parse(readSettingsText(path.join(directory, name)))?.model); } catch { /* declares nothing */ }
+    try {
+      const value = JSON.parse(readSettingsText(path.join(directory, name)))?.model;
+      // Gemini CLI reads `model.name` (v0.63.0); an older flat string still counts.
+      model = declaredModel(harness === 'gemini' && value && typeof value === 'object' ? value.name : value);
+    } catch { /* declares nothing */ }
     if (model !== null) return model;
   }
   return null;

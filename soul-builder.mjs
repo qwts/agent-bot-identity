@@ -298,7 +298,13 @@ function renderSettings(target, bytes, settings) {
   if (target.harness === 'codex') return renderCodexSettings(target.path, bytes, settings);
   const { _comment, ...value } = settingsObject(target.path, bytes);
   const keys = renderedKeys(target, settings);
-  if (keys.includes('model')) value.model = settings.model;
+  // Gemini CLI keeps the model at `model.name` (settings schema v0.63.0); a
+  // legacy flat string is the same setting and is replaced, while authored
+  // keys beside `name` stay.
+  if (keys.includes('model')) {
+    value.model = target.harness !== 'gemini' ? settings.model
+      : { ...(typeof value.model === 'string' ? {} : nestedSettings(value, 'model', target.path)), name: settings.model };
+  }
   if (target.harness === 'claude') {
     if (keys.includes('reasoningEffort')) value.effortLevel = settings.reasoningEffort;
     // Declared variables replace their own names; other authored ones stay.
