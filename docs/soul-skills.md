@@ -196,8 +196,14 @@ lives at `<root>/<uuid>/`:
 - `.snapshots/<sha256-hex>/payload/` retains exact acquired bytes. Its sibling
   `manifest.json` records file hashes, byte sizes, executable modes, source,
   acquisition time, dependency edges, coverage, exclusions and materialized links.
-- `.checks/<uuid>.json` records each successful or unavailable source check, returned as `checkId`. Receipts are append-only;
-  automatic retention/pruning is not implemented, so repeated checks grow this directory.
+- `.checks/<uuid>.json` records each successful or unavailable source check, returned as `checkId`.
+  Each check keeps the newest 50 receipts of its import (owner decision on #603,
+  2026-10-10): the new one first, then by `checkedAt`. It never prunes a receipt
+  that an `.updates/` record or `.pending-update.json` names, or a file it cannot
+  read as this import's receipt. The result's `receiptsPruned` counts what it
+  removed; a pruned `checkId` can no longer be passed to `update`, so check
+  again. Candidate snapshots in `.snapshots/` are not pruned. Pruning failures
+  never fail the check.
 - `.updates/<uuid>/` retains before/after records, prior local material and the
   outcome of an explicit update. `.pending-update.json` identifies an interrupted
   transaction requiring recovery. These are protected library metadata too.

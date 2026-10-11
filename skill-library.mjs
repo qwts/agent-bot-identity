@@ -404,12 +404,52 @@ export function readSkillMaterial(id, { selection = 'accepted', expectedDigest, 
   return { record, captureMetadata, selection, ...content, dependencies: selection === 'accepted' ? record.dependencies
     : dependencies(content.entries, id, boundedLimits(options.limits).references, record.locations) };
 }
+// Source-check receipts kept per import (owner decision on #603, 2026-10-10).
+export const CHECK_RECEIPTS_RETAINED = 50;
 function checkReceipt(root, result) {
   const checks = storedPath(root, '.checks');
   mkdirSync(checks, { recursive: true, mode: 0o700 });
   const receipt = { ...result, checkId: randomUUID() };
   writeJson(path.join(checks, `${receipt.checkId}.json`), receipt);
-  return receipt;
+  let pruned = 0;
+  try { pruned = pruneCheckReceipts(root, result.id, receipt.checkId); } catch { /* retention never fails a check */ }
+  return pruned ? { ...receipt, receiptsPruned: pruned } : receipt;
+}
+// The check IDs an update still names: each `.updates/<uuid>/` record, and
+// the interrupted one in `.pending-update.json` (a check refuses while that
+// exists, so this only guards a future caller). Those receipts are never
+// pruned, so recovery and update history keep their check.
+function referencedChecks(root) {
+  const named = new Set(), add = file => { try { const value = exists(file) ? json(file) : null; if (UUID.test(value?.checkId ?? '')) named.add(value.checkId); } catch { /* unreadable: names nothing */ } };
+  add(storedPath(root, '.pending-update.json'));
+  const updates = storedPath(root, '.updates');
+  if (exists(updates)?.isDirectory()) for (const entry of readdirSync(updates, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !UUID.test(entry.name)) continue;
+    for (const file of ['pending.json', 'result.json']) add(path.join(updates, entry.name, file));
+  }
+  return named;
+}
+// Keeps the newest CHECK_RECEIPTS_RETAINED receipts of this import (the one
+// just written first, then by `checkedAt` and file time), plus any an update
+// names. Files it cannot read as this import's receipt are left alone.
+function pruneCheckReceipts(root, id, latest) {
+  const checks = storedPath(root, '.checks'), keep = referencedChecks(root), receipts = [];
+  for (const entry of readdirSync(checks, { withFileTypes: true })) {
+    const match = entry.isFile() && entry.name.match(/^(.+)\.json$/);
+    if (!match || !UUID.test(match[1])) continue;
+    const file = path.join(checks, entry.name);
+    let value;
+    try { value = json(file); } catch { continue; }
+    if (value?.id !== id || (value.checkId !== undefined && value.checkId !== match[1]) || typeof value.checkedAt !== 'string') continue;
+    receipts.push({ checkId: match[1], file, at: Date.parse(value.checkedAt) || 0, mtime: lstatSync(file).mtimeMs });
+  }
+  receipts.sort((a, b) => (b.checkId === latest) - (a.checkId === latest) || b.at - a.at || b.mtime - a.mtime || a.checkId.localeCompare(b.checkId, 'en'));
+  let pruned = 0;
+  for (const [index, receipt] of receipts.entries()) {
+    if (index < CHECK_RECEIPTS_RETAINED || keep.has(receipt.checkId)) continue;
+    rmSync(receipt.file); pruned++;
+  }
+  return pruned;
 }
 function textDiffs(root, accepted, candidate, changes) {
   let budget = 64 * 1024;

@@ -85,6 +85,30 @@ test('source checks retain upstream/local bytes and distinguish unchanged, chang
   assert.ok(readdirSync(checks).some(file => JSON.parse(readFileSync(path.join(checks, file))).status === 'unavailable'));
 });
 
+test('source checks keep the newest 50 receipts, plus any an update names', t => {
+  const f = fixture(t), imported = importSkill(f.source, f.options);
+  const checks = path.join(f.library, imported.id, '.checks'), id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const at = n => new Date(Date.UTC(2026, 0, 1, 0, n)).toISOString();
+  for (let n = 1; n <= 60; n++) put(path.join(checks, `${id(n)}.json`), JSON.stringify({ id: imported.id, status: 'unchanged', checkedAt: at(n), checkId: id(n) }));
+  put(path.join(checks, `${id(99)}.json`), JSON.stringify({ id: '11111111-1111-4111-8111-111111111111', checkedAt: at(0) })); // not this import's
+  put(path.join(checks, 'notes.json'), 'not a receipt');
+  put(path.join(checks, `${id(98)}.json`), '{ unreadable');
+  put(path.join(f.library, imported.id, '.updates', id(200), 'result.json'), JSON.stringify({ id: imported.id, checkId: id(2), status: 'updated' }));
+  const latest = checkSkill(imported.id, f.options);
+  assert.equal(latest.status, 'unchanged');
+  assert.equal(latest.receiptsPruned, 10);
+  const left = readdirSync(checks).sort();
+  assert.ok(left.includes(`${latest.checkId}.json`), 'the new receipt is kept');
+  assert.ok(left.includes(`${id(2)}.json`), 'a receipt an update names is kept');
+  for (const n of [1, 3, 11]) assert.equal(left.includes(`${id(n)}.json`), false, `oldest ${n} pruned`);
+  for (const n of [12, 60]) assert.ok(left.includes(`${id(n)}.json`), `newer ${n} kept`);
+  for (const other of [`${id(99)}.json`, 'notes.json', `${id(98)}.json`]) assert.ok(left.includes(other), `${other} left alone`);
+  assert.equal(left.length, 50 + 1 + 3);
+  const again = checkSkill(imported.id, f.options);
+  assert.equal(again.receiptsPruned, 1, 'one in, one out');
+  assert.equal(readdirSync(checks).length, 50 + 1 + 3);
+});
+
 test('remote, unsafe and unsupported references are explicit and sensitive locator values are absent from provenance', t => {
   const f = fixture(t);
   put(path.join(f.source, 'references/guide.md'), '[Remote](https://example.test/guide.md)\n[Site](https://example.test/)\n[Secret](https://user:CANARY@example.test/g.md?token=CANARY)\n[Out](../../outside.md)\n[Absolute](/etc/passwd)\n');
