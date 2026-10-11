@@ -4,10 +4,14 @@ import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   renameSync,
   readFileSync,
   readlinkSync,
@@ -143,9 +147,29 @@ function hostAppCliToolText(app) {
     + `exec '${shim.replaceAll("'", `'\\''`)}' "$@"\n`;
 }
 
-export function isHostAppCliTool(path, stat, app, read = readFileSync) {
-  if (!app || !stat?.isFile?.() || stat.size >= 4096) return false;
-  return read(path, 'utf8') === hostAppCliToolText(app);
+// One descriptor answers every question: the path is opened once without
+// following a link (or blocking on a FIFO), and the type, the size bound and
+// the text all come from that handle, so a swap between checking and reading
+// cannot change what is judged.
+const HOST_APP_CLI_TOOL_MAX_BYTES = 4096;
+
+export function isHostAppCliTool(path, app, { open = openSync } = {}) {
+  if (!app) return false;
+  let fd;
+  try {
+    fd = open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch {
+    return false;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size >= HOST_APP_CLI_TOOL_MAX_BYTES) return false;
+    return readFileSync(fd, 'utf8') === hostAppCliToolText(app);
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function inspectExecutableLink(path, stat, { readlink = readlinkSync, statFile = statSync } = {}) {
@@ -174,7 +198,7 @@ export function installExecutable({
   exists = existsSync,
   mkdtemp = mkdtempSync,
   rename = renameSync,
-  read = readFileSync,
+  openFile = openSync,
   embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const paths = installationPaths(home);
@@ -182,7 +206,7 @@ export function installExecutable({
   mkdir(paths.binDir, { recursive: true });
   const stat = optionalLstat(paths.executable, lstat);
   // The embedding app's wrapper runs this runtime; it stays the CLI.
-  if (isHostAppCliTool(paths.executable, stat, embeddingApp, read)) return paths.executable;
+  if (stat && isHostAppCliTool(paths.executable, embeddingApp, { open: openFile })) return paths.executable;
   ensureExecutableMode(entrypoint, { stat: statFile, chmod });
   if (stat) {
     const link = inspectExecutableLink(paths.executable, stat, { readlink, statFile });

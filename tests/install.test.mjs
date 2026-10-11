@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, constants, existsSync, lstatSync, mkdirSync, openSync, renameSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -368,7 +368,7 @@ test('installExecutable leaves the embedding app\'s command-line tools wrapper u
   for (const app of [GENIUSBAR, "/Users/o'neil/Applications/GeniusBar.app"]) {
     const text = geniusBarWrapper(`${app.replaceAll("'", `'\\''`)}/Contents/Resources/bin/agent-bot`);
     const { home, entrypoint, installed } = homeWithCliFile(text);
-    assert.equal(isHostAppCliTool(installed, statSync(installed), app), true);
+    assert.equal(isHostAppCliTool(installed, app), true);
     const before = statSync(installed);
     assert.equal(installExecutable({
       home, entrypoint, embeddingApp: app, chmod: () => assert.fail('no chmod'),
@@ -397,7 +397,7 @@ test('installExecutable still refuses anything but the app\'s exact wrapper (#96
   };
   for (const [name, text] of Object.entries(variants)) {
     const { home, entrypoint, installed } = homeWithCliFile(text);
-    assert.equal(isHostAppCliTool(installed, statSync(installed), GENIUSBAR), false, name);
+    assert.equal(isHostAppCliTool(installed, GENIUSBAR), false, name);
     assert.throws(() => installExecutable({ home, entrypoint, embeddingApp: GENIUSBAR }), /not an agent-bot symlink/, name);
     assert.equal(readFileSync(installed, 'utf8'), text, name);
   }
@@ -409,13 +409,50 @@ test('a checkout or Homebrew install still refuses the app\'s wrapper (#968)', (
   assert.equal(readFileSync(installed, 'utf8'), geniusBarWrapper());
 });
 
+// Copilot on #970: the type, the size bound and the text must all come from
+// one descriptor opened without following a link, so a swap between the
+// check and the read cannot change what is judged.
+test('the app\'s wrapper is judged from one O_NOFOLLOW descriptor (#968)', () => {
+  // Swapped in after the open: what was opened (a foreign file) decides.
+  const { home, entrypoint, installed } = homeWithCliFile('foreign\n');
+  const swap = join(dirname(installed), 'swap');
+  writeFileSync(swap, geniusBarWrapper());
+  const openThenSwap = (path, flags) => {
+    const fd = openSync(path, flags);
+    renameSync(swap, path);
+    return fd;
+  };
+  assert.equal(isHostAppCliTool(installed, GENIUSBAR, { open: openThenSwap }), false);
+  writeFileSync(installed, 'foreign\n');
+  writeFileSync(swap, geniusBarWrapper());
+  assert.throws(() => installExecutable({ home, entrypoint, embeddingApp: GENIUSBAR, openFile: openThenSwap }),
+    /not an agent-bot symlink/);
+
+  // The open never follows a link and never blocks on a FIFO.
+  const flags = [];
+  isHostAppCliTool(installed, GENIUSBAR, { open: (path, value) => { flags.push(value); return openSync(path, value); } });
+  assert.equal(flags[0] & constants.O_NOFOLLOW, constants.O_NOFOLLOW);
+  assert.equal(flags[0] & constants.O_NONBLOCK, constants.O_NONBLOCK);
+
+  // The size bound comes from the descriptor: the wrapper padded past 4 KiB.
+  writeFileSync(installed, `${geniusBarWrapper()}${'#'.repeat(5000)}\n`);
+  assert.equal(isHostAppCliTool(installed, GENIUSBAR), false);
+});
+
+test('a FIFO at the CLI path is refused without blocking (#968)', { skip: process.platform === 'win32' }, () => {
+  const { installed } = homeWithCliFile('');
+  rmSync(installed);
+  execFileSync('mkfifo', [installed]);
+  assert.equal(isHostAppCliTool(installed, GENIUSBAR), false);
+});
+
 test('a symlink at the CLI path is never read as the app\'s wrapper (#968)', () => {
   const { home, entrypoint, installed } = homeWithCliFile('');
   const foreign = join(mkdtempSync(join(tmpdir(), 'foreign-agent-bot-root-')), 'agent-bot');
   writeFileSync(foreign, geniusBarWrapper());
   rmSync(installed);
   symlinkSync(foreign, installed);
-  assert.equal(isHostAppCliTool(installed, lstatSync(installed), GENIUSBAR), false);
+  assert.equal(isHostAppCliTool(installed, GENIUSBAR), false);
   assert.throws(() => installExecutable({ home, entrypoint, embeddingApp: GENIUSBAR }), /not an agent-bot symlink/);
   assert.equal(readlinkSync(installed), foreign);
   // A link to this runtime is still managed as before when an app embeds it.
