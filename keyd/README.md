@@ -43,7 +43,8 @@ in the owner's account could replace a key with no prompt (#753). keyd now
 checks an item's access list on every read. An App key it does not control is
 re-made from its own value under the lock, so an owner's imported key survives
 the upgrade. Anything under service `agent-bot.keyd` — the daemon grant key,
-the presence seed, the owner's statement keys — is refused instead, because
+the presence seed, the record of the owner's statement keys, the owner
+statement key — is refused instead, because
 those values are what agent-bot trusts.
 
 What an access list still does not stop: the legacy file keychain does not
@@ -89,8 +90,12 @@ refuses them rather than adopt them:
   says it replaces a record keyd did not make, and approving records the key
   set from generation 1 in an item keyd controls. Removing the item instead
   returns it to "never approved".
+- `owner-statement-key` — `owner/sign` and `owner/statement-key` answer
+  `-32002` and sign nothing. Removing the item lets keyd make a fresh key on
+  next use; the old one stops verifying anywhere it is pinned, so the owner
+  removes it with `agent-bot owner remove` and enrols the new one.
 
-All three are ordinary login-keychain generic passwords under service
+All four are ordinary login-keychain generic passwords under service
 `agent-bot.keyd`, removable with `security delete-generic-password`.
 
 ## Sockets
@@ -236,6 +241,19 @@ reports that record with no prompt. Both answer a `k1.` record signed with
 the presence key, `kind: "pins"`, so it never passes as a presence assertion.
 The format is in
 [docs/keyd-protocol.md](../docs/keyd-protocol.md#owner-statement-keys-keyd--agent-bot-753).
+
+## Signing the owner's statements
+
+keyd is the owner's statement store on a Mac
+([agent-bot-identity #753](https://github.com/qwts/agent-bot-identity/issues/753)).
+`owner/sign {payload}` takes the payload segment of a statement or challenge
+agent-bot built, checks it with agent-bot's own rules, shows the owner its
+text, scope and expiry in the Touch ID prompt, and only on approval signs
+exactly those bytes. It signs with the owner statement key, a seed of its own
+(service `agent-bot.keyd`, account `owner-statement-key`), never the
+presence seed. `owner/statement-key {nonce}` reports that key's public half
+with no prompt, signed with the presence key. The format is in
+[docs/keyd-protocol.md](../docs/keyd-protocol.md#owner-statement-signing-keyd-store-753).
 
 ## Build and test
 

@@ -32,6 +32,7 @@ mod pins;
 mod presence;
 mod relay;
 mod server;
+mod statement;
 mod store;
 
 use std::path::PathBuf;
