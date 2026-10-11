@@ -27,7 +27,6 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { leaveLaunchedSoul } from './comms-membership.mjs';
-import { mintAgentIdentity } from './agent-identity.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
@@ -175,7 +174,7 @@ export async function forkSoul({
     save();
     next.revision = computePackageRevision(folder);
     save();
-    identity = mintAgentIdentity({ ...options, stateDir, now, appSlug: null, packageRevision: computePackageRevision(folder), harness: runs, parentId, useGithub: false });
+    identity = identityOp('mint', { stateDir, now: now().toISOString(), appSlug: null, packageRevision: computePackageRevision(folder), harness: runs, parentId, useGithub: false });
     result.agentId = identity.id;
     // The fork's life starts inside its folder (ADR-0583 decisions 8 and 9),
     // like a spawn's: marker, Agent Space directory, history mirror.

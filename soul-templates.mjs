@@ -5,7 +5,6 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
-import { mintAgentIdentity } from './agent-identity.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { packageManifest, populationFile, recordSoulDisplayName, registerSoulDir, retireIdentityWithPopulation, showSoul, upsertIdentitySoul } from './agent-population.mjs';
@@ -228,8 +227,9 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     save();
     manifest.revision = computePackageRevision(directory);
     save();
-    identity = mintAgentIdentity({ ...options, stateDir, appSlug, packageRevision: computePackageRevision(directory),
-      parentId, harness, useGithub: Boolean(appSlug) && isGateEnabled('github-identity', options) });
+    identity = identityOp('mint', { stateDir, ...(options.now ? { now: options.now().toISOString() } : {}), appSlug,
+      packageRevision: computePackageRevision(directory), parentId, harness,
+      useGithub: Boolean(appSlug) && isGateEnabled('github-identity', options) });
     // The soul's life starts inside its folder (ADR-0583 decisions 8 and 9):
     // the marker, the Agent Space as a directory, and the history mirror
     // from the genesis revision on.

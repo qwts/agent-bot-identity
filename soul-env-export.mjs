@@ -43,7 +43,6 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { createGunzip, createGzip } from 'node:zlib';
-import { mintAgentIdentity } from './agent-identity.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, showSoulByName, soulDirectory, upsertSoul } from './agent-population.mjs';
@@ -812,7 +811,7 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
     save();
     next.revision = computePackageRevision(staging);
     save();
-    const identity = mintAgentIdentity({ env, home, stateDir, now, appSlug: null, packageRevision: computePackageRevision(staging), harness: manifest.identity?.harness ?? null, parentId: null, useGithub: false });
+    const identity = identityOp('mint', { stateDir, now: now().toISOString(), appSlug: null, packageRevision: computePackageRevision(staging), harness: manifest.identity?.harness ?? null, parentId: null, useGithub: false });
     agentId = identity.id;
     const revisionOptions = { stateDir, now, soulDir: staging, ...(authorization?.method ? { authorization } : {}) };
     adoptSoulPackage(agentId, staging, { ...revisionOptions, reason: `Import as a fork of ${manifest.agentId}` });
@@ -826,7 +825,7 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
     let identity = null;
     try { identity = identityOp('read', { id: agentId, stateDir }); } catch { /* unknown here: a moved life */ }
     if (identity?.status === 'retired') fail('import-id-retired', `${agentId} is retired here`, { action: 'add --fork to import it as a new soul' });
-    if (!identity) mintAgentIdentity({ env, home, stateDir, now, appSlug: null, idFactory: () => agentId, harness: manifest.identity?.harness ?? null, parentId: manifest.identity?.parentId ?? null, useGithub: false });
+    if (!identity) identityOp('mint', { stateDir, now: now().toISOString(), appSlug: null, id: agentId, harness: manifest.identity?.harness ?? null, parentId: manifest.identity?.parentId ?? null, useGithub: false });
     const local = path.join(stateDir, 'soul-revisions', agentId);
     const localHead = revisionHistory(agentId, { stateDir }).length > 0;
     if (localHead) { journal = 'kept-local'; rmSync(journalStaging, { recursive: true, force: true }); }
