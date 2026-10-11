@@ -28,6 +28,7 @@ import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { GIT_HOOK_NAMES } from './git-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
 import { OPENCODE_PLUGIN_PATH, opencodeHookPlugin } from './soul-builder.mjs';
+import { buildSoulDirectory } from './soul-build.mjs';
 import { GENERATED_HARNESS_MARKER } from './soul-harness-contract.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
 import { keydStatus, keydVersionAction } from './keyd-client.mjs';
@@ -1891,11 +1892,79 @@ export function opencodePluginCheck({ souls, read = readFileSync, lstat = lstatS
   });
 }
 
-function opencodeSoulPlugins({ home, env }) {
-  let souls;
-  try { souls = listSouls({ file: populationFile({ home, env }) }).filter((soul) => soul.status === 'active' && typeof soul.soulDir === 'string'); }
+// Each active soul's Codex skills (#378): the marked soul and command skills
+// the builder renders into the shared `.agents/skills/`. The check is the
+// build's own `--check`, narrowed to that folder: a marked file that differs
+// or should be gone is drift, and an unmarked file where one would render is
+// another tool's or person's skill, which the build refuses to replace, so it
+// is reported, never touched. Unmarked skills elsewhere in the folder are not
+// the builder's and are not reported. A soul with no AGENTS.md renders nothing.
+const CODEX_SKILLS = '.agents/skills/';
+export function codexSkillsCheck({ souls, build = buildSoulDirectory, exists = existsSync }) {
+  const found = { current: [], stale: [], unmarked: [], unchecked: [] };
+  const paths = {};
+  const errors = {};
+  for (const soul of souls) {
+    if (!exists(join(soul.soulDir, 'AGENTS.md'))) continue;
+    let drift;
+    try { drift = build(soul.soulDir, { check: true }).drift.filter((path) => path.startsWith(CODEX_SKILLS)); }
+    catch (error) {
+      const conflicts = String(error?.message ?? '').match(/\.agents\/skills\/[^,\s)]+/g);
+      if (/generated path conflict/.test(error?.message) && conflicts) { found.unmarked.push(soul.id); paths[soul.id] = conflicts; }
+      else { found.unchecked.push(soul.id); errors[soul.id] = String(error?.message ?? error); }
+      continue;
+    }
+    if (drift.length) { found.stale.push(soul.id); paths[soul.id] = drift; }
+    else found.current.push(soul.id);
+  }
+  const evidence = { path: CODEX_SKILLS, ...found, paths, errors };
+  if (!found.stale.length && !found.unmarked.length && !found.unchecked.length) {
+    return readinessCheck({
+      id: 'skills.codex',
+      status: 'ready',
+      message: found.current.length
+        ? `Codex skills in ${CODEX_SKILLS} are current in every soul that renders them (${found.current.length})`
+        : 'no soul renders Codex skills',
+      evidence,
+    });
+  }
+  const parts = [];
+  if (found.stale.length) parts.push(`out of date in ${found.stale.join(', ')}`);
+  if (found.unmarked.length) parts.push(`blocked by an unmarked file in ${found.unmarked.join(', ')}`);
+  if (found.unchecked.length) parts.push(`could not be checked in ${found.unchecked.join(', ')}`);
+  // A build that fails for another reason (an unmarked CLAUDE.md, a bad
+  // declaration) says nothing about this folder, so it is reported as
+  // unchecked with the build's own error, never as Codex skill drift.
+  const drifted = found.stale.length || found.unmarked.length;
+  return readinessCheck({
+    id: 'skills.codex',
+    status: 'warning',
+    code: found.unmarked.length ? 'codex-skills-unmarked' : found.stale.length ? 'codex-skills-stale' : 'codex-skills-unchecked',
+    message: drifted
+      ? `Codex skills in ${CODEX_SKILLS} are ${parts.join('; ')}: Codex sessions there see an older or no copy of the soul's skills`
+      : `Codex skills in ${CODEX_SKILLS} ${parts.join('; ')}: the soul build fails before it reaches them (${found.unchecked.map((id) => errors[id]).join('; ')})`,
+    action: found.unmarked.length
+      ? `rename the unmarked skill under ${CODEX_SKILLS} or the soul's skill, then run: agent-bot soul build <soul folder>`
+      : found.stale.length
+        ? 'run: agent-bot soul build <soul folder>'
+        : 'run: agent-bot soul build <soul folder> --check, fix the error it reports, then build again',
+    evidence,
+  });
+}
+
+function activeSouls({ home, env }) {
+  try { return listSouls({ file: populationFile({ home, env }) }).filter((soul) => soul.status === 'active' && typeof soul.soulDir === 'string'); }
   catch { return null; } // spaces.home already reports an unreadable census
-  return opencodePluginCheck({ souls });
+}
+
+function opencodeSoulPlugins({ home, env }) {
+  const souls = activeSouls({ home, env });
+  return souls && opencodePluginCheck({ souls });
+}
+
+function codexSoulSkills({ home, env }) {
+  const souls = activeSouls({ home, env });
+  return souls && codexSkillsCheck({ souls });
 }
 
 function ghShimCheck({ home, required, inspect }) {
@@ -2721,6 +2790,8 @@ export async function collectReadiness({
       : coverage);
     const opencodePlugins = opencodeSoulPlugins({ home, env });
     if (opencodePlugins) machineChecks.push(opencodePlugins);
+    const codexSkills = codexSoulSkills({ home, env });
+    if (codexSkills) machineChecks.push(codexSkills);
     if (configValid) {
       machineChecks.push(readinessCheck({
         id: 'hooks.claude_worktree',
