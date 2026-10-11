@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { upsertSoul, showSoul } from '../agent-population.mjs';
 import { createDaemonServer, daemonClient } from '../agent-daemon.mjs';
 import { auditFile } from '../agent-principals.mjs';
-import { stateDirectory } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { loadConfig } from '../config.mjs';
 import {
   DEFAULT_SANDBOX_ACCOUNT, formatSandboxStatus, launchSandbox, loadPersona, parsePersonaMapping, probeSandboxAccount, readSandboxStatus, resolveSandbox,

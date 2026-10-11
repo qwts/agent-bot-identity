@@ -5,7 +5,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mintAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { mintAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { ENV_CAPABILITIES, readSoulEnvironment } from '../soul-env.mjs';
 import { HISTORY_SCHEMA_VERSION, formatHistory, soulEnvHistoryCommand } from '../soul-env-history.mjs';

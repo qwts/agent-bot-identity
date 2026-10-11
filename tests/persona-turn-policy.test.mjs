@@ -7,7 +7,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { createInteractionService } from '../agent-interaction.mjs';
 import { getInvocation, readEvents } from '../agent-jobs.mjs';
 import { authorizeSouls, bindTransport, enrollPrincipal, setOperations } from '../agent-principals.mjs';
-import { stateDirectory } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { turnSandboxProblem } from '../sandbox.mjs';
 import { coldTurnExecutor, createTurnRegistry } from '../wake-plane.mjs';
 

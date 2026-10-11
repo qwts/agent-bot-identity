@@ -67,9 +67,9 @@ import {
   ensureAgentIdentity,
   mintAgentIdentity,
   readAgentIdentity,
-  stateDirectory,
   validateAgentId,
 } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { createInteractionService } from './agent-interaction.mjs';
 import { mint } from './mint-token.mjs';
 import { KEYD_TOOL_NAMES, grantTarget, keydRequest, mintViaKeyd, readKeydRecord, signKeydGrant } from './keyd-client.mjs';

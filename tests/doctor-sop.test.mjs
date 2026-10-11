@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { stateDirectory } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { buildReadinessReport, sopPersonaCheck } from '../readiness.mjs';
 import { personaBlockNotice } from '../sandbox.mjs';
 

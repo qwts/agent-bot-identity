@@ -30,7 +30,8 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { ensureAgentIdentity, readAgentIdentity, stateDirectory, withLock } from './agent-identity.mjs';
+import { ensureAgentIdentity, readAgentIdentity, withLock } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { daemonPreference, harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
 import { configuredAccountIdentity } from './detect-harness.mjs';
 import { AGENT_ID_KEYS, resolveAgentSlug } from './resolve-agent.mjs';

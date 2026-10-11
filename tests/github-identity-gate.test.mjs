@@ -12,9 +12,9 @@ import {
   ensureAgentIdentity,
   mintAgentIdentity,
   readAgentIdentity,
-  stateDirectory,
   validateIdentity,
 } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { displayName, listSouls, upsertIdentitySoul, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { acpExecutorFor, createWakePlane } from '../wake-plane.mjs';

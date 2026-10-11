@@ -33,7 +33,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { readAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
+import { readAgentIdentity, validateAgentId } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { readBinding } from './agent-binding.mjs';
 
 export const SOURCE_CLAUDE = 'claude-session-log';

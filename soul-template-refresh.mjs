@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync }
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { stateDirectory } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';

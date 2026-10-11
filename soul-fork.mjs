@@ -27,7 +27,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { leaveLaunchedSoul } from './comms-membership.mjs';
-import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, stateDirectory, validateAgentId } from './agent-identity.mjs';
+import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, validateAgentId } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { appendAuditReceipt } from './agent-principals.mjs';
 import { archiveSoulDirs, locateSoulDir, populationFile, recordSoulDisplayName, registerSoulDir,
   retireIdentityWithPopulation, upsertIdentitySoul } from './agent-population.mjs';

@@ -96,8 +96,6 @@ export function assertSoulCoAuthor(message, id) {
     : `the message credits a soul as co-author (${foreign[0]}), but no soul is bound here`);
 }
 
-export { stateDirectory } from './state-paths.mjs';
-
 export function discoverTranscript(env = process.env) {
   const transcriptId = env.AGENT_BOT_TRANSCRIPT_ID ?? env.QWTS_AGENT_TRANSCRIPT_ID;
   if (transcriptId) {

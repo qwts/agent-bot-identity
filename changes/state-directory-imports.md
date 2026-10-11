@@ -1,0 +1,1 @@
+- Modules import `stateDirectory` from `state-paths.mjs`, which owns it, rather than through `agent-identity.mjs`, which no longer re-exports it. This removes 23 imports of identity from soul, host and cli, with no change in behavior or state paths (#645).

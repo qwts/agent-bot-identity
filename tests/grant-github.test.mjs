@@ -12,7 +12,8 @@ import path from 'node:path';
 
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { createMcpState, handleMcpMessage } from '../agent-mcp.mjs';
-import { ensureAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { ensureAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
 import { humanTokenItem, itemTitle } from '../credential-names.mjs';
 import { createGrantLedger } from '../delegation-grants.mjs';

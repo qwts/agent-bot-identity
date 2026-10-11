@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { stateDirectory, withLock } from './agent-identity.mjs';
+import { withLock } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { loadConfig } from './config.mjs';
 import { credentialStores, legacyKeyRemovable } from './soul-credentials.mjs';
 

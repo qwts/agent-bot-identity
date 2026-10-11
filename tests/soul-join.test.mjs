@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { mintAgentIdentity, readAgentIdentity, retireAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { populationFile, showSoul, soulDirectory, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer, recordedWorktree } from '../agent-daemon.mjs';
 import { appendAuditReceipt, auditFile } from '../agent-principals.mjs';

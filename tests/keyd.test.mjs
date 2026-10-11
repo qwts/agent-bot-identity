@@ -7,7 +7,8 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { ensureAgentIdentity, retireAgentIdentity, stateDirectory } from '../agent-identity.mjs';
+import { ensureAgentIdentity, retireAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { mintBindToken } from '../agent-binding.mjs';
 import { auditFile } from '../agent-principals.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';

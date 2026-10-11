@@ -19,7 +19,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { isAgentId, stateDirectory, validateAgentId, withLock } from './agent-identity.mjs';
+import { isAgentId, validateAgentId, withLock } from './agent-identity.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul } from './agent-population.mjs';
 
 export const NO_REPLY = 'NO_REPLY';
