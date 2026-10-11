@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   compareToBaseline,
@@ -129,6 +130,24 @@ test('host imports identity only through its listed contracts', () => {
     .filter(({ to }) => !MAP.contracts?.[to]?.importable_by?.includes('host'))
     .map(({ from, to }) => `${from} -> ${to}`);
   assert.deepEqual(reached, [], 'import these through identity-host.mjs');
+});
+
+// ADR-0645 step 6: identity's files move into identity/, and each old path
+// stays as a shim that only re-exports its moved file, so callers, the
+// installed hooks and GeniusBar keep loading it there (#645).
+test('each old identity path is only a re-export shim of its moved file', () => {
+  for (const [old, moved] of Object.entries(MAP.shims ?? {})) {
+    assert.equal(MAP.files[old], 'identity', `${old}: a shim stays an identity file`);
+    assert.equal(MAP.files[moved], 'identity', `${moved}: the moved file is identity's`);
+    assert.ok(moved.startsWith('identity/'), `${moved}: moved into identity/`);
+    const target = readFileSync(new URL(`../${moved}`, import.meta.url), 'utf8');
+    const source = readFileSync(new URL(`../${old}`, import.meta.url), 'utf8').replace(/^#![^\n]*\n/u, '');
+    let spec = path.posix.relative(path.posix.dirname(old), moved);
+    if (!spec.startsWith('.')) spec = `./${spec}`;
+    assert.equal(source, `// Moved to ${moved} (#645, ADR-0645 step 6). This path keeps working\n`
+      + '// for callers that import it here; it re-exports the moved file.\n'
+      + `export { ${exportedNames(target).join(', ')} } from '${spec}';\n`, `${old}: not a plain shim of ${moved}`);
+  }
 });
 
 // A contract is a narrow, reviewed exception to may_import: its surface is

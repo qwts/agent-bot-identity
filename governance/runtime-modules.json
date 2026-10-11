@@ -138,6 +138,7 @@
     "gh-shim.mjs": "identity",
     "git-credential-bot.mjs": "identity",
     "git-publish-scan.mjs": "identity",
+    "identity/git-publish-scan.mjs": "identity",
     "grant-github.mjs": "host",
     "harness-auth.mjs": "soul",
     "hook-dialects.mjs": "harness",
@@ -164,6 +165,7 @@
     "owner-principal.mjs": "comms",
     "owner-statement.mjs": "identity",
     "owner-text.mjs": "identity",
+    "identity/owner-text.mjs": "identity",
     "process-ownership.mjs": "soul",
     "reach-contract.mjs": "comms",
     "reach-env.mjs": "shared",
@@ -179,6 +181,7 @@
     "secret-store.mjs": "identity",
     "secret.mjs": "identity",
     "session-approvals.mjs": "identity",
+    "identity/session-approvals.mjs": "identity",
     "setup-worktree.mjs": "soul",
     "shell-path.mjs": "shared",
     "signed-commit.mjs": "identity",
@@ -225,6 +228,7 @@
     "soul-env.mjs": "soul",
     "soul-fork.mjs": "soul",
     "soul-genesis.mjs": "identity",
+    "identity/soul-genesis.mjs": "identity",
     "soul-harness-contract.mjs": "soul",
     "soul-history.mjs": "soul",
     "soul-home.mjs": "soul",
@@ -261,6 +265,7 @@
     "uninstalled-identity-hook.mjs": "identity",
     "update.mjs": "cli",
     "vouch.mjs": "identity",
+    "identity/vouch.mjs": "identity",
     "windows-account-custody.mjs": "shared",
     "windows-task-job.mjs": "host",
     "wake-dispatch.mjs": "comms",
@@ -269,6 +274,13 @@
     "wake-resume.mjs": "soul",
     "wake-webhook.mjs": "comms",
     "worktree-token.mjs": "identity"
+  },
+  "shims": {
+    "git-publish-scan.mjs": "identity/git-publish-scan.mjs",
+    "owner-text.mjs": "identity/owner-text.mjs",
+    "session-approvals.mjs": "identity/session-approvals.mjs",
+    "soul-genesis.mjs": "identity/soul-genesis.mjs",
+    "vouch.mjs": "identity/vouch.mjs"
   },
   "notes": {
     "acp-registry.mjs": "Spawn rows select and launch harnesses, so soul owns them (ADR-0276, ADR-0322). Descriptive columns are candidates for agent-harness descriptors.",
