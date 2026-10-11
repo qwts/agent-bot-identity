@@ -701,10 +701,13 @@ export function adapterFallback(dialectKey, event, snapshot = { sha256: null, au
 }
 
 // In process the shared resolver decides directly; a config it refuses grants
-// nothing.
+// nothing. The config is located from the supplied env exactly as the
+// generated fallback locates it, never from this process's home: without
+// AGENT_BOT_CONFIG or HOME there is no config to read.
 function sharedUnmanagedAuthors(env) {
+  if (env.AGENT_BOT_UNMANAGED_AUTHORS === undefined && env.AGENT_BOT_CONFIG === undefined && !env.HOME) return [];
   try {
-    return unmanagedAuthors({ env }).authors;
+    return unmanagedAuthors(env.HOME ? { env, home: env.HOME } : { env }).authors;
   } catch {
     return [];
   }
