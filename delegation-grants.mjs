@@ -189,9 +189,10 @@ export function createGrantLedger({
       await presence(grantPresenceAction(grant), { env, home });
     } catch (error) {
       // keyd unavailable is a refusal here too: no other ceremony stands in.
-      // Only known codes reach the receipt.
+      // Only known codes reach the receipt. An item keyd does not control
+      // keeps its own code: nobody was asked, so it is no owner's no (#753).
       const code = error.code === 'presence-unavailable' ? 'presence-required'
-        : (['presence-invalid', 'keyd-signer-unverified'].includes(error.code) ? error.code : 'owner-declined');
+        : (['presence-invalid', 'keyd-signer-unverified', 'keyd-untrusted'].includes(error.code) ? error.code : 'owner-declined');
       throw refuse(code,
         `owner presence was not given: ${error.message}`);
     }

@@ -83,3 +83,12 @@ test('decideApproval sends a signed statement and surfaces a route challenge (#7
   await assert.rejects(client.decideApproval({ proposalId: 'p1', decision: 'approve', digest: 'a'.repeat(64), statement: 's1.a.b' }));
   assert.equal(sent[1].statement, 's1.a.b');
 });
+
+test('a grant refused on an untrusted keyd item keeps its code through the client (#753)', async (t) => {
+  const env = stateEnv(t);
+  writeState(env);
+  const fetchImpl = async () => new Response(JSON.stringify({
+    error: 'owner presence was not given: agent-bot-keyd refused an item it does not control', code: 'keyd-untrusted' }), { status: 403 });
+  await assert.rejects(daemonClient({ env, fetchImpl }).decideApproval({ proposalId: 'p1', decision: 'approve', digest: 'a'.repeat(64) }),
+    (error) => error.code === 'keyd-untrusted' && /does not control/.test(error.detail));
+});

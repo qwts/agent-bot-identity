@@ -11,7 +11,7 @@ import {
   ORGANIZATION_PROFILE_SCHEMA_VERSION, isProjectedRuntimeConfig, organizationProfileToConfig, validateOrganizationProfile,
 } from '../organization-profile.mjs';
 import {
-  PRESENCE_AUDIENCE, PRESENCE_UNAVAILABLE_RPC, actionDigest, developerIdRequirement, keydAttestPins, keydPresence,
+  PRESENCE_AUDIENCE, PRESENCE_KEY_UNTRUSTED, PRESENCE_UNAVAILABLE_RPC, actionDigest, developerIdRequirement, keydAttestPins, keydPresence,
   keydPresenceWithoutDialog, pinSetDigest, pinnedPresenceKey, pinnedPresenceKeyWithoutDialog, presenceKeyFingerprint, presencePinPath,
   presenceSignerPath, verifyPinsAttestation, verifyPresence,
 } from '../owner-presence.mjs';
@@ -542,6 +542,9 @@ test('keydPresence tells "nobody can be asked" apart from "the owner said no"', 
     { code: 'owner-declined' });
   await assert.rejects(keydPresence('x', failing(Object.assign(new Error('agent-bot-keyd did not answer in time'), { code: 'keyd-timeout' }))),
     { code: 'owner-declined' });
+  // A presence seed keyd does not control is neither the owner's no nor nobody to ask (#753).
+  await assert.rejects(keydPresence('x', failing(Object.assign(new Error('not one agent-bot-keyd controls'), { code: 'keyd-untrusted', rpcCode: -32002 }))),
+    { code: 'keyd-untrusted', message: /does not control/ });
 });
 
 test('keydAttestPins asks keyd to record the whole key set and checks the record is that set', async (t) => {
@@ -579,6 +582,37 @@ test('keydAttestPins asks keyd to record the whole key set and checks the record
     { code: 'presence-unavailable', message: /cannot record owner keys/ });
   await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('the owner did not approve (-2)'), { code: 'keyd-refused', rpcCode: -32000 }))),
     { code: 'owner-declined' });
+  await assert.rejects(keydAttestPins(pins, failing(Object.assign(new Error('not one agent-bot-keyd controls'), { code: 'keyd-untrusted', rpcCode: -32002 }))),
+    { code: 'keyd-untrusted' });
+});
+
+// End to end through a real process: presence-key's exit 3 is an untrusted
+// seed, never "no keyd", so the gate refuses without its dialog (#753).
+test('a presence-key exit for an untrusted seed refuses with keyd-untrusted, never as no keyd', async (t) => {
+  const { dir, env } = home(t);
+  const bin = join(dir, 'agent-bot-keyd');
+  const exits = (status) => writeFileSync(bin, `#!/bin/sh\necho "agent-bot-keyd: the keychain item for presence-key is not one agent-bot-keyd controls" >&2\nexit ${status}\n`, { mode: 0o700 });
+  const seams = { env, record: { bin }, verifyBinary: () => {}, receipt: () => {},
+    approve: () => assert.fail('no dialog'), approveRepin: () => assert.fail('no dialog') };
+  exits(PRESENCE_KEY_UNTRUSTED);
+  assert.throws(() => pinnedPresenceKey(seams), { code: 'keyd-untrusted', message: /not one keyd controls/ });
+  assert.throws(() => readFileSync(presencePinPath({ env })), { code: 'ENOENT' }, 'nothing is pinned');
+  const presence = (summary, options) => keydPresence(summary, { ...options, pinned: () => pinnedPresenceKey(seams),
+    request: async () => assert.fail('keyd is not asked') });
+  await assert.rejects(presenceOrConsent(`soul comms ${ID} off`, { env, presence,
+    consent: () => assert.fail('an untrusted seed never falls back to the dialog'), summarize: (text) => text }), { code: 'keyd-untrusted' });
+  // Any other failure is still a keyd that could not answer.
+  exits(1);
+  assert.equal(pinnedPresenceKey(seams), null);
+  // The status is keyd's: keyd/src/main.rs exits with the same number.
+  const main = readFileSync(new URL('../keyd/src/main.rs', import.meta.url), 'utf8');
+  assert.match(main, new RegExp(`const EXIT_UNTRUSTED_ITEM: u8 = ${PRESENCE_KEY_UNTRUSTED};`));
+});
+
+test('an untrusted keyd item refuses the owner action with its code, never falling back to the dialog', async () => {
+  const presence = () => { throw Object.assign(new Error('agent-bot-keyd refused an item it does not control'), { code: 'keyd-untrusted' }); };
+  await assert.rejects(presenceOrConsent(`soul comms ${ID} off`, { presence,
+    consent: () => assert.fail('an untrusted item never falls back'), summarize: (text) => text }), { code: 'keyd-untrusted' });
 });
 
 test('the gate asks keyd first and falls back to the administrator dialog only when keyd cannot ask', async () => {

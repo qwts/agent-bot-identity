@@ -66,8 +66,14 @@ export function keydPaths({ env = process.env, home = homedir() } = {}) {
   };
 }
 
+// keyd's JSON-RPC error for a pin that is a Keychain item keyd does not
+// control (keyd/src/server.rs UNTRUSTED_ITEM, #753): neither a value nor
+// "none", so a caller never reads it as absent.
+export const KEYD_UNTRUSTED_ITEM_RPC = -32002;
+
 // One JSON-RPC request on a keyd socket; resolves the result, rejects with
-// keyd's (secret-free) error message.
+// keyd's (secret-free) error message. An untrusted item rejects with code
+// `keyd-untrusted`, any other refusal with `keyd-refused`.
 export function keydRequest(socketPath, method, params = {}, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
@@ -87,8 +93,9 @@ export function keydRequest(socketPath, method, params = {}, { timeoutMs = REQUE
       let message;
       try { message = JSON.parse(buffer.slice(0, end)); } catch { reject(new Error('agent-bot-keyd answered malformed JSON')); return; }
       if (message.error) {
+        const rpcCode = Number.isInteger(message.error.code) ? message.error.code : null;
         reject(Object.assign(new Error(String(message.error.message ?? 'agent-bot-keyd refused')),
-          { code: 'keyd-refused', rpcCode: Number.isInteger(message.error.code) ? message.error.code : null }));
+          { code: rpcCode === KEYD_UNTRUSTED_ITEM_RPC ? 'keyd-untrusted' : 'keyd-refused', rpcCode }));
       } else {
         resolve(message.result);
       }

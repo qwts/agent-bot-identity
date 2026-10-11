@@ -202,6 +202,7 @@ request and must match.
 | `presence-unavailable` | no pinned key and none can be pinned; `keyd-unavailable` (no socket, connection closed); keyd answers RPC error `-32001` | the wired owner gate follows the signed-challenge fallback order below |
 | `keyd-signer-unverified` | the owner refused a loosened keyd signer | refused, nobody else is asked |
 | `presence-pin-mismatch` | the cached presence key disagrees with the code-signed binary and the owner did not approve a re-pin | refused, nobody else is asked |
+| `keyd-untrusted` | keyd answers RPC error `-32002`, or `agent-bot-keyd presence-key` exits 3: a pin keyd needs is a Keychain item it does not control (#753) | refused, nobody else is asked; a delegation grant keeps the code |
 | `owner-declined` | any other keyd refusal, including `keyd-timeout` | refused, nobody else is asked |
 | `presence-invalid` | the assertion does not verify | refused, nobody else is asked |
 
@@ -314,7 +315,10 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
    binary reports, a planted presence seed included, is then pinned silently.
    As with keyd's Keychain lock (#873), the durable answer is the
    data-protection keychain under the signed host app.
-5. Any other failure along the way pins nothing and returns `null`, which
+5. `presence-key` exiting 3 means keyd's presence seed is a Keychain item
+   keyd does not control (#753): `pinnedPresenceKey` throws `keyd-untrusted`,
+   pins nothing, and the owner gate refuses without another prompt. Any other
+   failure along the way pins nothing and returns `null`, which
    `keydPresence` reports as `presence-unavailable`.
 
 The key is never taken from the socket, and never from the cache alone. A
@@ -369,11 +373,24 @@ Both go on `owner.sock` only; `soul.sock` refuses them. `nonce` is agent-bot's,
   generation one past the last, in its Keychain item (service
   `agent-bot.keyd`, account `owner-pins`), and answer
   `{ attestation }`. A cancel is `-32000`; nobody to ask is `-32001`. Every
-  attempt leaves a `keyd-owner` receipt naming the digest.
+  attempt leaves a `keyd-owner` receipt naming the digest. A record that is
+  a Keychain item keyd does not control counts as no record, as the daemon
+  key does: the prompt adds "This replaces a record of your keys that
+  agent-bot-keyd did not make", the generation starts again at 1, and only
+  the owner's approval replaces the item with one keyd controls.
 - `owner/pins-status { nonce }`: no prompt. Answers `{ attestation }` for the
   record keyd holds: `digest: null` at generation 0 before any approval. A
   record keyd cannot read, generation 0 in a stored record included, is
-  `-32000`, never "no keys".
+  `-32000`, never "no keys". A record that is an item keyd does not control
+  is `-32002` (untrusted), unsigned, never "no keys" and never a record.
+
+`-32002` is keyd's answer wherever a pin it needs (the presence seed, the
+owner key record) is a Keychain item it does not control (#753). agent-bot's
+`keydRequest` rejects it with code `keyd-untrusted`, apart from
+`keyd-refused`; `keydPresence` and `keydAttestPins` pass that code on, and
+the owner gate refuses on it without falling back to another prompt. The
+same seed read by `agent-bot-keyd presence-key` exits 3, which
+`pinnedPresenceKey` reports as `keyd-untrusted` too.
 
 ### Record format
 
@@ -585,6 +602,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | The owner key set digest is the same in keyd and agent-bot | keyd | `pinSetDigest` | `keyd/src/pins.rs`: `digests_the_canonical_key_set`; `tests/owner-presence.test.mjs`: "the owner key set digest matches keyd" |
 | An owner key record verifies only for its key, nonce and time; `k1`/`pins` and `p1`/`presence` never pass for each other | keyd | `verifyPinsAttestation`, `verifyPresence` | `keyd/src/pins.rs`: `signs_under_its_own_prefix_and_kind`; `tests/owner-presence.test.mjs`: "an owner key record verifies only for its key, nonce and time, and is never a presence assertion" |
 | `owner/pins-attest` records the key set only on the owner's approval, naming every key, one generation up each time; a decline or nobody to ask changes nothing; `owner/pins-status` signs the record without a prompt | keyd-side | keyd `owner/pins-attest`, `owner/pins-status` | `keyd/src/server.rs`: `records_the_owner_keys_only_when_the_owner_approves`; `keyd/src/pins.rs`: `names_every_key_in_the_prompt` |
+| A record keyd does not control is no record to `owner/pins-attest`, replaced only on approval from generation 1, and `-32002` to `owner/pins-status`; a presence seed keyd does not control signs nothing and answers `-32002` | keyd-side, `keydRequest` | keyd `owner/pins-attest`, `owner/pins-status`, `owner/presence` | `keyd/src/server.rs`: `an_untrusted_owner_key_record_is_reported_and_replaced_only_with_approval`, `an_untrusted_presence_seed_signs_nothing`; `keyd/src/store.rs`: `an_untrusted_pin_is_typed_not_absent`; `tests/keyd.test.mjs`: "keydRequest speaks newline-delimited JSON-RPC and reports keyd refusals and absence" |
 | A malformed set or nonce is refused without asking; an unreadable record is an error, not "no keys"; both methods are owner-channel only | keyd-side | keyd `owner/pins-attest`, `owner/pins-status` | `keyd/src/server.rs`: `refuses_malformed_owner_key_requests_without_asking`; `keyd/src/pins.rs`: `refuses_malformed_key_sets`; `keyd/src/store.rs`: `memory_store_round_trips` |
 | `owner enroll` and `owner remove` write the pins only after keyd records the whole new set for a fresh nonce; no keyd, an older keyd (`-32601`), a decline, or a record of another set changes nothing; a change while the owner was asked refuses with `owner-keys-changed`; a soul caller is refused before keyd is asked | — | `keydAttestPins`, `ownerCommand` | `tests/owner-presence.test.mjs`: "keydAttestPins asks keyd to record the whole key set and checks the record is that set"; `tests/owner-statement.test.mjs`: "enroll pins a security key after a proof of possession and keyd recording the whole new key set", "enroll and remove change no pins when keyd cannot ask, the owner declines, or the key cannot prove possession", "pins are written under a lock, only if they are still the set keyd was shown", "a soul cannot enrol or remove an owner key, and keyd is never asked" |
 | Audience, unavailable RPC code and the code-signing requirement (Team ID and identifier) | — | `owner-presence.mjs` constants, `developerIdRequirement` | `tests/owner-presence.test.mjs`: "the presence contract constants keyd and agent-bot share" |

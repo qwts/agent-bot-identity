@@ -341,7 +341,7 @@ function grantView(grant) {
 }
 
 // The presence refusals a grant approval passes through (delegation-grants.mjs).
-const GRANT_PRESENCE_CODES = Object.freeze(['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified']);
+const GRANT_PRESENCE_CODES = Object.freeze(['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified', 'keyd-untrusted']);
 
 const GRANT_STATUS = Object.freeze({
   'grant-refused': 400,

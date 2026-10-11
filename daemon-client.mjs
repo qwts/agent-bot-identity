@@ -131,7 +131,7 @@ export function daemonClient({
         ? { code: payload.code, detail: String(payload.error ?? '') } : {},
       // So does a delegation grant's (#108).
       typeof payload.code === 'string' && (/^(grant|human)-[a-z][a-z-]{0,63}$/.test(payload.code)
-        || ['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified'].includes(payload.code))
+        || ['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified', 'keyd-untrusted'].includes(payload.code))
         ? { code: payload.code, detail: String(payload.error ?? '') } : {},
       // The unsigned owner challenges a decision route wants signed (#753).
       payload.code === 'owner-challenge-required' && Array.isArray(payload.challenges)
