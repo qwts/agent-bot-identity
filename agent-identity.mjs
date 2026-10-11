@@ -28,7 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { AGENT_ID_KEYS } from './resolve-agent.mjs';
-import { harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
+import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } from './config.mjs';
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
 
 const SCHEMA_VERSION = 1;
@@ -62,33 +62,42 @@ export function validateAgentId(id) {
 
 // ADR-0815: a soul is credited as a Git co-author whose email is its Agent
 // ID in a reserved, never-resolving domain (RFC 6761), so no GitHub account
-// can verify the address and claim the soul's commits.
+// can verify the address and claim the soul's commits. An organization may
+// name its own domain (`settings.soulCoauthorDomain`, validated by config).
 export const SOUL_COAUTHOR_DOMAIN = 'souls.agent-bot.invalid';
-const SOUL_CREDIT = new RegExp(
-  `^co-authored-by:[ \\t]*[^\\n<]*<([^@>\\s]*)@${SOUL_COAUTHOR_DOMAIN.replaceAll('.', '\\.')}>`,
-  'gim',
-);
+
+// The domains a soul credit may use: the one new trailers are written in
+// first, then the reserved default, which stays a soul domain after an
+// organization names its own so a credit in it can still be refused.
+export function soulCoAuthorDomains(config = loadConfig()) {
+  return [...new Set([soulCoauthorDomainSetting(config) ?? SOUL_COAUTHOR_DOMAIN, SOUL_COAUTHOR_DOMAIN])];
+}
+
+function soulCredit(domains) {
+  const hosts = domains.map((domain) => domain.replaceAll('.', '\\.')).join('|');
+  return new RegExp(`^co-authored-by:[ \\t]*[^\\n<]*<([^@>\\s]*)@(?:${hosts})>`, 'gim');
+}
 
 // The `Co-authored-by:` line for a soul. The name is the census name at
 // commit time; characters that would end or split the trailer are dropped.
-export function soulCoAuthorTrailer(id, name) {
+export function soulCoAuthorTrailer(id, name, domain = SOUL_COAUTHOR_DOMAIN) {
   validateAgentId(id);
   const shown = String(name ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim();
   if (!shown) throw new Error('a soul co-author needs a display name');
-  return `Co-authored-by: ${shown} <${id}@${SOUL_COAUTHOR_DOMAIN}>`;
+  return `Co-authored-by: ${shown} <${id}@${domain}>`;
 }
 
 // The Agent IDs (as written, valid or not) that a message credits as soul
 // co-authors, anywhere in the message. Other co-authors are not reported.
-export function soulCoAuthorCredits(message) {
-  return [...String(message).matchAll(SOUL_CREDIT)].map((match) => match[1]);
+export function soulCoAuthorCredits(message, domains = [SOUL_COAUTHOR_DOMAIN]) {
+  return [...String(message).matchAll(soulCredit(domains))].map((match) => match[1]);
 }
 
 // A message may credit only the soul it is committed as: one soul cannot be
 // credited with another soul's work (ADR-0815 §2, matrix row 7). With no
 // bound soul, no soul may be credited.
-export function assertSoulCoAuthor(message, id) {
-  const foreign = soulCoAuthorCredits(message).filter((credited) => credited !== id)
+export function assertSoulCoAuthor(message, id, domains = [SOUL_COAUTHOR_DOMAIN]) {
+  const foreign = soulCoAuthorCredits(message, domains).filter((credited) => credited !== id)
     .map((credited) => credited.replace(/[^\x21-\x7e]/g, '?').slice(0, 64));
   if (foreign.length === 0) return;
   throw new Error(id

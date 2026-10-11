@@ -143,6 +143,29 @@ test('a message crediting another soul is refused; other co-authors are left alo
   assert.equal(readFileSync(message, 'utf8'), `${people}${soulCoAuthorTrailer(identity.id, displayName(identity.id))}\nAgent-Identity: ${identity.id}\n`);
 });
 
+test('the hook writes the trailer in the organization domain when the profile names one (ADR-0815)', () => {
+  const { repo, identity, env } = fixture('coauthor-domain');
+  const config = path.join(root, 'coauthor-domain-config.json');
+  writeFileSync(config, JSON.stringify({ features: { 'github-identity': true }, settings: { soulCoauthorDomain: 'souls.example.org' } }));
+  const message = path.join(repo, 'message.txt');
+  writeFileSync(message, 'org domain\n');
+  execFileSync(prepare, [message, 'message'], { cwd: repo, env: { ...env, AGENT_BOT_CONFIG: config } });
+  assert.equal(readFileSync(message, 'utf8'),
+    `org domain\n\nCo-authored-by: ${displayName(identity.id)} <${identity.id}@souls.example.org>\nAgent-Identity: ${identity.id}\n`);
+});
+
+test('an unreadable census fails the commit instead of guessing the soul name (ADR-0815)', () => {
+  const { repo, env } = fixture('coauthor-census-broken');
+  writeFileSync(env.AGENT_BOT_POPULATION_PATH, '{ not json');
+  const message = path.join(repo, 'message.txt');
+  writeFileSync(message, 'census\n');
+  assert.throws(
+    () => execFileSync(prepare, [message, 'message'], { cwd: repo, env, stdio: 'pipe' }),
+    (error) => error.status === 1 && /cannot read the census/.test(String(error.stderr)),
+  );
+  assert.equal(readFileSync(message, 'utf8'), 'census\n');
+});
+
 test('a fork is a new soul with a new trailer email; a squash body is reported as such (ADR-0815)', () => {
   const { repo, identity } = fixture('coauthor-status');
   const fork = 'agent_33333333-3333-4333-8333-333333333333';

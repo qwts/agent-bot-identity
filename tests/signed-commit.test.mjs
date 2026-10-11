@@ -140,4 +140,7 @@ test('replay refuses a commit that credits another soul, before anything is crea
   writeFileSync(join(cwd, 'file.txt'), 'other\n');
   git('commit', '-am', `other\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Other <${other}@SOULS.agent-bot.invalid>`);
   await assert.rejects(run(['--dry-run']), new RegExp(`credits another soul as co-author \\(${other}\\).*Nothing was written`));
+  // Publishing refuses before a token is minted, so a doomed range causes
+  // no owner prompt and no credential receipt.
+  await assert.rejects(run([]), /credits another soul/);
 });

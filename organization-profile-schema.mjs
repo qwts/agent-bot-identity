@@ -136,11 +136,31 @@ function normalizeApiBase(value) {
   return value.replace(/\/+$/, '');
 }
 
+// The domain of a soul's co-author email (ADR-0815). By default the reserved
+// `souls.agent-bot.invalid`; an organization may name its own. Only the
+// shape is validated here, and a GitHub domain is refused, because an address
+// there implies an account. Whether the domain accepts mail cannot be checked
+// offline: that it accepts none is the operator's precondition (ADR-0815),
+// since anyone who can receive mail at `<agent-id>@<domain>` could verify it
+// on a GitHub account and claim the soul's commits. A `.invalid` domain
+// (RFC 6761) meets it by construction.
+const DOMAIN_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const GITHUB_DOMAINS = ['github.com', 'githubusercontent.com', 'github.io', 'ghe.com'];
+export function isSoulCoauthorDomain(value) {
+  if (typeof value !== 'string' || value.length > 253) return false;
+  const labels = value.split('.');
+  if (labels.length < 2 || !labels.every((label) => DOMAIN_LABEL.test(label))) return false;
+  if (!/^[a-z]{2,63}$/.test(labels.at(-1))) return false;
+  if (GITHUB_DOMAINS.some((github) => value === github || value.endsWith(`.${github}`))) return false;
+  // GitHub Enterprise Server's noreply addresses: users.noreply.<host>.
+  return !value.startsWith('users.noreply.');
+}
+
 function normalizeSettings(value) {
   if (value === undefined) return null;
   const settings = requireObject(value, 'organization profile settings');
   requireExactKeys(settings, {
-    allowed: ['spaces_root', 'daemon_preference', 'unmanaged_authors', 'keyd_team_id', 'keyd_identifier'],
+    allowed: ['spaces_root', 'daemon_preference', 'unmanaged_authors', 'keyd_team_id', 'keyd_identifier', 'soul_coauthor_domain'],
     required: [],
   }, 'organization profile settings');
   const normalized = {};
@@ -188,6 +208,12 @@ function normalizeSettings(value) {
       fail('profile-invalid', 'organization profile keyd_identifier must be a specific code-signing identifier (letters, digits, . -)');
     }
     normalized.keyd_identifier = settings.keyd_identifier;
+  }
+  if (settings.soul_coauthor_domain !== undefined) {
+    if (!isSoulCoauthorDomain(settings.soul_coauthor_domain)) {
+      fail('profile-invalid', 'organization profile soul_coauthor_domain must be a lowercase domain name that is not a GitHub domain');
+    }
+    normalized.soul_coauthor_domain = settings.soul_coauthor_domain;
   }
   return normalized;
 }
@@ -372,6 +398,7 @@ export function organizationProfileToConfig(value) {
     }
     if (profile.settings.keyd_team_id !== undefined) config.settings.keydTeamId = profile.settings.keyd_team_id;
     if (profile.settings.keyd_identifier !== undefined) config.settings.keydIdentifier = profile.settings.keyd_identifier;
+    if (profile.settings.soul_coauthor_domain !== undefined) config.settings.soulCoauthorDomain = profile.settings.soul_coauthor_domain;
   }
   return config;
 }
@@ -402,6 +429,7 @@ function profileFromRuntimeConfig(config) {
   if (config.settings?.unmanagedAuthors !== undefined) settings.unmanaged_authors = config.settings.unmanagedAuthors;
   if (config.settings?.keydTeamId !== undefined) settings.keyd_team_id = config.settings.keydTeamId;
   if (config.settings?.keydIdentifier !== undefined) settings.keyd_identifier = config.settings.keydIdentifier;
+  if (config.settings?.soulCoauthorDomain !== undefined) settings.soul_coauthor_domain = config.settings.soulCoauthorDomain;
   return validateOrganizationProfile({
     schema_version: metadata.schemaVersion,
     organization: metadata.organization,
