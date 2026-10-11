@@ -96,7 +96,9 @@ const CONVERSATION_READERS = Object.freeze({
 // Finds and reads the recorded session's file, or says why it cannot. The
 // excerpt is the newest whole lines within the byte bound, since the file is
 // a live, append-only log; its digest is of the delivered excerpt.
-export function captureDreamConversation(soulDir, session) {
+// `afterDirectoryOpen` is a test seam, called once each directory is opened
+// and before it is listed.
+export function captureDreamConversation(soulDir, session, { afterDirectoryOpen = () => {} } = {}) {
   const reader = session && Object.hasOwn(CONVERSATION_READERS, session.harness) ? CONVERSATION_READERS[session.harness] : null;
   if (!reader || session.store !== 'soul' || typeof session.sessionId !== 'string' || !SESSION_ID.test(session.sessionId)) {
     return { coverage: 'unsupported', conversation: null };
@@ -112,30 +114,49 @@ export function captureDreamConversation(soulDir, session) {
     // spans the whole store, so a growing history cannot make a recorded
     // session unreadable; each directory listing is bounded instead, and
     // only a single directory over that bound reports `unavailable`.
+    //
+    // Node cannot list a directory through a descriptor, so each directory
+    // (the store root and every year, month and day) is pinned instead: it
+    // must not be a link before it is opened, the descriptor opened with
+    // O_DIRECTORY | O_NOFOLLOW must be that directory, and the name must
+    // still be that same directory, not a link, once it has been listed.
+    // Anything else refuses the session rather than skipping ahead.
+    const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
     const list = directory => {
-      const dir = opendirSync(directory);
+      const before = lstatSync(directory);
+      if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('unsafe directory');
+      const pin = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       const names = [];
       try {
-        for (let entry; (entry = dir.readSync()) !== null;) {
-          if (names.length === DREAM_CONVERSATION_LIMITS.entries) throw new Error('limit');
-          names.push(entry);
-        }
-      } finally { dir.closeSync(); }
+        if (!same(fstatSync(pin), before)) throw new Error('directory changed');
+        afterDirectoryOpen(directory);
+        const dir = opendirSync(directory);
+        try {
+          for (let entry; (entry = dir.readSync()) !== null;) {
+            if (names.length === DREAM_CONVERSATION_LIMITS.entries) throw new Error('limit');
+            names.push(entry);
+          }
+        } finally { dir.closeSync(); }
+        const after = lstatSync(directory);
+        if (after.isSymbolicLink() || !same(after, before) || !same(fstatSync(pin), before)) throw new Error('directory changed');
+      } finally { closeSync(pin); }
       return names.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
     };
+    // The newest name that matches is the session's file, whatever it is: a
+    // link or anything else there refuses the session below rather than
+    // falling back to an older rollout.
     const walk = (directory, depth) => {
       for (const entry of list(directory)) {
         const file = path.join(directory, entry.name);
         if (depth < reader.depth) {
           if (entry.isDirectory()) { const match = walk(file, depth + 1); if (match) return match; }
-        } else if (entry.isFile() && reader.matches(entry.name, session.sessionId)) return file;
+        } else if (reader.matches(entry.name, session.sessionId)) return file;
       }
       return null;
     };
-    // The store root itself is checked before it is listed: a link there,
-    // or a root that resolves elsewhere, is never walked.
-    const root = path.join(home, reader.dir), rootInfo = lstatSync(root);
-    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || realpathSync(root) !== root) return unavailable;
+    // The store root must resolve to itself inside the tool home.
+    const root = path.join(home, reader.dir);
+    if (realpathSync(root) !== root) return unavailable;
     const file = walk(root, 0);
     if (file === null) return unavailable;
     // As the package reader does: no hardlink (another store's file can share
@@ -145,6 +166,10 @@ export function captureDreamConversation(soulDir, session) {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = fstatSync(fd), { size } = info;
     if (!info.isFile() || info.nlink !== 1 || info.dev !== checked.dev || info.ino !== checked.ino) return unavailable;
+    // Checked again once open: the file's only name is still this path inside
+    // the soul's tool home, reached through no link, so its bytes are the soul's.
+    const reached = lstatSync(file);
+    if (reached.isSymbolicLink() || reached.dev !== info.dev || reached.ino !== info.ino || realpathSync(file) !== file) return unavailable;
     // The whole file, not only the delivered tail, must be text: one
     // streaming pass in excerpt-sized chunks, so memory stays bounded
     // however long the session grows.

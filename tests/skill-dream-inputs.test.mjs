@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { computePackageRevision, computePackageRevisionFromEntries, readSoulPackageEntries, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
-import { captureDreamInputs, dreamInputMetadata, dreamInputMetadataDigest, validateDreamInputMetadata, DREAM_CONVERSATION_LIMITS, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
+import { captureDreamConversation, captureDreamInputs, dreamInputMetadata, dreamInputMetadataDigest, validateDreamInputMetadata, DREAM_CONVERSATION_LIMITS, DREAM_INPUT_LIMITS, DREAM_PACKAGE_LIMITS } from '../skill-dream-inputs.mjs';
 
 const HASH = `sha256:${'0'.repeat(64)}`;
 function fixture(t, formatVersion = 2) {
@@ -211,6 +211,28 @@ test('only the recorded session in the soul store is read; anything else is unsu
   mkdirSync(path.dirname(later), { recursive: true }); writeFileSync(later, '{"newest":true}\n');
   assert.equal(coverage(f.session).conversation.excerpt, '{"newest":true}\n');
   rmSync(path.dirname(later), { recursive: true });
+  // A newest matching rollout that is a link refuses the session; the older file is not used instead.
+  const linked = path.join(f.root, '.soul-state', 'tools', 'codex', 'sessions', '2026', '10', '11', `rollout-2026-10-11T09-00-00-${THREAD}.jsonl`);
+  mkdirSync(path.dirname(linked), { recursive: true }); symlinkSync(f.file, linked);
+  assert.equal(coverage(f.session).coverage.conversations, 'unavailable', 'no fall back past a linked newest rollout');
+  rmSync(path.dirname(linked), { recursive: true });
+  // A directory swapped for a link after it was checked is refused, root or day.
+  const swapped = mkdtempSync(path.join(tmpdir(), 'dream-swapped-'));
+  t.after(() => rmSync(swapped, { recursive: true, force: true }));
+  for (const target of ['sessions', path.join('sessions', '2026', '10', '10')]) {
+    const directory = path.join(realpathSync(f.root), '.soul-state', 'tools', 'codex', target);
+    let swappedOnce = false;
+    const result = captureDreamConversation(f.root, f.session, { afterDirectoryOpen: opened => {
+      if (opened !== directory || swappedOnce) return;
+      swappedOnce = true;
+      renameSync(directory, `${directory}.real`);
+      symlinkSync(`${directory}.real`, directory);
+    } });
+    assert.ok(swappedOnce, target);
+    assert.equal(result.coverage, 'unavailable', `a ${target} swapped for a link is refused`);
+    rmSync(directory); renameSync(`${directory}.real`, directory);
+  }
+  assert.equal(coverage(f.session).coverage.conversations, 'supported');
   const outside = mkdtempSync(path.join(tmpdir(), 'dream-outside-'));
   t.after(() => rmSync(outside, { recursive: true, force: true }));
   writeFileSync(path.join(outside, `rollout-x-${THREAD}.jsonl`), '{"secret":true}\n');

@@ -272,8 +272,13 @@ read and report `conversations: unsupported`. Codex is the first reader: it
 looks under `.soul-state/tools/codex/sessions/` for
 `rollout-*-<session>.jsonl`, newest first by the date-named directories and
 file names, follows no link, and stops at the first match, so a thread with
-several rollout files is read from its newest. The store root itself is checked first: a
-link there, or a root resolving outside the tool home, is never walked. No budget spans the whole store,
+several rollout files is read from its newest. Each directory, the store root included, is
+pinned while it is listed: it must not be a link, the descriptor opened with
+`O_DIRECTORY | O_NOFOLLOW` must be that directory, and the name must still be
+that directory afterwards, so a directory swapped for a link is refused. The
+newest matching name is the session's file whatever it is: if it is a link,
+the session is refused rather than an older rollout read. Once the file is open,
+its only name must still be that path, reached through no link. No budget spans the whole store,
 so a growing history never makes a recorded session unreadable; each directory
 listing is bounded to 4096 entries instead. A recorded soul-store session that
 is missing, linked or hardlinked, outside the tool home, binary or not UTF-8, or behind a
