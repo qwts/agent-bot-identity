@@ -66,7 +66,7 @@ export function validateDreamInputMetadata(value) {
     if (memory !== null) {
       keys(memory, ['harness', 'items', 'remaining', 'nextCursor']);
       if (!Object.hasOwn(MEMORY_READERS, memory.harness) || !Array.isArray(memory.items) || memory.items.length > DREAM_MEMORY_LIMITS.items
-        || !Number.isSafeInteger(memory.remaining) || memory.remaining < 0) invalid();
+        || !count(memory.remaining, DREAM_MEMORY_LIMITS.visited)) invalid();
       let previous = null, memoryBytes = 0;
       for (const item of memory.items) {
         keys(item, ['path', 'digest', 'size', 'excerptBytes', 'truncated']);
@@ -124,11 +124,14 @@ const CONVERSATION_READERS = Object.freeze({
 // that directory, and the name must still be that same directory, not a
 // link, once it has been listed. Node cannot list a directory through a
 // descriptor, hence the pin. Anything else, or more than `limit` entries,
-// throws. Entries come back in descending name order.
+// throws. Entries come back in descending name order. The whole path must
+// also resolve to itself before the directory is opened and after it is
+// listed, so an ancestor swapped for a link or for a directory elsewhere
+// (O_NOFOLLOW guards only the last component) refuses the listing.
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
 function listPinned(directory, limit, afterDirectoryOpen = () => {}) {
   const before = lstatSync(directory);
-  if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('unsafe directory');
+  if (!before.isDirectory() || before.isSymbolicLink() || realpathSync(directory) !== directory) throw new Error('unsafe directory');
   const pin = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   const names = [];
   try {
@@ -142,7 +145,7 @@ function listPinned(directory, limit, afterDirectoryOpen = () => {}) {
       }
     } finally { dir.closeSync(); }
     const after = lstatSync(directory);
-    if (after.isSymbolicLink() || !same(after, before) || !same(fstatSync(pin), before)) throw new Error('directory changed');
+    if (after.isSymbolicLink() || !same(after, before) || !same(fstatSync(pin), before) || realpathSync(directory) !== directory) throw new Error('directory changed');
   } finally { closeSync(pin); }
   return names.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
 }

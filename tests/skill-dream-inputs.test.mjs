@@ -347,6 +347,7 @@ test('harness memory in the soul\'s tool home is delivered as format 3, identifi
     value => { value.memory.items[0].excerptBytes = DREAM_MEMORY_LIMITS.excerptBytes + 1; },
     value => { value.memory.harness = 'codex'; },
     value => { value.memory.remaining = -1; },
+    value => { value.memory.remaining = DREAM_MEMORY_LIMITS.visited + 1; },
     value => { value.coverage.memory = 'unavailable'; },
     value => { value.memory = null; },
     value => { delete value.memory; },
@@ -447,6 +448,26 @@ test('memory is delivered within item and byte limits, with truncation and the r
   assert.equal(memory.items.reduce((sum, item) => sum + item.excerptBytes, 0), DREAM_MEMORY_LIMITS.bytes);
   assert.deepEqual([memory.items.length, memory.remaining], [4, 1], 'the byte budget stops delivery and counts the rest');
   assert.ok(dreamInputMetadata(captureDreamInputs(f.root, { memory: { harness: 'claude' } })));
+});
+
+test('memory listed through an ancestor swapped for a link is unavailable, not silently skipped', t => {
+  const f = memoryFixture(t);
+  f.remember('-b/memory/notes.txt', 'not memory');
+  // While the memory directory is open, its project moves out of the store
+  // and a link takes its place. The memory directory itself is unchanged
+  // (same inode, still a real directory at its last component), so only
+  // the whole path shows the listing is now outside the store.
+  const outside = mkdtempSync(path.join(tmpdir(), 'dream-ancestor-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  const project = path.join(realpathSync(f.root), '.soul-state', 'tools', 'claude', 'projects', '-b');
+  let moved = false;
+  const result = captureDreamMemory(f.root, 'claude', { afterDirectoryOpen: opened => {
+    if (opened !== path.join(project, 'memory') || moved) return;
+    moved = true; renameSync(project, path.join(outside, '-b')); symlinkSync(path.join(outside, '-b'), project);
+  } });
+  assert.deepEqual([moved, result.coverage], [true, 'unavailable']);
+  rmSync(project); renameSync(path.join(outside, '-b'), project);
+  assert.equal(captureDreamMemory(f.root, 'claude').coverage, 'supported', 'the swap undone');
 });
 
 test('a memory cursor lets later runs reach files past the limits, then wraps', t => {
