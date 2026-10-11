@@ -1,0 +1,1 @@
+- Dream memory input keeps a cursor, so runs after the first reach harness memory files past the 64-file and 256 KiB limits, then wrap to the start (#903).

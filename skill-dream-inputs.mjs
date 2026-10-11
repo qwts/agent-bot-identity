@@ -64,7 +64,7 @@ export function validateDreamInputMetadata(value) {
     const memory = value.memory;
     if (!MEMORY_COVERAGE.includes(coverage.memory) || (coverage.memory === 'supported') !== (memory !== null)) invalid();
     if (memory !== null) {
-      keys(memory, ['harness', 'items', 'remaining']);
+      keys(memory, ['harness', 'items', 'remaining', 'nextCursor']);
       if (!Object.hasOwn(MEMORY_READERS, memory.harness) || !Array.isArray(memory.items) || memory.items.length > DREAM_MEMORY_LIMITS.items
         || !Number.isSafeInteger(memory.remaining) || memory.remaining < 0) invalid();
       let previous = null, memoryBytes = 0;
@@ -77,6 +77,9 @@ export function validateDreamInputMetadata(value) {
         previous = item.path; memoryBytes += item.excerptBytes;
       }
       if (memoryBytes > DREAM_MEMORY_LIMITS.bytes) invalid();
+      // The last delivered path while files after it were left for a later
+      // run; null wraps the next run to the first memory file.
+      if (memory.nextCursor !== null && (memory.items.length === 0 || memory.nextCursor !== memory.items.at(-1).path || memory.remaining === 0)) invalid();
     }
   } else if (coverage.memory !== 'unsupported') invalid();
   if (coverage.definition !== 'supported'
@@ -100,7 +103,7 @@ export function dreamInputMetadata(inputs) {
     sources: inputs.sources.map(({ path, kind, digest, size, excerptBytes, truncated }) => ({ path, kind, digest, size, excerptBytes, truncated })),
     coverage: structuredClone(inputs.coverage), nextCursor: structuredClone(inputs.nextCursor),
     ...(inputs.schemaVersion >= 2 ? { conversation } : {}),
-    ...(inputs.schemaVersion === 3 ? { memory: inputs.memory === null ? null : { harness: inputs.memory.harness, remaining: inputs.memory.remaining,
+    ...(inputs.schemaVersion === 3 ? { memory: inputs.memory === null ? null : { harness: inputs.memory.harness, remaining: inputs.memory.remaining, nextCursor: inputs.memory.nextCursor,
       items: inputs.memory.items.map(({ path, digest, size, excerptBytes, truncated }) => ({ path, digest, size, excerptBytes, truncated })) } } : {}) });
 }
 
@@ -277,10 +280,12 @@ const memoryPath = (harness, value) => {
 // is unsafe or past a listing bound; the run continues without memory.
 // `supported`: every memory file was found without a link; the first ones in
 // path order are checked and delivered within the limits, and `remaining`
-// counts the rest.
+// counts the rest. Delivery starts after `cursor`, the previous run's
+// `nextCursor`, so later runs reach files past the limits; a cursor whose
+// file is gone still starts at the next path, and the end wraps to the start.
 // `afterDirectoryOpen` is a test seam, as for conversations; `afterFileScan`
 // (called once a file is hashed) and `visitedLimit` are test seams too.
-export function captureDreamMemory(soulDir, harness, { afterDirectoryOpen = () => {}, afterFileScan = () => {}, visitedLimit = DREAM_MEMORY_LIMITS.visited } = {}) {
+export function captureDreamMemory(soulDir, harness, { cursor = null, afterDirectoryOpen = () => {}, afterFileScan = () => {}, visitedLimit = DREAM_MEMORY_LIMITS.visited } = {}) {
   const reader = typeof harness === 'string' && Object.hasOwn(MEMORY_READERS, harness) ? MEMORY_READERS[harness] : null;
   const unsupported = { coverage: 'unsupported', memory: null }, unavailable = { coverage: 'unavailable', memory: null };
   if (!reader) return unsupported;
@@ -326,8 +331,11 @@ export function captureDreamMemory(soulDir, harness, { afterDirectoryOpen = () =
     // Path order (code units), the order format 3 metadata requires.
     files.sort((a, b) => (a.relative < b.relative ? -1 : a.relative > b.relative ? 1 : 0));
     const items = [];
-    let supplied = 0;
-    for (const { file, relative } of files) {
+    let supplied = 0, last = -1;
+    const after = typeof cursor === 'string' && memoryPath(harness, cursor) ? files.findIndex(entry => entry.relative > cursor) : 0;
+    const start = after === -1 ? 0 : after;
+    for (let index = start; index < files.length; index++) {
+      const { file, relative } = files[index];
       if (items.length === DREAM_MEMORY_LIMITS.items || supplied === DREAM_MEMORY_LIMITS.bytes) break;
       const opened = openPinnedFile(file);
       if (opened === null) return unavailable;
@@ -355,10 +363,12 @@ export function captureDreamMemory(soulDir, harness, { afterDirectoryOpen = () =
         const excerptBytes = Buffer.byteLength(excerpt);
         if (excerptBytes === 0 && opened.size > 0) break;
         supplied += excerptBytes;
+        last = index;
         items.push({ path: relative, digest: `sha256:${hash.digest('hex')}`, size: opened.size, excerpt, excerptBytes, truncated: excerptBytes < opened.size });
       } finally { closeSync(opened.fd); }
     }
-    return { coverage: 'supported', memory: { harness, items, remaining: files.length - items.length } };
+    return { coverage: 'supported', memory: { harness, items, remaining: files.length - items.length,
+      nextCursor: last !== -1 && last < files.length - 1 ? files[last].relative : null } };
   } catch { return unavailable; }
 }
 
@@ -414,7 +424,7 @@ export function captureDreamInputs(soulDir, { cursor = null, session, memory } =
   }
   const schemaVersion = memory !== undefined ? 3 : session !== undefined ? 2 : 1;
   const conversation = session === undefined ? (schemaVersion === 3 ? { coverage: 'unsupported', conversation: null } : null) : captureDreamConversation(soulDir, session);
-  const remembered = memory === undefined ? null : captureDreamMemory(soulDir, memory?.harness);
+  const remembered = memory === undefined ? null : captureDreamMemory(soulDir, memory?.harness, { cursor: memory?.cursor ?? null });
   return {
     schemaVersion, revision, sources,
     coverage: { definition: 'supported', memory: remembered?.coverage ?? 'unsupported', conversations: conversation?.coverage ?? 'unsupported',
