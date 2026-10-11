@@ -140,6 +140,65 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
     }
   }
 
+  function assertPrivateFile(file, sid) {
+    assertOwnedFile(file, sid);
+    verifyPrivateAcl(file, sid, 'file');
+  }
+
+  // Existing binding parents are inspected, never rewritten. Creation-only
+  // rights on an OS-owned ancestor (the normal volume-root ACL) cannot replace
+  // an existing descendant; the immediate parent must exclude all mutation.
+  function assertSafeBindingParents(file, sid) {
+    if (!isWindowsSid(sid)) throw new Error('expected account SID is invalid');
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      `$file = ${quoteForPowerShell(file)}`,
+      `$owner = '${sid}'`,
+      "  $reason = 'metadata'",
+      "  $depth = 0",
+      "try {",
+      "  $trusted = @($owner, 'S-1-5-18', 'S-1-5-32-544')",
+      // The Windows Modules Installer can own normal volume roots. This SID
+      // is accepted only as an ancestor owner, never as a file owner or grant.
+      "  $installer = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'",
+      "  $p = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($file))",
+      "  $first = $true",
+      "  while ($p) {",
+      "    $item = Get-Item -LiteralPath $p -Force",
+      "    if (-not $item.PSIsContainer -or [int]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { $reason = 'object'; throw 'object' }",
+      "    $acl = Get-Acl -LiteralPath $p",
+      "    $actualOwner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
+      "    $trustedOwner = $trusted -contains $actualOwner -or (-not $first -and $actualOwner -eq $installer)",
+      "    if (-not $trustedOwner -or ($first -and $actualOwner -ne $owner)) { $reason = 'owner'; throw 'owner' }",
+      "    $rights = [System.Security.AccessControl.FileSystemRights]",
+      "    $mutation = [long]$rights::Write -bor [long]$rights::Delete -bor [long]$rights::DeleteSubdirectoriesAndFiles -bor [long]$rights::ChangePermissions -bor [long]$rights::TakeOwnership",
+      "    if (-not $first -and $actualOwner -ne $owner) { $mutation = $mutation -band (-bnot ([long]$rights::WriteData -bor [long]$rights::AppendData)) }",
+      "    foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {",
+      "      if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }",
+      "      if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $trusted -notcontains $rule.IdentityReference.Value -and ([long]$rule.FileSystemRights -band $mutation) -ne 0) { $reason = 'foreign-mutation'; throw 'foreign mutation' }",
+      "    }",
+      "    $parent = [System.IO.Directory]::GetParent($p)",
+      "    $p = if ($parent) { $parent.FullName } else { $null }",
+      "    $first = $false",
+      "    $depth++",
+      "  }",
+      "  [Console]::Out.Write('safe')",
+      "} catch { [Console]::Out.Write(('refused|{0}|{1}' -f $reason, $depth)) }",
+      "",
+      "",
+    ].join('\n');
+    const result = run('powershell.exe', POWERSHELL_ARGS, {
+      input: script, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: legacyPowerShellEnv(env),
+    });
+    if (result?.status !== 0 || String(result.stdout ?? '').trim() !== 'safe') {
+      const refusal = /^refused\|(metadata|object|owner|foreign-mutation)\|([0-9]{1,3})$/.exec(String(result?.stdout ?? '').trim());
+      throw Object.assign(new Error(`Windows binding parent custody could not be verified${refusal ? ` (${refusal[1]}, ancestor ${refusal[2]})` : ''}`), {
+        code: 'binding-parent-untrusted',
+        ...(refusal ? { details: { reason: refusal[1], ancestor: Number(refusal[2]) } } : {}),
+      });
+    }
+  }
+
   function createOwnedDirectory(file, sid) {
     if (!isWindowsSid(sid)) throw new Error('expected account SID is invalid');
     const script = [
@@ -228,5 +287,5 @@ export function createWindowsAccountCustody({ run = spawnSync, env = process.env
     verifyPrivateAcl(file, sid, 'file');
   }
 
-  return Object.freeze({ currentSid, assertOwnedDirectory, assertOwnedFile, createOwnedDirectory, createPrivateFile, restrictPrivateFile });
+  return Object.freeze({ currentSid, assertOwnedDirectory, assertOwnedFile, assertPrivateFile, assertSafeBindingParents, createOwnedDirectory, createPrivateFile, restrictPrivateFile });
 }

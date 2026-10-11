@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createBindingRegistry, readBinding, revokeBinding } from '../agent-binding.mjs';
+import { assertPrivateGitDir, createBindingRegistry, readBinding, revokeBinding } from '../agent-binding.mjs';
 import { createMcpState, handleMcpMessage } from '../agent-mcp.mjs';
 import { runHooks } from '../agent-hook.mjs';
 import { signBindingProof } from '../binding-proof.mjs';
@@ -178,4 +178,63 @@ test('a proof captured before a daemon restart is refused after it, even on the 
   const fresh = signBindingProof({ secret: f.secret, ...request, now: f.options.now().getTime() });
   assert.equal(restarted.resolveProof(fresh, request).agentId, agentId);
   assert.equal(restarted.resolveProof(fresh, request), null);
+});
+
+test('Windows first-start binding paths do not require a Unix uid or existing registry', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'binding-first-start-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const module = new URL('../agent-binding.mjs', import.meta.url).href;
+  execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import {createBindingRegistry, readBinding} from ${JSON.stringify(module)};
+    process.getuid = undefined;
+    const file = ${JSON.stringify(path.join(root, 'missing.json'))};
+    const custody = {currentSid(){throw Error('missing files do not need custody inspection')}};
+    assert.equal(createBindingRegistry({file,platform:'win32',custody}).size(),0);
+    assert.equal(readBinding({env:{AGENT_BOT_BINDING:file},platform:'win32',custody}),null);
+  `]);
+});
+
+test('Windows binding write refuses a replaced temporary pathname before writing bytes', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'binding-write-race-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', root]);
+  const file = path.join(root, 'bindings.json');
+  let temporary;
+  let parents = 0;
+  const displaced = path.join(root, 'displaced-empty-file');
+  const custody = {
+    currentSid: () => 'S-1-5-21-1',
+    assertPrivateFile() {},
+    createPrivateFile(location) { temporary = location; writeFileSync(location, '', { flag: 'wx' }); },
+    assertSafeBindingParents() {
+      parents += 1;
+      if (parents === 2) {
+        // The write handle still names the original empty object.
+        renameSync(temporary, displaced);
+        writeFileSync(temporary, '', { flag: 'wx' });
+      }
+    },
+  };
+  const store = createBindingRegistry({ file, platform: 'win32', custody });
+  store.rewrite('http://127.0.0.1:1234');
+  assert.throws(() => store.bind({ agentId, parent: null, gitDir: path.join(root, '.git'), worktree: root }), /changed during open/);
+  assert.equal(readFileSync(displaced).length, 0);
+  assert.equal(existsSync(file), false);
+});
+
+
+test('Windows private Git directory comparison accepts the same object and rejects another directory', { skip: process.platform === 'win32' }, (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'binding-git-identity-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', root]);
+  const gitDir = path.join(root, '.git');
+  const alias = path.join(root, 'git-directory-alias');
+  symlinkSync(gitDir, alias, 'junction');
+  // The git probe returns .git while the claim uses an alias to the same
+  // object. A different real directory must still fail the authority check.
+  assertPrivateGitDir(alias, root, { platform: 'win32' });
+  const other = path.join(root, 'other-directory');
+  mkdirSync(other);
+  assert.throws(() => assertPrivateGitDir(other, root, { platform: 'win32' }), /private git dir/);
 });

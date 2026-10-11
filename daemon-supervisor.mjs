@@ -28,7 +28,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, win32 } from 'node:path';
+import { windowsTaskJobArguments, windowsTaskJobCommandLine } from './windows-task-job.mjs';
 import process from 'node:process';
 
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
@@ -114,12 +115,39 @@ function xmlEscape(value) {
     .replaceAll('"', '&quot;');
 }
 
-export function supervisorEnvironment({ env = process.env, home = homedir() } = {}) {
+// These are broker locations and state paths, never credential contents or
+// arbitrary caller environment. Preserve the installing host's explicit selection on restart.
+export function supervisorBrokerEnvironment(env, platform = process.platform) {
+  const selected = {};
+  const label = env.AGENT_COMMS_SERVICE_LABEL;
+  if (label !== undefined && label !== '') {
+    if (typeof label !== 'string' || !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(label)) {
+      fail('usage', 'invalid AGENT_COMMS_SERVICE_LABEL');
+    }
+    selected.AGENT_COMMS_SERVICE_LABEL = label;
+  }
+  for (const key of ['AGENT_COMMS_SHARED_DIR', 'AGENT_COMMS_BROKER_STATE_DIR', 'XDG_STATE_HOME', 'AGENT_BOT_COMMS_DAEMON_PATH']) {
+    const value = env[key];
+    if (value === undefined || value === '') continue;
+    if (typeof value !== 'string' || /[\r\n\0]/.test(value)
+      || !(platform === 'win32' ? win32.isAbsolute(value) : isAbsolute(value))) {
+      fail('usage', `${key} must be an absolute path without control characters`);
+    }
+    if (platform === 'win32' && /["%]/.test(value)) {
+      fail('usage', `${key} cannot be put on a Windows task command line`);
+    }
+    selected[key] = value;
+  }
+  return selected;
+}
+
+export function supervisorEnvironment({ env = process.env, home = homedir(), platform = process.platform } = {}) {
   const label = hostServiceLabel(env);
   // Validated here, so a malformed name fails the install, not a later mint.
   credentialNamespace(env);
   credentialVault(env);
   const keydSigner = keydSignerEnvironment(env);
+  const broker = supervisorBrokerEnvironment(env, platform);
   return {
     AGENT_BOT_DAEMON_STATE_PATH: daemonStateFile({ env, home }),
     ...(env.AGENT_BOT_DAEMON_LOG_MAX_BYTES !== undefined
@@ -132,6 +160,7 @@ export function supervisorEnvironment({ env = process.env, home = homedir() } = 
     // The host's keyd signer, which wins over the config as it does for
     // direct actions; unset leaves the daemon on the config (#865).
     ...keydSigner,
+    ...broker,
     // A host's own npm, which installs soul harnesses (ADR-0276).
     ...(env.AGENT_BOT_NPM && isAbsolute(env.AGENT_BOT_NPM) ? { AGENT_BOT_NPM: env.AGENT_BOT_NPM } : {}),
     ...(env.AGENT_BOT_EXECUTOR === '1' ? { AGENT_BOT_EXECUTOR: '1' } : {}),
@@ -366,8 +395,8 @@ export function renderScheduledTask({ executable, programArguments, environment 
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%SystemRoot%\\System32\\cmd.exe</Command>
-      ${element('Arguments', scheduledTaskArguments({ program, environment, logPath }))}
+      <Command>%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Command>
+      ${element('Arguments', windowsTaskJobArguments(scheduledTaskArguments({ program, environment, logPath })))}
       ${element('WorkingDirectory', dirname(logPath))}
     </Exec>
   </Actions>
@@ -449,8 +478,14 @@ export function supervisorUnitCredentialNames({
       value = quoted !== undefined ? quoted.replace(/\\(.)/g, '$1')
         : new RegExp(`^Environment=${key}=(\\S*)$`, 'm').exec(text)?.[1];
     } else {
-      value = new RegExp(`set &quot;${key}=([^&]*(?:&(?!quot;)[^&]*)*)&quot; &amp;&amp;`).exec(text)?.[1];
-      if (value !== undefined) value = xmlUnescape(value);
+      const encoded = /<Arguments>([^<]*)<\/Arguments>/.exec(text)?.[1];
+      const commandLine = encoded ? windowsTaskJobCommandLine(xmlUnescape(encoded)) : null;
+      if (commandLine !== null) {
+        value = new RegExp(`set "${key}=([^"\\r\\n]*)" &&`).exec(commandLine)?.[1];
+      } else {
+        value = new RegExp(`set &quot;${key}=([^&]*(?:&(?!quot;)[^&]*)*)&quot; &amp;&amp;`).exec(text)?.[1];
+        if (value !== undefined) value = xmlUnescape(value);
+      }
     }
     if (value) names[key] = value;
   }
@@ -656,7 +691,7 @@ export async function ensureDaemonSupervisor({
     return { applied: false, reason: 'unsupported-platform', platform };
   }
   const skipLoad = supervisorSkipLoad(env);
-  const environment = supervisorEnvironment({ env, home });
+  const environment = supervisorEnvironment({ env, home, platform });
   const supervisorEnv = { ...env, ...environment };
   // Resolve through the stable opt paths, not the versioned Cellar realpath:
   // a unit that pins a Cellar path breaks on the next `brew upgrade` +
@@ -752,7 +787,7 @@ export async function disableDaemonSupervisor({
     return { unloaded: false, reason: 'unsupported-platform', platform };
   }
   const skipLoad = supervisorSkipLoad(env);
-  const supervisorEnv = { ...env, ...supervisorEnvironment({ env, home }) };
+  const supervisorEnv = { ...env, ...supervisorEnvironment({ env, home, platform }) };
   if (exists(paths.unitPath) || inspectSupervisor({ home, env, platform, exists, exec }).loaded) {
     unloadSupervisor(paths, { env, exec, skipLoad });
   }

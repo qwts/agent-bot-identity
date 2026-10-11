@@ -261,6 +261,7 @@
     "update.mjs": "cli",
     "vouch.mjs": "identity",
     "windows-account-custody.mjs": "shared",
+    "windows-task-job.mjs": "host",
     "wake-dispatch.mjs": "comms",
     "wake-listen.mjs": "comms",
     "wake-plane.mjs": "host",

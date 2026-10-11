@@ -80,6 +80,7 @@ const LAUNCH_PATHS = {
   'worktree-token.mjs': [1, 'git'],
   // Build tooling, never shipped to a soul.
   'scripts/changelog.mjs': [1, 'build tooling: git'],
+  'scripts/windows-supervisor-acceptance.mjs': [1, 'owner-run disposable native acceptance: real OS task tools and staged first-party engines only'],
   'scripts/linux-bundle/build.mjs': [2, 'build tooling'],
 };
 

@@ -23,9 +23,16 @@ The task runs at this user's logon, hidden, with `RestartOnFailure` every
 minute (count 999, the schema's ceiling; it resets at the next logon), no
 `ExecutionTimeLimit` (`PT0S`) and `MultipleInstances` set to ignore a second
 start. Task Scheduler has neither stdio paths nor an environment block, so
-the action is `cmd.exe /S /C` with one line that pins the daemon's
+the action is a classic PowerShell wrapper that enters an unnamed Windows
+job before starting `cmd.exe /S /C`. Its non-inheritable job handle remains
+open for the wrapper lifetime: ending the task closes it and terminates only
+that task's descendant tree, including the daemon and pipe bridges. Failure
+to enter the job refuses startup; no PID scan or fallback is used. Older
+installed tasks gain this protection when refreshed. The cmd line pins the
+daemon's
 environment (`AGENT_BOT_DAEMON_STATE_PATH`, the label, the host's npm and
-tool path), runs the current `node.exe` with the daemon entry script and
+tool path, explicit broker label/shared/state paths, `XDG_STATE_HOME` and
+`AGENT_BOT_COMMS_DAEMON_PATH`), runs the current `node.exe` with the daemon entry script and
 `daemon run`, and appends stdout and stderr to the log. A path carrying a
 quote or a percent sign has no faithful form on that line and is refused as
 a usage error.
@@ -123,3 +130,40 @@ GeniusBar #46, agent-comms #127, and agent-bot #813.
 - `agent-bot install` (the hooks, the `~/.local/bin` launcher, the PATH
   block) and soul homes as symlinks: the GeniusBar slice of ADR-0046
   (`.cmd` shims, copies in place of links, bundled MinGit).
+
+## Signed-in supervisor acceptance
+
+Run the following command:
+
+```powershell
+node scripts/windows-supervisor-acceptance.mjs --comms ABSOLUTE_COMMS_CHECKOUT --report ABSOLUTE_REPORT_PATH
+```
+
+with `AGENT_COMMS_DISPOSABLE_WINDOWS=1` only in a disposable signed-in Windows
+account. Use the host-selected portable Node and a comms checkout containing
+the task-lifetime fix from agent-comms #148. The report path must be outside
+the script's runtime directory.
+
+This exercises the production supervisor installer, actual scheduled tasks,
+normal native vouch-key pairing, and actual `runDaemon` account-watch/wake
+reporting before and after task and broker restart. The daemon runs through
+its supported host API with an explicit disposable home and empty config;
+Windows custody still uses the actual account and profile. This isolates
+logs, population and config without changing `USERPROFILE` or `LOCALAPPDATA`.
+It does not establish CLI default-home installation, packaged host support,
+actual logoff/logon or full harness launch. No OS, process, transport or
+credential provider is injected. Cleanup targets only uniquely named tasks
+and directories. On failure, the sanitized JSON report includes scheduler
+state and result code, daemon health, and fixed startup error classifications.
+The uniquely named runtime directory is retained with its local startup log
+for diagnosis; that directory can contain credentials and must not be
+published with the report. Successful runs remove their runtime directory.
+
+Windows binding secrets and the daemon's binding registry use native SID and
+owner-only file ACL checks. Existing parent ACLs are inspected without changes:
+parents must be real directories with trusted account or OS ownership, and
+foreign mutation or descendant replacement rights cause refusal. Secure Git
+worktrees outside the profile remain eligible. The fixed Windows Modules
+Installer (TrustedInstaller) SID is accepted as an ancestor owner; immediate
+parents and binding files still require ownership by the current account, and
+foreign mutation grants remain subject to the same refusal checks.

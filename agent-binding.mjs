@@ -4,12 +4,13 @@
 // private git dir holds the secret; the daemon registry persists its hash.
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, openSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, openSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import process from 'node:process';
 
+import { createWindowsAccountCustody } from './windows-account-custody.mjs';
 import { validateAgentId } from './identity-format.mjs';
 import { PROOF_HEADER, PROOF_WINDOW_MS, bindingKeyId, checkBindingProof, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 
@@ -111,14 +112,30 @@ export function consumeBindToken({ gitDir, token }) {
 }
 
 // The shared reader refuses symlinks, foreign owners, and permissive modes.
-function readPrivate(file, uid = process.getuid()) {
+function readPrivate(file, uid, options = {}) {
+  const platform = options.platform ?? process.platform;
   let fd;
   try {
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let before;
+    let custody;
+    let sid;
+    if (platform === 'win32') {
+      // Check existence before asking for account custody, including on a
+      // first daemon start with no binding registry yet.
+      before = lstatSync(file);
+      custody = options.custody ?? createWindowsAccountCustody();
+      sid = custody.currentSid();
+      custody.assertSafeBindingParents(file, sid);
+      custody.assertPrivateFile(file, sid);
+    }
+    fd = openSync(file, platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.uid !== uid || (stat.mode & 0o777) !== 0o600) {
+    if (!stat.isFile() || (platform === 'win32'
+      ? before.dev !== stat.dev || before.ino !== stat.ino
+      : stat.uid !== (uid ?? process.getuid()) || (stat.mode & 0o777) !== 0o600)) {
       throw fail('untrusted binding file', 409);
     }
+    if (custody) custody.assertPrivateFile(file, sid);
     try { return JSON.parse(readFileSync(fd, 'utf8')); }
     catch { throw fail('invalid binding JSON', 409); }
   } catch (error) {
@@ -129,31 +146,64 @@ function readPrivate(file, uid = process.getuid()) {
   }
 }
 
-export function assertPrivateGitDir(gitDir, worktree) {
+export function assertPrivateGitDir(gitDir, worktree, { platform = process.platform } = {}) {
   if (typeof gitDir !== 'string' || !path.isAbsolute(gitDir)) throw fail('invalid private git dir');
   let actual;
   try {
     actual = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
       cwd: worktree, env: { PATH: process.env.PATH }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    if (realpathSync(actual) === realpathSync(gitDir)) return;
+    if (platform === 'win32') {
+      // Git and Node can spell the same Windows directory differently
+      // (separators or 8.3 aliases). Compare native object IDs, never fold
+      // case: Windows also supports case-sensitive directories.
+      const found = statSync(actual, { bigint: true });
+      const expected = statSync(gitDir, { bigint: true });
+      if (found.isDirectory() && expected.isDirectory() && found.ino !== 0n
+        && found.dev === expected.dev && found.ino === expected.ino) return;
+    } else if (realpathSync(actual) === realpathSync(gitDir)) return;
   } catch {}
   throw fail('binding path is not the worktree private git dir');
 }
 
-function atomicWrite(file, value) {
+function atomicWrite(file, value, options = {}) {
   const temp = `${file}.${randomBytes(12).toString('hex')}.tmp`;
   try {
-    const fd = openSync(temp, 'wx', 0o600);
+    const windows = (options.platform ?? process.platform) === 'win32';
+    const custody = windows ? options.custody ?? createWindowsAccountCustody() : null;
+    const sid = custody?.currentSid();
+    let created;
+    if (custody) {
+      custody.assertSafeBindingParents(file, sid);
+      if (existsSync(file)) custody.assertPrivateFile(file, sid);
+      custody.createPrivateFile(temp, sid);
+      created = lstatSync(temp);
+    }
+    const fd = openSync(temp, windows ? 'r+' : 'wx', 0o600);
     try {
-      fchmodSync(fd, 0o600);
+      if (custody) {
+        const opened = fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== created.dev || opened.ino !== created.ino || opened.size !== 0) throw fail('untrusted binding write', 409);
+        custody.assertSafeBindingParents(file, sid);
+        custody.assertPrivateFile(temp, sid);
+        const named = lstatSync(temp);
+        if (named.dev !== opened.dev || named.ino !== opened.ino) throw fail('binding file changed during open', 409);
+      }
+      else fchmodSync(fd, 0o600);
       writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
     } finally { closeSync(fd); }
+    if (custody) {
+      custody.assertSafeBindingParents(file, sid);
+      custody.assertPrivateFile(temp, sid);
+      const named = lstatSync(temp);
+      if (named.dev !== created.dev || named.ino !== created.ino) throw fail('binding file changed during write', 409);
+    }
     renameSync(temp, file);
+    if (custody) custody.assertPrivateFile(file, sid);
   } finally { rmSync(temp, { force: true }); }
 }
 
-export function readBinding({ env = process.env, cwd = process.cwd(), gitDir, uid = process.getuid() } = {}) {
+export function readBinding({ env = process.env, cwd = process.cwd(), gitDir, uid, platform = process.platform, custody = null } = {}) {
   let file = env.AGENT_BOT_BINDING;
   if (!file) {
     if (!gitDir) {
@@ -162,7 +212,7 @@ export function readBinding({ env = process.env, cwd = process.cwd(), gitDir, ui
     }
     file = path.join(gitDir, 'agent-binding.json');
   }
-  const binding = readPrivate(file, uid);
+  const binding = readPrivate(file, uid, { platform, custody });
   if (!binding) return null;
   let url;
   try { url = new URL(binding.daemon); } catch { throw fail('invalid binding daemon URL'); }
@@ -191,8 +241,9 @@ function entryPath(entry) {
   return childBindingPath(entry.gitDir, entry.agentId);
 }
 
-export function createBindingRegistry({ now = () => new Date(), file, account = process.env.USER ?? 'unknown' } = {}) {
-  const loaded = file ? readPrivate(file) ?? {} : {};
+export function createBindingRegistry({ now = () => new Date(), file, account = process.env.USER ?? process.env.USERNAME ?? 'unknown', platform = process.platform, custody = null } = {}) {
+  const storage = { platform, custody };
+  const loaded = file ? readPrivate(file, undefined, storage) ?? {} : {};
   if (typeof loaded !== 'object' || Array.isArray(loaded)) throw fail('invalid binding store');
   for (const [key, entry] of Object.entries(loaded)) {
     if (!/^[a-f0-9]{64}$/.test(key) || !entry || typeof entry !== 'object'
@@ -210,7 +261,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
   function save() {
     if (!file || (bindings.size === 0 && !existsSync(file))) return;
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    atomicWrite(file, Object.fromEntries(bindings));
+    atomicWrite(file, Object.fromEntries(bindings), storage);
   }
   // Removing the registry entry is what revokes; deleting the file is
   // cleanup, so an unreadable file or a moved worktree never blocks it.
@@ -221,7 +272,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
     }
     if (!entry.gitDir) return;
     try {
-      const existing = readBinding({ env: { AGENT_BOT_BINDING: entryPath(entry) } });
+      const existing = readBinding({ env: { AGENT_BOT_BINDING: entryPath(entry) }, ...storage });
       if (existing && hash(existing.secret) === key) {
         assertPrivateGitDir(entry.gitDir, entry.worktree);
         rmSync(entryPath(entry), { force: true });
@@ -282,10 +333,10 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       // so a binding whose file is gone, foreign, or moved is pruned.
       for (const [key, entry] of bindings) {
         try {
-          const existing = readBinding({ env: { AGENT_BOT_BINDING: entryPath(entry) } });
+          const existing = readBinding({ env: { AGENT_BOT_BINDING: entryPath(entry) }, ...storage });
           if (!existing || hash(existing.secret) !== key) { remove(key, entry); continue; }
           assertPrivateGitDir(entry.gitDir, entry.worktree);
-          atomicWrite(entryPath(entry), { ...existing, daemon });
+          atomicWrite(entryPath(entry), { ...existing, daemon }, storage);
         } catch {
           remove(key, entry);
         }
@@ -309,7 +360,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       try {
         if (gitDir) {
           if (spawnedBy) mkdirSync(path.join(gitDir, 'agent-bindings'), { recursive: true, mode: 0o700 });
-          atomicWrite(entryPath(entry), { v: 1, agentId, parent, account, daemon, secret });
+          atomicWrite(entryPath(entry), { v: 1, agentId, parent, account, daemon, secret }, storage);
         }
       } catch (error) {
         bindings.delete(hash(secret));
