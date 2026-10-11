@@ -37,6 +37,9 @@ const REGISTRY = {
   claude: { harness: 'claude', enabled: true, command: process.execPath, args: [FIXTURE], stripEnv: [], mcpToolNaming: 'claude-meta' },
   codex: { harness: 'codex', enabled: true, command: process.execPath, args: [FIXTURE], stripEnv: [], mcpToolNaming: 'claude-meta',
     sessionMode: ACP_SPAWN_REGISTRY.codex.sessionMode, setEnv: ACP_SPAWN_REGISTRY.codex.setEnv },
+  // OpenCode's row keeps the daemon's own agent and its ruleset.
+  opencode: { harness: 'opencode', enabled: true, command: process.execPath, args: [FIXTURE], stripEnv: [], mcpToolNaming: 'claude-meta',
+    sessionMode: ACP_SPAWN_REGISTRY.opencode.sessionMode, setEnv: ACP_SPAWN_REGISTRY.opencode.setEnv },
 };
 
 function fixture(t, permissionMode, settings = {}) {
@@ -64,6 +67,11 @@ function directMode(soulDir, harness) {
   if (harness === 'claude') {
     return { default: 'safe', bypassPermissions: 'autopilot' }[JSON.parse(readFileSync(path.join(soulDir, '.claude/settings.json'), 'utf8')).permissions.defaultMode];
   }
+  if (harness === 'opencode') {
+    const { edit, bash } = JSON.parse(readFileSync(path.join(soulDir, 'opencode.json'), 'utf8')).permission;
+    assert.equal(edit, bash);
+    return { ask: 'safe', allow: 'autopilot' }[bash];
+  }
   const policy = readFileSync(path.join(soulDir, '.codex/config.toml'), 'utf8').match(/^approval_policy = "(.*)"$/m)[1];
   return { 'on-request': 'safe', never: 'autopilot' }[policy];
 }
@@ -87,7 +95,7 @@ async function daemonTurn({ harness, cwd, env, home, ask = headless, modeFor = n
   return seen;
 }
 
-for (const harness of ['claude', 'codex']) {
+for (const harness of ['claude', 'codex', 'opencode']) {
   test(`${harness}: a declared safe mode applies the same way directly and under the daemon`, async (t) => {
     const { env, home, soulDir } = fixture(t, 'safe');
     assert.equal(directMode(soulDir, harness), 'safe');
@@ -127,6 +135,9 @@ for (const harness of ['claude', 'codex']) {
     assert.deepEqual(seen.log, []);
   });
 
+}
+
+for (const harness of ['claude', 'codex']) {
   test(`${harness}: a repo's own harness file outranks the soul package`, async (t) => {
     const { root, env, home, soulDir } = fixture(t, 'autopilot');
     const repo = path.join(root, 'repo');
@@ -150,6 +161,23 @@ for (const harness of ['claude', 'codex']) {
     assert.match(seen.log[0], /the repo declares autopilot; running safe/);
   });
 }
+
+// The daemon's mode layers read only Claude's and Codex's native files, so an
+// OpenCode repo's `opencode.json` permission is a layer that declares nothing:
+// the package's declaration decides, and a repo cannot loosen it.
+test('opencode: a repo opencode.json permission is not a mode layer; the package decides', async (t) => {
+  const { root, env, home, soulDir } = fixture(t, 'safe');
+  const repo = path.join(root, 'repo');
+  mkdirSync(repo);
+  writeFileSync(path.join(repo, 'opencode.json'), JSON.stringify({ permission: { edit: 'allow', bash: 'allow' } }));
+  assert.equal(directMode(repo, 'opencode'), 'autopilot');
+  assert.equal(repoPermissionMode(repo, 'opencode'), null);
+  assert.deepEqual(resolveSoulMode(ID, { harness: 'opencode', cwd: repo, soulDir, env, home }), { mode: 'safe', source: 'soul', declared: 'safe', code: null });
+  const seen = await daemonTurn({ harness: 'opencode', cwd: repo, env, home });
+  assert.equal(seen.mode, 'safe');
+  assert.deepEqual(seen.approvals, ['Bash']);
+  assert.deepEqual(seen.log, []);
+});
 
 test('unrecognised or unreadable layers declare nothing; a soul with no census row has no package layer', (t) => {
   const { root, env, home } = fixture(t, 'safe');
@@ -177,6 +205,7 @@ test('unrecognised or unreadable layers declare nothing; a soul with no census r
 // What a direct open reads: the model rendered into the soul's native files.
 function directModel(soulDir, harness) {
   if (harness === 'claude') return JSON.parse(readFileSync(path.join(soulDir, '.claude/settings.json'), 'utf8')).model;
+  if (harness === 'opencode') return JSON.parse(readFileSync(path.join(soulDir, 'opencode.json'), 'utf8')).model;
   return readFileSync(path.join(soulDir, '.codex/config.toml'), 'utf8').match(/^model = "(.*)"$/m)[1];
 }
 
@@ -204,7 +233,7 @@ async function modelTurn({ harness, cwd, env, home, prior = null, acpEnv = {}, c
   return { sent, running: observed.model, ...(capture ? { observed, logs } : {}) };
 }
 
-for (const harness of ['claude', 'codex']) {
+for (const harness of ['claude', 'codex', 'opencode']) {
   test(`${harness}: the model follows the settings order on both paths`, async (t) => {
     const { root, env, home, soulDir } = fixture(t, 'safe', { model: 'soul-model' });
     // In the soul's home a direct open reads the rendering; the daemon sends the same model.
@@ -220,6 +249,8 @@ for (const harness of ['claude', 'codex']) {
     if (harness === 'claude') {
       mkdirSync(path.join(repo, '.claude'));
       writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ model: 'repo-model' }));
+    } else if (harness === 'opencode') {
+      writeFileSync(path.join(repo, 'opencode.json'), JSON.stringify({ model: 'repo-model' }));
     } else {
       mkdirSync(path.join(repo, '.codex'));
       writeFileSync(path.join(repo, '.codex/config.toml'), 'model = "repo-model"\n');
