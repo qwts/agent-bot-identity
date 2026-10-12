@@ -306,10 +306,21 @@ function emptyDocument() {
   return { schemaVersion: SCHEMA_VERSION, souls: Object.create(null) };
 }
 
+// Non-blocking, then a regular file only, read from the same descriptor: a
+// FIFO at the census path refuses at once instead of blocking (it is read
+// inside the owner-decision journal lock). Links are still followed.
+function readRegularFile(file) {
+  const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('not a regular file');
+    return readFileSync(fd, 'utf8');
+  } finally { closeSync(fd); }
+}
+
 function readDocument(file) {
   let raw;
   try {
-    raw = readFileSync(file, 'utf8');
+    raw = readRegularFile(file);
   } catch (error) {
     if (error.code === 'ENOENT') return emptyDocument();
     throw new Error('population store could not be read');

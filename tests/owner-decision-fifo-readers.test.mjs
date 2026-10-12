@@ -16,6 +16,8 @@ import { loadOrCreateVouchKey, vouchKeyPath, vouchStateDir } from '../identity/v
 import { createOwnerDecisionTrustWriter } from '../identity/owner-decision-trust.mjs';
 import { createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
 import { requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
+import { presencePinPath } from '../identity/owner-presence.mjs';
+import { commsCredentialFile } from '../comms-client.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust and journal locks are Darwin-only', timeout: 20000 };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -92,4 +94,30 @@ const key = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk
 const { createOwnerDecisionTrustWriter } = await import(${module('owner-decision-trust.mjs')});
 createOwnerDecisionTrustWriter({ root: ${JSON.stringify(root)}, env: ${JSON.stringify(env)}, home: ${JSON.stringify(base)}, legacyPresenceKey: null })
   .enrollKeysV1({ receiptKey: key(), presenceKey: key(), brokerUid: ${process.getuid() + 1}, expectedObservationDigest: 'a'.repeat(64) })`));
+});
+
+test('keyd\'s presence pin cache: a FIFO is no pin, never a hang', darwin, (t) => {
+  const base = scratch(t), env = { XDG_STATE_HOME: path.join(base, 'state') }, root = path.join(base, 'trust');
+  loadOrCreateVouchKey(vouchStateDir({ env }));
+  createOwnerDecisionTrustWriter({ root, env, home: base, legacyPresenceKey: null }).enrollNamespace({ namespaceDigest: 'a'.repeat(64) });
+  const cache = presencePinPath({ env, home: base });
+  fs.mkdirSync(path.dirname(cache), { recursive: true, mode: 0o700 });
+  // Readiness reads the cache as a deny-list; with a FIFO there it reads no
+  // pin and goes on (here to no active key), at once.
+  refusesAtOnce(fifoAt(cache, `const { readOwnerDecisionTrust } = await import(${module('owner-decision-trust.mjs')});
+readOwnerDecisionTrust({ root: ${JSON.stringify(root)}, env: ${JSON.stringify(env)}, home: ${JSON.stringify(base)} })`));
+});
+
+test('the comms pairing credential read', { timeout: 20000 }, (t) => {
+  const base = scratch(t), env = { XDG_STATE_HOME: path.join(base, 'state') };
+  const file = commsCredentialFile({ env, home: base });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  refusesAtOnce(fifoAt(file, `const { loadCommsCredential } = await import(${JSON.stringify(new URL('../comms-client.mjs', import.meta.url).href)});
+loadCommsCredential({ env: ${JSON.stringify(env)}, home: ${JSON.stringify(base)} })`));
+});
+
+test('the soul census read', { timeout: 20000 }, (t) => {
+  const base = scratch(t), file = path.join(base, 'population.json');
+  refusesAtOnce(fifoAt(file, `const { listSouls } = await import(${JSON.stringify(new URL('../agent-population.mjs', import.meta.url).href)});
+listSouls({ file: ${JSON.stringify(file)} })`));
 });

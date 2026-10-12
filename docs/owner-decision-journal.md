@@ -723,8 +723,9 @@ route. None is built here.
   tree from trust and the journal.
 - **Custody of the comms pairing credential.** The gate takes the daemon's
   account from the comms pairing credential, which `loadCommsCredential`
-  reads on POSIX with a plain file read. Before wiring, that read needs
-  custody: no-follow, owned by this uid, mode 0600.
+  reads on POSIX non-blocking as a regular file only, but still following
+  links. Before wiring, that read needs custody: no-follow, owned by this
+  uid, mode 0600.
 - **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.
@@ -1027,5 +1028,12 @@ That covers:
 - the revision port;
 - the strict identity read;
 - the vouch key read, including the trust writer's vouch identity;
-- the trust store reads;
-- the journal's slot files and directory flushes.
+- the trust store reads, and keyd's presence pin cache (a deny-list, so
+  anything but a regular file there counts as no pin);
+- the trust audit append (a FIFO fails the open at once);
+- the journal's slot files and directory flushes;
+- the comms pairing credential and the soul census read (both still follow
+  links, as before).
+
+The pairing credential's no-follow, owner and 0600 checks remain under
+Before wiring.

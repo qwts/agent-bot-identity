@@ -141,7 +141,14 @@ function legacyPresenceRaw(injected, { env, home }) {
     return raw.length === 32 ? raw : null;
   };
   if (injected !== undefined) return injected === null ? null : decode(injected);
-  try { return decode(fs.readFileSync(presencePinPath({ env, home }), 'utf8').trim()); } catch { return null; }
+  // No-follow and non-blocking, then a regular file only: a FIFO or anything
+  // else at the cache path is no pin, never a hang.
+  let fd;
+  try {
+    fd = fs.openSync(presencePinPath({ env, home }), O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (!fs.fstatSync(fd).isFile()) return null;
+    return decode(fs.readFileSync(fd, 'utf8').trim());
+  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 const isLegacyPresence = (pin, legacy) => legacy !== null && Buffer.from(pin.publicKey, 'base64url').equals(legacy);
 
@@ -662,7 +669,8 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     const line = Buffer.concat([encode(entry, TRUST_LIMITS.auditLine - 1), Buffer.from('\n')]);
     let created = false;
     try { io.lstatSync(file); } catch (error) { if (error?.code !== 'ENOENT') throw error; created = true; }
-    const fd = io.openSync(file, O_WRONLY | O_APPEND | O_NOFOLLOW | (created ? O_CREAT | O_EXCL : 0), 0o600);
+    // O_NONBLOCK: a FIFO at the audit path fails the open at once (ENXIO).
+    const fd = io.openSync(file, O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | (created ? O_CREAT | O_EXCL : 0), 0o600);
     try {
       if (io.writeSync(fd, line) !== line.length) fail('owner-trust-io');
       fault(`${step}:audit-written`);
