@@ -265,7 +265,7 @@ function withRegistryLock(root, operation) {
 // record must be this account's own regular single-link file, opened without
 // following a link, at most IDENTITY_RECORD_MAX_BYTES, read from the same open
 // descriptor. `io` is injectable only so tests can simulate stats.
-export const IDENTITY_RECORD_MAX_BYTES = 64 * 1024;
+const IDENTITY_RECORD_MAX_BYTES = 64 * 1024;
 function readStrictRecord(file, io) {
   const fd = io.openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {

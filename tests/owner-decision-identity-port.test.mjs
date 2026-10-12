@@ -7,7 +7,10 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { IDENTITY_RECORD_MAX_BYTES, mintAgentIdentity, readAgentIdentity } from '../identity/agent-identity.mjs';
+import { mintAgentIdentity, readAgentIdentity } from '../identity/agent-identity.mjs';
+
+// The strict read's bound on an identity record (identity/agent-identity.mjs).
+const IDENTITY_RECORD_MAX_BYTES = 64 * 1024;
 import { OWNER_DECISION_IDENTITY_PORT_KIND, createOwnerDecisionIdentityPort } from '../owner-decision-identity-port.mjs';
 import { TARGET_REFUSAL, resolveOwnerDecisionTargetLocked } from '../owner-decision-target.mjs';
 import { upsertSoul } from '../agent-population.mjs';
