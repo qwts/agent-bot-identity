@@ -85,7 +85,7 @@ const LAUNCHABLE = new Set(['package', 'installed']);
 
 // Failure codes a launch keeps in the journal and prefixes to its detail, so
 // a client that reads only the broker's detail still sees which one it was.
-const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
+export const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
   'persona-policy-unavailable', 'persona-policy-stale', 'persona-policy-requires-addon',
   'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed', 'runtime-override-invalid', 'runtime-override-unsupported-platform',
   'tool-home-unwritable', 'tool-home-record-invalid',

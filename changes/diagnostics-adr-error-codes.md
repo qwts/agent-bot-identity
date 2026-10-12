@@ -1,0 +1,1 @@
+- Stable diagnostic error codes now have an add-only registry, `governance/error-codes.json`, starting with every launch refusal and failure code, and ADR-0983 records how local-first diagnostics and the optional, off-by-default OpenTelemetry export will work (#983).
