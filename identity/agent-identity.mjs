@@ -262,7 +262,8 @@ function withRegistryLock(root, operation) {
 }
 
 // The strict custody read (owner-decision final entry, agent-comms#77): the
-// record must be this account's own regular single-link file, opened without
+// record must be this account's own regular single-link file, writable by
+// neither group nor others, opened without
 // following a link, at most IDENTITY_RECORD_MAX_BYTES, read from the same open
 // descriptor. `io` is injectable only so tests can simulate stats.
 const IDENTITY_RECORD_MAX_BYTES = 64 * 1024;
@@ -270,7 +271,8 @@ function readStrictRecord(file, io) {
   const fd = io.openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(file);
-    if (!held.isFile() || held.nlink !== 1 || held.uid !== process.getuid() || held.dev !== named.dev || held.ino !== named.ino) {
+    if (!held.isFile() || held.nlink !== 1 || held.uid !== process.getuid() || (held.mode & 0o022) !== 0
+      || held.dev !== named.dev || held.ino !== named.ino) {
       throw new Error('identity record is not a private single-link regular file owned by this account');
     }
     if (held.size < 1 || held.size > IDENTITY_RECORD_MAX_BYTES) throw new Error('identity record size is out of bounds');

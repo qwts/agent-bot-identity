@@ -56,9 +56,14 @@ export function resolveOwnerDecisionTarget(request = {}, { daemonAccount, file =
 // synchronous. The host builds it (owner-decision-identity-port.mjs); soul
 // only checks the shape and never launches a process or awaits.
 const IDENTITY_PORT_KIND = 'owner-decision-identity-read-v1';
+// Exactly two own data properties, kind and read: nothing inherited, no
+// accessors, so checking the port never runs caller code.
 function validPort(port) {
-  return port !== null && typeof port === 'object' && Object.isFrozen(port)
-    && Object.keys(port).length === 2 && port.kind === IDENTITY_PORT_KIND && typeof port.read === 'function';
+  if (port === null || typeof port !== 'object' || !Object.isFrozen(port)) return false;
+  const names = Object.getOwnPropertyNames(port);
+  if (names.length !== 2 || !names.includes('kind') || !names.includes('read') || Object.getOwnPropertySymbols(port).length !== 0) return false;
+  const kind = Object.getOwnPropertyDescriptor(port, 'kind'), read = Object.getOwnPropertyDescriptor(port, 'read');
+  return 'value' in kind && 'value' in read && kind.value === IDENTITY_PORT_KIND && typeof read.value === 'function';
 }
 
 // Resolution for the locked final entry: the same fixed census read, then the
@@ -71,7 +76,7 @@ export function resolveOwnerDecisionTargetLocked(request = {}, { daemonAccount, 
   let row = null, record = null;
   try { row = showSoul(id, { file }); } catch { row = null; }
   try {
-    record = identityPort.read(id);
+    record = Object.getOwnPropertyDescriptor(identityPort, 'read').value(id);
     if (record !== null && typeof record === 'object' && typeof record.then === 'function') record = null;
   } catch { record = null; }
   return classifyOwnerDecisionTarget(request, { daemonAccount, row, record });

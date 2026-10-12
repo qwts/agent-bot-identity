@@ -491,9 +491,13 @@ through an in-process port instead of `identityOp('read')`.
   opt-in `custody: "strict"` mode.
 - **Strict custody.** The record file is opened without following a link.
   Through the same descriptor it must be a regular file with one link, owned by
-  this uid, the same object as its name, and at most 64 KiB. It then passes the
+  this uid, writable by neither group nor others, the same object as its
+  name, and at most 64 KiB. It then passes the
   same `validateIdentity`. Every existing caller keeps the default read
   unchanged, and `identity-soul.mjs` is untouched.
+- **Trusted parents.** No-follow covers only the record's final path
+  component, so `stateDir` and its parent directories must themselves be
+  trusted (owned by this account or root, not writable by others).
 - **The locked resolver.** `resolveOwnerDecisionTargetLocked` (soul) takes only
   that port. It checks the port's exact frozen shape, does the same fixed
   census read, and calls `read` synchronously. Each of these gives the same
