@@ -10,7 +10,7 @@ import process from 'node:process';
 import { createHash } from 'node:crypto';
 import {
   DAEMON_JOURNAL_SLOTS, FRAME_OVERHEAD, SCRATCH_BYTES, decodeCanonicalPayload, decodeDaemonJournalFrame,
-  encodeDaemonJournalFrame, requestDirectoryName,
+  encodeDaemonJournalFrame, peekAcceptanceContextFrame, requestDirectoryName,
 } from './owner-decision-journal-frame.mjs';
 
 export const DAEMON_JOURNAL_LIMIT = 4096;
@@ -27,12 +27,17 @@ const FILES = Object.freeze([
   Object.freeze({ name: 'scratch.record', slot: null, size: SCRATCH_BYTES }),
 ]);
 const FILE_BY_SLOT = new Map(FILES.filter(({ slot }) => slot).map((file) => [file.slot, file]));
+// The only lifecycle phase this disabled producer supports is the admission
+// prefix. Any other committed or partial slot is a phase whose typed graph
+// validator does not exist yet, so the whole request refuses.
+const ADMISSION_SLOTS = ['original-action', 'acceptance-context'];
 
 // Internal reasons stay in `reason`; callers see only the public code. Every
 // storage failure is a non-authorizing refusal, never proof that an earlier
 // effect did not enter, so retained state is preserved as found.
 const PUBLIC = Object.freeze({
   'owner-journal-capacity': 'journal-capacity',
+  'owner-journal-conflict': 'conflict',
   'owner-journal-platform-unsupported': 'owner-decision-unsupported',
   'invalid-owner-journal-record': 'bad-request',
 });
@@ -175,8 +180,9 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       ownedDirectory(io, root); ownedDirectory(io, requests);
       return operation();
     } catch (error) {
-      if (!['invalid-owner-journal-record', 'owner-journal-capacity'].includes(error?.reason)) poisoned = true;
-      throw error?.reason ? error : journalError('owner-journal-io');
+      if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict'].includes(error?.reason)) poisoned = true;
+      if (error?.reason) throw error;
+      throw journalError(error?.code === 'invalid-owner-journal-frame' ? 'owner-journal-corrupt' : 'owner-journal-io');
     } finally {
       try { io.closeSync(fd); } catch { poisoned = true; }
     }
@@ -208,21 +214,105 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     try { if (!readExactly(io, check, size).equals(frame)) fail(); } finally { io.closeSync(check); }
   }
 
+  const zeros = (bytes) => bytes.every((byte) => byte === 0);
+
+  // Reads one request directory as a complete graph. Only an exact, fully
+  // committed admission prefix with every later slot and scratch still zero is
+  // accepted; anything else refuses without creating, repairing or clearing.
+  function readGraph(name, expectedRequestId) {
+    const dir = path.join(requests, name);
+    ownedDirectory(io, dir);
+    const present = io.readdirSync(dir);
+    if (!present.every((entry) => FILES.some((file) => file.name === entry))) fail();
+    // Interrupted admission: files still missing, or acceptance-context (the
+    // first file created and the last published) not committed. Charged, kept
+    // and refused; never completed, cleared or forwarded.
+    if (present.length !== FILES.length) fail('owner-journal-orphan');
+    const readFile = ({ name: fileName, size }) => {
+      const fd = openFixed(io, path.join(dir, fileName), size, O_RDONLY);
+      try { return readExactly(io, fd, size); } finally { io.closeSync(fd); }
+    };
+    const contextFile = FILE_BY_SLOT.get('acceptance-context'), context = readFile(contextFile);
+    if (zeros(context.subarray(contextFile.size - 128))) fail('owner-journal-orphan');
+    const bytes = new Map(FILES.map((file) => [file.name, file === contextFile ? context : readFile(file)]));
+    // The request ID comes only from acceptance-context, never from the hashed
+    // directory name. Phase one reads it as untrusted bytes; nothing follows
+    // from it until the directory hash under our enrolled namespace and the
+    // full context-bound decode both agree.
+    const contextCap = contextFile.size;
+    const peeked = decodeCanonicalPayload(peekAcceptanceContextFrame(context).untrustedPayload, contextCap - FRAME_OVERHEAD).value;
+    const requestId = plain(peeked) ? peeked.requestId : undefined;
+    if (!matches(UUID4, requestId) || requestDirectoryName({ namespaceDigest, requestId }) !== name) fail();
+    if (expectedRequestId !== undefined && requestId !== expectedRequestId) fail();
+    const binding = { namespaceDigest, requestId };
+    const decoded = new Map(DAEMON_JOURNAL_SLOTS.map(({ slot }) => [slot, decodeDaemonJournalFrame(bytes.get(`${slot}.record`), { ...binding, slot })]));
+    if (!ADMISSION_SLOTS.every((slot) => decoded.get(slot).kind === 'committed')) fail('owner-journal-orphan');
+    for (const [slot, { kind }] of decoded) if (!ADMISSION_SLOTS.includes(slot) && kind !== 'empty') fail('owner-journal-unsupported-phase');
+    if (!zeros(bytes.get('scratch.record'))) fail('owner-journal-scratch-pending');
+    let saved;
+    try { saved = validateDaemonAdmission(decoded.get('original-action').payload, decoded.get('acceptance-context').payload, namespaceDigest); }
+    catch { fail(); }
+    return { dir, name, binding, saved, bytes };
+  }
+
+  // Visible committed frames prove nothing about their final flush. Before
+  // anything is acknowledged again, flush every committed frame and both
+  // directories, then require the bytes to be unchanged. A failed flush keeps
+  // the prefix unsettled and refuses. This is node's logical fsync only.
+  function recoveryFlush({ dir, bytes }) {
+    for (const slot of ADMISSION_SLOTS) {
+      const { name: fileName, size } = FILE_BY_SLOT.get(slot);
+      const fd = openFixed(io, path.join(dir, fileName), size, O_RDONLY);
+      try {
+        try { io.fsyncSync(fd); } catch { fail('owner-journal-flush'); }
+        fault(`recovery:${slot}:flushed`);
+        if (!readExactly(io, fd, size).equals(bytes.get(fileName))) fail();
+      } finally { io.closeSync(fd); }
+    }
+    flushDirectory(io, dir); flushDirectory(io, requests); fault('recovery:directories-flushed');
+  }
+
+  const settled = (graph, extra) => ({
+    state: 'admitted', requestId: graph.binding.requestId, directory: graph.name, ...extra,
+    authorizationSupported: false, physicalAllocationSupported: false, physicalFlushGuaranteed: false,
+  });
+
   return {
     // Charged request directories, including orphans and unknown entries.
     count: () => locked(() => scan().length),
 
-    // Fresh admission only: reserve the directory, create and zero-fill all 15
-    // fixed files, flush, validate, then publish the original action and the
-    // acceptance-context record in that order. An existing directory for this
-    // namespace/request is never admitted again here.
+    // Explicit recovery of one request after reopen. Absent is only "no such
+    // directory"; an orphan, partial, corrupt or unsupported graph refuses.
+    // It schedules nothing: no forward, delivery, check release or effect.
+    recover(requestId) {
+      if (!matches(UUID4, requestId)) fail('invalid-owner-journal-record');
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) return { state: 'absent', requestId };
+        const graph = readGraph(name, requestId);
+        recoveryFlush(graph);
+        return settled(graph, { recovered: true });
+      });
+    },
+
+    // Admission. A new request reserves its directory, creates and zero-fills
+    // all 15 fixed files, flushes and validates them, then publishes the
+    // original action and acceptance-context in that order. An exact duplicate
+    // writes nothing: it reads the saved graph and acknowledges only after the
+    // recovery flush. Changed input for the same request is a conflict; an
+    // orphan or any other graph refuses.
     admit(actionBytes, acceptanceBytes) {
       const saved = validateDaemonAdmission(actionBytes, acceptanceBytes, namespaceDigest);
       const binding = { namespaceDigest, requestId: saved.record.requestId };
       const name = requestDirectoryName(binding), dir = path.join(requests, name);
       return locked(() => {
         const entries = scan();
-        if (entries.includes(name)) fail('owner-journal-recovery-required');
+        if (entries.includes(name)) {
+          const graph = readGraph(name, binding.requestId);
+          if (!graph.saved.action.equals(saved.action) || !graph.saved.acceptance.equals(saved.acceptance)) fail('owner-journal-conflict');
+          recoveryFlush(graph);
+          return settled(graph, { duplicate: true });
+        }
         if (entries.length >= DAEMON_JOURNAL_LIMIT) fail('owner-journal-capacity');
         io.mkdirSync(dir, { mode: 0o700 }); fault('request:directory-created');
         flushDirectory(io, requests); fault('request:directory-flushed');
@@ -245,10 +335,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
         }
         publish(dir, 'original-action', saved.action, binding);
         publish(dir, 'acceptance-context', saved.acceptance, binding);
-        return {
-          state: 'admitted', requestId: binding.requestId, directory: name,
-          physicalAllocationSupported: false, physicalFlushGuaranteed: false,
-        };
+        return settled({ binding, name }, {});
       });
     },
   };

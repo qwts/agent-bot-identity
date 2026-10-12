@@ -118,6 +118,32 @@ export function decodeDaemonJournalFrame(frameBytes, options) {
   } catch { fail(); }
 }
 
+// Phase one of reading acceptance-context, whose request ID is not known from
+// its hashed directory: integrity only, without the context binding. Header
+// and trailer contexts must agree with each other, but nothing proves they
+// are ours, so the payload is untrusted. The caller must validate its schema,
+// recompute the directory name from its trusted enrolled namespace, and then
+// decode the frame again with the full binding before using anything.
+export function peekAcceptanceContextFrame(frameBytes) {
+  try {
+    const { id, cap } = slotDescriptor('acceptance-context');
+    const bytes = snapshot(frameBytes, cap + FRAME_OVERHEAD);
+    if (bytes.length !== cap + FRAME_OVERHEAD || zeros(bytes)) fail();
+    const header = bytes.subarray(0, 128), body = bytes.subarray(128, 128 + cap), trailer = bytes.subarray(128 + cap);
+    const length = header.readUInt32BE(20);
+    if (!header.subarray(0, 8).equals(HEADER_MAGIC) || header.readUInt16BE(8) !== 1 || header.readUInt16BE(10) !== id
+      || header.readUInt32BE(12) !== 0 || header.readUInt32BE(16) !== cap || length < 1 || length > cap
+      || header.readBigUInt64BE(24) !== 1n || !zeros(header.subarray(96)) || !zeros(body.subarray(length))
+      || !header.subarray(64, 96).equals(hash(body.subarray(0, length)))) fail();
+    if (!trailer.subarray(0, 8).equals(TRAILER_MAGIC) || trailer.readUInt16BE(8) !== 1 || trailer.readUInt16BE(10) !== id
+      || trailer.readUInt32BE(12) !== 0 || trailer.readBigUInt64BE(16) !== 1n || trailer.readUInt32BE(24) !== length
+      || trailer.readUInt32BE(28) !== 0 || !zeros(trailer.subarray(96))
+      || !trailer.subarray(64, 96).equals(header.subarray(32, 64))
+      || !trailer.subarray(32, 64).equals(frameHash(header, body))) fail();
+    return { untrustedPayload: Buffer.from(body.subarray(0, length)) };
+  } catch { fail(); }
+}
+
 // --- Paired reconciliation payloads (observation-pair, terminal-pair) ---
 
 const exactKeys = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)

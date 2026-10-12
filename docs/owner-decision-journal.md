@@ -93,6 +93,42 @@ platforms with `owner-decision-unsupported`. A store is created once, by
 - **After a failure.** After any storage failure the store instance refuses
   until it is reopened.
 
+## Recovery and strict graph refusal
+
+`recover(requestId)` is explicit and schedules nothing: no forward, no
+delivery, no check release and no effect. It returns `absent` only when no
+directory exists. Otherwise it reads the request as one complete graph.
+
+- **The request ID.** It comes only from `acceptance-context`, never from the
+  hashed directory name. Phase one is a context-free integrity peek of that
+  frame, and its payload is untrusted. The request ID must be UUIDv4, and its
+  directory hash, computed under the store's own enrolled namespace, must
+  match. Only then are the frames decoded with the full
+  role/slot/request/context binding, and the original action checked against
+  the acceptance. Nothing follows from the peek alone.
+- **What is accepted.** The only accepted graph is the exact committed
+  admission prefix: `original-action` and `acceptance-context` committed,
+  every later slot and scratch all zero.
+- **What refuses.** Each of these refuses as `storage-failed` and is left
+  exactly as found:
+  - an orphan;
+  - a partial or committed later phase, until its typed validator exists;
+  - nonzero scratch;
+  - a corrupt or foreign-role frame;
+  - another request's context;
+  - an extra or missing file;
+  - a symlink or hard link;
+  - a wrong EOF or mode.
+
+  Missing files are never recreated.
+- **Duplicates.** Visible committed bytes prove nothing about their final
+  flush. Before any acknowledgement, including an exact duplicate admission,
+  every committed frame and both directories are flushed again, and the bytes
+  must be unchanged. If that flush fails, nothing is acknowledged and the
+  prefix stays unsettled. An exact duplicate never writes. Changed input for
+  the same request is `conflict`. Later phases, including a duplicate
+  preparation, will use the same recovery flush before acknowledging.
+
 Every flush here is node's `fsync`. On Darwin that tries `F_FULLFSYNC` but can
 silently fall back, so it is a logical flush only. Results carry
 `physicalAllocationSupported:false` and `physicalFlushGuaranteed:false`. Zero
@@ -105,9 +141,10 @@ Internal reasons stay in `error.reason`. Callers see only a public code:
 | Internal reason | Public code |
 | --- | --- |
 | `owner-journal-capacity` | `journal-capacity` |
+| changed input for an admitted request | `conflict` |
 | invalid action or acceptance | `bad-request` |
 | non-Darwin platform | `owner-decision-unsupported` |
-| busy, corrupt, I/O, flush, unknown graph, recovery or reopen required | `storage-failed` |
+| busy, corrupt, I/O, flush, orphan, unsupported phase, pending scratch, reopen required | `storage-failed` |
 
 `storage-failed` is a non-authorizing refusal, never proof that an earlier
 effect did not enter. Retained state is kept as found. An effect that entered
