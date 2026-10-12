@@ -45,6 +45,11 @@ or `configured`, and `observedAt`.
 
 Nothing else is stored: no message text, tool input, path or raw line.
 
+A source that cannot be read is listed under `errors` with its `code` and a
+redacted `message`: credentials, token-shaped strings and paths under any home
+directory are replaced, and the message is one line of at most 500 characters
+(`diagnostic-redact.mjs`, #983).
+
 ## Reads
 
 There is one checkpoint per source, made of the file identity and a byte offset:
