@@ -95,6 +95,14 @@ registry and the functions host needs in-process: bot checks, principals,
 approvals, keyd, vouch, the secret stores and the inbox. With F9 steps 2 to
 4 it also holds identity's route handler and identity's half of spawn.
 
+### `identity-cli.mjs`
+
+cli's entry (F13 step 3; the owner's revised Q-F13-3 answer), importable by
+cli only. It is in-process, so readiness keeps its injectable probes. It holds
+the readiness and doctor probes, the bootstrap actions and the hook fallback.
+F8 and F13 step 4 add the owner and principal command functions in the PR
+stacked on it.
+
 ## Record operations
 
 `identityOp` runs these operations of `identity-entry.mjs`. Inputs are data

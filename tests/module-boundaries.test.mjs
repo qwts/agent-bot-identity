@@ -148,6 +148,8 @@ test('each old identity path is only a re-export shim of its moved file', () => 
       + '// for callers that import it here; it re-exports the moved file.\n'
       + `export { ${exportedNames(target).join(', ')} } from '${spec}';\n`, `${old}: not a plain shim of ${moved}`);
   }
+});
+
 // cli's readiness, doctor, bootstrap and hook-sync code reaches identity only
 // through listed contracts (identity-cli.mjs, identity-format.mjs and
 // daemon-client.mjs), never through another identity file (#645, F13 step 3).
