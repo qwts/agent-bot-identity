@@ -102,6 +102,13 @@ cli only. It is in-process, so readiness keeps its injectable probes. It holds
 the readiness and doctor probes, the bootstrap actions and the hook fallback.
 F8 and F13 step 4 add the owner and principal command functions in the PR
 stacked on it.
+### `identity-soul.mjs`
+
+Soul's and comms' entry (owner decisions of 2026-10-11), importable by soul and
+comms. It is in-process and holds the binding reader, the bot and App resolver,
+the vouch key paths, the co-author rules, session grants and comms'
+binding-proof signing. Credential custody (F7) and the owner
+gate (F8) join it in the PRs stacked on it.
 
 ## Record operations
 

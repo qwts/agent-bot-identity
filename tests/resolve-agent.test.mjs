@@ -262,7 +262,10 @@ test('every consumer that mints or commits shares this resolver', async () => {
     })),
   );
   for (const { path, text } of sources) {
-    assert.match(text, /resolve-agent\.mjs/, `${path} resolves identity through the shared order`);
+    // The shared resolver itself, imported by name from resolve-agent.mjs or
+    // from identity's published entries, which re-export it (#645).
+    assert.match(text, /import\s*\{[^}]*\bresolveAgentSlug\b[^}]*\}\s*from\s*'[^']*\b(?:resolve-agent|identity-soul|identity-cli)\.mjs'/u,
+      `${path} resolves identity through the shared order`);
     assert.doesNotMatch(text, /detectHarness\(/, `${path} does not call detection directly`);
     // ENG-0339: there is no directory question left to ask. A call site that
     // still passed the retired `worktree:` flag would be asking it.

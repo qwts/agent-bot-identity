@@ -25,8 +25,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
+import { PROOF_HEADER, resolveAgentSlug, signBindingProof } from './identity-soul.mjs';
 
 export const WAKE_PATH = '/v0/wake';
 export const BINDING_FILE = 'agent-binding.json';

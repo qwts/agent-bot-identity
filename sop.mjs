@@ -25,7 +25,7 @@ import { validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { soulDirectory } from './agent-population.mjs';
-import { readBinding } from './agent-binding.mjs';
+import { readBinding } from './identity-soul.mjs';
 import process from 'node:process';
 import { assertOwnerAction } from './owner-action.mjs';
 import { pathToFileURL } from 'node:url';

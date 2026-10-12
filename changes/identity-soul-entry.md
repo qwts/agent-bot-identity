@@ -1,0 +1,1 @@
+- Soul and comms reach identity's binding reads, bot identity, vouch key paths, co-author rules and session grants through one published entry, `identity-soul.mjs`, listed in the module map as a contract; behavior is unchanged (#645).
