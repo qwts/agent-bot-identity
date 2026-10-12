@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmdirSync, rmSync } from 'node:f
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { apiBase, isGateEnabled, loadConfig, slugForHarness, appLifecycleStatus } from '../config.mjs';
+import { appJwtApiBase, isGateEnabled, loadConfig, slugForHarness, appLifecycleStatus } from '../config.mjs';
 import { PROFILE_HARNESSES, profileAppSlugs } from '../organization-profile.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { assignAgentApp, readAgentIdentity } from './agent-identity.mjs';
@@ -85,9 +85,10 @@ function installations(rows) {
 }
 async function github(method, route, credential, options) {
   const headers = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-bot-identity' };
+  const base = appJwtApiBase(options.config);
   if (credential) headers.authorization = `Bearer ${buildAppJwt(credential.appId, credential.privateKeyPem, Math.floor(Date.now() / 1000))}`;
   try {
-    const response = await (options.fetchImpl ?? fetch)(`${apiBase(options.config)}${route}`, {
+    const response = await (options.fetchImpl ?? fetch)(`${base}${route}`, {
       method, headers, redirect: 'error', signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) fail('identity-app-github', `GitHub refused the App operation (HTTP ${response.status}); check the App ID, key and installation.`);

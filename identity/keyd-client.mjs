@@ -138,11 +138,13 @@ export function signKeydGrant({ agentId, app, tool, apiBase, installationId = nu
 
 // What the daemon's config says about where to mint, for a grant.
 export async function grantTarget({ env = process.env, config } = {}) {
-  const { apiBase, githubHost, loadConfig } = await import('../config.mjs');
+  const { appJwtApiBase, loadConfig } = await import('../config.mjs');
   const loaded = config ?? loadConfig({ env });
+  // keyd sends the App JWT to this base, so it resolves like a direct mint (#1062).
+  const base = appJwtApiBase(loaded);
   return {
-    apiBase: apiBase(loaded),
-    host: githubHost(loaded),
+    apiBase: base,
+    host: new URL(base).host.replace(/^api\./, ''),
     owner: loaded.owner ?? null,
     installationId: env.GH_APP_INSTALLATION_ID || null,
   };

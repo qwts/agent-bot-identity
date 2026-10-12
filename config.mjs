@@ -434,6 +434,27 @@ export function apiBase(config = loadConfig()) {
   return (config.apiBase ?? process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '');
 }
 
+// #1062: where an App JWT may be sent. The JWT can mint a token for any of the
+// App's installations, so its destination comes only from the config file (an
+// organization profile projects its validated api_base there) or GitHub's own
+// API, never from the caller's GITHUB_API_URL. The URL must be credential-free
+// HTTPS with no query or fragment; plain http is accepted only on a loopback
+// host (LOOPBACK_HOSTS above), where a local test GitHub listens.
+export function appJwtApiBase(config = loadConfig()) {
+  const value = config.apiBase ?? 'https://api.github.com';
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('agent-bot config apiBase is not a URL; no App JWT is sent');
+  }
+  const secure = parsed.protocol === 'https:' || (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname));
+  if (!secure || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('agent-bot config apiBase must be a credential-free HTTPS URL with no query or fragment; no App JWT is sent');
+  }
+  return value.replace(/\/+$/, '');
+}
+
 export function githubHost(config = loadConfig()) {
   return new URL(apiBase(config)).host.replace(/^api\./, '');
 }

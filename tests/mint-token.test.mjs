@@ -620,3 +620,106 @@ test('a bound checkout asking mint-token for another App goes through the owner 
     await github.close();
   }
 });
+
+// ------------------------------------------- #1062: where the App JWT may go
+
+// Runs `body` with global fetch replaced by one that records each request and
+// answers 401, so a test can see where a JWT would have gone without any
+// network traffic. GITHUB_API_URL is set for the duration, as a caller would.
+async function withRecordedFetch(callerApiUrl, body) {
+  const seen = [];
+  const original = globalThis.fetch;
+  const previous = process.env.GITHUB_API_URL;
+  globalThis.fetch = async (url, init = {}) => {
+    seen.push({ url: String(url), authorization: init.headers?.authorization ?? null, redirect: init.redirect ?? null });
+    return new Response(JSON.stringify({ message: 'Bad credentials' }), { status: 401 });
+  };
+  if (callerApiUrl === null) delete process.env.GITHUB_API_URL;
+  else process.env.GITHUB_API_URL = callerApiUrl;
+  try {
+    await body();
+  } finally {
+    globalThis.fetch = original;
+    if (previous === undefined) delete process.env.GITHUB_API_URL;
+    else process.env.GITHUB_API_URL = previous;
+  }
+  return seen;
+}
+
+test('#1062: a caller GITHUB_API_URL never receives the App JWT; GitHub does', async () => {
+  const seen = await withRecordedFetch('https://attacker.example/api', async () => {
+    await assert.rejects(mint({ env: mintEnv(undefined, 'governance-owner') }), /401/);
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, 'https://api.github.com/app/installations');
+  assert.match(seen[0].authorization, /^Bearer /);
+  assert.equal(seen[0].redirect, 'error');
+});
+
+test('#1062: an apiBase that is not credential-free HTTPS is refused before any JWT is sent', async () => {
+  for (const base of [
+    'http://github.example',
+    'https://user:secret@github.example/api/v3',
+    'https://github.example/api/v3?x=1',
+    'https://github.example/api/v3#frag',
+    'ftp://github.example',
+    'not a url',
+  ]) {
+    const seen = await withRecordedFetch(null, async () => {
+      await assert.rejects(mint({ env: mintEnv(base, 'governance-owner') }), /apiBase/, base);
+    });
+    assert.deepEqual(seen, [], base);
+  }
+});
+
+test('#1062: a redirect from the API never carries the App JWT to another origin', async () => {
+  const elsewhere = [];
+  const attacker = createServer((request, response) => {
+    elsewhere.push({ url: request.url, authorization: request.headers.authorization ?? null });
+    response.setHeader('content-type', 'application/json');
+    response.end('[]');
+  });
+  await new Promise((resolve) => attacker.listen(0, '127.0.0.1', resolve));
+  const redirecting = createServer((request, response) => {
+    response.statusCode = 307;
+    response.setHeader('location', `http://127.0.0.1:${attacker.address().port}${request.url}`);
+    response.end();
+  });
+  await new Promise((resolve) => redirecting.listen(0, '127.0.0.1', resolve));
+  try {
+    await assert.rejects(mint({ env: mintEnv(`http://127.0.0.1:${redirecting.address().port}`, 'governance-owner') }));
+    assert.deepEqual(elsewhere, []);
+  } finally {
+    await new Promise((resolve) => attacker.close(resolve));
+    await new Promise((resolve) => redirecting.close(resolve));
+  }
+});
+
+test('#1062: keyd grants and the stored-key check resolve the JWT origin the same way', async () => {
+  const { grantTarget } = await import('../identity/keyd-client.mjs');
+  const { verifyAppCredential } = await import('../identity/soul-credentials.mjs');
+  await withRecordedFetch('https://attacker.example/api', async () => {
+    assert.deepEqual(await grantTarget({ env: {}, config: {} }), {
+      apiBase: 'https://api.github.com', host: 'github.com', owner: null, installationId: null,
+    });
+    const configured = await grantTarget({ env: {}, config: { apiBase: 'https://ghe.example/api/v3/' } });
+    assert.equal(configured.apiBase, 'https://ghe.example/api/v3');
+    assert.equal(configured.host, 'ghe.example');
+    await assert.rejects(grantTarget({ env: {}, config: { apiBase: 'https://u:p@ghe.example' } }), /apiBase/);
+  });
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    requests.push({ url, redirect: init.redirect });
+    return new Response('{}', { status: 200 });
+  };
+  const previous = process.env.GITHUB_API_URL;
+  process.env.GITHUB_API_URL = 'https://attacker.example/api';
+  try {
+    const env = { ...mintEnv(undefined, undefined), GITHUB_API_URL: 'https://attacker.example/api' };
+    assert.equal(await verifyAppCredential({ appId: '1', privateKeyPem: pem }, { env, fetchImpl }), true);
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_API_URL;
+    else process.env.GITHUB_API_URL = previous;
+  }
+  assert.deepEqual(requests, [{ url: 'https://api.github.com/app', redirect: 'error' }]);
+});
