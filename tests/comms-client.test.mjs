@@ -456,6 +456,36 @@ test('the watch binds its owner-decision identity once per socket and surfaces e
   }
 });
 
+// An event line that also carries ok:true is that event, never a ready: it
+// neither rebinds the watch identity nor hides the event (fail closed).
+test('an event line carrying ok:true is never taken for a ready', async () => {
+  const world = scratchWorld();
+  const credential = { account: 'worker', secret: 's3cret', brokerUid: MY_UID, pairedAt: '2026-10-01T00:00:00.000Z' };
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const daemonKey = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
+  const identity = { watchId: '11111111-1111-4111-8111-111111111111', daemonEpoch: 2, daemonKey };
+  const broker = await startFakeBroker(world.socket, (line, { send }) => {
+    if (line.op !== 'account-watch') return;
+    send({ event: 'ready', ...identity });
+    send({ event: 'wake', ok: true, agentId: 'agent_11111111-1111-4111-8111-111111111111', messageIds: ['m1'] });
+  });
+  const wakes = [];
+  const supervisor = createCommsSupervisor({
+    env: world.env, home: '/nonexistent', credential, paths: world.paths, daemonKey,
+    sleepImpl: async () => {}, onWake: async (wake) => { wakes.push(wake.messageIds); },
+  });
+  try {
+    supervisor.start();
+    await waitFor(() => wakes.length === 1);
+    assert.deepEqual(wakes, [['m1']]);
+    assert.deepEqual(supervisor.watchIdentity(), identity);
+    assert.equal(supervisor.getState().lastError, null);
+  } finally {
+    supervisor.stop();
+    await broker.close();
+  }
+});
+
 test('the watch reconnects with capped exponential backoff', async () => {
   const world = scratchWorld();
   const credential = {

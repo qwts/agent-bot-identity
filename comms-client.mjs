@@ -821,7 +821,9 @@ export function createCommsSupervisor({
     await client.stream(
       { op: 'account-watch', auth: { daemon: pair.account, secret: pair.secret } },
       (event) => {
-        if (event?.event === 'ready' || event?.ok === true) {
+        // Ready is exactly a `ready` event or a pure `{ok:true}` acknowledgement;
+        // an event line that also carries ok:true is that event, never a ready.
+        if (event?.event === 'ready' || (event?.ok === true && event.event === undefined)) {
           state.connected = true;
           state.lastError = null;
           if (identityDecided) {

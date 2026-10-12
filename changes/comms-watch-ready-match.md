@@ -1,0 +1,1 @@
+- The comms account watch treats only a `ready` event or a pure `{ok:true}` acknowledgement as ready, so an event line that also carries `ok:true` is handled as that event and never rebinds the owner-decision watch identity (agent-comms#77).
