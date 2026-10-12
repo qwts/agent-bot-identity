@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createLaunchHandler, LAUNCH_NAME_MAX } from '../daemon-launch.mjs';
+import { createLaunchHandler, LAUNCH_CODES, LAUNCH_NAME_MAX, LAUNCH_REFUSALS } from '../daemon-launch.mjs';
 import { createTurnRegistry } from '../turn-registry.mjs';
 import { HARNESS_SESSION_EVENT } from '../executor-contract.mjs';
 import { mintAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
@@ -1221,4 +1221,53 @@ test('a product refusal comes before the SOP policy, which never turns it into a
     assert.equal(f.reports[0].code, 'harness-disabled');
     assert.deepEqual([f.side.overrides, f.side.receipts], [[], []], 'the policy was not consulted');
   }
+});
+
+test('a launch records stage and outcome diagnostics under one trace, never changing the launch (#983)', async (t) => {
+  const recorded = [];
+  const diagnostics = { record: (fields) => { recorded.push(fields); return true; } };
+  let clock = 1000;
+  const nowMs = () => { clock += 5; return clock; };
+  const parent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+  const ok = fixture(t, { joinSoul: async () => 'addr', diagnostics, nowMs });
+  await ok.handler({ ...event, traceparent: parent }, ok.ports);
+  assert.deepEqual(ok.reports[0], { requestId: 'r1', status: 'launched', agentId }, 'the broker report is unchanged');
+  assert.deepEqual(recorded.map((e) => [e.event, e.stage, e.outcome]), [
+    ['launch-stage', 'checking', 'ok'], ['launch-stage', 'account', 'ok'], ['launch-stage', 'joining', 'ok'], ['launch', 'harness', 'ok'],
+  ]);
+  for (const e of recorded) {
+    assert.equal(e.traceId, '4bf92f3577b34da6a3ce929d0e0e4736', 'the caller trace is continued');
+    assert.equal(e.parentSpanId, '00f067aa0ba902b7');
+    assert.equal(e.spanId, recorded[0].spanId);
+    assert.ok(e.durationMs > 0);
+  }
+  assert.equal(recorded.at(-1).agentId, agentId);
+  assert.equal(recorded.at(-1).detail, undefined);
+  const journal = JSON.parse(readFileSync(ok.options.file, 'utf8'));
+  assert.equal(JSON.stringify(journal).includes('4bf92f35'), false, 'the journal format is unchanged');
+
+  // An expected refusal is `refused`; a fault is `failed`; a forged parent starts a new trace.
+  recorded.length = 0;
+  const refused = fixture(t, { joinSoul: async () => 'addr', diagnostics, nowMs, signIn: { check: async () => ({ status: 'signed-out' }) } });
+  await refused.handler({ ...event, traceparent: 'forged' }, refused.ports);
+  const last = recorded.at(-1);
+  assert.deepEqual([last.event, last.stage, last.outcome, last.code], ['launch', 'sign-in', 'refused', 'harness-signed-out']);
+  assert.match(last.traceId, /^[0-9a-f]{32}$/);
+  assert.notEqual(last.traceId, '4bf92f3577b34da6a3ce929d0e0e4736');
+  assert.equal(last.parentSpanId, undefined);
+  assert.match(last.detail, /harness-signed-out/);
+
+  recorded.length = 0;
+  const failed = fixture(t, { diagnostics, nowMs, executorFor: () => async () => { throw new Error('no session'); } });
+  await failed.handler(event, failed.ports);
+  assert.deepEqual([recorded.at(-1).outcome, recorded.at(-1).code], ['failed', undefined]);
+
+  // A recorder that throws changes nothing.
+  const broken = fixture(t, { joinSoul: async () => 'addr', diagnostics: { record: () => { throw new Error('disk full'); } } });
+  await broken.handler(event, broken.ports);
+  assert.deepEqual(broken.reports[0], { requestId: 'r1', status: 'launched', agentId });
+});
+
+test('every launch refusal is a launch code', () => {
+  assert.deepEqual([...LAUNCH_REFUSALS].filter((code) => !LAUNCH_CODES.has(code)), []);
 });

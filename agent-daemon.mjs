@@ -107,6 +107,7 @@ import { resolveSoulModel, resolveSoulReasoningEffort, soulModel, setSoulModel, 
 import { ownerGate as soulSettingOwnerGate, readColdWakeSnapshot, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
+import { createDiagnostics, runtimeVersion } from './diagnostics.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLaunchRefusal, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
@@ -1890,6 +1891,8 @@ export async function runDaemon({
   };
   const onLaunch = createLaunchHandler({
     turns, isPaused,
+    // Local launch diagnostics (#983, ADR-0983); best effort, never exported from here.
+    diagnostics: createDiagnostics({ component: 'daemon', version: runtimeVersion(), env, home }),
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
     identityFor,
