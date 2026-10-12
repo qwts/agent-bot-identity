@@ -61,7 +61,7 @@ test('namespace.json accepts each published digest and refuses every other spell
     await t.test(vector.id, (tt) => {
       const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-namespace-')));
       tt.after(() => fs.rmSync(base, { recursive: true, force: true }));
-      const root = path.join(base, 'trust'), writer = createOwnerDecisionTrustWriter({ root });
+      const root = path.join(base, 'trust'), writer = createOwnerDecisionTrustWriter({ root, env: vouchEnv, home: vouchState });
       for (const value of rejected) {
         assert.throws(() => writer.enrollNamespace({ namespaceDigest: value }), { code: 'bad-request', reason: 'owner-trust-invalid-input' });
       }

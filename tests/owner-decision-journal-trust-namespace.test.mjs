@@ -9,6 +9,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { createOwnerDecisionTrustWriter, readOwnerDecisionNamespace, readOwnerDecisionTrust } from '../identity/owner-decision-trust.mjs';
+import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
+
+// Scratch state and home for every writer and reader here, with a generated
+// scratch vouch key: never the real vouch-key.pem or keyd presence cache.
+const scratch = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-namespace-reader-state-')));
+process.on('exit', () => fs.rmSync(scratch, { recursive: true, force: true }));
+const scope = { env: { XDG_STATE_HOME: scratch }, home: scratch };
+loadOrCreateVouchKey(vouchStateDir(scope));
+const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, ...scope, ...options });
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);
@@ -27,21 +36,21 @@ function snapshot(root) {
   walk(root);
   return out;
 }
-// daemonKey is this daemon's own vouch key ID; no generated pin can equal it.
-const enrollKeys = (w) => w.enrollKeys({ receiptKey: rawKey(), presenceKey: rawKey(), brokerUid: process.getuid() + 1, daemonKey: 'f'.repeat(64) });
+// The daemonKey is derived from the scratch vouch key; generated pins never equal it.
+const enrollKeys = (w) => w.enrollKeys({ receiptKey: rawKey(), presenceKey: rawKey(), brokerUid: process.getuid() + 1 });
 
 test('before any keys, the namespace reads while full trust is still unsupported', darwin, (t) => {
   const root = freshRoot(t);
   assert.throws(() => readOwnerDecisionNamespace({ root }), refused('owner-trust-missing', 'owner-decision-unsupported'));
-  createOwnerDecisionTrustWriter({ root }).enrollNamespace({ namespaceDigest });
+  writer(root).enrollNamespace({ namespaceDigest });
   const before = snapshot(root);
   assert.deepEqual(readOwnerDecisionNamespace({ root }), { namespaceDigest });
   assert.deepEqual(snapshot(root), before);
-  assert.throws(() => readOwnerDecisionTrust({ root, daemonKey: 'f'.repeat(64) }), refused('owner-trust-no-active-key', 'owner-decision-unsupported'));
+  assert.throws(() => readOwnerDecisionTrust({ root, ...scope }), refused('owner-trust-no-active-key', 'owner-decision-unsupported'));
 });
 
 test('between a revocation and the next enrollment the namespace still reads, and nothing more', darwin, (t) => {
-  const root = freshRoot(t), w = createOwnerDecisionTrustWriter({ root });
+  const root = freshRoot(t), w = writer(root);
   w.enrollNamespace({ namespaceDigest });
   enrollKeys(w);
   w.revokeKeys({ revokes: sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json'))), reason: 'rotated' });
@@ -57,7 +66,7 @@ test('a pending namespace audit or publication refuses for an explicit retry and
   for (const point of ['namespace:published', 'namespace:audit-flushed', 'namespace:confirmation:pending-flushed']) {
     await t.test(point, (tt) => {
       const root = freshRoot(tt);
-      assert.throws(() => createOwnerDecisionTrustWriter({ root, fault: (at) => { if (at === point) throw new Error('crash'); } })
+      assert.throws(() => writer(root, { fault: (at) => { if (at === point) throw new Error('crash'); } })
         .enrollNamespace({ namespaceDigest }));
       const before = snapshot(root);
       const reason = point.includes('confirmation:pending') ? 'owner-trust-pending' : 'owner-trust-audit-pending';
@@ -69,7 +78,7 @@ test('a pending namespace audit or publication refuses for an explicit retry and
 
 test('a held lock refuses instead of waiting', darwin, (t) => {
   const root = freshRoot(t);
-  createOwnerDecisionTrustWriter({ root }).enrollNamespace({ namespaceDigest });
+  writer(root).enrollNamespace({ namespaceDigest });
   const held = fs.openSync(path.join(root, '.trust-lock'), fs.constants.O_RDWR | fs.constants.O_NONBLOCK | 0x20);
   try { assert.throws(() => readOwnerDecisionNamespace({ root }), refused('owner-trust-busy')); } finally { fs.closeSync(held); }
   assert.deepEqual(readOwnerDecisionNamespace({ root }), { namespaceDigest });
@@ -89,7 +98,7 @@ test('custody failures and damage refuse, kept as found', darwin, async (t) => {
   for (const [name, damage] of cases) {
     await t.test(name, (tt) => {
       const root = freshRoot(tt);
-      createOwnerDecisionTrustWriter({ root }).enrollNamespace({ namespaceDigest });
+      writer(root).enrollNamespace({ namespaceDigest });
       damage(root);
       const before = snapshot(root);
       assert.throws(() => readOwnerDecisionNamespace({ root }), (error) => error.code === 'storage-failed', name);
