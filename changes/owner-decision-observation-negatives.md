@@ -1,0 +1,1 @@
+- Publish two negative vectors for the daemon trust observation v1 (a leading UTF-8 BOM, and a non-string digest) beside the frozen 16, and test the validator against them (agent-comms#77).
