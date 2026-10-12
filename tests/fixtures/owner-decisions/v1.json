@@ -1,0 +1,1000 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Static synthetic proposal fixtures; no runtime conformance claim. All identities, packages and keys are test-only.",
+  "keys": {
+    "brokerSpkiBase64": "MCowBQYDK2VwAyEA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "presenceSpkiBase64": "MCowBQYDK2VwAyEAZr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+    "presenceRawBase64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=",
+    "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+    "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f"
+  },
+  "positive": [
+    {
+      "id": "approve",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.approve\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"Reviewed\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInByb3Bvc2FsSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJyZWFzb24iOiJSZXZpZXdlZCJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTAxIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+      "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"Reviewed\"",
+      "actionText": "Owner decision revision.approve for qwts/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"Reviewed\"; request 00000000-0000-4000-8000-000000000101; payload sha256:19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+      "actionScalars": 278,
+      "actionUtf8Bytes": 278,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "dea8ac22054e449fc56de85f6ba368c297f97bab41214b76d69824b2c38c7d16",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJkZWE4YWMyMjA1NGU0NDlmYzU2ZGU4NWY2YmEzNjhjMjk3Zjk3YmFiNDEyMTRiNzZkNjk4MjRiMmMzOGM3ZDE2IiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRSIsInYiOjF9.ToWRip8Nw6Gr5V3dRw-6NM21tnAqAz9grlAlzDjRtYSR8p2i06Zy9ci3DwcSS9L8G3cDa0dbUtGFcvCctMutBg",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.approve",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "ab6c60ee04ab97c2dbd5b5e587e2032b01e22b018235f7a36897bec6bf63110a",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUUiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hcHByb3ZlIiwicGF5bG9hZERpZ2VzdCI6IjE5ODc5ZjBhMTY5MzNmM2E3ZmY2N2E0MGFhNTNkYmE1Mzk1YjUxOTJhYzk2OTFkYTllYmVkNzg4OTFjZTFlODciLCJwcmVzZW5jZURpZ2VzdCI6ImFiNmM2MGVlMDRhYjk3YzJkYmQ1YjVlNTg3ZTIwMzJiMDFlMjJiMDE4MjM1ZjdhMzY4OTdiZWM2YmY2MzExMGEiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTAxIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.UsjeUe_9IZZpktQPnoqc3WyNnLE6TO0_Nx4oWrVUkrT1BT1NChmbJ6W70B0KrObVL7NaTmK9wpDu9oKnsX2mBw",
+      "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd"
+    },
+    {
+      "id": "reject",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.reject\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"Needs work\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000102\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLnJlamVjdCIsInBhcmFtZXRlcnMiOnsiZXhwZWN0ZWRSZXZpc2lvbiI6InNoYTI1NjphYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicHJvcG9zYWxJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsInJlYXNvbiI6Ik5lZWRzIHdvcmsifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDEwMiIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ",
+      "payloadDigest": "2351e8fd1e719217984d2a44ed0c8a8e8824d45a678e4460017ac6753ebdea06",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"Needs work\"",
+      "actionText": "Owner decision revision.reject for qwts/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"Needs work\"; request 00000000-0000-4000-8000-000000000102; payload sha256:2351e8fd1e719217984d2a44ed0c8a8e8824d45a678e4460017ac6753ebdea06",
+      "actionScalars": 279,
+      "actionUtf8Bytes": 279,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "b476f1a2a5020243f6322f505516bad21ad6224bb32e2ac8362015e34b547ef6",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJiNDc2ZjFhMmE1MDIwMjQzZjYzMjJmNTA1NTE2YmFkMjFhZDYyMjRiYjMyZTJhYzgzNjIwMTVlMzRiNTQ3ZWY2IiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSSIsInYiOjF9.Z55b4_O0FHkQ2W8B9868nzCSUs2wuev28QH3I9a_7pVjImMDPxwun16Y9xOiFTTn9BGzoyW_75QW9woJqt3pCA",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000102",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.reject",
+        "payloadDigest": "2351e8fd1e719217984d2a44ed0c8a8e8824d45a678e4460017ac6753ebdea06",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "c2c2edbf09bf12370e01859a5e80e3a4419e16ca7ca5361328a61806c1e22024",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkFnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0kiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5yZWplY3QiLCJwYXlsb2FkRGlnZXN0IjoiMjM1MWU4ZmQxZTcxOTIxNzk4NGQyYTQ0ZWQwYzhhOGU4ODI0ZDQ1YTY3OGU0NDYwMDE3YWM2NzUzZWJkZWEwNiIsInByZXNlbmNlRGlnZXN0IjoiYzJjMmVkYmYwOWJmMTIzNzBlMDE4NTlhNWU4MGUzYTQ0MTllMTZjYTdjYTUzNjEzMjhhNjE4MDZjMWUyMjAyNCIsInByZXNlbmNlS2V5IjoiYTU1NGU0YTcyMTBhYjhiNTBmZGY5NDgwYTFhYmU1ZDYzOGQ3M2U5ODFmMTEzMDU0YTA3OTY3NjA0N2EwNGE0ZiIsInByaW5jaXBhbCI6InByaW5jaXBhbF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJyZXF1ZXN0SWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAxMDIiLCJzb3VsIjoiYWdlbnRfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6MX0.vTPvsQHmgGCQN9sBUUtuUfqMZpY4Ch8OaZVQU4XJ_O6TYLRpMr1xM7tDhoL0ysXFQj0xYGN0HDjpE61lToavCg",
+      "receiptDigest": "fe280e5aeae17e69320cee4909395ede8292b619c455574269728808ef929469"
+    },
+    {
+      "id": "adopt",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.adopt\",\"parameters\":{\"expectedRevision\":null,\"packageDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"reason\":\"Initial package\",\"stagingId\":\"00000000-0000-4000-8000-000000000004\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFkb3B0IiwicGFyYW1ldGVycyI6eyJleHBlY3RlZFJldmlzaW9uIjpudWxsLCJwYWNrYWdlRGlnZXN0IjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInJlYXNvbiI6IkluaXRpYWwgcGFja2FnZSIsInN0YWdpbmdJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTAzIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+      "payloadDigest": "ab6db07428679262aa12c294a69988a60766e0f75ec8600b50ccc27a5fb8f855",
+      "summary": "package sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; reason=\"Initial package\"",
+      "actionText": "Owner decision revision.adopt for qwts/agent_00000000-0000-4000-8000-000000000001: package sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; reason=\"Initial package\"; request 00000000-0000-4000-8000-000000000103; payload sha256:ab6db07428679262aa12c294a69988a60766e0f75ec8600b50ccc27a5fb8f855",
+      "actionScalars": 315,
+      "actionUtf8Bytes": 315,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "8e6ee4c96df7eb92ee489c55a42eff2e4af61e92b544aceaf21835770f1338cf",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiI4ZTZlZTRjOTZkZjdlYjkyZWU0ODljNTVhNDJlZmYyZTRhZjYxZTkyYjU0NGFjZWFmMjE4MzU3NzBmMTMzOGNmIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TSIsInYiOjF9.vy6lpsUBWISq5IdS8ZU8P--vRcSMmVtvPYF1jxkw4o2Z_2SvV0xjeeHWExIPnTYQU7epknbHFbbl9tvq5SiGAw",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000103",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.adopt",
+        "payloadDigest": "ab6db07428679262aa12c294a69988a60766e0f75ec8600b50ccc27a5fb8f855",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "c86a3e5e199be40e5959332389c1a5725cbc9d5778d714908d896f753c5002cf",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd00iLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hZG9wdCIsInBheWxvYWREaWdlc3QiOiJhYjZkYjA3NDI4Njc5MjYyYWExMmMyOTRhNjk5ODhhNjA3NjZlMGY3NWVjODYwMGI1MGNjYzI3YTVmYjhmODU1IiwicHJlc2VuY2VEaWdlc3QiOiJjODZhM2U1ZTE5OWJlNDBlNTk1OTMzMjM4OWMxYTU3MjVjYmM5ZDU3NzhkNzE0OTA4ZDg5NmY3NTNjNTAwMmNmIiwicHJlc2VuY2VLZXkiOiJhNTU0ZTRhNzIxMGFiOGI1MGZkZjk0ODBhMWFiZTVkNjM4ZDczZTk4MWYxMTMwNTRhMDc5Njc2MDQ3YTA0YTRmIiwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDEwMyIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ.sm2Q2AT_P51Vy4Qv3prY5rGcKLldqmyTzdSjsCxQPm09Nosk4tVhbn4uRFwlpMo9SgxLm3BW_za4G3lQT9MjDw",
+      "receiptDigest": "51785693f6ef24aed8c2058e652b07ac6b0a82b7489a9b7fefda25a333f1110a"
+    },
+    {
+      "id": "edit-apply",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.edit\",\"parameters\":{\"apply\":true,\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"packageDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"reason\":\"Update instructions\",\"stagingId\":\"00000000-0000-4000-8000-000000000004\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000104\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmVkaXQiLCJwYXJhbWV0ZXJzIjp7ImFwcGx5Ijp0cnVlLCJleHBlY3RlZFJldmlzaW9uIjoic2hhMjU2OmFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJwYWNrYWdlRGlnZXN0IjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInJlYXNvbiI6IlVwZGF0ZSBpbnN0cnVjdGlvbnMiLCJzdGFnaW5nSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDEwNCIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ",
+      "payloadDigest": "0bc89a270276891f59ced95af57f5554a6116ddf4f50902c6dc2bf9dd1b27e7e",
+      "summary": "package sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; apply=true; reason=\"Update instructions\"",
+      "actionText": "Owner decision revision.edit for qwts/agent_00000000-0000-4000-8000-000000000001: package sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; apply=true; reason=\"Update instructions\"; request 00000000-0000-4000-8000-000000000104; payload sha256:0bc89a270276891f59ced95af57f5554a6116ddf4f50902c6dc2bf9dd1b27e7e",
+      "actionScalars": 330,
+      "actionUtf8Bytes": 330,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "df0ee0c56331e7aab2c7e43fd8fe2c0efc57b4c1140c9654d4d14858894d3437",
+        "nonce": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJkZjBlZTBjNTYzMzFlN2FhYjJjN2U0M2ZkOGZlMmMwZWZjNTdiNGMxMTQwYzk2NTRkNGQxNDg1ODg5NGQzNDM3IiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUSIsInYiOjF9.Kk7C7uoicmlp3MBJRZv7R81jlOT6zaOfIvYdbBFKEIO9rLveTe3bdan2Vgeo9bxEn6pRTZRtEvcqKWgkzErUAA",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000104",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.edit",
+        "payloadDigest": "0bc89a270276891f59ced95af57f5554a6116ddf4f50902c6dc2bf9dd1b27e7e",
+        "nonce": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "3738c802a3390528f8ed292a02b2e38c606d842feda3633d33ff83525c698821",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRRUJBUUVCQVEiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5lZGl0IiwicGF5bG9hZERpZ2VzdCI6IjBiYzg5YTI3MDI3Njg5MWY1OWNlZDk1YWY1N2Y1NTU0YTYxMTZkZGY0ZjUwOTAyYzZkYzJiZjlkZDFiMjdlN2UiLCJwcmVzZW5jZURpZ2VzdCI6IjM3MzhjODAyYTMzOTA1MjhmOGVkMjkyYTAyYjJlMzhjNjA2ZDg0MmZlZGEzNjMzZDMzZmY4MzUyNWM2OTg4MjEiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA0Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.bxdfJjV0_I9wz1_eBZdjwQelD1PiXpTSWnWggUDJVIbHcGL69s2acRzHNlNEKb-M2psCF0_Cu7R1AU1nc14XBw",
+      "receiptDigest": "8d564e093e36eebaf86f67b2f15922a22a5a325b6eab152facf700f01fa26f0e"
+    },
+    {
+      "id": "edit-record",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.edit\",\"parameters\":{\"apply\":false,\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"packageDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"reason\":\"Record only\",\"stagingId\":\"00000000-0000-4000-8000-000000000004\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000105\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmVkaXQiLCJwYXJhbWV0ZXJzIjp7ImFwcGx5IjpmYWxzZSwiZXhwZWN0ZWRSZXZpc2lvbiI6InNoYTI1NjphYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicGFja2FnZURpZ2VzdCI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWFzb24iOiJSZWNvcmQgb25seSIsInN0YWdpbmdJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA1Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+      "payloadDigest": "8ca1789562a2ddc14b5e47afc91f1ccccd4d86a8c8eeebb0063b2576ec452d88",
+      "summary": "package sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; apply=false; reason=\"Record only\"",
+      "actionText": "Owner decision revision.edit for qwts/agent_00000000-0000-4000-8000-000000000001: package sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; apply=false; reason=\"Record only\"; request 00000000-0000-4000-8000-000000000105; payload sha256:8ca1789562a2ddc14b5e47afc91f1ccccd4d86a8c8eeebb0063b2576ec452d88",
+      "actionScalars": 323,
+      "actionUtf8Bytes": 323,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "72f769428808758e64a9aa19c3b158f332e1b9bfbbed8476763a06ec149831a2",
+        "nonce": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiI3MmY3Njk0Mjg4MDg3NThlNjRhOWFhMTljM2IxNThmMzMyZTFiOWJmYmJlZDg0NzY3NjNhMDZlYzE0OTgzMWEyIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVSIsInYiOjF9.C45gUQIMBKGfEbNQM8DmeDztyXRqKMyzO6SKVz9BFBaD4wL0Apo8iSZwN-GwVLHdXg9l05vSsB5QChB_5K82Dg",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000105",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.edit",
+        "payloadDigest": "8ca1789562a2ddc14b5e47afc91f1ccccd4d86a8c8eeebb0063b2576ec452d88",
+        "nonce": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "82c8db35c603e2bd6aed25c09d09dc0713ab2b5410be8180da128099f851fe1b",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVUiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5lZGl0IiwicGF5bG9hZERpZ2VzdCI6IjhjYTE3ODk1NjJhMmRkYzE0YjVlNDdhZmM5MWYxY2NjY2Q0ZDg2YThjOGVlZWJiMDA2M2IyNTc2ZWM0NTJkODgiLCJwcmVzZW5jZURpZ2VzdCI6IjgyYzhkYjM1YzYwM2UyYmQ2YWVkMjVjMDlkMDlkYzA3MTNhYjJiNTQxMGJlODE4MGRhMTI4MDk5Zjg1MWZlMWIiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA1Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.lj6oMb_gOucdeKKbHixREq4GTuBglv_tLoN28-Qpbs6agt1pb3J1BscGN4dVSrRVSQcca2XqgYxRxr30p0fNBQ",
+      "receiptDigest": "b38b2f05a159899444428e127dd4d5976ac2b0517f4e68bcbc359622692ecf3b"
+    },
+    {
+      "id": "wake-on",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"cold-wake.set\",\"parameters\":{\"mode\":\"on\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000106\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJvbiJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA2Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+      "payloadDigest": "2009310ad5b0062e874d7564e9d76497fa78be122bd9c70fb849a6e7af753998",
+      "summary": "mode=on",
+      "actionText": "Owner decision cold-wake.set for qwts/agent_00000000-0000-4000-8000-000000000001: mode=on; request 00000000-0000-4000-8000-000000000106; payload sha256:2009310ad5b0062e874d7564e9d76497fa78be122bd9c70fb849a6e7af753998",
+      "actionScalars": 216,
+      "actionUtf8Bytes": 216,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "daefadd9c4e1af80bda4773dfedd963964cf0ecea95afd8ee812a5b88c97e7e3",
+        "nonce": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJkYWVmYWRkOWM0ZTFhZjgwYmRhNDc3M2RmZWRkOTYzOTY0Y2YwZWNlYTk1YWZkOGVlODEyYTViODhjOTdlN2UzIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQmdZR0JnWUdCZ1lHQmdZR0JnWUdCZ1lHQmdZR0JnWUdCZ1lHQmdZR0JnWSIsInYiOjF9.Cb3WQs7F9DMMIP76G9pbIzUx_1BF-yrkolZ4oRUVFDEZQKtEVsBAfx7GN9vCOkawLpGfvxTd8_qDoLY1y37mAQ",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000106",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "cold-wake.set",
+        "payloadDigest": "2009310ad5b0062e874d7564e9d76497fa78be122bd9c70fb849a6e7af753998",
+        "nonce": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "59560c61d552ab99659fb300be9c5e2ff4707b1ebc859fbdbeb2bd1817cc9718",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkJnWUdCZ1lHQmdZR0JnWUdCZ1lHQmdZR0JnWUdCZ1lHQmdZR0JnWUdCZ1kiLCJvcGVyYXRpb24iOiJjb2xkLXdha2Uuc2V0IiwicGF5bG9hZERpZ2VzdCI6IjIwMDkzMTBhZDViMDA2MmU4NzRkNzU2NGU5ZDc2NDk3ZmE3OGJlMTIyYmQ5YzcwZmI4NDlhNmU3YWY3NTM5OTgiLCJwcmVzZW5jZURpZ2VzdCI6IjU5NTYwYzYxZDU1MmFiOTk2NTlmYjMwMGJlOWM1ZTJmZjQ3MDdiMWViYzg1OWZiZGJlYjJiZDE4MTdjYzk3MTgiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA2Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.KBEswDjsKa8efcp6NcyLPKC0BuJ-ZJ3ym6SG__h0XTkNIMC2xAO6sqw2th5eTl3UVz3sC4dudr74GBDxgxmlCQ",
+      "receiptDigest": "7633e509c0a7d5e88fb7679baa48ba03ac144b8c34795c7bd2db74d5beef5438"
+    },
+    {
+      "id": "wake-off",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"cold-wake.set\",\"parameters\":{\"mode\":\"off\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJvZmYifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDEwNyIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ",
+      "payloadDigest": "61eaefb44443bfff1cd6b19bb2edc60c15810d539f875d43a114478099a8e6d9",
+      "summary": "mode=off",
+      "actionText": "Owner decision cold-wake.set for qwts/agent_00000000-0000-4000-8000-000000000001: mode=off; request 00000000-0000-4000-8000-000000000107; payload sha256:61eaefb44443bfff1cd6b19bb2edc60c15810d539f875d43a114478099a8e6d9",
+      "actionScalars": 217,
+      "actionUtf8Bytes": 217,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "a7b66073257fec951ed83e7afb0e18e87261014c39a250dd0a4e374d12a54bd3",
+        "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJhN2I2NjA3MzI1N2ZlYzk1MWVkODNlN2FmYjBlMThlODcyNjEwMTRjMzlhMjUwZGQwYTRlMzc0ZDEyYTU0YmQzIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3YyIsInYiOjF9.tp0gU-bu2drfQc26IMN6DKAZiuPu4DQo1GoHmafys7aRwsTPK6VysqFBjQWvhrF8KX7xC0ZfRca1cpJY7V8FAA",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000107",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "cold-wake.set",
+        "payloadDigest": "61eaefb44443bfff1cd6b19bb2edc60c15810d539f875d43a114478099a8e6d9",
+        "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "e48dae23a3e4319c8d1d270071cd1780ac01baf4807939d0bd8a05ac1b17957a",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2MiLCJvcGVyYXRpb24iOiJjb2xkLXdha2Uuc2V0IiwicGF5bG9hZERpZ2VzdCI6IjYxZWFlZmI0NDQ0M2JmZmYxY2Q2YjE5YmIyZWRjNjBjMTU4MTBkNTM5Zjg3NWQ0M2ExMTQ0NzgwOTlhOGU2ZDkiLCJwcmVzZW5jZURpZ2VzdCI6ImU0OGRhZTIzYTNlNDMxOWM4ZDFkMjcwMDcxY2QxNzgwYWMwMWJhZjQ4MDc5MzlkMGJkOGEwNWFjMWIxNzk1N2EiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA3Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.zGkqFIKNEykiKdKCGHxo_T22b0mPhbxRZgJkew4AxbTqRwzp-eJ_VY9Bv_oIw6AIzgbWnEDea-R4qKFPfiCGAw",
+      "receiptDigest": "1b6b93cd7ad9ae49f75499685d0d21aad9f91b54d8baea669b483ff2a47f6f28"
+    },
+    {
+      "id": "wake-resume-read-only",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"cold-wake.set\",\"parameters\":{\"mode\":\"resume\",\"policy\":\"read-only\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJyZXN1bWUiLCJwb2xpY3kiOiJyZWFkLW9ubHkifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDEwOCIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ",
+      "payloadDigest": "3b207eb256c7d293ebef06f9f8513015225da1340719b717540b53c5edaad836",
+      "summary": "mode=resume; policy=read-only",
+      "actionText": "Owner decision cold-wake.set for qwts/agent_00000000-0000-4000-8000-000000000001: mode=resume; policy=read-only; request 00000000-0000-4000-8000-000000000108; payload sha256:3b207eb256c7d293ebef06f9f8513015225da1340719b717540b53c5edaad836",
+      "actionScalars": 238,
+      "actionUtf8Bytes": 238,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "ce53f8e8862cefda555d062eecf0729bc37d78602e5625b2275ebdfade52bebc",
+        "nonce": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJjZTUzZjhlODg2MmNlZmRhNTU1ZDA2MmVlY2YwNzI5YmMzN2Q3ODYwMmU1NjI1YjIyNzVlYmRmYWRlNTJiZWJjIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZyIsInYiOjF9.h6DE4-9cNRBuBcR8R9yCtgIB4mOEk5_M5M0VRbHtru04RhCHA89am8SEUtcJs7giNnuIDxz-5YlrbyRWI7PWBw",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000108",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "cold-wake.set",
+        "payloadDigest": "3b207eb256c7d293ebef06f9f8513015225da1340719b717540b53c5edaad836",
+        "nonce": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "c4f1ea7704b7fde074ac25f5e811727f6a9086d6416c458e0277c9bfa3004279",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWciLCJvcGVyYXRpb24iOiJjb2xkLXdha2Uuc2V0IiwicGF5bG9hZERpZ2VzdCI6IjNiMjA3ZWIyNTZjN2QyOTNlYmVmMDZmOWY4NTEzMDE1MjI1ZGExMzQwNzE5YjcxNzU0MGI1M2M1ZWRhYWQ4MzYiLCJwcmVzZW5jZURpZ2VzdCI6ImM0ZjFlYTc3MDRiN2ZkZTA3NGFjMjVmNWU4MTE3MjdmNmE5MDg2ZDY0MTZjNDU4ZTAyNzdjOWJmYTMwMDQyNzkiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA4Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.flHzVHeQZnDdbKkMp3Dlai79G-hR0dRPBoahChA1iQu-vgHofwKG6d0o2vmScUD9LggNnBCoho3t7AdDbOJPDA",
+      "receiptDigest": "1e522b4da6f3010180c2549b7d57224699e404a9979a8547958bdf5a49965dba"
+    },
+    {
+      "id": "wake-resume-workspace",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"cold-wake.set\",\"parameters\":{\"mode\":\"resume\",\"policy\":\"workspace\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000109\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJyZXN1bWUiLCJwb2xpY3kiOiJ3b3Jrc3BhY2UifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDEwOSIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ",
+      "payloadDigest": "d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4",
+      "summary": "mode=resume; policy=workspace",
+      "actionText": "Owner decision cold-wake.set for qwts/agent_00000000-0000-4000-8000-000000000001: mode=resume; policy=workspace; request 00000000-0000-4000-8000-000000000109; payload sha256:d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4",
+      "actionScalars": 238,
+      "actionUtf8Bytes": 238,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "3129c9f6a504dffef5e59f11fab82f95b69d33884f87290597608593780e10fd",
+        "nonce": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiIzMTI5YzlmNmE1MDRkZmZlZjVlNTlmMTFmYWI4MmY5NWI2OWQzMzg4NGY4NzI5MDU5NzYwODU5Mzc4MGUxMGZkIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRayIsInYiOjF9.jcfC9pgvOaxWgytyvAbzDYagseMM0iGsOmesKhGFRRx2nhFQxw8_MQQKPH7RHThnDfW738SmuEHqo3NwxKBDAQ",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000109",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "cold-wake.set",
+        "payloadDigest": "d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4",
+        "nonce": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "2bf55fdf0184adac2a383b8c0a261b3ab7163ca56e8512c814fcfc8130bb4ee5",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWsiLCJvcGVyYXRpb24iOiJjb2xkLXdha2Uuc2V0IiwicGF5bG9hZERpZ2VzdCI6ImQwYjQ0ZjhkYzdmZmI4MjY0NDY3NzYyM2NiOWNiNGJkZTEwZTE2OGQxNzk3MWJjYWEwYjBlY2FhYTU1MDA3ZTQiLCJwcmVzZW5jZURpZ2VzdCI6IjJiZjU1ZmRmMDE4NGFkYWMyYTM4M2I4YzBhMjYxYjNhYjcxNjNjYTU2ZTg1MTJjODE0ZmNmYzgxMzBiYjRlZTUiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA5Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.c55vwCeRU4jAi9Ug7Jcaj3LGDSSzfVvFuQn64hrfjSh6fcD5koKK0DaqTkMbOQrEY657ytSjJCgzVLmUyE_3Bw",
+      "receiptDigest": "ac3aebde851554423f68f9bf3e4d1f65513e1836e32d89a177f2d2c8733920c9"
+    },
+    {
+      "id": "wake-webhook",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"cold-wake.set\",\"parameters\":{\"configurationDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"host\":\"example.com\",\"mode\":\"webhook\",\"stagingId\":\"00000000-0000-4000-8000-000000000004\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000110\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7ImNvbmZpZ3VyYXRpb25EaWdlc3QiOiJjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjIiwiaG9zdCI6ImV4YW1wbGUuY29tIiwibW9kZSI6IndlYmhvb2siLCJzdGFnaW5nSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDExMCIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ",
+      "payloadDigest": "f7d408cd9ab2cc7377990aeb520250213ebb6166ba637df7bc04019d0284ac90",
+      "summary": "mode=webhook; host=\"example.com\"; configuration sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "actionText": "Owner decision cold-wake.set for qwts/agent_00000000-0000-4000-8000-000000000001: mode=webhook; host=\"example.com\"; configuration sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc; request 00000000-0000-4000-8000-000000000110; payload sha256:f7d408cd9ab2cc7377990aeb520250213ebb6166ba637df7bc04019d0284ac90",
+      "actionScalars": 328,
+      "actionUtf8Bytes": 328,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "abb81ae0df310d31c602468698d1e45309b5eeb4421672884e74d063329bd135",
+        "nonce": "CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJhYmI4MWFlMGRmMzEwZDMxYzYwMjQ2ODY5OGQxZTQ1MzA5YjVlZWI0NDIxNjcyODg0ZTc0ZDA2MzMyOWJkMTM1IiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQ2dvS0Nnb0tDZ29LQ2dvS0Nnb0tDZ29LQ2dvS0Nnb0tDZ29LQ2dvS0NnbyIsInYiOjF9.pxDmS8isqBHpYtSu2hjwJVhBOF_PbYDFluCTult89XI-uwt8b7yiBlbMoDK4ZoYUWUy_-gYmzhvJKmigcHNaDw",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000110",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "cold-wake.set",
+        "payloadDigest": "f7d408cd9ab2cc7377990aeb520250213ebb6166ba637df7bc04019d0284ac90",
+        "nonce": "CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "3464f43d514c321f24593a44a684e6aff767b5b8a250b3abb78ff7bb64699578",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkNnb0tDZ29LQ2dvS0Nnb0tDZ29LQ2dvS0Nnb0tDZ29LQ2dvS0Nnb0tDZ28iLCJvcGVyYXRpb24iOiJjb2xkLXdha2Uuc2V0IiwicGF5bG9hZERpZ2VzdCI6ImY3ZDQwOGNkOWFiMmNjNzM3Nzk5MGFlYjUyMDI1MDIxM2ViYjYxNjZiYTYzN2RmN2JjMDQwMTlkMDI4NGFjOTAiLCJwcmVzZW5jZURpZ2VzdCI6IjM0NjRmNDNkNTE0YzMyMWYyNDU5M2E0NGE2ODRlNmFmZjc2N2I1YjhhMjUwYjNhYmI3OGZmN2JiNjQ2OTk1NzgiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTEwIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.e73zc2eF5HnQtbvUIYM-JPoMKmztN2-lgXF4TNKJPWqaQ0HPCBGHR-Jb2HPlyW1tYcXDgXsHgkKKFnxTpe5wAQ",
+      "receiptDigest": "c93f2616e360f4d0d519d4717de7ec7e6b752b02c1a167e792864b96f490375f"
+    },
+    {
+      "id": "quoted-unicode",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.approve\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"Say \\\"yes\\\"; keep \\\\ and café 😀\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000111\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInByb3Bvc2FsSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJyZWFzb24iOiJTYXkgXCJ5ZXNcIjsga2VlcCBcXCBhbmQgY2Fmw6kg8J-YgCJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTExIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+      "payloadDigest": "80fec5adbd7986bd94adc31f362fc5fd80b5eacbad33b32b2c76675b747b4ce0",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"Say \\\"yes\\\"; keep \\\\ and café 😀\"",
+      "actionText": "Owner decision revision.approve for qwts/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"Say \\\"yes\\\"; keep \\\\ and café 😀\"; request 00000000-0000-4000-8000-000000000111; payload sha256:80fec5adbd7986bd94adc31f362fc5fd80b5eacbad33b32b2c76675b747b4ce0",
+      "actionScalars": 301,
+      "actionUtf8Bytes": 305,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "cdf10c69322733f003a11860c98f846ee946f82e3787aedfe63a6962dad68ce1",
+        "nonce": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJjZGYxMGM2OTMyMjczM2YwMDNhMTE4NjBjOThmODQ2ZWU5NDZmODJlMzc4N2FlZGZlNjNhNjk2MmRhZDY4Y2UxIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiQ3dzTEN3c0xDd3NMQ3dzTEN3c0xDd3NMQ3dzTEN3c0xDd3NMQ3dzTEN3cyIsInYiOjF9.vsJk-nBuooQ_1RarDEh34cV8UbtpsI8dDpfpYeMMgi9TepuzSA1QMyh1vA3YM4n5GhSSsIkM0XMOybUPszVmAg",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000111",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.approve",
+        "payloadDigest": "80fec5adbd7986bd94adc31f362fc5fd80b5eacbad33b32b2c76675b747b4ce0",
+        "nonce": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "cc2210cff6089d228d9ab8d75fcccc9014844adc8a4b0f6cba182dfc096d0d2c",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6IkN3c0xDd3NMQ3dzTEN3c0xDd3NMQ3dzTEN3c0xDd3NMQ3dzTEN3c0xDd3MiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hcHByb3ZlIiwicGF5bG9hZERpZ2VzdCI6IjgwZmVjNWFkYmQ3OTg2YmQ5NGFkYzMxZjM2MmZjNWZkODBiNWVhY2JhZDMzYjMyYjJjNzY2NzViNzQ3YjRjZTAiLCJwcmVzZW5jZURpZ2VzdCI6ImNjMjIxMGNmZjYwODlkMjI4ZDlhYjhkNzVmY2NjYzkwMTQ4NDRhZGM4YTRiMGY2Y2JhMTgyZGZjMDk2ZDBkMmMiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTExIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.5_doqx1j3XgtqgBDC2PLLr1sm_35Q4HtLa22RU4o0TVda3SMQ-RCoofVMmB-9sAjylloaontZ_Gjcd4iNfjLAA",
+      "receiptDigest": "6c0970f7eb0df09eeb867b1b63d3ad2349ddf22a11a3eeec272d0339ba8fec1f"
+    }
+  ],
+  "displayBoundaries": [
+    {
+      "id": "scalar-400",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.approve\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000150\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInByb3Bvc2FsSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJyZWFzb24iOiJ4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4In0sInByaW5jaXBhbCI6InByaW5jaXBhbF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJyZXF1ZXN0SWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAxNTAiLCJzb3VsIjoiYWdlbnRfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6MX0",
+      "payloadDigest": "ab619670abea7f335b51a5fb0554105fce6e96789262a0351532f036c4fe6a4b",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"",
+      "actionText": "Owner decision revision.approve for qwts/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"; request 00000000-0000-4000-8000-000000000150; payload sha256:ab619670abea7f335b51a5fb0554105fce6e96789262a0351532f036c4fe6a4b",
+      "actionScalars": 400,
+      "actionUtf8Bytes": 400,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "3f0c4dec6bbf50f4e0a0981194c9b7383e4047b0e33f8a8128ce7d5202255798",
+        "nonce": "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiIzZjBjNGRlYzZiYmY1MGY0ZTBhMDk4MTE5NGM5YjczODNlNDA0N2IwZTMzZjhhODEyOGNlN2Q1MjAyMjU1Nzk4IiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiTWpJeU1qSXlNakl5TWpJeU1qSXlNakl5TWpJeU1qSXlNakl5TWpJeU1qSSIsInYiOjF9.AERSv8nC9TsdHXPwfv9xkijdYCPVtJonfXiefEfWRTacxYA-FfBadTqnB7Vfpb87451hmnnwYMmlA79UUTrYAw",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000150",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.approve",
+        "payloadDigest": "ab619670abea7f335b51a5fb0554105fce6e96789262a0351532f036c4fe6a4b",
+        "nonce": "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "a3ebecb89f45243593581b296b3fede0c0a120fe6287237635e2a5eebdb9b03f",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6Ik1qSXlNakl5TWpJeU1qSXlNakl5TWpJeU1qSXlNakl5TWpJeU1qSXlNakkiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hcHByb3ZlIiwicGF5bG9hZERpZ2VzdCI6ImFiNjE5NjcwYWJlYTdmMzM1YjUxYTVmYjA1NTQxMDVmY2U2ZTk2Nzg5MjYyYTAzNTE1MzJmMDM2YzRmZTZhNGIiLCJwcmVzZW5jZURpZ2VzdCI6ImEzZWJlY2I4OWY0NTI0MzU5MzU4MWIyOTZiM2ZlZGUwYzBhMTIwZmU2Mjg3MjM3NjM1ZTJhNWVlYmRiOWIwM2YiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTUwIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.NIa4FM_dtIbLi5YTygYAV42Fay5w5tLafjUTncHEdOtbzceQqXFL1VTVRUPEHi6dGB2Lnbjm3Vt1B8H6AGPsAQ",
+      "receiptDigest": "babb33b2172644895983749b27afa9c3b599103cd1f0f7c0ed6981fcd8895bcb",
+      "expectedPreparation": "accept"
+    },
+    {
+      "id": "scalar-401",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.approve\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000151\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInByb3Bvc2FsSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJyZWFzb24iOiJ4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTUxIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+      "payloadDigest": "dd86606e91cfa1f68dcea6d350be24e00b2d6483745189c55ddbe0fe19af035a",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"",
+      "actionText": "Owner decision revision.approve for qwts/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"; request 00000000-0000-4000-8000-000000000151; payload sha256:dd86606e91cfa1f68dcea6d350be24e00b2d6483745189c55ddbe0fe19af035a",
+      "actionScalars": 401,
+      "actionUtf8Bytes": 401,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "33c4bec1d7f23d351addfd3f737aa58cea885d33b2c690e0bb45cab54599567d",
+        "nonce": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiIzM2M0YmVjMWQ3ZjIzZDM1MWFkZGZkM2Y3MzdhYTU4Y2VhODg1ZDMzYjJjNjkwZTBiYjQ1Y2FiNTQ1OTk1NjdkIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiTXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TSIsInYiOjF9.A9YdVIK4WVoR4Dg4r6g9jNSEEG4HIkYtqSCaAdzF_mWt51Lbmqxyeot1hOj5NYyEvsLelJt5HZMB40S-NK1IBA",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000151",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.approve",
+        "payloadDigest": "dd86606e91cfa1f68dcea6d350be24e00b2d6483745189c55ddbe0fe19af035a",
+        "nonce": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "6569c408fde8e9fb46a1a4a33021987ca51754ea567d140b8c89736d84785542",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6Ik16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek0iLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hcHByb3ZlIiwicGF5bG9hZERpZ2VzdCI6ImRkODY2MDZlOTFjZmExZjY4ZGNlYTZkMzUwYmUyNGUwMGIyZDY0ODM3NDUxODljNTVkZGJlMGZlMTlhZjAzNWEiLCJwcmVzZW5jZURpZ2VzdCI6IjY1NjljNDA4ZmRlOGU5ZmI0NmExYTRhMzMwMjE5ODdjYTUxNzU0ZWE1NjdkMTQwYjhjODk3MzZkODQ3ODU1NDIiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTUxIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.Alru4_kZFWDwaBAbE9h_KGVDRizoFRCNX-hrl9U_t4kHLg_gdOSF12uGLAfyHU3TSYGH_aeBiYoYlmcPvi7MAA",
+      "receiptDigest": "168c193c1658d774d99296b4ad0348de7dd2d05d244a718b6faad00c545fab07",
+      "expectedPreparation": "refuse-display"
+    },
+    {
+      "id": "unicode-within",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.approve\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀xx\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000152\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInByb3Bvc2FsSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJyZWFzb24iOiLwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIB4eCJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTUyIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+      "payloadDigest": "457ab1d107150f5ac05d1cfb766010ddc340782d6ab564176b636ccc33d384f4",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀xx\"",
+      "actionText": "Owner decision revision.approve for qwts/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀xx\"; request 00000000-0000-4000-8000-000000000152; payload sha256:457ab1d107150f5ac05d1cfb766010ddc340782d6ab564176b636ccc33d384f4",
+      "actionScalars": 329,
+      "actionUtf8Bytes": 500,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "15781152b7ce84e18e6c67f666dfea130b15d1825915f8fafbf35f268f3413fd",
+        "nonce": "NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiIxNTc4MTE1MmI3Y2U4NGUxOGU2YzY3ZjY2NmRmZWExMzBiMTVkMTgyNTkxNWY4ZmFmYmYzNWYyNjhmMzQxM2ZkIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiTkRRME5EUTBORFEwTkRRME5EUTBORFEwTkRRME5EUTBORFEwTkRRME5EUSIsInYiOjF9.NwqGQt_bXk3B5Grvlson6D0Pr_4tEMzNULD-hNJNaWpoweMijwfmIqTsXD9f6HVO5tsw6flDMFmzVdCw5qG_Ag",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000152",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.approve",
+        "payloadDigest": "457ab1d107150f5ac05d1cfb766010ddc340782d6ab564176b636ccc33d384f4",
+        "nonce": "NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "56889116042da738147c587259b21f53c1a30d879b68ff384962c6ff3cac7f7f",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6Ik5EUTBORFEwTkRRME5EUTBORFEwTkRRME5EUTBORFEwTkRRME5EUTBORFEiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hcHByb3ZlIiwicGF5bG9hZERpZ2VzdCI6IjQ1N2FiMWQxMDcxNTBmNWFjMDVkMWNmYjc2NjAxMGRkYzM0MDc4MmQ2YWI1NjQxNzZiNjM2Y2NjMzNkMzg0ZjQiLCJwcmVzZW5jZURpZ2VzdCI6IjU2ODg5MTE2MDQyZGE3MzgxNDdjNTg3MjU5YjIxZjUzYzFhMzBkODc5YjY4ZmYzODQ5NjJjNmZmM2NhYzdmN2YiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTUyIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.cW8P5bwFgBT1AMoRaVGxCN91jZE_Z9AmNEXMG8bfiWO1-1UdzK2ASXAA7F4tSxew0FtIBiJ84X40Ag6L0DH1CA",
+      "receiptDigest": "c55d6a8feb4d257137008dafe39dc91ecc4886e849f6c73bd20df4322e7bfdfd",
+      "expectedPreparation": "accept"
+    },
+    {
+      "id": "utf8-over-500",
+      "actionJson": "{\"account\":\"qwts\",\"operation\":\"revision.approve\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀xxx\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000153\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInByb3Bvc2FsSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJyZWFzb24iOiLwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIDwn5iA8J-YgPCfmIB4eHgifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsXzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInJlcXVlc3RJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDE1MyIsInNvdWwiOiJhZ2VudF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJ2IjoxfQ",
+      "payloadDigest": "59901478e7d8f970264543d13694ea7a21244d60a61b2862cb4dd088a8f1da6a",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀xxx\"",
+      "actionText": "Owner decision revision.approve for qwts/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀xxx\"; request 00000000-0000-4000-8000-000000000153; payload sha256:59901478e7d8f970264543d13694ea7a21244d60a61b2862cb4dd088a8f1da6a",
+      "actionScalars": 330,
+      "actionUtf8Bytes": 501,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "1b1ba1dac056d0c73e1bfd3425fa7d72832111e907a2f665c4b583d0ac75c939",
+        "nonce": "NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiIxYjFiYTFkYWMwNTZkMGM3M2UxYmZkMzQyNWZhN2Q3MjgzMjExMWU5MDdhMmY2NjVjNGI1ODNkMGFjNzVjOTM5IiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiTlRVMU5UVTFOVFUxTlRVMU5UVTFOVFUxTlRVMU5UVTFOVFUxTlRVMU5UVSIsInYiOjF9.xxuJgfMdQwHmq5_xcwByRoXkom9a6ZnnhA2vPlDQMLrw0jPUNINGAfyKvjDjUrzaEEFZCHgZ0M7TswwXfRaiBw",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000153",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "qwts",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.approve",
+        "payloadDigest": "59901478e7d8f970264543d13694ea7a21244d60a61b2862cb4dd088a8f1da6a",
+        "nonce": "NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "ebb231f5516725fefbf364b6b9c5ca1628f767785858f6d9c8b89b7e747feebd",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoicXd0cyIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6Ik5UVTFOVFUxTlRVMU5UVTFOVFUxTlRVMU5UVTFOVFUxTlRVMU5UVTFOVFUiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hcHByb3ZlIiwicGF5bG9hZERpZ2VzdCI6IjU5OTAxNDc4ZTdkOGY5NzAyNjQ1NDNkMTM2OTRlYTdhMjEyNDRkNjBhNjFiMjg2MmNiNGRkMDg4YThmMWRhNmEiLCJwcmVzZW5jZURpZ2VzdCI6ImViYjIzMWY1NTE2NzI1ZmVmYmYzNjRiNmI5YzVjYTE2MjhmNzY3Nzg1ODU4ZjZkOWM4Yjg5YjdlNzQ3ZmVlYmQiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTUzIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.D9LVCQSFndMmZgH3Hw94urWME7fQt5Bk-mMFxXZeBKsNeOSInUdJIx6kd5gU4o6R2c2VFYnvVU995XST9BhuDQ",
+      "receiptDigest": "301167d0e50e27bb1182ea5de96816d437dcbf4bee14673c27d195272e36adc7",
+      "expectedPreparation": "refuse-display"
+    },
+    {
+      "id": "long-account-over-scalar",
+      "actionJson": "{\"account\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"operation\":\"revision.approve\",\"parameters\":{\"expectedRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"reason\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000154\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+      "actionBase64url": "eyJhY2NvdW50IjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInByb3Bvc2FsSWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJyZWFzb24iOiJ4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4In0sInByaW5jaXBhbCI6InByaW5jaXBhbF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJyZXF1ZXN0SWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAxNTQiLCJzb3VsIjoiYWdlbnRfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6MX0",
+      "payloadDigest": "46caaa7193cf40f4ea9778e2b2a4b82f296933ec4bf0d9f87ae561d1f1ffbd6d",
+      "summary": "proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"",
+      "actionText": "Owner decision revision.approve for aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/agent_00000000-0000-4000-8000-000000000001: proposal=\"00000000-0000-4000-8000-000000000003\"; reason=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"; request 00000000-0000-4000-8000-000000000154; payload sha256:46caaa7193cf40f4ea9778e2b2a4b82f296933ec4bf0d9f87ae561d1f1ffbd6d",
+      "actionScalars": 430,
+      "actionUtf8Bytes": 430,
+      "presencePayload": {
+        "v": 1,
+        "aud": "agent-bot-owner",
+        "kind": "presence",
+        "action": "c2155bc32ef46f06af0f334b1f54f0fe7f66e116f3dea9a6cf04064b4fca2590",
+        "nonce": "NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY",
+        "iat": 2000000000,
+        "exp": 2000000060
+      },
+      "presenceToken": "p1.eyJhY3Rpb24iOiJjMjE1NWJjMzJlZjQ2ZjA2YWYwZjMzNGIxZjU0ZjBmZTdmNjZlMTE2ZjNkZWE5YTZjZjA0MDY0YjRmY2EyNTkwIiwiYXVkIjoiYWdlbnQtYm90LW93bmVyIiwiZXhwIjoyMDAwMDAwMDYwLCJpYXQiOjIwMDAwMDAwMDAsImtpbmQiOiJwcmVzZW5jZSIsIm5vbmNlIjoiTmpZMk5qWTJOalkyTmpZMk5qWTJOalkyTmpZMk5qWTJOalkyTmpZMk5qWSIsInYiOjF9.eC-c4Rkd8hhqfGmqeoMduI4T2tfuQR3e6fKEbJAN1ce7qqVddiYSj8wuuEWP2OILSCP207inn_izO4f52q9GAA",
+      "receiptPayload": {
+        "v": 1,
+        "aud": "agent-comms-owner-decision",
+        "brokerKey": "324be2dea8bc44461b0233e51fa48902ed6b1cc671e7739af2551e0bfe68f54e",
+        "requestId": "00000000-0000-4000-8000-000000000154",
+        "principal": "principal_00000000-0000-4000-8000-000000000002",
+        "account": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "soul": "agent_00000000-0000-4000-8000-000000000001",
+        "operation": "revision.approve",
+        "payloadDigest": "46caaa7193cf40f4ea9778e2b2a4b82f296933ec4bf0d9f87ae561d1f1ffbd6d",
+        "nonce": "NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY",
+        "presenceKey": "a554e4a7210ab8b50fdf9480a1abe5d638d73e981f113054a079676047a04a4f",
+        "presenceDigest": "8cb457f78d99445a1ce56f04a20b674bff6bd71f0f8977d25d88be0b55acfc73",
+        "iat": 2000000000,
+        "exp": 2000000045
+      },
+      "receiptToken": "d1.eyJhY2NvdW50IjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsImF1ZCI6ImFnZW50LWNvbW1zLW93bmVyLWRlY2lzaW9uIiwiYnJva2VyS2V5IjoiMzI0YmUyZGVhOGJjNDQ0NjFiMDIzM2U1MWZhNDg5MDJlZDZiMWNjNjcxZTc3MzlhZjI1NTFlMGJmZTY4ZjU0ZSIsImV4cCI6MjAwMDAwMDA0NSwiaWF0IjoyMDAwMDAwMDAwLCJub25jZSI6Ik5qWTJOalkyTmpZMk5qWTJOalkyTmpZMk5qWTJOalkyTmpZMk5qWTJOalkiLCJvcGVyYXRpb24iOiJyZXZpc2lvbi5hcHByb3ZlIiwicGF5bG9hZERpZ2VzdCI6IjQ2Y2FhYTcxOTNjZjQwZjRlYTk3NzhlMmIyYTRiODJmMjk2OTMzZWM0YmYwZDlmODdhZTU2MWQxZjFmZmJkNmQiLCJwcmVzZW5jZURpZ2VzdCI6IjhjYjQ1N2Y3OGQ5OTQ0NWExY2U1NmYwNGEyMGI2NzRiZmY2YmQ3MWYwZjg5NzdkMjVkODhiZTBiNTVhY2ZjNzMiLCJwcmVzZW5jZUtleSI6ImE1NTRlNGE3MjEwYWI4YjUwZmRmOTQ4MGExYWJlNWQ2MzhkNzNlOTgxZjExMzA1NGEwNzk2NzYwNDdhMDRhNGYiLCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTU0Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9.woMb4caI-GBT35puWpEGj0x-9X-x53rM4zBcG1J5WDuUnOkso_hOAXwjj8smMXM6UMSXQEb7qnGeOQY0FYQlCA",
+      "receiptDigest": "d7749a077cabff4001a17ad1a527fcf043bed40f36d9729137a8537e33def9d1",
+      "expectedPreparation": "refuse-display"
+    }
+  ],
+  "serialization": [
+    {
+      "id": "nested-scalars-and-integers",
+      "value": {
+        "z": [
+          null,
+          true,
+          false,
+          -9007199254740991,
+          9007199254740991
+        ],
+        "a": {
+          "q": "quote\" slash/ backslash\\",
+          "unicode": "café 😀",
+          "controls": "\b\t\n\f\r\u0000\u001f"
+        }
+      },
+      "canonicalJson": "{\"a\":{\"controls\":\"\\b\\t\\n\\f\\r\\u0000\\u001f\",\"q\":\"quote\\\" slash/ backslash\\\\\",\"unicode\":\"café 😀\"},\"z\":[null,true,false,-9007199254740991,9007199254740991]}",
+      "utf8Hex": "7b2261223a7b22636f6e74726f6c73223a225c625c745c6e5c665c725c75303030305c7530303166222c2271223a2271756f74655c2220736c6173682f206261636b736c6173685c5c222c22756e69636f6465223a22636166c3a920f09f9880227d2c227a223a5b6e756c6c2c747275652c66616c73652c2d393030373139393235343734303939312c393030373139393235343734303939315d7d",
+      "sha256": "236a1798b7a247e2253029226bfd8f783f9cbefe48b1ee5ee2dd0cd354c416ca"
+    },
+    {
+      "id": "zero",
+      "value": {
+        "number": 0
+      },
+      "canonicalJson": "{\"number\":0}",
+      "utf8Hex": "7b226e756d626572223a307d",
+      "sha256": "37e0043fa06b9c3790cd32d713dfda30e7ce8217f30ef142d2732c18ea0024d2"
+    }
+  ],
+  "negativeActionBytes": [
+    {
+      "id": "duplicate-key",
+      "bytesBase64url": "eyJ2IjoxLCJ2IjoxfQ",
+      "expected": "refuse"
+    },
+    {
+      "id": "unknown-key",
+      "bytesBase64url": "eyJ1bmV4cGVjdGVkIjp0cnVlfQ",
+      "expected": "refuse"
+    },
+    {
+      "id": "non-ascii-key",
+      "bytesBase64url": "eyLDqSI6MX0",
+      "expected": "refuse"
+    },
+    {
+      "id": "negative-zero",
+      "bytesBase64url": "eyJuIjotMH0",
+      "expected": "refuse"
+    },
+    {
+      "id": "float",
+      "bytesBase64url": "eyJuIjoxLjB9",
+      "expected": "refuse"
+    },
+    {
+      "id": "exponent",
+      "bytesBase64url": "eyJuIjoxZTB9",
+      "expected": "refuse"
+    },
+    {
+      "id": "plus",
+      "bytesBase64url": "eyJuIjorMX0",
+      "expected": "refuse"
+    },
+    {
+      "id": "leading-zero",
+      "bytesBase64url": "eyJuIjowMX0",
+      "expected": "refuse"
+    },
+    {
+      "id": "unsafe-integer",
+      "bytesBase64url": "eyJuIjo5MDA3MTk5MjU0NzQwOTkyfQ",
+      "expected": "refuse"
+    },
+    {
+      "id": "alternate-escape",
+      "bytesBase64url": "eyJzIjoiXHUwMDYxIn0",
+      "expected": "refuse"
+    },
+    {
+      "id": "escaped-slash",
+      "bytesBase64url": "eyJzIjoiXC8ifQ",
+      "expected": "refuse"
+    },
+    {
+      "id": "unpaired-surrogate",
+      "bytesBase64url": "eyJzIjoiXHVkODAwIn0",
+      "expected": "refuse"
+    },
+    {
+      "id": "outside-whitespace",
+      "bytesBase64url": "IHt9",
+      "expected": "refuse"
+    },
+    {
+      "id": "bom",
+      "bytesBase64url": "77u_e30",
+      "expected": "refuse"
+    },
+    {
+      "id": "invalid-utf8",
+      "bytesBase64url": "eyJzIjoi_yJ9",
+      "expected": "refuse"
+    }
+  ],
+  "receiptClockCases": [
+    {
+      "id": "future-equality",
+      "iat": 2000000000,
+      "exp": 2000000045,
+      "now": 1999999970,
+      "expected": true
+    },
+    {
+      "id": "future-one-over",
+      "iat": 2000000000,
+      "exp": 2000000045,
+      "now": 1999999969,
+      "expected": false
+    },
+    {
+      "id": "before-expiry",
+      "iat": 2000000000,
+      "exp": 2000000045,
+      "now": 2000000044,
+      "expected": true
+    },
+    {
+      "id": "at-expiry",
+      "iat": 2000000000,
+      "exp": 2000000045,
+      "now": 2000000045,
+      "expected": false
+    },
+    {
+      "id": "zero-lifetime",
+      "iat": 2000000000,
+      "exp": 2000000000,
+      "now": 2000000000,
+      "expected": false
+    },
+    {
+      "id": "lifetime-61",
+      "iat": 2000000000,
+      "exp": 2000000061,
+      "now": 2000000000,
+      "expected": false
+    },
+    {
+      "id": "negative-iat",
+      "iat": -1,
+      "exp": 1,
+      "now": 0,
+      "expected": false
+    },
+    {
+      "id": "fractional-iat",
+      "iat": 1.5,
+      "exp": 2,
+      "now": 1,
+      "expected": false
+    }
+  ],
+  "nativePresenceClockCases": [
+    {
+      "id": "native-expiry-grace-equality",
+      "iat": 2000000000,
+      "exp": 2000000060,
+      "now": 2000000090,
+      "expected": true
+    },
+    {
+      "id": "native-expiry-grace-one-over",
+      "iat": 2000000000,
+      "exp": 2000000060,
+      "now": 2000000091,
+      "expected": false
+    }
+  ],
+  "preparationClockCases": [
+    {
+      "id": "preparation-behind-equality",
+      "acceptedAt": 2000000000,
+      "preparedAt": 1999999970,
+      "exp": 2000000150,
+      "now": 2000000000,
+      "stageExp": null,
+      "expected": true
+    },
+    {
+      "id": "preparation-behind-one-over",
+      "acceptedAt": 2000000000,
+      "preparedAt": 1999999969,
+      "exp": 2000000149,
+      "now": 2000000000,
+      "stageExp": null,
+      "expected": false
+    },
+    {
+      "id": "preparation-future-equality",
+      "acceptedAt": 2000000000,
+      "preparedAt": 2000000030,
+      "exp": 2000000180,
+      "now": 2000000000,
+      "stageExp": null,
+      "expected": true
+    },
+    {
+      "id": "preparation-future-one-over",
+      "acceptedAt": 2000000000,
+      "preparedAt": 2000000031,
+      "exp": 2000000180,
+      "now": 2000000000,
+      "stageExp": null,
+      "expected": false
+    },
+    {
+      "id": "preparation-broker-expiry",
+      "acceptedAt": 2000000000,
+      "preparedAt": 2000000000,
+      "exp": 2000000180,
+      "now": 2000000180,
+      "stageExp": null,
+      "expected": false
+    },
+    {
+      "id": "preparation-stage-before-expiry",
+      "acceptedAt": 2000000000,
+      "preparedAt": 2000000000,
+      "exp": 2000000100,
+      "now": 2000000099,
+      "stageExp": 2000000100,
+      "expected": true
+    },
+    {
+      "id": "preparation-stage-at-expiry",
+      "acceptedAt": 2000000000,
+      "preparedAt": 2000000000,
+      "exp": 2000000100,
+      "now": 2000000100,
+      "stageExp": 2000000100,
+      "expected": false
+    },
+    {
+      "id": "preparation-cannot-extend-broker-cap",
+      "acceptedAt": 2000000000,
+      "preparedAt": 2000000030,
+      "exp": 2000000210,
+      "now": 2000000000,
+      "stageExp": null,
+      "expected": false
+    }
+  ],
+  "primitiveCases": [
+    {
+      "id": "soul-v8",
+      "field": "soul",
+      "value": "agent_01234567-89ab-8cde-8f01-23456789abcd",
+      "expected": true
+    },
+    {
+      "id": "soul-v1",
+      "field": "soul",
+      "value": "agent_01234567-89ab-1cde-af01-23456789abcd",
+      "expected": true
+    },
+    {
+      "id": "soul-version-zero",
+      "field": "soul",
+      "value": "agent_01234567-89ab-0cde-8f01-23456789abcd",
+      "expected": false
+    },
+    {
+      "id": "soul-invalid-variant",
+      "field": "soul",
+      "value": "agent_01234567-89ab-8cde-7f01-23456789abcd",
+      "expected": false
+    },
+    {
+      "id": "principal-existing-unrestricted-groups",
+      "field": "principal",
+      "value": "principal_01234567-89ab-0cde-7f01-23456789abcd",
+      "expected": true
+    },
+    {
+      "id": "request-v8-refused",
+      "field": "requestId",
+      "value": "01234567-89ab-8cde-8f01-23456789abcd",
+      "expected": false
+    },
+    {
+      "id": "request-v4",
+      "field": "requestId",
+      "value": "01234567-89ab-4cde-8f01-23456789abcd",
+      "expected": true
+    },
+    {
+      "id": "host-dns",
+      "field": "host",
+      "value": "hooks.example.test",
+      "expected": true
+    },
+    {
+      "id": "host-ipv6-port",
+      "field": "host",
+      "value": "[2001:db8::1]:8443",
+      "expected": true
+    },
+    {
+      "id": "host-ipv4",
+      "field": "host",
+      "value": "127.0.0.1",
+      "expected": true
+    },
+    {
+      "id": "host-default-port",
+      "field": "host",
+      "value": "hooks.example.test:443",
+      "expected": false
+    },
+    {
+      "id": "host-uppercase",
+      "field": "host",
+      "value": "HOOKS.example.test",
+      "expected": false
+    },
+    {
+      "id": "host-port-leading-zero",
+      "field": "host",
+      "value": "hooks.example.test:08443",
+      "expected": false
+    },
+    {
+      "id": "host-expanded-ipv6",
+      "field": "host",
+      "value": "[2001:0db8::1]",
+      "expected": false
+    },
+    {
+      "id": "host-path",
+      "field": "host",
+      "value": "hooks.example.test/path",
+      "expected": false
+    },
+    {
+      "id": "host-credentials",
+      "field": "host",
+      "value": "user@hooks.example.test",
+      "expected": false
+    },
+    {
+      "id": "host-query",
+      "field": "host",
+      "value": "hooks.example.test?secret=value",
+      "expected": false
+    },
+    {
+      "id": "host-idna-noncanonical",
+      "field": "host",
+      "value": "é.example.test",
+      "expected": false
+    },
+    {
+      "id": "host-empty",
+      "field": "host",
+      "value": "",
+      "expected": false
+    }
+  ]
+}

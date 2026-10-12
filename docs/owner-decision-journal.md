@@ -393,3 +393,31 @@ prepare time. It is disabled, with no route or transport.
   network), not constant-time. A resolved target only means "local and live
   at prepare time". Final entry rechecks under its locks, through the
   in-process identity read that is still pending an owner decision.
+
+## d1 receipt verification (disabled)
+
+`identity/owner-decision-receipt.mjs` verifies one broker d1 receipt, as
+specified in agent-comms `docs/owner-decisions.md`. The tests check it against
+the issuer vectors at `c7f7ea0` (#213) and their source `v1.json`, both
+vendored and pinned. It only verifies: no slot write, release or route.
+
+A receipt verifies only if all of these hold:
+- **Token form.** ASCII, at most 4096 bytes, of the form `d1.<payload>.<signature>`.
+  Both segments are canonical unpadded base64url, and the payload is exact
+  canonical JSON with the 14 fields.
+- **Audience.** `aud` is `agent-comms-owner-decision`.
+- **Clock.** `0 < exp - iat <= 60`, `iat <= now + 30` and `now < exp`. This
+  matches all eight shared clock cases.
+- **Keys.** `brokerKey` equals the active receipt pin's key ID, and the
+  signature verifies under that pin. `presenceKey` equals the active presence
+  pin's key ID.
+- **No aliases.** The receipt, presence and vouch (`daemonKey`) key IDs are
+  pairwise distinct.
+- **Saved challenge.** The request, principal, account, soul, operation,
+  payload digest and nonce equal the saved challenge (slot 3). Its `daemonKey`
+  is ours, and `exp` is no later than the challenge's.
+- **The p1.** `presenceDigest` is SHA-256 of the exact p1 token, and `exp` is
+  no later than the p1's stated expiry.
+
+The p1 signature and action-text verification belongs to the native presence
+verifier, a separate slice that needs shared action vectors.
