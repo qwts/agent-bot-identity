@@ -65,6 +65,7 @@ import {
   validateApprovalScope, vouchPublicKeyPem, vouchStateDir
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
+import { createSoulRoutes } from './soul-routes.mjs';
 import { createSoulHistory } from './soul-history.mjs';
 import { ensureSoulSpace, soulSpacePath } from './soul-memory.mjs';
 import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulApp, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
@@ -564,6 +565,12 @@ export function createDaemonServer({
   };
   // Identity's routes (#645, F9 step 2). The daemon keeps its auth: the
   // binding-proof checks are passed in and run where they always have.
+  // Soul's routes (#645, F9 step 3): POST /v0/register, behind the bearer.
+  const handleSoulRoute = createSoulRoutes({
+    env, home,
+    readBody, parseJsonBody, sendJson,
+    requireAgentId, populationOverride,
+  });
   const handleIdentityRoute = createIdentityRoutes({
     bindings, env, home, config, now,
     readBody, parseJsonBody, sendJson,
@@ -693,6 +700,7 @@ export function createDaemonServer({
         return;
       }
       if (await handleIdentityRoute(route, req, res)) return;
+      if (await handleSoulRoute(route, req, res)) return;
       switch (route) {
         case 'POST /v0/asides/delivered': {
           const source = requireBinding(req, bindings);
@@ -757,30 +765,6 @@ export function createDaemonServer({
           // The census path when the census knows the soul (ADR-0583 decision 8).
           const id = requireAgentId(url.searchParams.get('agentId'));
           sendJson(res, 200, { agentId: id, path: soulSpacePath(id, { env, home, config, file: populationOverride(env, home) }) });
-          return;
-        }
-        case 'POST /v0/register': {
-          const body = parseJsonBody(await readBody(req));
-          const id = requireAgentId(body.agentId);
-          if (typeof body.spacePath !== 'string' || !path.isAbsolute(body.spacePath)) {
-            throw Object.assign(new Error('spacePath must be an absolute path'), { statusCode: 400 });
-          }
-          let worktree;
-          if (body.worktree !== undefined && body.worktree !== null) {
-            if (typeof body.worktree !== 'string' || !path.isAbsolute(body.worktree)) {
-              throw Object.assign(new Error('worktree must be an absolute path'), { statusCode: 400 });
-            }
-            worktree = body.worktree;
-          }
-          // `sighted` comes from setup-worktree and its hooks, a live
-          // session; a join or repair registers without it (#109).
-          const soul = upsertIdentitySoul(id, body.spacePath, {
-            file: populationOverride(env, home),
-            stateDir: stateDirectory({ env, home }),
-            worktree,
-            sighted: body.sighted === true,
-          });
-          sendJson(res, 200, { soul });
           return;
         }
         // A soul starts a teammate as itself (#377): the binding is the

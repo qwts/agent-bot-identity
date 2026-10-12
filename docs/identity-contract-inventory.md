@@ -220,8 +220,10 @@ identity semantics:
 
 Two routes straddle identity and soul (F9):
 
-- **`POST /v0/register`** (`agent-daemon.mjs:762`) writes the soul census (`upsertIdentitySoul`
+- **`POST /v0/register`** (`soul-routes.mjs:21`) writes the soul census (`upsertIdentitySoul`
   in `agent-population.mjs`, soul) on behalf of `setup-worktree` and join.
+  Since F9 step 3 it is a soul route, in `soul-routes.mjs` (D6). It stays
+  bearer-only, and its identity read goes through `identityOp`.
 - **`POST /v0/spawn`** (`identity-routes.mjs:49`) mints a child identity,
   binds it and runs the spawn hook. It is called from `agent-identity.mjs:832`.
 
