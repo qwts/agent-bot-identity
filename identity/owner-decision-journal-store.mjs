@@ -179,6 +179,11 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   // After any storage failure this instance refuses until reopened, so a
   // half-known prefix is never written over by the same process.
   let poisoned = false;
+  // Live entries: the one-shot handle enterEffect returns, known only to this
+  // instance and only until completion consumes it. A crash, reopen or other
+  // instance has none, so an entered request it did not complete stays
+  // effect-uncertain forever.
+  const liveEntries = new WeakMap();
 
   function locked(operation) {
     if (poisoned) fail('owner-journal-reopen-required');
@@ -372,7 +377,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     try {
       const { slots, action, preparation, preparationDigest, receiptDigest, entered } = enteredPrefix(decode, saved);
       if (preparation.operation === 'cold-wake.set' && slots['linked-authoritative-event']) return null;
-      return Object.freeze({ action, preparation, preparationDigest, receiptDigest, entered });
+      return Object.freeze({ action, preparation, preparationDigest, receiptDigest, entered, enteredDigest: effectDigest(slots.entered) });
     } catch { return null; }
   }
 
@@ -458,13 +463,20 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
           receiptDigest: view.receiptDigest, action: view.action });
         const bytes = Buffer.from(canonicalJson(record));
         publish(graph.dir, 'entered', bytes, graph.binding);
-        return { state: 'entered', requestId, effectId: view.preparation.effectId, enteredDigest: effectDigest(bytes),
-          physicalFlushGuaranteed: false };
+        const entry = Object.freeze(Object.create(null)), enteredDigest = effectDigest(bytes);
+        liveEntries.set(entry, Object.freeze({ requestId, enteredDigest }));
+        return { state: 'entered', requestId, effectId: view.preparation.effectId, enteredDigest, entry, physicalFlushGuaranteed: false };
       });
     },
 
     // Completion of one entered effect (C2; disabled, no route): entered
-    // becomes completed, under the journal lock. `result` is { at } seconds,
+    // becomes completed, under the journal lock. It takes the live `entry`
+    // handle that this instance's enterEffect returned, never a request ID:
+    // without that handle (forged, from another instance, after a crash or
+    // reopen, or already used) it refuses, so nothing can complete an effect
+    // it did not just enter. The handle is consumed once the write starts, and
+    // the entered record must still be the one it entered. `result` is
+    // { at } seconds, no earlier than entry,
     // plus for a revision what the effect reports: { journalSeq,
     // journalRecordDigest, working } (working null unless entered applies).
     // The store derives the record from the saved entered record and action
@@ -472,22 +484,25 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     // applied; a revision stays indeterminate until its linked authoritative
     // event is present. Already completed, applied or refused is a conflict;
     // any other phase, or a damaged entered record, refuses.
-    completeEffect(requestId, result) {
-      if (!matches(UUID4, requestId) || !plain(result)) fail('invalid-owner-journal-record');
-      const name = requestDirectoryName({ namespaceDigest, requestId });
+    completeEffect(entry, result) {
+      const live = liveEntries.get(entry);
+      if (!live) fail('owner-journal-entry-required');
+      if (!plain(result)) fail('invalid-owner-journal-record');
+      const { requestId } = live, name = requestDirectoryName({ namespaceDigest, requestId });
       return locked(() => {
-        if (!scan().includes(name)) fail('owner-journal-transition-refused');
         const graph = readGraph(name, requestId);
-        if (['applied', 'refused'].includes(graph.state) || !zeros(graph.bytes.get('completed.record'))) fail('owner-journal-conflict');
-        if (!graph.awaiting) fail('owner-journal-transition-refused');
+        if (!zeros(graph.bytes.get('completed.record'))) fail('owner-journal-conflict');
+        if (!graph.awaiting || graph.awaiting.enteredDigest !== live.enteredDigest) fail('owner-journal-transition-refused');
         recoveryFlush(graph);
         const { entered, action, preparation, preparationDigest, receiptDigest } = graph.awaiting;
         const { at, journalSeq, journalRecordDigest, working } = result;
         let bytes;
         try {
+          if (!Number.isSafeInteger(at) || at < entered.at) throw new Error();
           bytes = Buffer.from(canonicalJson(completedRecordFor({ entered, action, at, journalSeq, journalRecordDigest, working })));
           bindEffect(decodeEffect(bytes), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
         } catch { fail('invalid-owner-journal-record'); }
+        liveEntries.delete(entry);
         publish(graph.dir, 'completed', bytes, graph.binding);
         return settled(readGraph(name, requestId), { effectId: preparation.effectId, completedDigest: effectDigest(bytes) });
       });

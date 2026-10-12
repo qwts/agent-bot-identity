@@ -1,7 +1,8 @@
 // The disabled owner-decision effect writers (agent-comms#77, C2): completion
 // (slot 10, entered -> completed) and the final pre-effect refusal (slot 7).
 // Each test builds a request in scratch state with the typed fixture records,
-// enters it through the store, then drives the writers.
+// enters it through one store instance, then drives the writers. Completion
+// takes that instance's live entry handle.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -12,7 +13,7 @@ import process from 'node:process';
 import { canonicalJson } from '../canonical-json.mjs';
 import { encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
-import { REFUSAL_OUTCOMES, challengeFor } from '../identity/owner-decision-evidence.mjs';
+import { REFUSAL_OUTCOMES, challengeFor, enteredRecordFor } from '../identity/owner-decision-evidence.mjs';
 import * as host from '../identity-host.mjs';
 import * as soul from '../identity-soul.mjs';
 
@@ -63,7 +64,7 @@ function transaction(operation, coldId = 'wake-on-preparation') {
   };
 }
 
-function journal(t, operation = 'revision.approve', { upTo = 'successful-check', enter = true, coldId } = {}) {
+function journal(t, operation = 'revision.approve', { upTo = 'successful-check', enter = true, coldId, fault } = {}) {
   const tx = transaction(operation, coldId);
   const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-writers-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
@@ -75,11 +76,14 @@ function journal(t, operation = 'revision.approve', { upTo = 'successful-check',
   const write = (slot, payload) => fs.writeFileSync(path.join(dir, `${slot}.record`), encodeDaemonJournalFrame(payload, { namespaceDigest, requestId: tx.requestId, slot }));
   const read = (slot) => fs.readFileSync(path.join(dir, `${slot}.record`));
   for (const slot of upTo ? PRE_ENTRY.slice(0, PRE_ENTRY.indexOf(upTo) + 1) : []) write(slot, tx.slots[slot]);
-  if (upTo === 'successful-check' && enter) open().enterEffect(tx.requestId, () => ({ at: AT }));
+  // The instance that enters, and its one-shot entry handle.
+  const store = open({ fault });
+  const entry = upTo === 'successful-check' && enter ? store.enterEffect(tx.requestId, () => ({ at: AT })).entry : null;
   const recover = () => open().recover(tx.requestId);
-  const complete = (result = operation === 'cold-wake.set' ? { at: AT } : tx.revision, options) => open(options).completeEffect(tx.requestId, result);
+  const defaults = operation === 'cold-wake.set' ? { at: AT } : tx.revision;
+  const complete = (result = defaults, handle = entry) => store.completeEffect(handle, result);
   const refuse = (refusal = { code: 'expected-state-changed', at: AT }, options) => open(options).refusePreEffect(tx.requestId, refusal);
-  return { tx, root, write, read, recover, complete, refuse };
+  return { tx, root, write, read, recover, complete, refuse, store, entry, open, defaults };
 }
 
 // Nothing is written: the request's files are byte-identical.
@@ -131,19 +135,59 @@ test('a revision completion is indeterminate until its linked authoritative even
   });
 });
 
-test('completion is legal only from a valid entered record', darwin, async (t) => {
-  for (const [upTo, state] of [[null, 'admitted'], ['preparation', 'preparing'], ['prepared-challenge', 'prepared'], ['receipt', 'authorizing'],
-    ['successful-check', 'released']]) {
-    await t.test(state, (tt) => {
-      const j = journal(tt, 'revision.approve', { upTo, enter: false });
-      assert.equal(j.recover().state, state);
-      unchanged(j, () => j.complete(), { reason: 'owner-journal-transition-refused', code: 'storage-failed' });
-      assert.equal(j.recover().state, state);
-    });
-  }
-  await t.test('damaged entered', (tt) => {
-    const j = journal(tt, 'revision.approve', { enter: false });
+// Completion needs the live handle from this instance's own entry: nothing
+// else, including recovery or a reopened store, can complete an entered effect.
+test('completion requires the live one-shot entry handle from the instance that entered', darwin, async (t) => {
+  const required = { reason: 'owner-journal-entry-required', code: 'storage-failed' };
+  await t.test('no handle', (tt) => {
+    const j = journal(tt, 'cold-wake.set');
+    for (const handle of [undefined, null, j.tx.requestId, 7]) unchanged(j, () => j.store.completeEffect(handle, j.defaults), required);
+    assert.equal(j.complete().state, 'applied');
+  });
+  await t.test('a forged lookalike', (tt) => {
+    const j = journal(tt, 'cold-wake.set');
+    for (const handle of [Object.freeze(Object.create(null)), {}, Object.freeze({ ...j.entry }), Object.create(j.entry)]) {
+      unchanged(j, () => j.store.completeEffect(handle, j.defaults), required);
+    }
+    assert.equal(j.complete().state, 'applied');
+  });
+  await t.test('a handle used on a second instance over the same journal', (tt) => {
+    const j = journal(tt, 'cold-wake.set');
+    unchanged(j, () => j.open().completeEffect(j.entry, j.defaults), required);
+    assert.equal(j.complete().state, 'applied');
+  });
+  await t.test('after a crash and reopen the entered request stays effect-uncertain', (tt) => {
+    // The entering instance fails a later write and is poisoned; a reopened
+    // instance has no live entry, so the request can never be completed.
+    let flushes = 0;
+    const j = journal(tt, 'cold-wake.set', { fault: (at) => { if (at === 'recovery:directories-flushed' && ++flushes === 2) throw new Error('crash'); } });
+    assert.throws(() => j.complete());
+    assert.throws(() => j.complete(), { reason: 'owner-journal-reopen-required' });
+    unchanged(j, () => j.open().completeEffect(j.entry, j.defaults), required);
+    assert.deepEqual(j.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+  });
+  await t.test('a handle is used once', (tt) => {
+    const j = journal(tt);
+    assert.equal(j.complete().state, 'indeterminate');
+    unchanged(j, () => j.complete(), required);
+  });
+  await t.test('a handle for one request never completes another', (tt) => {
+    const j = journal(tt, 'cold-wake.set'), k = journal(tt, 'cold-wake.set');
+    unchanged(k, () => j.store.completeEffect(k.entry, k.defaults), required);
+  });
+});
+
+test('completion is legal only while the entered record is the one the handle entered', darwin, async (t) => {
+  await t.test('a damaged entered record', (tt) => {
+    const j = journal(tt);
     j.write('entered', Buffer.from('{"not":"an effect"}'));
+    unchanged(j, () => j.complete(), { reason: 'owner-journal-transition-refused', code: 'storage-failed' });
+  });
+  await t.test('another valid entered record', (tt) => {
+    // Rewritten behind this instance with a later time: valid, but not the entry it holds.
+    const j = journal(tt);
+    j.write('entered', Buffer.from(canonicalJson(enteredRecordFor({ preparation: j.tx.preparation, preparationDigest: j.tx.preparationDigest,
+      receiptDigest: j.tx.receiptDigest, action: JSON.parse(j.tx.action), at: AT + 1 }))));
     assert.equal(j.recover().state, 'indeterminate');
     unchanged(j, () => j.complete(), { reason: 'owner-journal-transition-refused' });
   });
@@ -152,10 +196,10 @@ test('completion is legal only from a valid entered record', darwin, async (t) =
     j.write('linked-authoritative-event', j.tx.linked);
     unchanged(j, () => j.complete(), { reason: 'owner-journal-transition-refused' });
   });
-  await t.test('unknown request', (tt) => {
-    const j = journal(tt);
-    assert.throws(() => createDaemonJournalStore({ root: j.root, namespaceDigest }).completeEffect('22222222-2222-4222-8222-222222222222', { at: AT }),
-      { reason: 'owner-journal-transition-refused' });
+  await t.test('a completed slot already holding anything', (tt) => {
+    const j = journal(tt, 'cold-wake.set');
+    j.write('completed', Buffer.from('{}'));
+    unchanged(j, () => j.complete(), { reason: 'owner-journal-conflict', code: 'conflict' });
   });
 });
 
@@ -164,6 +208,7 @@ test('a completion that does not repeat the entered transition refuses and write
     'missing journal sequence': { at: AT, journalRecordDigest: 'b'.repeat(64), working: null },
     'working tree on a record-only entry': { at: AT, journalSeq: 1, journalRecordDigest: 'b'.repeat(64), working: { rootDigest: 'c'.repeat(64), inventoryDigest: 'd'.repeat(64) } },
     'negative time': { at: -1, journalSeq: 1, journalRecordDigest: 'b'.repeat(64), working: null },
+    'a time before entry': { at: AT - 1, journalSeq: 1, journalRecordDigest: 'b'.repeat(64), working: null },
   };
   for (const [name, result] of Object.entries(bad)) {
     await t.test(name, (tt) => {
@@ -208,21 +253,21 @@ test('a final refusal is legal from every prepared phase before entry, with the 
 
 test('double completion, double refusal, applied after refused and refused after entered are conflicts', darwin, async (t) => {
   const conflict = { reason: 'owner-journal-conflict', code: 'conflict' };
-  await t.test('double completion (applied)', (tt) => {
+  // A second completion has no live handle (it was consumed), so it refuses
+  // before reading anything; a completed slot behind a live handle is a conflict.
+  await t.test('double completion', (tt) => {
     const j = journal(tt, 'cold-wake.set'); j.complete();
-    unchanged(j, () => j.complete(), conflict);
-  });
-  await t.test('double completion (awaiting its linked event)', (tt) => {
-    const j = journal(tt); j.complete();
-    unchanged(j, () => j.complete(), conflict);
+    unchanged(j, () => j.complete(), { reason: 'owner-journal-entry-required' });
   });
   await t.test('double refusal', (tt) => {
     const j = journal(tt, 'revision.approve', { enter: false }); j.refuse();
     unchanged(j, () => j.refuse({ code: 'expired', at: AT }), conflict);
   });
   await t.test('completion after refusal', (tt) => {
+    // A refused request can never be entered, so no handle can exist for it.
     const j = journal(tt, 'revision.approve', { enter: false }); j.refuse();
-    unchanged(j, () => j.complete(), conflict);
+    assert.throws(() => j.store.enterEffect(j.tx.requestId, () => ({ at: AT })), { reason: 'owner-journal-consumed' });
+    unchanged(j, () => j.complete(), { reason: 'owner-journal-entry-required' });
     assert.equal(j.recover().state, 'refused');
   });
   await t.test('refusal after entry', (tt) => {
@@ -244,14 +289,14 @@ test('double completion, double refusal, applied after refused and refused after
 test('a crash between writes recovers to the existing mapped outcome', darwin, async (t) => {
   const crashAt = (point) => ({ fault: (at) => { if (at === point) throw new Error('crash'); } });
   await t.test('completion body without its trailer is effect-uncertain, never completed again', (tt) => {
-    const j = journal(tt, 'cold-wake.set');
-    assert.throws(() => j.complete(undefined, crashAt('completed:body-written')));
+    const j = journal(tt, 'cold-wake.set', crashAt('completed:body-written'));
+    assert.throws(() => j.complete());
     assert.deepEqual(j.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
-    assert.throws(() => j.complete(), { reason: 'owner-journal-conflict' });
+    assert.throws(() => j.open().completeEffect(j.entry, j.defaults), { reason: 'owner-journal-entry-required' });
   });
   await t.test('completion trailer written but not flushed is applied', (tt) => {
-    const j = journal(tt, 'cold-wake.set');
-    assert.throws(() => j.complete(undefined, crashAt('completed:trailer-written')));
+    const j = journal(tt, 'cold-wake.set', crashAt('completed:trailer-written'));
+    assert.throws(() => j.complete());
     assert.equal(j.recover().state, 'applied');
   });
   await t.test('refusal body without its trailer refuses as found, and never enters', (tt) => {
@@ -269,28 +314,39 @@ test('a crash between writes recovers to the existing mapped outcome', darwin, a
 });
 
 test('malformed input refuses before the lock, and a refused transition leaves the store usable', darwin, (t) => {
-  const j = journal(t, 'revision.approve', { enter: false });
-  const held = acquireDaemonJournalLock(j.root);
-  try {
-    for (const run of [() => j.complete(null), () => j.refuse(null), () => j.complete([]), () => j.refuse('expired')]) {
-      assert.throws(run, { reason: 'invalid-owner-journal-record' });
-    }
-  } finally { fs.closeSync(held); }
-  // Completing a released request refuses without poisoning this instance.
+  const live = journal(t, 'cold-wake.set'), j = journal(t, 'revision.approve', { enter: false });
+  for (const root of [live.root, j.root]) {
+    const held = acquireDaemonJournalLock(root);
+    try {
+      for (const run of [() => live.complete(null), () => live.complete([]), () => j.refuse(null), () => j.refuse('expired')]) {
+        assert.throws(run, { reason: 'invalid-owner-journal-record' });
+      }
+      assert.throws(() => j.store.completeEffect(null, {}), { reason: 'owner-journal-entry-required' });
+    } finally { fs.closeSync(held); }
+  }
+  assert.equal(live.complete().state, 'applied');
+  // A refused phase transition does not poison the instance that refused it.
+  const admitted = journal(t, 'revision.approve', { upTo: null });
+  assert.throws(() => admitted.store.refusePreEffect(admitted.tx.requestId, { code: 'expired', at: AT }), { reason: 'owner-journal-transition-refused' });
+  assert.equal(admitted.store.recover(admitted.tx.requestId).state, 'admitted');
+  // Refused writes leave this instance usable, its live entry included.
   const store = createDaemonJournalStore({ root: j.root, namespaceDigest });
-  assert.throws(() => store.completeEffect(j.tx.requestId, j.tx.revision), { reason: 'owner-journal-transition-refused' });
-  assert.equal(store.enterEffect(j.tx.requestId, () => ({ at: AT })).state, 'entered');
+  assert.throws(() => store.completeEffect(null, j.tx.revision), { reason: 'owner-journal-entry-required' });
+  const { entry } = store.enterEffect(j.tx.requestId, () => ({ at: AT }));
   assert.throws(() => store.refusePreEffect(j.tx.requestId, { code: 'expired', at: AT }), { reason: 'owner-journal-conflict' });
-  assert.equal(store.completeEffect(j.tx.requestId, j.tx.revision).state, 'indeterminate');
+  // A refused completion does not consume the handle: it completes once fixed.
+  assert.throws(() => store.completeEffect(entry, { ...j.tx.revision, at: AT - 1 }), { reason: 'invalid-owner-journal-record' });
+  assert.equal(store.completeEffect(entry, j.tx.revision).state, 'indeterminate');
 });
 
 test('each writer flushes the request it read before writing, and refuses an unknown request', darwin, async (t) => {
   for (const [name, operation, options, slot, run] of [
-    ['completion', 'cold-wake.set', {}, 'completed', (j, o) => j.complete(undefined, o)],
+    ['completion', 'cold-wake.set', {}, 'completed', (j) => j.complete()],
     ['refusal', 'revision.approve', { enter: false }, 'pre-effect-refused', (j, o) => j.refuse(undefined, o)],
   ]) {
     await t.test(name, (tt) => {
-      const j = journal(tt, operation, options), seen = [];
+      const seen = [], j = journal(tt, operation, { ...options, fault: (at) => seen.push(at) });
+      seen.length = 0;
       run(j, { fault: (at) => seen.push(at) });
       const flushed = seen.indexOf('recovery:directories-flushed');
       assert(flushed >= 0 && flushed < seen.indexOf(`${slot}:body-written`), seen.join(' '));
