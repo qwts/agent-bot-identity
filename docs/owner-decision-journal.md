@@ -782,14 +782,16 @@ recovery. A refused write doesn't poison the instance.
 
 ## Preparation writer and trust version (v2, disabled)
 
-`recordPreparation(requestId, {preparation, trust})` writes the v2
+`recordPreparation(requestId, {preparation})` writes the v2
 preparation (owner decision Q3; agent-comms `effect-evidence-v2.json` at
 bf0b705, vendored), then the exact prepared challenge it implies.
 - **What the record holds.** The v1 fields plus `trustVersion`: the active
   trust enrollment's chain version, an odd integer from 1 to 1023. The caller
   never supplies it. The store reads live trust itself:
-  - it calls `readOwnerDecisionTrust` for this journal's namespace, with
-    `trust` as `{root, env, home}`;
+  - it calls `readOwnerDecisionTrust` for this journal's namespace, on the
+    daemon's own trust store, resolved from its launch env and home the
+    same way `readOwnerDecisionTrustObservation()` does, never a store the
+    caller names;
   - it takes the trust lock inside the journal lock, and refuses rather than
     waits;
   - it records that version.
@@ -813,3 +815,9 @@ bf0b705, vendored), then the exact prepared challenge it implies.
 The decoder accepts v2 and keeps v1 for the vendored v1 vectors. The
 effect-entry gate requires the current chain version to equal the
 preparation's `trustVersion`, so a v1 preparation never enters.
+
+**One trust store by construction.** The preparation writer and the
+effect-entry gate both take no trust root, env or home. Each reads the
+daemon's own store, resolved from its launch environment and home, so they
+read the same store as the trust observation. A second, custody-valid store
+under the same namespace can't be selected through either.

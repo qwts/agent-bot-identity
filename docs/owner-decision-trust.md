@@ -156,7 +156,9 @@ first key enrollment doesn't depend on the key chain it is about to start.
   writes anything.
 
 The full `readOwnerDecisionTrust` stays mandatory for owner-decision
-capability and for every trust check.
+capability and for every trust check. Called with no `root`, it reads this daemon's own store, resolved from
+the same env and home as its vouch key. The preparation writer and the
+effect-entry gate always call it that way.
 
 ## Daemon trust observation (v1, disabled)
 

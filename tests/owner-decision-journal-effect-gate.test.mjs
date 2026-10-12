@@ -15,8 +15,9 @@ import { createOwnerDecisionIdentityPort } from '../owner-decision-identity-port
 import { upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../identity/agent-identity.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
-import { createOwnerDecisionTrustWriter } from '../identity/owner-decision-trust.mjs';
+import { createOwnerDecisionTrustWriter, ownerDecisionTrustRoot } from '../identity/owner-decision-trust.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
+import { asDaemon } from './helpers/owner-decision-daemon-env.mjs';
 import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
 import { encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { challengeFor } from '../identity/owner-decision-evidence.mjs';
@@ -56,7 +57,8 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   if (!shared) t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
   const signer = shared?.signer ?? generateKeyPairSync('ed25519'), broker = shared?.broker ?? generateKeyPairSync('ed25519');
-  const trustRoot = path.join(base, 'trust');
+  // The daemon's own trust store, where its launch env and home resolve it.
+  const trustRoot = ownerDecisionTrustRoot({ env, home });
   const trustWriter = (now) => withCurrentObservation(createOwnerDecisionTrustWriter({ root: trustRoot, env, home, now: () => now, legacyPresenceKey: null }),
     { root: trustRoot, env, home });
   if (!shared) {
@@ -93,8 +95,7 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   // instead of writing the preparation and challenge directly.
   if (viaWriter) {
     const { v, kind, trustVersion: ignored, ...fields } = preparation; void v; void kind; void ignored;
-    createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recordPreparation(requestId,
-      { preparation: fields, trust: { root: trustRoot, env, home } });
+    asDaemon({ env, home }, () => createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recordPreparation(requestId, { preparation: fields }));
   }
   for (const [slot, payload] of order) {
     if (!(viaWriter && ['preparation', 'prepared-challenge'].includes(slot))) write(slot, payload);
@@ -109,10 +110,11 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
     upsertSoul({ id: soul, appSlug: null, parentId: null, status: 'active', spacePath: `/spaces/${soul}`, worktree: null, worktrees: [],
       transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file: censusFile });
   }
-  const options = { journalRoot, namespaceDigest, trustRoot, env, home, daemonAccount: account, censusFile,
+  const options = { journalRoot, namespaceDigest, daemonAccount: account, censusFile,
     identityPort: createOwnerDecisionIdentityPort({ stateDir }), nowMilliseconds: NOW };
   const recover = () => createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recover(requestId);
-  const enter = (overrides = {}, token = presence) => enterOwnerDecisionEffect({ requestId, presenceToken: token }, { ...options, ...overrides });
+  // The gate runs as this daemon: its trust store comes from the launch env and home.
+  const enter = (overrides = {}, token = presence) => asDaemon({ env, home }, () => enterOwnerDecisionEffect({ requestId, presenceToken: token }, { ...options, ...overrides }));
   return { base, requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText,
     receiptToken: receipt.toString('ascii'), check };
 }
@@ -440,4 +442,44 @@ test('a request prepared under live trust refuses after a rollback re-enroll of 
 
 test('a request prepared through the writer under unchanged trust enters', darwin, (t) => {
   assert.equal(released(t, { viaWriter: true }).enter().state, 'entered');
+});
+
+// The gate and the preparation writer read only the daemon's own trust store:
+// a second, custody-valid store under the same namespace can't be selected.
+test('a second trust store under the same namespace can never be selected', darwin, async (t) => {
+  // A second store, as a caller might stage it: the same namespace and pair,
+  // re-enrolled to version 3 (what a rollback re-enroll would produce).
+  const second = (r) => {
+    const root = path.join(r.base, 'second-trust'), env = { XDG_STATE_HOME: path.join(r.base, 'xdg') };
+    const w = (now) => withCurrentObservation(createOwnerDecisionTrustWriter({ root, env, home: r.base, now: () => now, legacyPresenceKey: null }), { root, env, home: r.base });
+    w(1_999_999_000).enrollNamespace({ namespaceDigest });
+    w(1_999_999_000).enrollKeys({ receiptKey: rawKey(r.broker), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+    const head = fs.readdirSync(path.join(root, 'keys')).filter((n) => /^\d{10}\.json$/.test(n)).sort().at(-1);
+    w(1_999_999_400).revokeKeys({ revokes: sha256(fs.readFileSync(path.join(root, 'keys', head))), reason: 'compromised' });
+    w(1_999_999_500).enrollKeys({ receiptKey: rawKey(r.broker), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+    return root;
+  };
+  await t.test('the gate ignores a named trust root and reads its own', (tt) => {
+    // The request was prepared (via the writer) under the daemon's own store at version 1.
+    const r = released(tt, { viaWriter: true });
+    const other = second(r);
+    // Naming the second store changes nothing: entry is decided by the own store.
+    assert.equal(r.enter({ trustRoot: other, env: { XDG_STATE_HOME: path.join(r.base, 'nowhere') }, home: path.join(r.base, 'nowhere') }).state, 'entered');
+  });
+  await t.test('the probe through a second store still refuses once the own store moves', (tt) => {
+    const r = released(tt, { viaWriter: true });
+    const other = second(r);
+    const keys = path.join(r.trustRoot, 'keys');
+    const head = fs.readdirSync(keys).filter((n) => /^\d{10}\.json$/.test(n)).sort().at(-1);
+    r.trustWriter(1_999_999_400).revokeKeys({ revokes: sha256(fs.readFileSync(path.join(keys, head))), reason: 'compromised' });
+    r.trustWriter(1_999_999_500).enrollKeys({ receiptKey: rawKey(r.broker), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+    refusedWithoutWrite(r, r.enter({ trustRoot: other }), 'trust-unavailable');
+  });
+  await t.test('the writer takes no trust store at all', (tt) => {
+    const r = released(tt, { upTo: null });
+    const other = second(r);
+    const { v, kind, trustVersion, ...fields } = { ...template, requestId: r.requestId }; void v; void kind; void trustVersion;
+    assert.throws(() => asDaemon({ env: { XDG_STATE_HOME: path.join(r.base, 'xdg') }, home: r.base }, () => createDaemonJournalStore({ root: r.journalRoot, namespaceDigest })
+      .recordPreparation(r.requestId, { preparation: fields, trust: { root: other } })), { reason: 'invalid-owner-journal-record' });
+  });
 });

@@ -722,24 +722,25 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     // the trust lock taken inside the journal lock, refusing rather than
     // waiting) and records that enrollment's chain version. No ready active
     // pair, a busy or damaged trust store, or a foreign namespace refuses
-    // with owner-journal-trust-unavailable and writes nothing.
+    // with owner-journal-trust-unavailable and writes nothing. The trust
+    // store is always this daemon's own, from its launch env and home, never
+    // the caller's choice.
     // `preparation` is every other preparation field (the daemon's effectId,
-    // nonce, times, binding, stage and expected state); `trust` is
-    // {root, env, home} for the trust store. The store adds v, kind and
+    // nonce, times, binding, stage and expected state). The store adds v, kind and
     // trustVersion and binds the record to the admission and action. Legal
     // only from `admitted`, or from `preparing` with the same preparation
     // (finishing its challenge); the same preparation and challenge again are
     // an idempotent duplicate, and any other preparation or later phase is a
     // conflict.
-    recordPreparation(requestId, { preparation, trust, ...rest } = {}) {
-      if (!matches(UUID4, requestId) || !plain(preparation) || !plain(trust) || Object.keys(rest).length > 0) fail('invalid-owner-journal-record');
+    recordPreparation(requestId, { preparation, ...rest } = {}) {
+      if (!matches(UUID4, requestId) || !plain(preparation) || Object.keys(rest).length > 0) fail('invalid-owner-journal-record');
       const name = requestDirectoryName({ namespaceDigest, requestId });
       return locked(() => {
         if (!scan().includes(name)) fail('owner-journal-transition-refused');
         const graph = readGraph(name, requestId);
         const action = JSON.parse(graph.saved.action.toString('utf8'));
         let trustVersion;
-        try { ({ version: trustVersion } = readOwnerDecisionTrust({ root: trust.root, env: trust.env, home: trust.home, namespaceDigest })); }
+        try { ({ version: trustVersion } = readOwnerDecisionTrust({ namespaceDigest })); }
         catch (error) {
           throw Object.assign(journalError('owner-journal-trust-unavailable'), { refusal: typeof error?.reason === 'string' ? error.reason : null });
         }
