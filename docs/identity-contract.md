@@ -7,6 +7,8 @@ and comms use only what is listed here. After step 9, identity ships as
 (answer 3). Everything here then comes from that pinned package, and nothing
 else in identity can be reached.
 
+How identity leaves this repository is
+[identity-extraction-plan.md](identity-extraction-plan.md) (step 8).
 Background and line references are in
 [identity-contract-inventory.md](identity-contract-inventory.md). The owner
 decisions that shaped this are recorded there in §8.
