@@ -205,18 +205,18 @@ identity semantics:
 
 | Route | Class | Handler | Stability | Callers |
 | --- | --- | --- | --- | --- |
-| `POST /v0/vouch` | binding | `agent-daemon.mjs:599` | **public** | agent-comms `lib/client.mjs:253` (`aud: agent-comms`); the token is checked by the broker against the key paired by `daemon pair-comms` |
-| `POST /v0/bind` | binding (bind token) | `identity-routes.mjs:35` | internal | `daemon-client.mjs:197`, which `setup-worktree` and `soul-join` use |
-| `GET /v0/binding` | binding | `identity-routes.mjs:99` | internal | `daemon-client.mjs:201` |
-| `DELETE /v0/binding` | binding | `identity-routes.mjs:105` | internal | `daemon-client.mjs:212`, `agent-binding.mjs:405` |
-| `POST /v0/binding/app` | binding | `identity-routes.mjs:91` | internal | `daemon-client.mjs:209` |
-| `POST /v0/credential` | binding | `identity-routes.mjs:123` | internal | `daemon-client.mjs:217`, `keyd-client.mjs:173` |
-| `POST /v0/keyd/grant` | binding | `identity-routes.mjs:309` | **public** | keyd relay (`keyd/src/relay.rs:22`; the same in GeniusBar's snapshot) |
-| `POST /v0/inbox/take` | binding | `identity-routes.mjs:237` | internal | `daemon-client.mjs:222` |
-| `POST /v0/grants/request`, `/spend` | binding | `identity-routes.mjs:276`, `:291` | internal | `daemon-client.mjs:227`, `:230` |
-| `GET /v0/identity/apps` | bearer | `agent-daemon.mjs:634` | internal | none outside this repository; GeniusBar uses the CLI |
-| `GET /v0/identity/apps/jobs/{id}` | bearer | `agent-daemon.mjs:634` | internal | as above |
-| `POST /v0/identity/apps/{action}` | owner | `agent-daemon.mjs:634` | internal | as above |
+| `POST /v0/vouch` | binding | `agent-daemon.mjs:598` | **public** | agent-comms `lib/client.mjs:253` (`aud: agent-comms`); the token is checked by the broker against the key paired by `daemon pair-comms` |
+| `POST /v0/bind` | binding (bind token) | `identity-routes.mjs:38` | internal | `daemon-client.mjs:197`, which `setup-worktree` and `soul-join` use |
+| `GET /v0/binding` | binding | `identity-routes.mjs:63` | internal | `daemon-client.mjs:201` |
+| `DELETE /v0/binding` | binding | `identity-routes.mjs:69` | internal | `daemon-client.mjs:212`, `agent-binding.mjs:405` |
+| `POST /v0/binding/app` | binding | `identity-routes.mjs:55` | internal | `daemon-client.mjs:209` |
+| `POST /v0/credential` | binding | `identity-routes.mjs:87` | internal | `daemon-client.mjs:217`, `keyd-client.mjs:173` |
+| `POST /v0/keyd/grant` | binding | `identity-routes.mjs:273` | **public** | keyd relay (`keyd/src/relay.rs:22`; the same in GeniusBar's snapshot) |
+| `POST /v0/inbox/take` | binding | `identity-routes.mjs:201` | internal | `daemon-client.mjs:222` |
+| `POST /v0/grants/request`, `/spend` | binding | `identity-routes.mjs:240`, `:255` | internal | `daemon-client.mjs:227`, `:230` |
+| `GET /v0/identity/apps` | bearer | `agent-daemon.mjs:633` | internal | none outside this repository; GeniusBar uses the CLI |
+| `GET /v0/identity/apps/jobs/{id}` | bearer | `agent-daemon.mjs:633` | internal | as above |
+| `POST /v0/identity/apps/{action}` | owner | `agent-daemon.mjs:633` | internal | as above |
 
 Two routes straddle identity and soul (F9):
 
@@ -224,8 +224,11 @@ Two routes straddle identity and soul (F9):
   in `agent-population.mjs`, soul) on behalf of `setup-worktree` and join.
   Since F9 step 3 it is a soul route, in `soul-routes.mjs` (D6). It stays
   bearer-only, and its identity read goes through `identityOp`.
-- **`POST /v0/spawn`** (`identity-routes.mjs:49`) mints a child identity,
-  binds it and runs the spawn hook. It is called from `agent-identity.mjs:832`.
+- **`POST /v0/spawn`** (`agent-daemon.mjs:771`) mints a child identity, binds
+  it and runs the spawn hook. It is called from `agent-identity.mjs:832`.
+  Since F9 step 4 it is split (D6). `spawnChildIdentity`
+  (`identity-routes.mjs:321`) mints and binds the child. The daemon keeps the
+  route and the binding check, and it runs the spawn hook.
 
 The wire contracts agent-comms depends on are already written down: the binding
 proof (`binding-proof.mjs`; [daemon-api.md](daemon-api.md)) and the soul token

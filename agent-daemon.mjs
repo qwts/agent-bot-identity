@@ -61,7 +61,7 @@ import {
   createInboxTaker, ensureAgentIdentity, extractToken, identityAppFailure, identityAppOperation,
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
-  readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken,
+  readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
   validateApprovalScope, vouchPublicKeyPem, vouchStateDir
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
@@ -576,7 +576,6 @@ export function createDaemonServer({
     readBody, parseJsonBody, sendJson,
     requireBinding, presentedCredential, grantBinding,
     bindWorktreeConversation, reconcileSoulApp, ownerGate,
-    spawnHook, computePackageRevision,
     mintImpl, keydCall, signingKey,
     inboxTake,
     grantLedger, grantActor, grantView, grantFailure,
@@ -765,6 +764,20 @@ export function createDaemonServer({
           // The census path when the census knows the soul (ADR-0583 decision 8).
           const id = requireAgentId(url.searchParams.get('agentId'));
           sendJson(res, 200, { agentId: id, path: soulSpacePath(id, { env, home, config, file: populationOverride(env, home) }) });
+          return;
+        }
+        // Split (D6, F9 step 4): identity mints the child and binds it; the
+        // daemon checks the parent's binding and runs the spawn hook.
+        case 'POST /v0/spawn': {
+          const source = requireBinding(req, bindings);
+          const body = parseJsonBody(await readBody(req));
+          const { result, name, harness } = spawnChildIdentity({
+            source, body, bindings, env, home, config, now, computePackageRevision,
+          });
+          let warning;
+          try { warning = await spawnHook({ ...result, name, harness, cwd: source.worktree, env }); }
+          catch { warning = 'spawn hook failed'; }
+          sendJson(res, 200, { ...result, ...(warning ? { warning } : {}) });
           return;
         }
         // A soul starts a teammate as itself (#377): the binding is the

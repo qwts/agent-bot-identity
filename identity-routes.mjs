@@ -8,6 +8,10 @@
 // the soul credential declaration) also comes in as ports, so identity
 // imports neither. handleIdentityRoute answers true when it handled the
 // route and false when the route is not identity's.
+//
+// POST /v0/spawn is split (D6, F9 step 4): the daemon keeps the route, its
+// binding check and the spawn hook, and spawnChildIdentity does identity's
+// half, minting the child and binding it under the parent.
 
 import { readAgentIdentity, mintAgentIdentity } from './agent-identity.mjs';
 import { childBindingPath } from './agent-binding.mjs';
@@ -24,7 +28,6 @@ export function createIdentityRoutes({
   readBody, parseJsonBody, sendJson,
   requireBinding, presentedCredential, grantBinding,
   bindWorktreeConversation, reconcileSoulApp, ownerGate,
-  spawnHook, computePackageRevision,
   mintImpl, keydCall, signingKey,
   inboxTake,
   grantLedger, grantActor, grantView, grantFailure,
@@ -44,45 +47,6 @@ export function createIdentityRoutes({
         const bound = bindWorktreeConversation({ body, bindings, env, home, config, now, presented: presentedCredential(req) });
         const app = body.app ? await reconcileSoulApp({ agentId: bound.agentId, claimed: body.app, env, home, config, now, ownerGate }) : null;
         sendJson(res, 200, app ? { ...bound, app } : bound);
-        return true;
-      }
-      case 'POST /v0/spawn': {
-        const source = requireBinding(req, bindings);
-        const body = parseJsonBody(await readBody(req));
-        const stateDir = stateDirectory({ env, home });
-        const parent = readAgentIdentity(source.agentId, { stateDir });
-        const parentApp = parent.github?.appSlug ?? null;
-        if ((body.parent && body.parent !== source.agentId)
-          || (body.app && body.app !== parentApp)) {
-          throw Object.assign(new Error('spawn cannot override parent authority'), { statusCode: 403 });
-        }
-        const harness = body.harness ?? source.harness ?? parent.harness ?? 'unknown';
-        const name = body.name ?? 'child';
-        for (const value of [name, harness]) {
-          if (typeof value !== 'string' || !value || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) {
-            throw Object.assign(new Error('invalid spawn name or harness'), { statusCode: 400 });
-          }
-        }
-        // A parent with no github field stays without one even when the
-        // gate is on. The gate off omits github on the child either way.
-        const useGithub = isGateEnabled('github-identity', { env, home, config }) && parent.github != null;
-        const identity = mintAgentIdentity({
-          appSlug: parentApp, botUid: parent.github?.botUid ?? null, harness,
-          transcript: body.transcript, parentId: source.agentId,
-          packageRevision: body.packagePath == null ? null : computePackageRevision(body.packagePath),
-          team: body.team ?? parent.team, squad: body.squad ?? parent.squad,
-          type: body.type ?? 'agent', level: body.level, subjects: body.subjects ?? [], stateDir, now,
-          useGithub,
-        });
-        bindings.bind({ agentId: identity.id, parent: source.agentId, spawnedBy: source.bindingHash,
-          worktree: source.worktree, gitDir: source.gitDir, app: identity.github?.appSlug ?? null,
-          harness, transcript: identity.transcript });
-        const result = { agentId: identity.id, parent: source.agentId,
-          binding: childBindingPath(source.gitDir, identity.id) };
-        let warning;
-        try { warning = await spawnHook({ ...result, name: body.name ?? identity.id, harness, cwd: source.worktree, env }); }
-        catch { warning = 'spawn hook failed'; }
-        sendJson(res, 200, { ...result, ...(warning ? { warning } : {}) });
         return true;
       }
       // A session resuming on a binding that outlived its last one (#107)
@@ -348,4 +312,42 @@ export function createIdentityRoutes({
         return false;
     }
   };
+}
+
+// Identity's half of POST /v0/spawn: checks the request against the parent's
+// authority, mints the child and binds it under the parent's binding. The
+// package hash is soul's, so it comes in as a port. Returns the response
+// body and the name and harness the daemon hands its spawn hook.
+export function spawnChildIdentity({ source, body, bindings, env, home, config, now, computePackageRevision }) {
+  const stateDir = stateDirectory({ env, home });
+  const parent = readAgentIdentity(source.agentId, { stateDir });
+  const parentApp = parent.github?.appSlug ?? null;
+  if ((body.parent && body.parent !== source.agentId)
+    || (body.app && body.app !== parentApp)) {
+    throw Object.assign(new Error('spawn cannot override parent authority'), { statusCode: 403 });
+  }
+  const harness = body.harness ?? source.harness ?? parent.harness ?? 'unknown';
+  const name = body.name ?? 'child';
+  for (const value of [name, harness]) {
+    if (typeof value !== 'string' || !value || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) {
+      throw Object.assign(new Error('invalid spawn name or harness'), { statusCode: 400 });
+    }
+  }
+  // A parent with no github field stays without one even when the
+  // gate is on. The gate off omits github on the child either way.
+  const useGithub = isGateEnabled('github-identity', { env, home, config }) && parent.github != null;
+  const identity = mintAgentIdentity({
+    appSlug: parentApp, botUid: parent.github?.botUid ?? null, harness,
+    transcript: body.transcript, parentId: source.agentId,
+    packageRevision: body.packagePath == null ? null : computePackageRevision(body.packagePath),
+    team: body.team ?? parent.team, squad: body.squad ?? parent.squad,
+    type: body.type ?? 'agent', level: body.level, subjects: body.subjects ?? [], stateDir, now,
+    useGithub,
+  });
+  bindings.bind({ agentId: identity.id, parent: source.agentId, spawnedBy: source.bindingHash,
+    worktree: source.worktree, gitDir: source.gitDir, app: identity.github?.appSlug ?? null,
+    harness, transcript: identity.transcript });
+  const result = { agentId: identity.id, parent: source.agentId,
+    binding: childBindingPath(source.gitDir, identity.id) };
+  return { result, name: body.name ?? identity.id, harness };
 }
