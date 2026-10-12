@@ -105,8 +105,10 @@ import { launchSandbox, personaBlockNotice, readSandboxStatus, turnSandboxProble
 import { checkSopLaunchPolicy } from './sop.mjs';
 import { resolveSoulModel, resolveSoulReasoningEffort, soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSnapshot, setColdWake } from './cold-wake-settings.mjs';
-import { isGateEnabled, loadConfig } from './config.mjs';
+import { diagnosticsOtlpEndpointSetting, isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
+import { createDiagnostics, runtimeVersion } from './diagnostics.mjs';
+import { createOtlpExporter, otlpHeaders } from './otlp-export.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLaunchRefusal, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
@@ -1742,6 +1744,14 @@ export function sopLaunchPolicy({ env = process.env, home = homedir(), now = () 
   };
 }
 
+// The OTLP exporter for diagnostics (ADR-0983 decision 4), or null: off
+// unless `settings.diagnosticsOtlpEndpoint` is set in the user config.
+export function diagnosticsExporter({ env = process.env, home = homedir(), config, create = createOtlpExporter } = {}) {
+  let endpoint;
+  try { endpoint = diagnosticsOtlpEndpointSetting(config ?? loadConfig({ home, env })); } catch { return null; }
+  return endpoint ? create({ endpoint, headers: otlpHeaders(env), version: runtimeVersion() }) : null;
+}
+
 export async function runDaemon({
   env = process.env,
   home = homedir(),
@@ -1890,6 +1900,9 @@ export async function runDaemon({
   };
   const onLaunch = createLaunchHandler({
     turns, isPaused,
+    // Local launch diagnostics (#983, ADR-0983), best effort. They leave the
+    // machine only when the user config names an OTLP endpoint.
+    diagnostics: createDiagnostics({ component: 'daemon', version: runtimeVersion(), env, home, sink: diagnosticsExporter({ env, home, config })?.enqueue ?? null }),
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
     identityFor,

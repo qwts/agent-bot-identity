@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { LAUNCH_CODES } from '../daemon-launch.mjs';
+import { LAUNCH_CODES, LAUNCH_REFUSALS } from '../daemon-launch.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PATH = 'governance/error-codes.json';
@@ -62,4 +62,11 @@ test('the registry only grows relative to the base branch', (t) => {
     if (old.deprecated) assert.equal(entry.deprecated, true, `${old.code} was un-deprecated`);
   }
   assert.ok(REGISTRY.schema_version >= base.schema_version);
+});
+
+test('a launch code is an expected refusal exactly when the registry says so', () => {
+  const kinds = new Map(REGISTRY.codes.map((entry) => [entry.code, entry.kind]));
+  for (const code of LAUNCH_CODES) {
+    assert.equal(LAUNCH_REFUSALS.has(code) ? 'refusal' : 'failure', kinds.get(code), code);
+  }
 });

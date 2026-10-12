@@ -168,6 +168,7 @@
     "metrics.mjs": "host",
     "mint-token.mjs": "identity",
     "muse-acp.mjs": "soul",
+    "otlp-export.mjs": "host",
     "organization-profile-schema.mjs": "shared",
     "organization-profile.mjs": "org",
     "owner-action.mjs": "soul",

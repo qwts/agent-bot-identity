@@ -9,6 +9,7 @@ import { soulCommsSetting } from './soul-package.mjs';
 import { assertSoulUnpaused, displayName, normalizeLaunchBrief } from './agent-population.mjs';
 import { createTurnRegistry } from './turn-registry.mjs';
 import { sandboxLaunchProblem } from './sandbox.mjs';
+import { startSpan } from './traceparent.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
 // carries its template's), else the launched package's, else on.
@@ -92,6 +93,14 @@ export const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbo
   'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid',
   'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing',
   'policy-denied', 'policy-unavailable', 'policy-denied-audit-failed', 'policy-unavailable-audit-failed']);
+// The launch codes that are expected refusals (the owner's choice, policy or
+// this host's setup), not faults; the rest of LAUNCH_CODES are failures. The
+// same split is the `kind` of each code in governance/error-codes.json,
+// which tests/error-codes.test.mjs holds them to.
+export const LAUNCH_REFUSALS = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
+  'persona-policy-stale', 'persona-policy-requires-addon', 'runtime-unsupported-platform', 'runtime-override-invalid',
+  'runtime-override-unsupported-platform', 'provider-secret-missing', 'provider-declaration-invalid',
+  'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing', 'policy-denied']);
 // The broker's launch-result detail budget, code prefix included.
 const DETAIL_MAX = 512;
 
@@ -164,10 +173,18 @@ const DETAIL_MAX = 512;
 // fails `persona-policy-stale` before anything is minted. A team start (the
 // daemon's own caller, an agent) and a handler without `verifyOwner` are
 // refused as before: nothing wired is a refusal, never a pass.
+//
+// `diagnostics` (#983, ADR-0983): a recorder from diagnostics.mjs. Each
+// launch records a `launch-stage` event as each stage completes and one
+// `launch` event with the outcome, the stage it stopped at, the code and the
+// duration, all under one trace. An event's `traceparent`, when it parses,
+// makes the launch a child span of the caller's; it correlates and nothing
+// else. Recording is best effort and never changes the launch or its report.
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
   isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, signIn = null,
-  souls = null, receipt = () => {}, verifyOwner = null, policy = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry() }) {
+  souls = null, receipt = () => {}, verifyOwner = null, policy = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry(),
+  diagnostics = null, nowMs = () => Date.now() }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -205,7 +222,19 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     // Progress is best effort (#536): a broker without `launch-progress`, or
     // one that is away, never fails a launch. The journal keeps the stage so
     // a failure shows where it stopped.
+    const span = startSpan(typeof event.traceparent === 'string' ? event.traceparent : null);
+    const startedAt = nowMs();
+    let stageAt = startedAt;
+    const diagnose = (fields) => {
+      if (!diagnostics) return;
+      try {
+        diagnostics.record({ traceId: span.traceId, spanId: span.spanId, parentSpanId: span.parentSpanId ?? undefined, ...fields });
+      } catch { /* diagnostics never change a launch */ }
+    };
     const step = async (stage) => {
+      const at = nowMs();
+      if (row.stage) diagnose({ event: 'launch-stage', stage: row.stage, outcome: 'ok', durationMs: at - stageAt });
+      stageAt = at;
       row.stage = stage;
       if (!progress) return;
       try { await progress({ requestId, stage }); } catch { /* best effort */ }
@@ -432,6 +461,11 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       if (spawned) { try { await discard(spawned, rollback); } catch (rollbackError) { row.detail = `${row.detail} (rollback failed: ${rollbackError.message})`; } }
     }
     save(); // Persist outcome before network I/O; retry only the report.
+    const launched = row.status === 'launched';
+    diagnose({
+      event: 'launch', stage: row.stage, outcome: launched ? 'ok' : (LAUNCH_REFUSALS.has(row.code) ? 'refused' : 'failed'),
+      code: row.code, durationMs: nowMs() - startedAt, agentId: row.agentId ?? undefined, detail: launched ? undefined : row.detail,
+    });
     await reportRow(row, report);
   };
   // Every soul this daemon has launched, for the managed backfill (#409).
