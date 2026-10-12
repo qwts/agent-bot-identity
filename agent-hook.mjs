@@ -43,23 +43,18 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 // Injectable so the deadline is testable without sleeping through it.
 const now = () => Date.now();
 
-// Where the hooks actually live, in priority order:
-//   1. AGENT_BOT_HOOKS_DIR — explicit wins.
-//   2. The repo being worked in. `agent-bot` is normally a symlink in
-//      ~/.local/bin pointing at one clone, so resolving relative to this
-//      module would look inside the *toolkit* and silently find nothing when a
-//      project carries its own agent-hooks/. Hooks that never run are the
-//      failure mode this whole layer exists to avoid, so the working tree is
-//      asked first.
-//   3. This module's own directory, which is the right answer when the toolkit
-//      repo is itself the project.
+// Where the hooks actually live:
+//   1. AGENT_BOT_HOOKS_DIR — explicit wins. The soul builder and the owner's
+//      own configuration set it.
+//   2. This toolkit's own agent-hooks/, which the owner installed.
+// The checkout being worked in is never asked (#1065). Its agent-hooks/ is
+// content of whatever repository the session opened, so running its
+// executables from a machine-wide adapter would hand host-user code
+// execution to any checkout before anyone decided to trust it. A project
+// that needs its own lifecycle hooks is opted in by the owner pointing
+// AGENT_BOT_HOOKS_DIR at it. `cwd` stays in the signature for callers.
 export function hooksDir(env = process.env, cwd = process.cwd()) {
   if (env.AGENT_BOT_HOOKS_DIR) return env.AGENT_BOT_HOOKS_DIR;
-  const repo = repoRoot(cwd);
-  if (repo) {
-    const candidate = join(repo, 'agent-hooks');
-    if (existsSync(candidate)) return candidate;
-  }
   return join(ROOT, 'agent-hooks');
 }
 
@@ -428,9 +423,10 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
 // The comms CLI owns account pairing and refuses an unpaired join. Do not
 // inspect its private state or initiate pairing here. Keep this asynchronous:
 // join may call back into this daemon for the sibling vouch operation.
-// The daemon calls this with its own environment, and the hooks may be the
-// soul's checkout's own agent-hooks/, so both children get the child
-// boundary (#785); the timeout setting only ever tightens and passes.
+// The daemon calls this with its own environment, and the hooks are the
+// owner's configured or installed ones, never the soul checkout's (#1065);
+// both children get the child boundary (#785); the timeout setting only ever
+// tightens and passes.
 export async function runSpawnHooks({ agentId, parent, binding, name, harness, cwd, env = process.env }) {
   const childEnv = { ...minimalChildEnv(env),
     ...(typeof env.AGENT_HOOK_TIMEOUT_MS === 'string' ? { AGENT_HOOK_TIMEOUT_MS: env.AGENT_HOOK_TIMEOUT_MS } : {}),

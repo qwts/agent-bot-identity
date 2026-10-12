@@ -25,6 +25,12 @@ rarely — not *hooks*, which change constantly.
 Files run in lexicographic order, so `10-` runs before `50-`. A file that is
 not executable never runs.
 
+The runner reads this toolkit's own `agent-hooks/`, or the folder the owner
+names in `AGENT_BOT_HOOKS_DIR`. It never picks up an `agent-hooks/` folder from
+the repository a session happens to be working in: opening a checkout is not a
+decision to trust its executables (#1065). To run a project's own hooks, point
+`AGENT_BOT_HOOKS_DIR` at them in configuration you control.
+
 The runner also includes a soul write confinement check independent of these
 executables, so a project's hook directory does not replace it. It defaults
 to warn: outside file tool writes are logged and allowed, and check errors
