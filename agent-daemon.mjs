@@ -1520,12 +1520,11 @@ export function daemonModeFor({
 // nobody could ask: the turn passes Claude a `--settings` layer (the SDK's
 // `extraArgs`) that makes each of those rules `ask`, which Claude evaluates
 // before `allow`, so the call reaches the daemon. A file that could not be
-// read here is never approved blind: its rules are unknown, so every
-// built-in tool that can need permission asks. Autopilot turns are not
-// checked (nothing is asked then), and other harnesses get nothing.
+// read here has unknown rules that no `ask` list can be sure to cover, so it
+// is never put to the owner and the turn does not start. Autopilot turns are
+// not checked (nothing is asked then), and other harnesses get nothing.
 export const ALLOW_RULES_TOOL = 'permission-rules:allow';
 export const ALLOW_RULES_NEED_OWNER = 'permission-allow-rules-need-owner';
-const CLAUDE_ASK_ALL = Object.freeze(['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch']);
 const allowRulesOperation = (agentId, { source, files, digest }) => operationDigest({ change: 'permission-rules', effect: 'allow', agentId, source, files, sha256: digest });
 
 export function daemonClaudeOptionsFor({
@@ -1541,12 +1540,13 @@ export function daemonClaudeOptionsFor({
     try { soulDir = soulDirectory(agentId, { env, home, config, file: populationFile({ env, home }), readOnly: true }); } catch { /* no census row: no package layer */ }
     const layer = claudeAllowLayer({ harness, cwd, soulDir });
     if (!layer) return null;
-    const rules = layer.unreadable ? [...new Set([...CLAUDE_ASK_ALL, ...layer.allow])] : layer.allow;
-    const strict = { extraArgs: { settings: JSON.stringify({ permissions: { ask: rules } }) } };
     if (layer.unreadable) {
-      log(`agent-bot daemon: ${ALLOW_RULES_NEED_OWNER}: ${agentId}: a ${layer.source} Claude settings file could not be read; every tool asks the daemon`);
-      return strict;
+      const message = `${ALLOW_RULES_NEED_OWNER}: ${agentId}: a ${layer.source} Claude settings file is not a readable regular file under 1 MiB `
+        + `(${layer.files.join(', ')}); its allow rules are unknown, so a safe daemon turn cannot start there`;
+      log(`agent-bot daemon: ${message}`);
+      return Promise.reject(new Error(message));
     }
+    const strict = { extraArgs: { settings: JSON.stringify({ permissions: { ask: layer.allow } }) } };
     const key = `${agentId} ${layer.source} ${layer.digest}`;
     if (!asking.has(key)) {
       asking.set(key, askOwnerToLoosen({ agentId, tool: ALLOW_RULES_TOOL, operation: allowRulesOperation(agentId, layer),

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -140,8 +140,10 @@ export function resolveSoulMode(agentId, { harness = null, cwd = null, soulDir =
 // the source is `soul` in the soul's own home (the package's rendering),
 // otherwise `repo`. Returns null when no file declares an allow rule, else
 // `{ source, files, digest, allow, unreadable }`. Unlike the mode layers, a
-// file is read even through a link, as Claude reads it; one that cannot be
-// read or is too large to read here is `unreadable`, so its rules are unknown.
+// file is read even through a link, as Claude reads it, but only a regular
+// file, opened without blocking (a FIFO or a device never stalls the
+// daemon). One that is not a regular file, cannot be read or is too large to
+// read here is `unreadable`, so its rules are unknown.
 export const CLAUDE_ALLOW_FILES = Object.freeze(['.claude/settings.json', '.claude/settings.local.json']);
 const ALLOW_FILE_MAX = 1024 * 1024;
 export function claudeAllowLayer({ harness = null, cwd = null, soulDir = null } = {}) {
@@ -152,14 +154,17 @@ export function claudeAllowLayer({ harness = null, cwd = null, soulDir = null } 
   for (const name of CLAUDE_ALLOW_FILES) {
     const file = path.join(cwd, name);
     let text;
+    let fd;
     try {
-      if (statSync(file).size > ALLOW_FILE_MAX) throw new Error('too large');
-      text = readFileSync(file, 'utf8');
+      fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > ALLOW_FILE_MAX) throw new Error('not a small regular file');
+      text = readFileSync(fd, 'utf8');
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue;
       files.push(file); hashes.push(`${file}\0unreadable`); unreadable = true;
       continue;
-    }
+    } finally { if (fd !== undefined) closeSync(fd); }
     let rules = null;
     try { rules = JSON.parse(text)?.permissions?.allow; } catch { /* Claude cannot read it either */ }
     const declared = Array.isArray(rules) ? rules.filter((rule) => typeof rule === 'string' && rule.length > 0) : [];

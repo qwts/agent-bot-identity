@@ -714,9 +714,11 @@ for those depends on the adapter that runs it:
     so each such call reaches the daemon's approval queue. `deny` and `env`
     still come from the files. Nothing is kept when keyd cannot ask, so the
     next turn asks again.
-  - A settings file the daemon cannot read (over 1 MiB, or unreadable) has
-    unknown rules: it is never put to the owner, and every built-in tool that
-    can need permission is listed under `ask`.
+  - A settings file the daemon cannot read as a regular file under 1 MiB
+    (opened through a link as Claude does, but without blocking, so a FIFO or
+    device never stalls the daemon) has unknown rules that no `ask` list is
+    sure to cover. It is never put to the owner, and the safe turn does not
+    start; the log says which file.
   - Autopilot turns are not checked, since every call is allowed then; a
     direct open reads the files as they are, without this check.
   The SDK option is `extraArgs` in `@anthropic-ai/claude-agent-sdk` 0.2.44,

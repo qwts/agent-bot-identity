@@ -750,19 +750,30 @@ test('claude: autopilot turns, no allow rules, and other harnesses are not check
   assert.equal(optionsFor(ID, { harness: 'claude', cwd: path.join(root, 'nowhere'), mode: 'safe' }), null);
 });
 
-test('claude: an allow file that cannot be read here is never approved blind; every tool asks', async (t) => {
+test('claude: an allow file that cannot be read here is never approved blind; the turn does not start', async (t) => {
   const { root, env, home } = fixture(t, 'safe');
   const repo = path.join(root, 'repo');
   mkdirSync(path.join(repo, '.claude'), { recursive: true });
   writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ permissions: { allow: ['Bash(make)'] } }));
-  writeFileSync(path.join(repo, '.claude/settings.local.json'), `{"permissions":{"allow":["Bash"]},"pad":"${'x'.repeat(1024 * 1024)}"}`);
-  const logs = [];
-  const options = await allowTurn({ cwd: repo, env, home, ask: () => assert.fail('not asked about unknown rules'), log: (line) => logs.push(line) });
-  assert.deepEqual(askRules(options), ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Bash(make)']);
-  assert.match(logs[0], new RegExp(`${ALLOW_RULES_NEED_OWNER}: ${ID}: a repo Claude settings file could not be read; every tool asks the daemon`));
-  // A linked file is read as Claude reads it.
-  rmSync(path.join(repo, '.claude/settings.local.json'));
+  const local = path.join(repo, '.claude/settings.local.json');
+  const refused = async (what) => {
+    const logs = [];
+    await assert.rejects(allowTurn({ cwd: repo, env, home, ask: () => assert.fail('not asked about unknown rules'), log: (line) => logs.push(line) }),
+      new RegExp(`${ALLOW_RULES_NEED_OWNER}: ${ID}: a repo Claude settings file is not a readable regular file under 1 MiB .*allow rules are unknown`), what);
+    assert.equal(logs.length, 1, what);
+  };
+  // Hidden past the size cap.
+  writeFileSync(local, `{"permissions":{"allow":["*"]},"pad":"${'x'.repeat(1024 * 1024)}"}`);
+  await refused('oversized');
+  // A link to a device or a FIFO is refused without blocking the daemon.
+  rmSync(local);
+  symlinkSync('/dev/zero', local);
+  await refused('device');
+  rmSync(local);
+  if (spawnSync('mkfifo', [local]).status === 0) await refused('fifo');
+  // A linked regular file is read as Claude reads it.
+  rmSync(local, { force: true });
   writeFileSync(path.join(root, 'shared.json'), JSON.stringify({ permissions: { allow: ['WebSearch'] } }));
-  symlinkSync(path.join(root, 'shared.json'), path.join(repo, '.claude/settings.local.json'));
+  symlinkSync(path.join(root, 'shared.json'), local);
   assert.deepEqual(askRules(await allowTurn({ cwd: repo, env, home, ask: declined })), ['Bash(make)', 'WebSearch']);
 });
