@@ -107,33 +107,33 @@ and the F numbers point to the follow-ups in §7.
 | --- | --- | --- | --- | --- |
 | `agent-identity.mjs` | Agent ID records: mint, read, finalize, retire, lineage, transcript; ID format; `withLock` | internal, except `mintAgentIdentity`, which GeniusBar's compat driver imports by path (below) | 57 (soul 44, host 8, cli 3, comms 2) | ID format to the contract file (F1); `stateDirectory` re-export goes (F2); `withLock` (F3); record operations through routes (F6) |
 | `agent-principals.mjs` | Transport principals, authorization, audit receipts | internal | 25 (soul 18, host 6, cli 1) | `appendAuditReceipt` (F4); principal checks stay with the daemon (F9) |
-| `agent-binding.mjs` | Bind tokens, the binding registry, binding files | internal; its files are public (§4) | 11 (soul 5, host 5, cli 1) | `readBinding` and `readBindToken` to the contract file (F1); `mintBindToken` (F6); registry (F9) |
+| `agent-binding.mjs` | Bind tokens, the binding registry, binding files | internal; its files are public (§4) | 10 (soul 5, host 5) | `readBinding` and `readBindToken` to the contract file (F1); `mintBindToken` (F6); registry (F9) |
 | `daemon-client.mjs` | HTTP client for the daemon, `daemon.json` reader | internal | 13 (soul 6, host 3, cli 3, comms 1) | It carries every daemon call, not only identity's (F5) |
-| `resolve-agent.mjs` | Which bot or App a checkout or session is; git config keys | internal; its keys are public (§6) | 11 (soul 5, host 3, cli 2, comms 1) | Key names and `pinnedSlug` to the contract file (F1); bot checks (F9) |
+| `resolve-agent.mjs` | Which bot or App a checkout or session is; git config keys | internal; its keys are public (§6) | 10 (soul 5, host 3, cli 1, comms 1) | Key names and `pinnedSlug` to the contract file (F1); bot checks (F9) |
 | `owner-gate.mjs` | Owner authorization, soul markers, `owner-credential-required` | internal | 9 (soul 5, cli 2, comms 1) | F8 |
 | `credential-names.mjs` | Keychain and pass item names, store kinds, secret-name rule | internal; the names are public (§6) | 6 (soul 3, host 2, cli 1) | Name rules to the contract file (F1, F7) |
-| `keyd-client.mjs` | keyd socket client, grant signing, MCP entry, version pin | internal; the keyd protocol is public | 5 (host 4, cli 1) plus a dynamic import in soul | F7, F9 |
-| `identity-app-store.mjs` | Managed App metadata and key-store targets | internal | 5 (soul 2, host 1, cli 2) | F7 |
-| `soul-credentials.mjs` | GitHub App and secret custody per soul (`resolveAppCredential`) | internal | 4 (soul 3, cli 1) | F7, F12 |
+| `keyd-client.mjs` | keyd socket client, grant signing, MCP entry, version pin | internal; the keyd protocol is public | 4 (host 4) plus a dynamic import in soul | F7, F9 |
+| `identity-app-store.mjs` | Managed App metadata and key-store targets | internal | 4 (soul 2, host 1, cli 1) | F7 |
+| `soul-credentials.mjs` | GitHub App and secret custody per soul (`resolveAppCredential`) | internal | 3 (soul 3) | F7, F12 |
 | `vouch.mjs` | Ed25519 soul tokens and the vouch key | internal; the token is public (§3) | 4 (host 2, soul 1, comms 1) | F11 |
 | `binding-proof.mjs` | `x-agent-binding-proof` sign and check | **public**: agent-comms keeps a copy (`lib/binding-proof.mjs`) | 3 (host 2, comms 1) | Is already a contract file; add the parity test (F10) |
-| `credential-reconciler.mjs` | Reconciles App keys between stores | internal | 3 (cli 2, soul 1) | F7 |
-| `git-credential-bot.mjs` | Git credential helper; in-process minting | internal; the helper command is public (§2) | 2 (soul 1, cli 1) | F7 |
+| `credential-reconciler.mjs` | Reconciles App keys between stores | internal | 1 (soul 1) | F7 |
+| `git-credential-bot.mjs` | Git credential helper; in-process minting | internal; the helper command is public (§2) | 1 (soul 1) | F7 |
 | `git-hooks.mjs` | List of git hook names | internal | 3 (cli 3) | F1 or F13 |
 | `owner-presence.mjs` | keyd owner presence, pinned attestation | internal | 3 (soul 1, host 1, cli 1) | F8 |
 | `owner-statement.mjs` | Owner-signed statements and challenges | internal; the statement format is public | 3 (soul 1, cli 2) | F8 |
 | `permission-risk.mjs` | Display risk of a tool call | internal | 3 (host 2, soul 1) | F1 |
 | `session-approvals.mjs` | Daemon-lifetime grants | internal | 3 (host 2, soul 1) | F9 |
 | `identity-apps.mjs` | `identity app*` operations | internal | 2 (host 1, cli 1) | F9, F13 |
-| `install-gh-shim.mjs` | Installs and inspects the `gh` shim | internal | 2 (cli 2) | F13 |
+| `install-gh-shim.mjs` | Installs and inspects the `gh` shim | internal | 0 (cli uses `identity-cli.mjs` since F13 step 3) | F13 |
 | `mint-token.mjs` | App installation token minting | internal | 1 (host 1) | F9 |
-| `secret-store.mjs` | Secret provider registry | internal | 2 (host 1, cli 1) | F7 |
-| `secret.mjs` | `agent-bot secret`; built-in providers | internal | 2 (host 1, cli 1) | F7 |
-| `inbox-probe.mjs` | `doctor --probe-inbox` | internal | 1 (cli) | F13 |
+| `secret-store.mjs` | Secret provider registry | internal | 1 (host 1) | F7 |
+| `secret.mjs` | `agent-bot secret`; built-in providers | internal | 1 (host 1) | F7 |
+| `inbox-probe.mjs` | `doctor --probe-inbox` | internal | 0 (cli uses `identity-cli.mjs` since F13 step 3) | F13 |
 | `inbox-take.mjs` | Takes from the `gh-app-hook` mailbox | internal | 1 (host) | F9 |
 | `owner-approval.mjs` | Owner approval for an explicit App mint | internal | 0 (`cli/mint-token.mjs` is identity's since F13 step 2) | done |
 | `secret-providers/pass-cli-credentials.mjs` | pass-cli credential store | internal | 1 (host) | F7 |
-| `uninstalled-identity-hook.mjs` | Fallback hook when agent-bot is not installed | internal | 1 (cli) | F13 |
+| `uninstalled-identity-hook.mjs` | Fallback hook when agent-bot is not installed | internal | 0 (cli uses `identity-cli.mjs` since F13 step 3) | F13 |
 | `git-publish-scan.mjs` | Which repositories a shell command publishes to | internal | 1 (host) | F9 |
 | `windows-account-custody.mjs` | Windows SID and ACL custody | internal | 1 (comms) | F11; moved to `shared` (#925) |
 
@@ -464,6 +464,19 @@ how each one is done, and §9 puts them in order.
   Identity may not import soul (ADR-0645). The owner chose to keep these three
   in cli and to revisit them after F8 settles the owner-prompt design.
   The policy and the baseline don't change.
+
+  **F13 step 3 (2026-10-11).** This replaces the owner's Q3 answer (a
+  `doctor-checks` entry operation whose JSON readiness merges).
+  - Why not `doctor-checks`: readiness calls identity inside mixed checks,
+    with its own injectable probes, and those can't cross a process
+    boundary. Bootstrap and sync-hooks call identity actions, not checks.
+  - The owner chose one published entry, `identity-cli.mjs`, as host has
+    `identity-host.mjs`. It is a contract importable by cli only, with an
+    exact export list: the readiness and doctor probes, the bootstrap
+    actions and the hook fallback.
+  - `readiness.mjs`, `doctor.mjs`, `bootstrap.mjs` and `sync-hooks.mjs`
+    import identity only through it and the other listed contracts, and a
+    module-boundaries test holds them to that. Readiness keeps its test hooks.
 - **F14. Assign the non-`.mjs` identity assets.** *Done (2026-10-11, owner
   answer):*
   - The module map's `assets` assigns `keyd/`,
@@ -519,9 +532,11 @@ question in the F9 and F13 design note:
   `cli/mint-token.mjs` (with `cli/mint-output.mjs`) turned out to be one,
   and it is reassigned to identity. The other three pass soul into identity,
   so the owner kept them in cli until after F8 (see F13 step 2 under F13).
-- **F13 Q3, readiness:** an identity entry operation, `doctor-checks`,
-  returns identity's checks as JSON, and `readiness.mjs` stays in cli and
-  merges them.
+- **F13 Q3, readiness:** the first answer was an identity entry operation,
+  `doctor-checks`, whose JSON `readiness.mjs` would merge. The owner replaced
+  it with one published entry, `identity-cli.mjs`: a contract importable by
+  cli only, with an exact export list, so readiness keeps its test hooks
+  (see F13 step 3 under F13).
 
 ## 9. Order of work
 
@@ -558,7 +573,8 @@ mechanical moves; steps 6 to 10 change how a module reaches identity.
     2. reassign `cli/mint-token.mjs` and `cli/mint-output.mjs` in the
        module map (`cli/principal.mjs`, `cli/owner.mjs` and
        `cli/identity-apps.mjs` stay in cli until after F8);
-    3. add `doctor-checks` for readiness, doctor, bootstrap and sync-hooks;
+    3. publish `identity-cli.mjs` for readiness, doctor, bootstrap and
+       sync-hooks;
     4. move `agent-approvals.mjs` and `cli/soul-dream.mjs` after F8's
        owner-prompt design.
 11. **F14:** assign the remaining assets.
@@ -579,10 +595,9 @@ identity file, so its rows in §1 and the appendix record the baseline only.
 There are 193 import statements, which make the 192 file edges.
 `owner-action.mjs` imports `owner-gate.mjs` twice.
 
-- **`agent-binding.mjs`** (11):
+- **`agent-binding.mjs`** (10):
   - soul: `confinement.mjs:14`, `setup-worktree.mjs:11`, `sop.mjs:25`, `soul-join.mjs:34`, `soul-tool-home.mjs:31`
   - host: `agent-daemon.mjs:58`, `agent-hook.mjs:34`, `agent-mcp.mjs:29`, `daemon-mcp.mjs:56`, `metrics.mjs:37`
-  - cli: `readiness.mjs:32`
 - **`agent-identity.mjs`** (57):
   - soul: `agent-population.mjs:31`, `agent-space-pack.mjs:22`, `agent-space.mjs:28`, `claude-worktree-create.mjs:33`, `cold-wake-settings.mjs:9`, `confinement.mjs:10`, `executor-contract.mjs:57`, `harness-auth.mjs:14`, `sandbox.mjs:34`, `setup-worktree.mjs:15`, `skill-dream-previews.mjs:8`, `skill-dream-scheduler.mjs:7`, `skill-install.mjs:13`, `skill-learning.mjs:9`, `skill-library.mjs:6`, `skill-status.mjs:9`, `skill-workspace.mjs:17`, `sop.mjs:23`, `soul-asides.mjs:37`, `soul-build.mjs:9`, `soul-comms.mjs:13`, `soul-computer-use.mjs:6`, `soul-credential-migration.mjs:14`, `soul-dir.mjs:4`, `soul-env-export.mjs:46`, `soul-env-migrate.mjs:23`, `soul-env.mjs:12`, `soul-fork.mjs:30`, `soul-home.mjs:12`, `soul-join.mjs:35`, `soul-memory.mjs:19`, `soul-mode.mjs:9`, `soul-model.mjs:9`, `soul-profile.mjs:9`, `soul-remove.mjs:22`, `soul-revisions.mjs:12`, `soul-runtimes.mjs:30`, `soul-stop.mjs:6`, `soul-template-refresh.mjs:15`, `soul-templates.mjs:8`, `soul-threads.mjs:22`, `soul-tool-home.mjs:32`, `spaces-cutover.mjs:25`, `wake-resume.mjs:21`
   - host: `agent-daemon.mjs:64`, `agent-interaction.mjs:71`, `agent-jobs.mjs:33`, `daemon-mcp.mjs:51`, `delegation-grants.mjs:43`, `metrics.mjs:36`, `skill-dream-service.mjs:6`, `telegram-adapter.mjs:50`
@@ -599,38 +614,31 @@ There are 193 import statements, which make the 192 file edges.
   - soul: `soul-credential-migration.mjs:19`, `soul-package.mjs:10`, `soul-providers.mjs:20`
   - host: `daemon-supervisor.mjs:37`, `grant-github.mjs:21`
   - cli: `readiness.mjs:37`
-- **`credential-reconciler.mjs`** (3):
+- **`credential-reconciler.mjs`** (1):
   - soul: `setup-worktree.mjs:14`
-  - cli: `bootstrap.mjs:18`, `readiness.mjs:24`
 - **`daemon-client.mjs`** (13):
   - soul: `claude-worktree-create.mjs:40`, `setup-worktree.mjs:13`, `soul-computer-use.mjs:10`, `soul-join.mjs:299`, `soul-stop.mjs:5`, `soul-tool-home.mjs:33`
   - host: `agent-daemon.mjs:92`, `agent-mcp.mjs:30`, `telegram-adapter.mjs:49`
   - cli: `agent-approvals.mjs:19`, `cli/identity.mjs:13`, `cli/soul-dream.mjs:7`
   - comms: `daemon-status.mjs:10`
-- **`git-credential-bot.mjs`** (2):
+- **`git-credential-bot.mjs`** (1):
   - soul: `agent-space-pack.mjs:24`
-  - cli: `readiness.mjs:35`
 - **`git-hooks.mjs`** (3):
   - cli: `cli/dispatch.mjs:5`, `install.mjs:24`, `readiness.mjs:28`
 - **`git-publish-scan.mjs`** (1):
   - host: `agent-hook.mjs:38`
-- **`identity-app-store.mjs`** (5):
+- **`identity-app-store.mjs`** (4):
   - soul: `setup-worktree.mjs:21`, `soul-credential-migration.mjs:18`
   - host: `agent-daemon.mjs:108`
-  - cli: `cli/identity.mjs:17`, `doctor.mjs:15`
+  - cli: `cli/identity.mjs:17`
 - **`identity-apps.mjs`** (2):
   - host: `agent-daemon.mjs:106`
   - cli: `cli/identity-apps.mjs:8`
-- **`inbox-probe.mjs`** (1):
-  - cli: `doctor.mjs:16`
 - **`inbox-take.mjs`** (1):
   - host: `agent-daemon.mjs:77`
-- **`install-gh-shim.mjs`** (2):
-  - cli: `bootstrap.mjs:21`, `readiness.mjs:39`
-- **`keyd-client.mjs`** (5):
+- **`keyd-client.mjs`** (4):
   - soul: `soul-credential-migration.mjs:151`
   - host: `agent-daemon.mjs:75`, `keyd-supervisor.mjs:16`, `wake-plane.mjs:18`
-  - cli: `readiness.mjs:31`
 - **`mint-token.mjs`** (1):
   - host: `agent-daemon.mjs:74`
 - **`owner-gate.mjs`** (9):
@@ -647,27 +655,22 @@ There are 193 import statements, which make the 192 file edges.
 - **`permission-risk.mjs`** (3):
   - soul: `executor-contract.mjs:56`
   - host: `agent-daemon.mjs:81`, `agent-interaction.mjs:72`
-- **`resolve-agent.mjs`** (11):
+- **`resolve-agent.mjs`** (10):
   - soul: `agent-space-pack.mjs:25`, `claude-worktree-create.mjs:36`, `cold-wake-settings.mjs:12`, `setup-worktree.mjs:10`, `soul-join.mjs:41`
   - host: `agent-hook.mjs:37`, `agent-mcp.mjs:32`, `daemon-mcp.mjs:55`
-  - cli: `cli/identity.mjs:18`, `readiness.mjs:46`
+  - cli: `cli/identity.mjs:18`
   - comms: `wake-listen.mjs:29`
 - **`secret-providers/pass-cli-credentials.mjs`** (1):
   - host: `grant-github.mjs:22`
-- **`secret-store.mjs`** (2):
+- **`secret-store.mjs`** (1):
   - host: `telegram-adapter.mjs:54`
-  - cli: `readiness.mjs:56`
-- **`secret.mjs`** (2):
+- **`secret.mjs`** (1):
   - host: `telegram-adapter.mjs:55`
-  - cli: `readiness.mjs:55`
 - **`session-approvals.mjs`** (3):
   - soul: `turn-registry.mjs:5`
   - host: `agent-daemon.mjs:83`, `agent-interaction.mjs:29`
-- **`soul-credentials.mjs`** (4):
+- **`soul-credentials.mjs`** (3):
   - soul: `soul-credential-migration.mjs:22`, `soul-env.mjs:17`, `soul-secrets.mjs:20`
-  - cli: `readiness.mjs:25`
-- **`uninstalled-identity-hook.mjs`** (1):
-  - cli: `sync-hooks.mjs:27`
 - **`vouch.mjs`** (4):
   - soul: `confinement.mjs:16`
   - host: `agent-daemon.mjs:90`, `keyd-supervisor.mjs:17`

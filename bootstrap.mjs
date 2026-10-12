@@ -15,10 +15,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { isGateEnabled, loadConfig, scopeConfigToApps } from './config.mjs';
-import { reconcileAppCredentials } from './credential-reconciler.mjs';
+import { installGhShim, reconcileAppCredentials } from './identity-cli.mjs';
 import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
-import { installGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
   isProjectedRuntimeConfig,

@@ -24,7 +24,7 @@ import { loadConfig, unmanagedAuthorsSnapshot } from './config.mjs';
 import { pathToFileURL } from 'node:url';
 
 import { CANONICAL_EVENTS, CLAUDE_WORKTREE_CREATE_COMMAND, DIALECTS, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
-import { adapterFallback } from './uninstalled-identity-hook.mjs';
+import { adapterFallback } from './identity-cli.mjs';
 
 export const MANAGED_MARKER = 'agent-bot agent-hook';
 

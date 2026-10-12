@@ -1,0 +1,1 @@
+- `readiness.mjs`, `doctor.mjs`, `bootstrap.mjs` and `sync-hooks.mjs` reach identity through one published entry, `identity-cli.mjs`, listed in the module map as a contract for cli only; `agent-bot doctor`, `bootstrap` and hook sync behave as before (#645, F13 step 3).
