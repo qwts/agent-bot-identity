@@ -22,7 +22,33 @@ const SOUL = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 const DIGEST = /^[0-9a-f]{64}$/;
 const REVISION = /^sha256:[0-9a-f]{64}$/;
 const OPERATIONS = new Set(['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set']);
-const CONTROLS = /[\x00-\x1f\x7f-\x9f]/u;
+// Scalars the owner's display refuses: every Unicode 17.0.0 Cc, Cf, Zl and Zp
+// code point (DerivedGeneralCategory.txt), as inclusive [first, last] ranges.
+// A frozen literal table, never an ambient \p{} property, so a runtime's
+// Unicode version can't change it; it equals agent-comms
+// display-rejections-v1.json rejectedRanges exactly.
+export const OWNER_DISPLAY_REJECTED_RANGES = Object.freeze([
+  [0x0000, 0x001f, 'Cc'], [0x007f, 0x009f, 'Cc'], [0x00ad, 0x00ad, 'Cf'], [0x0600, 0x0605, 'Cf'],
+  [0x061c, 0x061c, 'Cf'], [0x06dd, 0x06dd, 'Cf'], [0x070f, 0x070f, 'Cf'], [0x0890, 0x0891, 'Cf'],
+  [0x08e2, 0x08e2, 'Cf'], [0x180e, 0x180e, 'Cf'], [0x200b, 0x200f, 'Cf'], [0x2028, 0x2028, 'Zl'],
+  [0x2029, 0x2029, 'Zp'], [0x202a, 0x202e, 'Cf'], [0x2060, 0x2064, 'Cf'], [0x2066, 0x206f, 'Cf'],
+  [0xfeff, 0xfeff, 'Cf'], [0xfff9, 0xfffb, 'Cf'], [0x110bd, 0x110bd, 'Cf'], [0x110cd, 0x110cd, 'Cf'],
+  [0x13430, 0x1343f, 'Cf'], [0x1bca0, 0x1bca3, 'Cf'], [0x1d173, 0x1d17a, 'Cf'], [0xe0001, 0xe0001, 'Cf'],
+  [0xe0020, 0xe007f, 'Cf'],
+].map((range) => Object.freeze(range)));
+
+// Whether any scalar of `text` falls in a refused range. The text is checked
+// exactly as given: no trimming or normalization.
+function hasRejectedScalar(text) {
+  for (const scalar of text) {
+    const code = scalar.codePointAt(0);
+    for (const [first, last] of OWNER_DISPLAY_REJECTED_RANGES) {
+      if (code < first) break;
+      if (code <= last) return true;
+    }
+  }
+  return false;
+}
 const matches = (pattern, value) => typeof value === 'string' && pattern.exec(value)?.[0] === value;
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const byteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'byteLength').get;
@@ -102,7 +128,7 @@ function fields(value, names) {
 }
 
 function reason(value) {
-  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > 500 || CONTROLS.test(value)) fail();
+  if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > 500 || hasRejectedScalar(value)) fail();
 }
 
 // A canonical WHATWG HTTPS host: lowercase ASCII, at most 253 bytes, that
@@ -161,7 +187,7 @@ export function decodeOwnerDecisionAction(bytes) {
   const typedSummary = summary(action);
   const payloadDigest = sha256(copy);
   const actionText = `Owner decision ${action.operation} for ${action.account}/${action.soul}: ${typedSummary}; request ${action.requestId}; payload sha256:${payloadDigest}`;
-  if ([...actionText].length > 400 || Buffer.byteLength(actionText) > 500 || CONTROLS.test(actionText)) fail('owner-action-display');
+  if ([...actionText].length > 400 || Buffer.byteLength(actionText) > 500 || hasRejectedScalar(actionText)) fail('owner-action-display');
   return { action, payloadDigest, summary: typedSummary, actionText, actionDigest: sha256(Buffer.from(actionText, 'utf8')) };
 }
 

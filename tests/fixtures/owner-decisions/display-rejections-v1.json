@@ -1,0 +1,285 @@
+{
+  "v": 1,
+  "kind": "owner-decision-display-rejections",
+  "sourceFixtureSha256": "70706e7327b90f8649b0b1f8baa7b59d2e4e8f6f1f33b674dc8472cb7eb951ac",
+  "rejectedCategories": [
+    "Cc",
+    "Cf",
+    "Zl",
+    "Zp"
+  ],
+  "negative": [
+    {
+      "id": "c0-tab",
+      "scalar": "\t",
+      "codePoint": "U+0009",
+      "category": "Cc",
+      "reason": "before\tafter"
+    },
+    {
+      "id": "c1-next-line",
+      "scalar": "\u0085",
+      "codePoint": "U+0085",
+      "category": "Cc",
+      "reason": "before\u0085after"
+    },
+    {
+      "id": "soft-hyphen",
+      "scalar": "\u00ad",
+      "codePoint": "U+00AD",
+      "category": "Cf",
+      "reason": "before\u00adafter"
+    },
+    {
+      "id": "arabic-letter-mark",
+      "scalar": "\u061c",
+      "codePoint": "U+061C",
+      "category": "Cf",
+      "reason": "before\u061cafter"
+    },
+    {
+      "id": "zero-width-space",
+      "scalar": "\u200b",
+      "codePoint": "U+200B",
+      "category": "Cf",
+      "reason": "before\u200bafter"
+    },
+    {
+      "id": "zero-width-non-joiner",
+      "scalar": "\u200c",
+      "codePoint": "U+200C",
+      "category": "Cf",
+      "reason": "before\u200cafter"
+    },
+    {
+      "id": "zero-width-joiner",
+      "scalar": "\u200d",
+      "codePoint": "U+200D",
+      "category": "Cf",
+      "reason": "before\u200dafter"
+    },
+    {
+      "id": "left-to-right-mark",
+      "scalar": "\u200e",
+      "codePoint": "U+200E",
+      "category": "Cf",
+      "reason": "before\u200eafter"
+    },
+    {
+      "id": "right-to-left-mark",
+      "scalar": "\u200f",
+      "codePoint": "U+200F",
+      "category": "Cf",
+      "reason": "before\u200fafter"
+    },
+    {
+      "id": "bidi-embedding",
+      "scalar": "\u202a",
+      "codePoint": "U+202A",
+      "category": "Cf",
+      "reason": "before\u202aafter"
+    },
+    {
+      "id": "bidi-override",
+      "scalar": "\u202e",
+      "codePoint": "U+202E",
+      "category": "Cf",
+      "reason": "before\u202eafter"
+    },
+    {
+      "id": "bidi-pop",
+      "scalar": "\u202c",
+      "codePoint": "U+202C",
+      "category": "Cf",
+      "reason": "before\u202cafter"
+    },
+    {
+      "id": "bidi-isolate",
+      "scalar": "\u2066",
+      "codePoint": "U+2066",
+      "category": "Cf",
+      "reason": "before\u2066after"
+    },
+    {
+      "id": "bidi-isolate-end",
+      "scalar": "\u2069",
+      "codePoint": "U+2069",
+      "category": "Cf",
+      "reason": "before\u2069after"
+    },
+    {
+      "id": "word-joiner",
+      "scalar": "\u2060",
+      "codePoint": "U+2060",
+      "category": "Cf",
+      "reason": "before\u2060after"
+    },
+    {
+      "id": "bom",
+      "scalar": "\ufeff",
+      "codePoint": "U+FEFF",
+      "category": "Cf",
+      "reason": "before\ufeffafter"
+    },
+    {
+      "id": "language-tag",
+      "scalar": "\udb40\udc01",
+      "codePoint": "U+E0001",
+      "category": "Cf",
+      "reason": "before\udb40\udc01after"
+    },
+    {
+      "id": "line-separator",
+      "scalar": "\u2028",
+      "codePoint": "U+2028",
+      "category": "Zl",
+      "reason": "before\u2028after"
+    },
+    {
+      "id": "paragraph-separator",
+      "scalar": "\u2029",
+      "codePoint": "U+2029",
+      "category": "Zp",
+      "reason": "before\u2029after"
+    }
+  ],
+  "positiveReasons": [
+    "\u0645\u0631\u062d\u0628\u0627",
+    "\u05e9\u05dc\u05d5\u05dd",
+    "e\u0301",
+    "\u00e9",
+    "\u0915\u094d",
+    "a\ufe0f",
+    "literal \\u202E"
+  ],
+  "unicodeVersion": "17.0.0",
+  "unicodeSource": "https://www.unicode.org/Public/17.0.0/ucd/extracted/DerivedGeneralCategory.txt",
+  "unicodeSourceSha256": "d62e5bab70ca74f099343f71224fa051cb1fdd61a1ab45c0488c44cfc0b6102e",
+  "rejectedRanges": [
+    {
+      "first": 0,
+      "last": 31,
+      "category": "Cc"
+    },
+    {
+      "first": 127,
+      "last": 159,
+      "category": "Cc"
+    },
+    {
+      "first": 173,
+      "last": 173,
+      "category": "Cf"
+    },
+    {
+      "first": 1536,
+      "last": 1541,
+      "category": "Cf"
+    },
+    {
+      "first": 1564,
+      "last": 1564,
+      "category": "Cf"
+    },
+    {
+      "first": 1757,
+      "last": 1757,
+      "category": "Cf"
+    },
+    {
+      "first": 1807,
+      "last": 1807,
+      "category": "Cf"
+    },
+    {
+      "first": 2192,
+      "last": 2193,
+      "category": "Cf"
+    },
+    {
+      "first": 2274,
+      "last": 2274,
+      "category": "Cf"
+    },
+    {
+      "first": 6158,
+      "last": 6158,
+      "category": "Cf"
+    },
+    {
+      "first": 8203,
+      "last": 8207,
+      "category": "Cf"
+    },
+    {
+      "first": 8232,
+      "last": 8232,
+      "category": "Zl"
+    },
+    {
+      "first": 8233,
+      "last": 8233,
+      "category": "Zp"
+    },
+    {
+      "first": 8234,
+      "last": 8238,
+      "category": "Cf"
+    },
+    {
+      "first": 8288,
+      "last": 8292,
+      "category": "Cf"
+    },
+    {
+      "first": 8294,
+      "last": 8303,
+      "category": "Cf"
+    },
+    {
+      "first": 65279,
+      "last": 65279,
+      "category": "Cf"
+    },
+    {
+      "first": 65529,
+      "last": 65531,
+      "category": "Cf"
+    },
+    {
+      "first": 69821,
+      "last": 69821,
+      "category": "Cf"
+    },
+    {
+      "first": 69837,
+      "last": 69837,
+      "category": "Cf"
+    },
+    {
+      "first": 78896,
+      "last": 78911,
+      "category": "Cf"
+    },
+    {
+      "first": 113824,
+      "last": 113827,
+      "category": "Cf"
+    },
+    {
+      "first": 119155,
+      "last": 119162,
+      "category": "Cf"
+    },
+    {
+      "first": 917505,
+      "last": 917505,
+      "category": "Cf"
+    },
+    {
+      "first": 917536,
+      "last": 917631,
+      "category": "Cf"
+    }
+  ]
+}
