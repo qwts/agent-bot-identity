@@ -1,0 +1,1 @@
+- Expose the existing dependency-free keyd presence verifier through a narrow identity contract, preserving p1 verification and the existing owner-presence entry without adding prompting, key lookup or authority.
