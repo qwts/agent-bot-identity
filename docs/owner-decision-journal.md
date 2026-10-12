@@ -549,3 +549,46 @@ second, or one stamped earlier after a clock rollback, would pass it.
 request by the daemon-generated nonce in its preparation, never by
 `presenceDigest`. A crash after it is `effect-uncertain`. Every refusal writes
 nothing. No effect runs here.
+
+## Effect completion and final refusal writers (disabled)
+
+The journal store has two more writers, reachable only through the store that
+`identity-host.mjs` exports, the same way `enterEffect` is. There is no route.
+Each runs under the journal's exclusive lock and refuses a busy lock without
+waiting. It reads and validates the whole request graph, flushes what it read,
+and only then publishes one slot. The store builds and binds each record
+itself, from the saved records and the signed action. Nothing changes in the
+persisted format.
+
+- **`completeEffect(requestId, result)`** publishes slot 10, `completed`.
+  - It is legal only after a valid `entered` record.
+  - `result` is `{at}`. For a revision it also carries what the effect
+    reports: `journalSeq`, `journalRecordDigest` and `working`, which is null
+    unless the entered record applies.
+  - A cold-wake request is then `applied`. A revision stays `indeterminate`
+    until its linked authoritative event is present, as the reader already
+    requires. That event's writer is a separate slice.
+  - It refuses (`conflict`) if `completed` already holds anything, or the
+    request is applied or refused.
+  - It refuses (`storage-failed`) for any other phase, a damaged `entered`
+    record, or a cold-wake request that carries a linked event.
+- **`refusePreEffect(requestId, {code, at})`** publishes slot 7, the final
+  pre-effect refusal.
+  - It is legal from `preparing`, `prepared`, `authorizing` or `released`. It
+    binds the checked receipt, or `null` before the successful check.
+  - `code` is one of the eight final-refusal reasons. The request is then
+    `refused` with the mapped public outcome.
+  - It refuses (`conflict`) once the request has entered, is applied, or is
+    already refused.
+  - It refuses (`storage-failed`) for an admitted request.
+
+Malformed input refuses as `bad-request` and writes nothing. A refused
+transition doesn't poison the store instance; a storage failure does.
+
+**After a crash between writes:**
+- A completion body without its trailer is `effect-uncertain`, and is never
+  completed again.
+- A committed completion is `applied` (cold-wake).
+- A refusal body without its trailer refuses as found, and the request can no
+  longer enter.
+- A committed refusal is `refused`, with its mapped outcome.

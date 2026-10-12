@@ -13,8 +13,8 @@ import {
   encodeDaemonJournalFrame, peekAcceptanceContextFrame, requestDirectoryName,
 } from './owner-decision-journal-frame.mjs';
 import {
-  bindEffect, bindPreparation, challengeFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest, effectOutcome,
-  enteredRecordFor,
+  bindEffect, bindPreparation, challengeFor, completedRecordFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
+  effectOutcome, enteredRecordFor, refusedRecordFor,
 } from './owner-decision-evidence.mjs';
 import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
@@ -187,8 +187,8 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       ownedDirectory(io, root); ownedDirectory(io, requests);
       return operation();
     } catch (error) {
-      if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict', 'owner-journal-consumed', 'owner-journal-entry-refused']
-        .includes(error?.reason)) poisoned = true;
+      if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict', 'owner-journal-consumed', 'owner-journal-entry-refused',
+        'owner-journal-transition-refused'].includes(error?.reason)) poisoned = true;
       if (error?.reason) throw error;
       throw journalError(error?.code === 'invalid-owner-journal-frame' ? 'owner-journal-corrupt' : 'owner-journal-io');
     } finally {
@@ -280,7 +280,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     }
     if (uncertain) {
       try { return { ...graph, ...effectGraph(decode, saved) }; }
-      catch { return { ...graph, state: 'indeterminate', outcome: { code: 'effect-uncertain', effectDigest: null } }; }
+      catch { return { ...graph, state: 'indeterminate', outcome: { code: 'effect-uncertain', effectDigest: null }, awaiting: awaitingCompletion(decode, saved) }; }
     }
     if (!zeros(bytes.get('scratch.record'))) fail('owner-journal-scratch-pending');
     return { ...graph, ...preEffectGraph(decode, saved) };
@@ -341,23 +341,46 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
         { phase: 'refused', preparation, preparationDigest, receiptDigest, action }));
       return { ...effectOutcome(slots['pre-effect-refused']), refusalReason: refused.detail.code };
     }
+    // What a final pre-effect refusal binds: the checked receipt, or none
+    // before the successful check.
+    const refusable = Object.freeze({ preparation, preparationDigest, receiptDigest: slots['successful-check'] ? receiptDigest : null });
     if (slots['successful-check']) {
-      return { state: 'released', view: Object.freeze({ action, actionBytes: saved.action, acceptance, preparation, preparationDigest,
+      return { state: 'released', refusable, view: Object.freeze({ action, actionBytes: saved.action, acceptance, preparation, preparationDigest,
         receiptDigest, receiptKeys: receiptKeyIds(slots.receipt), presenceToken: slots.presence.toString('latin1') }) };
     }
-    if (slots.presence || slots.receipt) return { state: 'authorizing' };
-    return { state: slots['prepared-challenge'] ? 'prepared' : 'preparing' };
+    if (slots.presence || slots.receipt) return { state: 'authorizing', refusable };
+    return { state: slots['prepared-challenge'] ? 'prepared' : 'preparing', refusable };
+  }
+
+  // The whole released prefix through a bound entered record, with no
+  // refusal, pair or local outcome. Throws otherwise.
+  function enteredPrefix(decode, saved) {
+    const ev = evidence(decode, saved);
+    const { slots, action, preparation, preparationDigest, receiptDigest, acceptance } = ev;
+    if (!preparation || !slots['prepared-challenge'] || !slots['prepared-challenge'].equals(challengeFor(preparation, saved.action))
+      || !slots.presence || !slots.receipt || !slots['successful-check'] || slots['pre-effect-refused'] || !slots.entered
+      || slots['observation-pair'] || slots['terminal-pair'] || slots['local-lifecycle-outcome']) fail();
+    decodeSuccessfulCheck(slots['successful-check'], { acceptance, receiptDigest });
+    return { ...ev, entered: bindEffect(decodeEffect(slots.entered), { phase: 'entered', preparation, preparationDigest, receiptDigest, action }) };
+  }
+
+  // An indeterminate request that may be completed: a valid entered record
+  // and (for cold-wake, which has none) no linked event. A revision's linked
+  // event may already be present. Null otherwise. The completion writer
+  // refuses a nonzero completed slot before consulting this.
+  function awaitingCompletion(decode, saved) {
+    try {
+      const { slots, action, preparation, preparationDigest, receiptDigest, entered } = enteredPrefix(decode, saved);
+      if (preparation.operation === 'cold-wake.set' && slots['linked-authoritative-event']) return null;
+      return Object.freeze({ action, preparation, preparationDigest, receiptDigest, entered });
+    } catch { return null; }
   }
 
   // Throws on anything short of a fully validated completion; the caller maps
   // every throw to indeterminate.
   function effectGraph(decode, saved) {
-    const { slots, action, preparation, preparationDigest, receiptDigest, acceptance } = evidence(decode, saved);
-    if (!preparation || !slots['prepared-challenge'] || !slots['prepared-challenge'].equals(challengeFor(preparation, saved.action))
-      || !slots.presence || !slots.receipt || !slots['successful-check'] || slots['pre-effect-refused'] || !slots.entered || !slots.completed
-      || slots['observation-pair'] || slots['terminal-pair'] || slots['local-lifecycle-outcome']) fail();
-    decodeSuccessfulCheck(slots['successful-check'], { acceptance, receiptDigest });
-    const entered = bindEffect(decodeEffect(slots.entered), { phase: 'entered', preparation, preparationDigest, receiptDigest, action });
+    const { slots, action, preparation, preparationDigest, receiptDigest, acceptance, entered } = enteredPrefix(decode, saved);
+    if (!slots.completed) fail();
     const completed = bindEffect(decodeEffect(slots.completed), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
     if (preparation.operation === 'cold-wake.set') {
       if (slots['linked-authoritative-event']) fail();
@@ -437,6 +460,63 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
         publish(graph.dir, 'entered', bytes, graph.binding);
         return { state: 'entered', requestId, effectId: view.preparation.effectId, enteredDigest: effectDigest(bytes),
           physicalFlushGuaranteed: false };
+      });
+    },
+
+    // Completion of one entered effect (C2; disabled, no route): entered
+    // becomes completed, under the journal lock. `result` is { at } seconds,
+    // plus for a revision what the effect reports: { journalSeq,
+    // journalRecordDigest, working } (working null unless entered applies).
+    // The store derives the record from the saved entered record and action
+    // and binds it before publishing slot 10. A cold-wake request is then
+    // applied; a revision stays indeterminate until its linked authoritative
+    // event is present. Already completed, applied or refused is a conflict;
+    // any other phase, or a damaged entered record, refuses.
+    completeEffect(requestId, result) {
+      if (!matches(UUID4, requestId) || !plain(result)) fail('invalid-owner-journal-record');
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        if (['applied', 'refused'].includes(graph.state) || !zeros(graph.bytes.get('completed.record'))) fail('owner-journal-conflict');
+        if (!graph.awaiting) fail('owner-journal-transition-refused');
+        recoveryFlush(graph);
+        const { entered, action, preparation, preparationDigest, receiptDigest } = graph.awaiting;
+        const { at, journalSeq, journalRecordDigest, working } = result;
+        let bytes;
+        try {
+          bytes = Buffer.from(canonicalJson(completedRecordFor({ entered, action, at, journalSeq, journalRecordDigest, working })));
+          bindEffect(decodeEffect(bytes), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
+        } catch { fail('invalid-owner-journal-record'); }
+        publish(graph.dir, 'completed', bytes, graph.binding);
+        return settled(readGraph(name, requestId), { effectId: preparation.effectId, completedDigest: effectDigest(bytes) });
+      });
+    },
+
+    // A final pre-effect refusal (C2; disabled, no route), under the journal
+    // lock. Legal only for a prepared request that has not entered: preparing,
+    // prepared, authorizing or released. `refusal` is { code, at }, code one
+    // of the final-refusal reasons; the store builds the record (binding the
+    // checked receipt, or none before the check) and publishes slot 7. The
+    // request is then refused with the mapped outcome. Entered, applied or
+    // already refused is a conflict; an admitted request refuses.
+    refusePreEffect(requestId, refusal) {
+      if (!matches(UUID4, requestId) || !plain(refusal)) fail('invalid-owner-journal-record');
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        if (['indeterminate', 'applied', 'refused'].includes(graph.state)) fail('owner-journal-conflict');
+        if (!graph.refusable) fail('owner-journal-transition-refused');
+        recoveryFlush(graph);
+        const { preparation, preparationDigest, receiptDigest } = graph.refusable;
+        let bytes;
+        try {
+          bytes = Buffer.from(canonicalJson(refusedRecordFor({ preparation, preparationDigest, receiptDigest, code: refusal.code, at: refusal.at })));
+          bindEffect(decodeEffect(bytes), { phase: 'refused', preparation, preparationDigest, receiptDigest });
+        } catch { fail('invalid-owner-journal-record'); }
+        publish(graph.dir, 'pre-effect-refused', bytes, graph.binding);
+        return settled(readGraph(name, requestId), { effectId: preparation.effectId });
       });
     },
 
