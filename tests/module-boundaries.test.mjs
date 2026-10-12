@@ -17,6 +17,7 @@ import {
   edgeKey,
   exportedNames,
   importSpecifiers,
+  maskSource,
   moduleEdges,
   resolveSpecifier,
   validateModuleMap,
@@ -205,6 +206,18 @@ test("identity's git hooks reach soul only through soul's hook adapter", () => {
   assert.deepEqual(reached, [], 'run soul steps through hooks/soul-hook');
 });
 
+// A root-level contract that stands in for identity code may hold nothing but
+// named re-exports of files inside identity/: no logic, no bare or node:
+// specifiers, no dynamic imports. Comments are ignored.
+function onlyReexportsIdentity(file, source) {
+  const masked = maskSource(source);
+  const statements = masked.code.split(';').map((statement) => statement.trim()).filter(Boolean);
+  return statements.length > 0 && statements.every((statement) => {
+    const match = /^export\s*\{[^}]*\}\s*from\s*"\u0000(\d+)"$/u.exec(statement);
+    return Boolean(match) && resolveSpecifier(file, masked.strings[Number(match[1])]).startsWith('identity/');
+  });
+}
+
 // ADR-0645 step 6 is done when identity's code lives in identity/: every
 // identity file outside it is a listed shim, or a published contract (such as
 // identity-presence.mjs, whose bytes agent-comms pins) that only re-exports
@@ -212,14 +225,29 @@ test("identity's git hooks reach soul only through soul's hook adapter", () => {
 test('identity code outside identity/ is only shims and re-exporting contracts', () => {
   const stray = Object.entries(MAP.files)
     .filter(([file, owner]) => owner === 'identity' && !file.startsWith('identity/') && !Object.hasOwn(MAP.shims ?? {}, file))
-    .filter(([file]) => {
-      if (!MAP.contracts?.[file]) return true;
-      const targets = importSpecifiers(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'))
-        .map((specifier) => resolveSpecifier(file, specifier));
-      return targets.length === 0 || targets.some((target) => !target.startsWith('identity/'));
-    })
+    .filter(([file]) => !MAP.contracts?.[file]
+      || !onlyReexportsIdentity(file, readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')))
     .map(([file]) => file);
   assert.deepEqual(stray, [], 'move these into identity/ and leave a shim');
+});
+
+test('a re-exporting contract holds only named re-exports from identity/', () => {
+  assert.equal(onlyReexportsIdentity('entry.mjs', "// a comment\nexport { a, b } from './identity/x.mjs';\n"), true);
+  assert.equal(onlyReexportsIdentity('entry.mjs', "export { a } from './identity/x.mjs';\nexport { b as c } from './identity/y.mjs';"), true);
+  for (const source of [
+    '',
+    "export { a } from './identity/x.mjs';\nexport function b() { return 1; }",
+    "export { a } from './identity/x.mjs';\nconst secret = 1;",
+    "export { readFileSync } from 'node:fs';",
+    "export { a } from 'some-package';",
+    "export { a } from './outside.mjs';",
+    "export { a } from '../identity/x.mjs';",
+    "export * from './identity/x.mjs';",
+    "export { a } from './identity/x.mjs';\nawait import('./identity/' + name);",
+    "import './identity/x.mjs';",
+  ]) {
+    assert.equal(onlyReexportsIdentity('entry.mjs', source), false, source);
+  }
 });
 
 // A contract is a narrow, reviewed exception to may_import: its surface is
