@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "description": "Stable, add-only diagnostic error codes (ADR-0983). Never remove, renumber or change the kind of a code; mark a retired one deprecated.",
+  "codes": [
+    {
+      "n": 1,
+      "code": "soul-paused",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The soul is paused; the owner resumes it before it launches."
+    },
+    {
+      "n": 2,
+      "code": "sandbox-not-ready",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The soul's sandbox account is not ready."
+    },
+    {
+      "n": 3,
+      "code": "sandbox-other-account",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The soul's sandbox belongs to a different OS account."
+    },
+    {
+      "n": 4,
+      "code": "persona-policy-unavailable",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The persona policy could not be read."
+    },
+    {
+      "n": 5,
+      "code": "persona-policy-stale",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The persona policy changed since it was approved; the owner verifies before launch."
+    },
+    {
+      "n": 6,
+      "code": "persona-policy-requires-addon",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The persona policy needs an add-on that is not installed."
+    },
+    {
+      "n": 7,
+      "code": "runtime-download-failed",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A declared runtime could not be downloaded."
+    },
+    {
+      "n": 8,
+      "code": "runtime-checksum-mismatch",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A downloaded runtime did not match its declared checksum."
+    },
+    {
+      "n": 9,
+      "code": "runtime-unsupported-platform",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A declared runtime has no build for this platform."
+    },
+    {
+      "n": 10,
+      "code": "runtime-install-failed",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A declared runtime could not be installed."
+    },
+    {
+      "n": 11,
+      "code": "runtime-override-invalid",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A user runtime override is invalid."
+    },
+    {
+      "n": 12,
+      "code": "runtime-override-unsupported-platform",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A user runtime override has no build for this platform."
+    },
+    {
+      "n": 13,
+      "code": "tool-home-unwritable",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The soul's harness tool home could not be created or written."
+    },
+    {
+      "n": 14,
+      "code": "tool-home-record-invalid",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The soul's tool-home record is invalid."
+    },
+    {
+      "n": 15,
+      "code": "provider-secret-missing",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A provider secret the soul declares is not set."
+    },
+    {
+      "n": 16,
+      "code": "provider-secret-unreadable",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A provider secret could not be read."
+    },
+    {
+      "n": 17,
+      "code": "provider-declaration-invalid",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The soul's provider declaration is invalid."
+    },
+    {
+      "n": 18,
+      "code": "harness-signed-out",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The harness is signed out for this soul."
+    },
+    {
+      "n": 19,
+      "code": "harness-unknown",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "agent-bot has no such harness."
+    },
+    {
+      "n": 20,
+      "code": "harness-disabled",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The harness is disabled on this host."
+    },
+    {
+      "n": 21,
+      "code": "harness-tool-missing",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The harness CLI is not an executable file on this host."
+    },
+    {
+      "n": 22,
+      "code": "policy-denied",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The owner-activated SOP launch policy denied the launch."
+    },
+    {
+      "n": 23,
+      "code": "policy-unavailable",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The SOP launch policy could not be checked."
+    },
+    {
+      "n": 24,
+      "code": "policy-denied-audit-failed",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A policy denial's receipt could not be written, so the launch was refused."
+    },
+    {
+      "n": 25,
+      "code": "policy-unavailable-audit-failed",
+      "component": "launch",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A policy-unavailable receipt could not be written, so the launch was refused."
+    },
+    {
+      "n": 26,
+      "code": "collect-failed",
+      "component": "metrics",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A metrics source could not be collected for an unspecified reason."
+    }
+  ]
+}
