@@ -669,9 +669,16 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     const line = Buffer.concat([encode(entry, TRUST_LIMITS.auditLine - 1), Buffer.from('\n')]);
     let created = false;
     try { io.lstatSync(file); } catch (error) { if (error?.code !== 'ENOENT') throw error; created = true; }
-    // O_NONBLOCK: a FIFO at the audit path fails the open at once (ENXIO).
+    // O_NONBLOCK: a FIFO without a reader fails the open at once (ENXIO).
     const fd = io.openSync(file, O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | (created ? O_CREAT | O_EXCL : 0), 0o600);
     try {
+      // Before any byte is written, the opened file must be the named audit
+      // file: a regular file owned by this uid, not group- or world-writable,
+      // with one link. A FIFO with an active reader opens, so it is refused
+      // here, before the write.
+      const held = io.fstatSync(fd), named = io.lstatSync(file);
+      if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o022) !== 0 || held.nlink !== 1
+        || held.dev !== named.dev || held.ino !== named.ino) fail('owner-trust-custody');
       if (io.writeSync(fd, line) !== line.length) fail('owner-trust-io');
       fault(`${step}:audit-written`);
       try { io.fsyncSync(fd); } catch { fail('owner-trust-flush'); }

@@ -1030,7 +1030,12 @@ That covers:
 - the vouch key read, including the trust writer's vouch identity;
 - the trust store reads, and keyd's presence pin cache (a deny-list, so
   anything but a regular file there counts as no pin);
-- the trust audit append (a FIFO fails the open at once);
+- the trust audit append. A FIFO without a reader fails the open at once.
+  One with an active reader opens, so before any byte is written the opened
+  descriptor must be a regular file owned by this uid, not group- or
+  world-writable, with one link, and the same file (dev/ino) as the audit
+  path's lstat. Otherwise it refuses `owner-trust-custody` with nothing
+  written;
 - the journal's slot files and directory flushes;
 - the comms pairing credential and the soul census read (both still follow
   links, as before).
