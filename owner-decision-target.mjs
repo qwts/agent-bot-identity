@@ -24,9 +24,9 @@ export const TARGET_REFUSAL = Object.freeze({
   outcome: Object.freeze({ code: 'validation-refused', effectDigest: null }),
 });
 
-// Pure classification of one request from the two read results (values, not
-// functions): the resolved target, or TARGET_REFUSAL.
-export function classifyOwnerDecisionTarget({ account, soul } = {}, { daemonAccount, row = null, record = null } = {}) {
+// Classification of one request from the two read results. Internal: no
+// production caller can supply its own read results.
+function classifyOwnerDecisionTarget({ account, soul } = {}, { daemonAccount, row = null, record = null } = {}) {
   const id = matches(SOUL, soul) ? soul : PLACEHOLDER_SOUL;
   const live = matches(SOUL, soul) && typeof account === 'string' && account.length > 0
     && typeof daemonAccount === 'string' && daemonAccount.length > 0 && account === daemonAccount

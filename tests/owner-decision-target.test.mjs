@@ -1,69 +1,122 @@
 // Disabled owner-decision prepare-side target resolution (agent-comms#77):
-// every target the daemon cannot act for is the same early refusal, and the
-// production resolver takes no injectable reads.
+// every target the daemon cannot act for is the same early refusal, after
+// exactly one census read and one identity read, through the only export.
+// Reads are counted by instrumenting the node builtins (never by injecting
+// anything into production code): the census reads the population file with
+// fs.readFileSync, and the identity read runs the identity entry with
+// child_process.execFileSync.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as fs from 'node:fs';
+import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { TARGET_REFUSAL, classifyOwnerDecisionTarget, resolveOwnerDecisionTarget } from '../owner-decision-target.mjs';
+import * as target from '../owner-decision-target.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity, retireAgentIdentity } from '../identity/agent-identity.mjs';
 
-const soul = 'agent_11111111-1111-4111-8111-111111111111';
+const { TARGET_REFUSAL, resolveOwnerDecisionTarget } = target;
 const daemonAccount = 'worker';
-const row = { id: soul, status: 'active' };
-const record = { id: soul, status: 'active' };
+const PLACEHOLDER = 'agent_00000000-0000-4000-8000-000000000000';
+const ids = {
+  live: 'agent_11111111-1111-4111-8111-111111111111',
+  finalized: 'agent_22222222-2222-4222-8222-222222222222',
+  retiredIdentity: 'agent_33333333-3333-4333-8333-333333333333',
+  retiredCensus: 'agent_44444444-4444-4444-8444-444444444444',
+  notInCensus: 'agent_55555555-5555-4555-8555-555555555555',
+  unknown: 'agent_66666666-6666-4666-8666-666666666666',
+  unreadableIdentity: 'agent_77777777-7777-4777-8777-777777777777',
+};
 
-test('the classifier resolves only a live local soul of this account', () => {
-  assert.deepEqual(classifyOwnerDecisionTarget({ account: daemonAccount, soul }, { daemonAccount, row, record }),
-    { state: 'resolved', target: { account: daemonAccount, soul } });
-  assert.equal(classifyOwnerDecisionTarget({ account: daemonAccount, soul }, { daemonAccount, row: { ...row, comms: false }, record: { ...record, status: 'finalized' } }).state, 'resolved');
+// A scratch census and identity state with one soul per case.
+function fixtures(t) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-target-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const file = path.join(base, 'population.json'), stateDir = path.join(base, 'state');
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const mint = (id) => mintAgentIdentity({ useGithub: false, gate: () => false, appSlug: null, harness: 'codex',
+    transcript: { provider: 'codex', id: 't' }, stateDir, idFactory: () => id, now: () => new Date('2026-10-12T00:00:00.000Z') });
+  const census = (id, status = 'active') => upsertSoul({ id, appSlug: null, parentId: null, status, spacePath: `/spaces/${id}`,
+    worktree: null, worktrees: [], transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file });
+  for (const id of [ids.live, ids.finalized, ids.retiredIdentity, ids.retiredCensus, ids.unreadableIdentity]) { mint(id); census(id); }
+  mint(ids.notInCensus);
+  retireAgentIdentity(ids.retiredIdentity, { stateDir });
+  census(ids.retiredCensus, 'retired');
+  // An identity record that cannot be parsed.
+  const record = fs.readdirSync(stateDir, { recursive: true }).map(String).find((name) => name.includes(ids.unreadableIdentity.slice(6)));
+  fs.writeFileSync(path.join(stateDir, record), '{not json');
+  return { file, stateDir };
+}
+
+// Runs the real resolver while counting its census and identity reads.
+function counted({ file, stateDir }, request) {
+  const reads = { census: 0, identity: [] };
+  const readFileSync = fs.readFileSync, execFileSync = childProcess.execFileSync;
+  fs.readFileSync = function counting(target, ...rest) {
+    if (target === file) reads.census++;
+    return readFileSync.call(this, target, ...rest);
+  };
+  childProcess.execFileSync = function counting(command, args, options) {
+    if (Array.isArray(args) && args.at(-1) === 'read') reads.identity.push(JSON.parse(options.input).id);
+    return execFileSync.call(this, command, args, options);
+  };
+  syncBuiltinESMExports();
+  try {
+    return { result: resolveOwnerDecisionTarget(request, { daemonAccount, file, stateDir }), reads };
+  } finally {
+    fs.readFileSync = readFileSync; childProcess.execFileSync = execFileSync;
+    syncBuiltinESMExports();
+  }
+}
+
+test('only the resolver that performs its own reads is exported', () => {
+  assert.deepEqual(Object.keys(target).sort(), ['TARGET_REFUSAL', 'resolveOwnerDecisionTarget']);
 });
 
-test('every unavailable target classifies to the identical refusal', () => {
+test('a live local soul of this account resolves after one census and one identity read', (t) => {
+  const state = fixtures(t);
+  for (const soul of [ids.live, ids.finalized]) {
+    const { result, reads } = counted(state, { account: daemonAccount, soul });
+    assert.deepEqual(result, { state: 'resolved', target: { account: daemonAccount, soul } });
+    assert.deepEqual(reads, { census: 1, identity: [soul] });
+  }
+});
+
+test('every unavailable target is the identical refusal after exactly the same reads', (t) => {
+  const state = fixtures(t);
   const cases = {
-    'missing from the census': [{ account: daemonAccount, soul }, { row: null }],
-    'retired in the census': [{ account: daemonAccount, soul }, { row: { ...row, status: 'retired' } }],
-    'missing identity': [{ account: daemonAccount, soul }, { record: null }],
-    'retired identity': [{ account: daemonAccount, soul }, { record: { ...record, status: 'retired' } }],
-    'identity for another soul': [{ account: daemonAccount, soul }, { record: { id: 'agent_22222222-2222-4222-8222-222222222222', status: 'active' } }],
-    'another account': [{ account: 'someone-else', soul }, {}],
-    'no daemon account': [{ account: daemonAccount, soul }, { daemonAccount: undefined }],
-    'malformed soul': [{ account: daemonAccount, soul: 'agent_not-a-uuid' }, {}],
-    'missing soul': [{ account: daemonAccount }, {}],
-    'malformed account': [{ account: '', soul }, {}],
+    'retired identity': { account: daemonAccount, soul: ids.retiredIdentity },
+    'retired in the census': { account: daemonAccount, soul: ids.retiredCensus },
+    'identity but not in the census': { account: daemonAccount, soul: ids.notInCensus },
+    'unknown soul': { account: daemonAccount, soul: ids.unknown },
+    'unreadable identity record': { account: daemonAccount, soul: ids.unreadableIdentity },
+    'another account': { account: 'someone-else', soul: ids.live },
+    'malformed account': { account: '', soul: ids.live },
+    'malformed soul': { account: daemonAccount, soul: '../../etc/passwd' },
+    'missing soul': { account: daemonAccount },
   };
-  for (const [name, [request, overrides]] of Object.entries(cases)) {
-    assert.equal(classifyOwnerDecisionTarget(request, { daemonAccount, row, record, ...overrides }), TARGET_REFUSAL, name);
+  for (const [name, request] of Object.entries(cases)) {
+    const { result, reads } = counted(state, request);
+    assert.equal(result, TARGET_REFUSAL, name);
+    assert.equal(reads.census, 1, `${name}: one census read`);
+    assert.equal(reads.identity.length, 1, `${name}: one identity read`);
   }
   assert.deepEqual(TARGET_REFUSAL, { state: 'refused', receiptDigest: null, outcome: { code: 'validation-refused', effectDigest: null } });
   assert(Object.isFrozen(TARGET_REFUSAL) && Object.isFrozen(TARGET_REFUSAL.outcome));
 });
 
-test('the production resolver takes no injectable read: only its fixed census and identity reads', (t) => {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-target-')));
-  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
-  const file = path.join(base, 'population.json'), stateDir = path.join(base, 'state');
-  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const mint = (id) => mintAgentIdentity({ useGithub: false, gate: () => false, appSlug: null, harness: 'codex', transcript: { provider: 'codex', id: 't' },
-    stateDir, idFactory: () => id, now: () => new Date('2026-10-12T00:00:00.000Z') });
-  const census = (id, status = 'active') => upsertSoul({ id, appSlug: null, parentId: null, status, spacePath: `/spaces/${id}`, worktree: null,
-    worktrees: [], transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file });
-  const live = soul, retired = 'agent_33333333-3333-4333-8333-333333333333', notInCensus = 'agent_44444444-4444-4444-8444-444444444444';
-  mint(live); census(live);
-  mint(retired); census(retired); retireAgentIdentity(retired, { stateDir });
-  mint(notInCensus);
-  const resolve = (request, options = {}) => resolveOwnerDecisionTarget(request, { daemonAccount, file, stateDir, ...options });
-  assert.deepEqual(resolve({ account: daemonAccount, soul: live }), { state: 'resolved', target: { account: daemonAccount, soul: live } });
-  for (const request of [{ account: daemonAccount, soul: retired }, { account: daemonAccount, soul: notInCensus },
-    { account: daemonAccount, soul: 'agent_55555555-5555-4555-8555-555555555555' }, { account: 'someone-else', soul: live },
-    { account: daemonAccount, soul: '../../etc/passwd' }]) {
-    assert.equal(resolve(request), TARGET_REFUSAL, JSON.stringify(request));
+test('a malformed Agent ID reads the fixed placeholder, never its input', (t) => {
+  const state = fixtures(t);
+  for (const soul of ['../../etc/passwd', 'agent_not-a-uuid', undefined, 42]) {
+    assert.deepEqual(counted(state, { account: daemonAccount, soul }).reads, { census: 1, identity: [PLACEHOLDER] });
   }
-  // Read functions passed as options are ignored, never called.
-  let called = false;
-  const spy = () => { called = true; return record; };
-  assert.equal(resolve({ account: daemonAccount, soul: retired }, { census: spy, identityRead: spy }), TARGET_REFUSAL);
-  assert.equal(called, false);
+});
+
+test('an unreadable census refuses identically after the same reads', (t) => {
+  const state = fixtures(t);
+  fs.writeFileSync(state.file, '{not json');
+  const { result, reads } = counted(state, { account: daemonAccount, soul: ids.live });
+  assert.equal(result, TARGET_REFUSAL);
+  assert.deepEqual(reads, { census: 1, identity: [ids.live] });
 });
