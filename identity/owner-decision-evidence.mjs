@@ -223,6 +223,32 @@ export function enteredRecordFor({ preparation, preparationDigest, receiptDigest
     receiptDigest, effectId: preparation.effectId, phase: 'entered', at, detail };
 }
 
+// The completed record for one entered effect. It repeats the entered
+// transition; a cold-wake completion derives its settings and webhook digests
+// from the signed action, and a revision completion takes what the effect
+// reports: its revision-journal sequence and record digest, and the working
+// tree digests (null unless the entered record applies). The caller binds it.
+export function completedRecordFor({ entered, action, at, journalSeq, journalRecordDigest, working }) {
+  const d = entered.detail;
+  let detail;
+  if (d.kind === 'cold-wake') {
+    const desired = desiredSetting(action.parameters);
+    detail = { kind: 'cold-wake', beforeDigest: d.beforeDigest, afterDigest: d.afterDigest, settingsDigest: sha256(canonicalJson(desired)),
+      webhookDigest: desired.mode === 'webhook' ? action.parameters.configurationDigest : null };
+  } else {
+    detail = { kind: 'revision', journalSeq, journalRecordDigest, beforeRevision: d.beforeRevision, afterRevision: d.afterRevision,
+      proposalId: d.proposalId, working };
+  }
+  return { ...entered, phase: 'completed', at, detail };
+}
+
+// The final pre-effect refusal record for one prepared request. The receipt
+// digest is the checked receipt's, or null before a successful check.
+export function refusedRecordFor({ preparation, preparationDigest, receiptDigest, code, at }) {
+  return { v: 1, kind: 'effect', requestId: preparation.requestId, payloadDigest: preparation.payloadDigest, preparationDigest,
+    receiptDigest, effectId: preparation.effectId, phase: 'refused', at, detail: { code } };
+}
+
 // One effect record belongs to exactly this preparation and receipt, in the
 // phase expected. Entered must describe the transition from the prepared
 // expectation to exactly what the signed action asks for, and completed must

@@ -1,0 +1,1 @@
+- Add the disabled owner-decision effect writers: under the journal lock, record an entered effect's completion (only with the live one-shot entry handle from the same store instance, so a crashed entry stays effect-uncertain) or a final pre-effect refusal, each only from a legal phase and with no new persisted format (agent-comms#77).

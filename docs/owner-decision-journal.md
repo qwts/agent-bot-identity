@@ -549,3 +549,66 @@ second, or one stamped earlier after a clock rollback, would pass it.
 request by the daemon-generated nonce in its preparation, never by
 `presenceDigest`. A crash after it is `effect-uncertain`. Every refusal writes
 nothing. No effect runs here.
+
+## Effect completion and final refusal writers (disabled)
+
+The journal store has two more writers, reachable only through the store that
+`identity-host.mjs` exports, the same way `enterEffect` is. There is no route.
+Each runs under the journal's exclusive lock and refuses a busy lock without
+waiting. It reads and validates the whole request graph, flushes what it read,
+and only then publishes one slot. The store builds and binds each record
+itself, from the saved records and the signed action. Nothing changes in the
+persisted format.
+
+- **`completeEffect(entry, result)`** publishes slot 10, `completed`.
+  - **Same instance only.** `entry` is the one-shot handle that `enterEffect`
+    returned from this same store instance. It is unforgeable: held only in
+    this instance's memory, keyed to the request and its entered-record
+    digest. No request ID is accepted. It refuses (`storage-failed`,
+    `owner-journal-entry-required`) without a live handle: none, a lookalike
+    object, one from another instance on the same journal, one from before a
+    crash or reopen, or one already used.
+  - **Never after a crash.** An entered request that the entering instance
+    did not complete stays `effect-uncertain` forever. Recovery and every new
+    instance can never complete it, so nothing records an effect it did not
+    see run.
+  - **Consumption.** The handle is consumed once the write starts. A
+    completion refused before then (busy lock, bad input) leaves it usable.
+    The entered record must still be the one the handle entered.
+  - `result` is `{at}`, no earlier than the entered `at`. For a revision it
+    also carries what the effect reports: `journalSeq`, `journalRecordDigest`
+    and `working`, which is null unless the entered record applies.
+  - A cold-wake request is then `applied`. A revision stays `indeterminate`
+    until its linked authoritative event is present, as the reader already
+    requires. That event's writer is a separate slice.
+  - Like every writer, it refuses (`storage-failed`, `owner-journal-corrupt`)
+    while an unknown or excess entry is in `requests/`. That refusal is a
+    storage failure and poisons the instance. The handle is not consumed,
+    but the instance holding it refuses until reopened, and a reopened one
+    has no handle, so the request stays `effect-uncertain`.
+  - It refuses (`conflict`) if `completed` already holds anything.
+  - It refuses (`storage-failed`) if the `entered` record is damaged or
+    changed, or a cold-wake request carries a linked event.
+  - The effect-entry gate opens its own store, so its caller can't complete
+    yet. Composing entry, the effect step and completion in one instance is
+    a later slice.
+- **`refusePreEffect(requestId, {code, at})`** publishes slot 7, the final
+  pre-effect refusal.
+  - It is legal from `preparing`, `prepared`, `authorizing` or `released`. It
+    binds the checked receipt, or `null` before the successful check.
+  - `code` is one of the eight final-refusal reasons. The request is then
+    `refused` with the mapped public outcome.
+  - It refuses (`conflict`) once the request has entered, is applied, or is
+    already refused.
+  - It refuses (`storage-failed`) for an admitted request.
+
+Malformed input refuses as `bad-request` and writes nothing. A refused
+transition doesn't poison the store instance; a storage failure does.
+
+**After a crash between writes:**
+- A completion body without its trailer is `effect-uncertain`, and is never
+  completed again: the handle is gone.
+- A committed completion is `applied` (cold-wake).
+- A refusal body without its trailer refuses as found, and the request can no
+  longer enter.
+- A committed refusal is `refused`, with its mapped outcome.
