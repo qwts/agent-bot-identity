@@ -349,7 +349,11 @@ pass on everything except that the change may land outside the delivered
 package sources, because memory itself is never in the package. Every changed
 path must be definition or skill content, the change must be non-empty and
 fully listed, and at least one changed path must be a file (directories alone
-are not content). A memory file whose name a report could not cite (a
+are not content). One verified change credits at most one memory item (owner
+decision on #929, 2026-10-12): the first memory item in report order that cites
+it, keyed by the verified revision, so a proposal and its revision count as one
+change. Any other memory item citing that change is not verified, with reason
+`artifact-already-credited`, and stays eligible for later runs. A memory file whose name a report could not cite (a
 backslash or control character) is not delivered. Its digest alone is source identity; an agent claim, an external
 receipt or a memory's age or removal processes nothing.
 
