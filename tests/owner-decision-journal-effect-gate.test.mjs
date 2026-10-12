@@ -46,9 +46,11 @@ function d1(broker, payload) {
 // for another request's nonce; `receiptKeys(broker, signer)` overrides the
 // key IDs the stored receipt names, and `receiptToken(token)` rewrites the whole token.
 // `shared` (an earlier released request) puts this one in the same journal,
-// trust, identity and census.
+// trust, identity and census. `p1Key` and `d1Key` sign the tokens instead of
+// the enrolled presence signer and broker (a forger's keys).
 function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce = nonceOf(1), storedP1Nonce = nonce, upTo = 'successful-check',
-  receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token, shared } = {}) {
+  receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token, shared,
+  p1Key, d1Key } = {}) {
   const base = shared?.base ?? fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-gate-')));
   if (!shared) t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
@@ -71,8 +73,8 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   createDaemonJournalStore({ root: journalRoot, namespaceDigest }).admit(action, Buffer.from(canonicalJson(acceptance)));
   const preparation = { ...template, requestId, payloadDigest: acceptance.payloadDigest, nonce, acceptedAt: 2_000_000_000, preparedAt: 2_000_000_000, exp: 2_000_000_180 };
   const { actionText } = decodeOwnerDecisionAction(action);
-  const presence = p1(signer, { actionText, nonce: storedP1Nonce });
-  const receipt = Buffer.from(receiptToken(d1(broker, { v: 1, aud: 'agent-comms-owner-decision', ...receiptKeys(broker, signer), requestId,
+  const presence = p1(p1Key ?? signer, { actionText, nonce: storedP1Nonce });
+  const receipt = Buffer.from(receiptToken(d1(d1Key ?? broker, { v: 1, aud: 'agent-comms-owner-decision', ...receiptKeys(broker, signer), requestId,
     principal, account, soul, operation: 'revision.approve', payloadDigest: acceptance.payloadDigest, nonce,
     presenceDigest: sha256(Buffer.from(presence, 'ascii')), iat: 2_000_000_001, exp: 2_000_000_060 })), 'ascii');
   const receiptDigest = sha256(receipt);
@@ -96,7 +98,8 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
     identityPort: createOwnerDecisionIdentityPort({ stateDir }), nowMilliseconds: NOW };
   const recover = () => createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recover(requestId);
   const enter = (overrides = {}, token = presence) => enterOwnerDecisionEffect({ requestId, presenceToken: token }, { ...options, ...overrides });
-  return { base, requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText };
+  return { base, requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText,
+    receiptToken: receipt.toString('ascii'), check };
 }
 
 // What the effect reports for this approve: its revision-journal sequence and
@@ -285,6 +288,59 @@ test('the journal never consults the gate for a request that is not exactly rele
       assert.throws(() => store.enterEffect(r.requestId, () => { consulted = true; return { at: 1 }; }), { reason: 'owner-journal-entry-refused' });
       assert.equal(consulted, false);
       assert.equal(r.recover().state, state);
+    });
+  }
+});
+
+// End to end through intake: the journal's check intake trusts the pins its
+// caller passes, so wiring must pass current trust. Forged pins (a forger's
+// key under the real key ID) never get past intake, and the request never
+// enters. Stale pins after a rotation do get through intake, and the gate,
+// reading real trust, then refuses with trust-unavailable and never enters.
+const pinOf = (keyPair, keyId = keyIdOf(keyPair)) => ({ alg: 'ed25519', publicKey: rawKey(keyPair), keyId });
+
+test('intake under forged pins refuses, and the request never enters', darwin, async (t) => {
+  const forger = generateKeyPairSync('ed25519');
+  for (const [name, forged, pins, refusal] of [
+    ['a forged presence pin', { p1Key: forger }, (r) => ({ receiptKey: pinOf(r.broker), presenceKey: pinOf(forger, keyIdOf(r.signer)) }), 'owner-presence-trust'],
+    ['a forged receipt pin', { d1Key: forger }, (r) => ({ receiptKey: pinOf(forger, keyIdOf(r.broker)), presenceKey: pinOf(r.signer) }), 'owner-receipt-trust'],
+  ]) {
+    await t.test(name, (tt) => {
+      const r = released(tt, { upTo: 'prepared-challenge', ...forged });
+      const store = createDaemonJournalStore({ root: r.journalRoot, namespaceDigest });
+      assert.throws(() => store.recordDecision(r.requestId, { presenceToken: r.presence, receiptToken: r.receiptToken, trust: pins(r), nowMilliseconds: NOW }),
+        { reason: 'owner-journal-intake-refused', refusal });
+      assert.throws(() => store.recordSuccessfulCheck(r.requestId, { check: r.check, nowMilliseconds: NOW }), { reason: 'owner-journal-transition-refused' });
+      assert.equal(r.recover().state, 'prepared');
+      // The gate, with real trust, never enters a request that never released.
+      assert.deepEqual(r.enter(), { state: 'refused', reason: 'owner-journal-entry-refused', code: 'storage-failed' });
+      assert.equal(r.recover().state, 'prepared');
+    });
+  }
+});
+
+test('intake under stale pins after a rotation releases, but the gate with real trust refuses and never enters', darwin, async (t) => {
+  const rotate = (r, at) => {
+    const keys = path.join(r.trustRoot, 'keys');
+    const head = fs.readdirSync(keys).filter((n) => /^\d{10}\.json$/.test(n)).sort().at(-1);
+    r.trustWriter(at).revokeKeys({ revokes: sha256(fs.readFileSync(path.join(keys, head))), reason: 'rotated' });
+    r.trustWriter(at).enrollKeys({ receiptKey: rawKey(generateKeyPairSync('ed25519')), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+  };
+  // Stamped after preparation, and (by clock rollback) before it: the receipt
+  // key binding refuses either way.
+  for (const at of [2_000_000_005, 1_999_999_500]) {
+    await t.test(`rotated at ${at}`, (tt) => {
+      const r = released(tt, { upTo: 'prepared-challenge' });
+      rotate(r, at);
+      const store = createDaemonJournalStore({ root: r.journalRoot, namespaceDigest });
+      const stale = { receiptKey: pinOf(r.broker), presenceKey: pinOf(r.signer) };
+      assert.equal(store.recordDecision(r.requestId, { presenceToken: r.presence, receiptToken: r.receiptToken, trust: stale, nowMilliseconds: NOW }).state,
+        'authorizing');
+      assert.equal(store.recordSuccessfulCheck(r.requestId, { check: r.check, nowMilliseconds: NOW }).state, 'released');
+      const refusal = r.enter();
+      assert.deepEqual(refusal, { state: 'refused', reason: 'trust-unavailable', code: 'storage-failed' });
+      assert.equal('complete' in refusal, false);
+      assert.equal(r.recover().state, 'released');
     });
   }
 });
