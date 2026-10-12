@@ -132,6 +132,26 @@ jobs:
       - name: Exercise native Windows custody and named-pipe APIs with disposable state
         run: node --test tests/windows-native-preflight.test.mjs tests/windows-task-job-native.test.mjs
 
+  darwin-journal:
+    name: Darwin owner-decision journal
+    # #1007: the disabled owner-decision journal's storage, O_EXLOCK lock and
+    # recovery tests skip off Darwin, so they run here, on a GitHub-hosted
+    # macOS runner with disposable temporary state and no credentials. The
+    # runner is a literal hosted label, never a repo variable (#752).
+    needs: policy
+    if: needs.policy.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 20
+      - name: Run the owner-decision journal tests on Darwin
+        run: node --test tests/owner-decision-journal*.test.mjs
+
   codeql:
     name: Advanced CodeQL
     needs: [policy, merge-evidence, preflight-evidence]
@@ -282,7 +302,7 @@ jobs:
 
   gate:
     name: CI
-    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd, windows-native]
+    needs: [policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd, windows-native, darwin-journal]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -298,6 +318,7 @@ jobs:
           LINUX_BUNDLE: ${{ needs.linux-bundle.result }}
           KEYD: ${{ needs.keyd.result }}
           WINDOWS_NATIVE: ${{ needs.windows-native.result }}
+          DARWIN_JOURNAL: ${{ needs.darwin-journal.result }}
           PREFLIGHT: ${{ needs.preflight-evidence.result }}
           PREFLIGHT_VALIDATED: ${{ needs.preflight-evidence.outputs.validated }}
           MERGE_VALIDATED: ${{ needs.merge-evidence.outputs.validated }}
@@ -308,6 +329,7 @@ jobs:
           test "$LINUX_BUNDLE" = success
           test "$KEYD" = success
           test "$WINDOWS_NATIVE" = success
+          test "$DARWIN_JOURNAL" = success
           case "$MODE" in
             full)
               if [ "$PREFLIGHT_VALIDATED" = true ]; then
