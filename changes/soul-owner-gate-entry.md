@@ -1,0 +1,1 @@
+- Soul's owner prompts (`owner-action.mjs`, soul stop, computer use, asides and key migration) reach identity's owner gate, statements and presence through `identity-soul.mjs`, in-process, so presence prompts keep the caller's terminal; behavior is unchanged (#645, F8).

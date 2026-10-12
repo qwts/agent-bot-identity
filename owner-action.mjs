@@ -6,7 +6,9 @@
 // refused, not waved through.
 import process from 'node:process';
 import { listSouls, populationFile } from './agent-population.mjs';
-import * as gate from './owner-gate.mjs';
+// The owner gate, statements and presence are identity's, reached through
+// its published soul entry (#645, F8).
+import * as gate from './identity-soul.mjs';
 import {
   createOwnerChallenges,
   localHost,
@@ -14,14 +16,14 @@ import {
   readOwnerKeys,
   statementError,
   verifyOwnerChallenge,
-} from './owner-statement.mjs';
+} from './identity-soul.mjs';
 import { verifyPrincipalOwner } from './owner-principal.mjs';
-import { attestedOwnerKeys } from './owner-presence.mjs';
+import { attestedOwnerKeys } from './identity-soul.mjs';
 
-export { consentOwner, soulMarkers } from './owner-gate.mjs';
+export { consentOwner, soulMarkers } from './identity-soul.mjs';
 export { ownerCredentialRequired } from './identity-format.mjs';
 export { verifyPrincipalOwner } from './owner-principal.mjs';
-export { keydPresenceWithoutDialog } from './owner-presence.mjs';
+export { keydPresenceWithoutDialog } from './identity-soul.mjs';
 
 export const populationSouls = (env = process.env) => () => listSouls({ file: populationFile({ env }) });
 

@@ -274,7 +274,7 @@ function resolveSoul(target, file) {
 
 export async function soulAsidesCommand(argv, {
   env = process.env, home = homedir(), cwd = process.cwd(), write = (text) => process.stdout.write(text),
-  markers = async () => (await import('./owner-gate.mjs')).soulMarkers({ env, cwd }),
+  markers = async () => (await import('./identity-soul.mjs')).soulMarkers({ env, cwd }),
 } = {}) {
   const json = argv.includes('--json');
   const args = argv.filter((arg) => arg !== '--json');
