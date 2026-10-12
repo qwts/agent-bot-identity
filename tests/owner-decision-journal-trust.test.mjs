@@ -275,3 +275,58 @@ test('the documented rollback limit: a removed complete suffix reads as the earl
   fs.writeFileSync(path.join(root, 'audit.jsonl'), `${lines.slice(0, -1).join('\n')}\n`);
   assert.throws(() => read(root), refused('owner-trust-no-active-key'));
 });
+
+test('reconcile checks custody first and keeps any pending bytes it cannot match exactly', darwin, async (t) => {
+  // An enrollment interrupted right after its link: keys/.pending.json and
+  // keys/0000000001.json are two names for one inode.
+  const interrupted = (tt) => {
+    const root = freshRoot(tt);
+    writer(root).enrollNamespace({ namespaceDigest });
+    assert.throws(() => writer(root, { fault: (at) => { if (at === 'key-1:linked') throw new Error('crash'); } }).enrollKeys(keys()));
+    return root;
+  };
+
+  await t.test('a symlinked keys directory refuses and nothing is unlinked', (tt) => {
+    const root = interrupted(tt), moved = `${root}-keys-elsewhere`;
+    fs.renameSync(path.join(root, 'keys'), moved);
+    fs.symlinkSync(moved, path.join(root, 'keys'));
+    tt.after(() => fs.rmSync(moved, { recursive: true, force: true }));
+    const before = fs.readdirSync(moved).sort();
+    assert.throws(() => writer(root).reconcile(), refused('owner-trust-custody', 'storage-failed'));
+    assert.deepEqual(fs.readdirSync(moved).sort(), before);
+    assert(before.includes('.pending.json'));
+  });
+
+  await t.test('a pending name whose second link is outside the store is kept and refused', (tt) => {
+    const root = interrupted(tt), keysDir = path.join(root, 'keys');
+    // Replace the in-store twin with an outside link to the same bytes.
+    fs.linkSync(path.join(keysDir, '.pending.json'), `${root}-outside`);
+    tt.after(() => fs.rmSync(`${root}-outside`, { force: true }));
+    fs.rmSync(path.join(keysDir, '0000000001.json'));
+    const before = snapshot(root);
+    assert.throws(() => writer(root).reconcile(), refused('owner-trust-pending'));
+    assert.deepEqual(snapshot(root), before);
+  });
+
+  await t.test('a lone pending file whose bytes differ from the needed confirmation is kept and refused', (tt) => {
+    const root = freshRoot(tt);
+    writer(root).enrollNamespace({ namespaceDigest });
+    assert.throws(() => writer(root, { fault: (at) => { if (at === 'key-1:confirmation:pending-flushed') throw new Error('crash'); } }).enrollKeys(keys()));
+    const pending = path.join(root, 'keys', '.pending.json');
+    fs.writeFileSync(pending, Buffer.from(fs.readFileSync(pending).toString().replace('"v":1', '"v":2')));
+    const before = snapshot(root);
+    assert.throws(() => writer(root).reconcile(), refused('owner-trust-pending'));
+    assert.deepEqual(snapshot(root), before);
+  });
+
+  await t.test('a symlinked pending name is refused without being followed', (tt) => {
+    const root = interrupted(tt), keysDir = path.join(root, 'keys');
+    fs.rmSync(path.join(keysDir, '.pending.json'));
+    fs.writeFileSync(`${root}-target`, 'outside', { mode: 0o600 });
+    tt.after(() => fs.rmSync(`${root}-target`, { force: true }));
+    fs.symlinkSync(`${root}-target`, path.join(keysDir, '.pending.json'));
+    assert.throws(() => writer(root).reconcile(), (error) => error.code === 'storage-failed');
+    assert.equal(fs.readFileSync(`${root}-target`, 'utf8'), 'outside');
+    assert(fs.lstatSync(path.join(keysDir, '.pending.json')).isSymbolicLink());
+  });
+});

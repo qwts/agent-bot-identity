@@ -209,6 +209,22 @@ function readFlushed(io, file, max) {
   } finally { io.closeSync(fd); }
 }
 
+// Reads one file through a no-follow descriptor whose fstat must be ours, a
+// private regular file with an allowed link count, the same object as its
+// name, and within `max` bytes. Used by reconcile, where a pending name may
+// legitimately have a second link.
+function readHeld(io, file, max, links) {
+  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW);
+  try {
+    const held = io.fstatSync(fd), named = io.lstatSync(file);
+    if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || !links.includes(held.nlink)
+      || held.dev !== named.dev || held.ino !== named.ino || held.size < 1 || held.size > max) fail('owner-trust-pending');
+    const bytes = Buffer.alloc(held.size);
+    if (io.readSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) fail('owner-trust-io');
+    return { bytes, held };
+  } finally { io.closeSync(fd); }
+}
+
 function acquireLock(io, root) {
   let fd;
   try {
@@ -550,24 +566,31 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     // evidence and refuses; nothing is deleted because it failed to parse.
     reconcile() {
       return locked(() => {
-        const dirs = [root, path.join(root, KEYS)];
+        // Custody of the root and keys/ comes before touching any name in them,
+        // so a swapped or symlinked directory can never redirect an unlink.
+        const keys = path.join(root, KEYS);
+        assertAncestors(io, root); ownedDirectory(io, root);
+        const dirs = [root];
+        try { io.lstatSync(keys); dirs.push(keys); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+        if (dirs.includes(keys)) {
+          try { ownedDirectory(io, keys); } catch (error) { if (error?.reason) throw error; fail('owner-trust-custody'); }
+        }
         for (const dir of dirs) {
           const pending = path.join(dir, PENDING);
-          let held;
-          try { held = io.lstatSync(pending); } catch (error) { if (error?.code === 'ENOENT') continue; throw error; }
-          if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || held.size > TRUST_LIMITS.record) fail('owner-trust-pending');
-          const bytes = io.readFileSync(pending);
+          try { io.lstatSync(pending); } catch (error) { if (error?.code === 'ENOENT') continue; throw error; }
+          const { bytes, held } = readHeld(io, pending, TRUST_LIMITS.record, [1, 2]);
           if (held.nlink === 2) {
             const twin = listBounded(io, dir, dir === root ? ROOT_NAMES.size + 1 : 2 * TRUST_LIMITS.versions + 1)
               .filter((name) => name !== PENDING).find((name) => {
                 const info = io.lstatSync(path.join(dir, name));
                 return info.isFile() && info.dev === held.dev && info.ino === held.ino;
               });
-            if (!twin || !io.readFileSync(path.join(dir, twin)).equals(bytes)) fail('owner-trust-pending');
+            if (!twin) fail('owner-trust-pending');
+            const other = readHeld(io, path.join(dir, twin), TRUST_LIMITS.record, [2]);
+            if (other.held.dev !== held.dev || other.held.ino !== held.ino || !other.bytes.equals(bytes)) fail('owner-trust-pending');
             io.unlinkSync(pending); flushDirectory(io, dir); fault('reconcile:twin-removed');
             continue;
           }
-          if (held.nlink !== 1) fail('owner-trust-pending');
           const graph = readGraph(io, root, { allowPending: true });
           const [record] = graph.pending;
           const lines = record ? graph.audit.filter(({ value }) => value.subject === record.subject && value.version === record.version) : [];

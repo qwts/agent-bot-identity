@@ -71,7 +71,10 @@ audit line. An audit line for a missing record refuses. The public codes are:
 
 Everything that fails is kept as found.
 
-**Reconcile** is an explicit owner step, and makes only three repairs:
+**Reconcile** is an explicit owner step. Before touching any name it
+custody-checks the root, its ancestors and `keys/`. It reads pending files and
+their twins only through no-follow descriptors, checked like every other
+record and bounded. It makes only three repairs:
 - it unlinks a pending name that is a second link to an already published file
   with the same inode and bytes;
 - it links a lone pending file whose bytes are exactly the confirmation that
