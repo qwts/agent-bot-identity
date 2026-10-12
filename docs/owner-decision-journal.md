@@ -934,6 +934,26 @@ between the two publications is never retried, and the request stays
 `effect-uncertain`. A linked event already present refuses. Cold-wake is
 unchanged, with no linked event.
 
+**After a crash between slot 13 and slot 10.** The request stays
+indeterminate. Following agent-comms' owner-decision-locking contract, the
+only way forward is explicit owner-local reconciliation:
+- **Record-only operations** (approve, reject, adopt, and edit with apply
+  false). Only an authenticated owner-local ceremony may produce the missing
+  typed completed record. It builds it from the retained entered record, the
+  validated linked event and the immutable package, after a resync and
+  verified matching actual state, and reserves slot 10 to write it.
+- **What that record carries.** The exact `journalSeq` and
+  `journalRecordDigest`. The public `effectDigest` and the terminal pair's
+  `basisDigest` stay the SHA-256 of those completed bytes.
+- **Never automatic.** It is never run automatically and never replays the
+  consumed completer.
+- **Applying edits and cold-wake** need whole-effect proof and otherwise stay
+  uncertain.
+
+That reconciliation writer is a later, separately owned capability. Until
+actual state is verified by the daemon, matching from a ceremony's preimage
+is mechanism-only.
+
 **Port custody.** For `<stateDir>/soul-revisions/<agentId>/<seq>.json`:
 - The fixed ancestry (the state directory, `soul-revisions/` and the agent
   directory) must be real directories, owned by this uid, with no group or
