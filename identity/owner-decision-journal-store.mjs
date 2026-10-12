@@ -1,0 +1,241 @@
+// Disabled daemon owner-decision journal storage (#1007, agent-comms#77): the
+// fixed-file request layout, admission and orphan charging. No route, daemon
+// call or activation reaches it. A valid stored frame is storage integrity,
+// never authorization, and node's fsync is a logical flush only: on Darwin it
+// may silently fall back from F_FULLFSYNC, so nothing here claims a physical
+// flush or allocation guarantee. That needs a separately reviewed native helper.
+import * as fs from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import { createHash } from 'node:crypto';
+import {
+  DAEMON_JOURNAL_SLOTS, FRAME_OVERHEAD, SCRATCH_BYTES, decodeCanonicalPayload, decodeDaemonJournalFrame,
+  encodeDaemonJournalFrame, requestDirectoryName,
+} from './owner-decision-journal-frame.mjs';
+
+export const DAEMON_JOURNAL_LIMIT = 4096;
+export const DAEMON_RESERVATION_BYTES = 524288;
+const LOCK_NAME = '.journal-lock';
+const REQUESTS = 'requests';
+const O_EXLOCK = 0x20; // Apple xnu-8792.61.2 bsd/sys/fcntl.h (macOS 13 era), flock semantics.
+const { O_RDONLY, O_RDWR, O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+const O_CLOEXEC = fs.constants.O_CLOEXEC ?? 0; // libuv adds it anyway; ask explicitly where defined.
+
+// Every request file, its fixed EOF and (for a slot) its frame binding.
+const FILES = Object.freeze([
+  ...DAEMON_JOURNAL_SLOTS.map(({ slot, cap }) => Object.freeze({ name: `${slot}.record`, slot, size: cap + FRAME_OVERHEAD })),
+  Object.freeze({ name: 'scratch.record', slot: null, size: SCRATCH_BYTES }),
+]);
+const FILE_BY_SLOT = new Map(FILES.filter(({ slot }) => slot).map((file) => [file.slot, file]));
+
+// Internal reasons stay in `reason`; callers see only the public code. Every
+// storage failure is a non-authorizing refusal, never proof that an earlier
+// effect did not enter, so retained state is preserved as found.
+const PUBLIC = Object.freeze({
+  'owner-journal-capacity': 'journal-capacity',
+  'owner-journal-platform-unsupported': 'owner-decision-unsupported',
+  'invalid-owner-journal-record': 'bad-request',
+});
+export function journalError(reason) {
+  return Object.assign(new Error('owner decision journal refused'), { code: PUBLIC[reason] ?? 'storage-failed', reason });
+}
+const fail = (reason = 'owner-journal-corrupt') => { throw journalError(reason); };
+
+const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const DIGEST = /^[a-f0-9]{64}$/;
+const SOUL = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const PRINCIPAL = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ACCOUNT = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+const OPERATIONS = new Set(['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set']);
+const matches = (pattern, value) => typeof value === 'string' && pattern.exec(value)?.[0] === value;
+const plain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const exactKeys = (value, keys) => plain(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+// The daemon acceptance record (the acceptance-context payload) and its
+// agreement with the exact original action bytes. Operation parameters are
+// only shape-checked here; their typed validation is the operation adapter's.
+export function validateDaemonAdmission(actionBytes, acceptanceBytes, namespaceDigest) {
+  try {
+    if (!matches(DIGEST, namespaceDigest)) fail();
+    const original = decodeCanonicalPayload(actionBytes, FILE_BY_SLOT.get('original-action').size - FRAME_OVERHEAD);
+    const saved = decodeCanonicalPayload(acceptanceBytes, FILE_BY_SLOT.get('acceptance-context').size - FRAME_OVERHEAD);
+    const action = original.value, acceptance = saved.value;
+    if (!exactKeys(action, ['v', 'requestId', 'principal', 'account', 'soul', 'operation', 'parameters'])
+      || action.v !== 1 || !plain(action.parameters)) fail();
+    if (!exactKeys(acceptance, ['v', 'kind', 'requestId', 'principal', 'account', 'soul', 'operation', 'payloadDigest',
+      'namespaceDigest', 'acceptedAt', 'daemonKey', 'daemonEpoch', 'watchId', 'reservationBytes'])) fail();
+    if (acceptance.v !== 1 || acceptance.kind !== 'acceptance' || !matches(UUID4, acceptance.requestId)
+      || !matches(PRINCIPAL, acceptance.principal) || !matches(ACCOUNT, acceptance.account)
+      || !matches(SOUL, acceptance.soul) || !OPERATIONS.has(acceptance.operation)
+      || acceptance.namespaceDigest !== namespaceDigest || acceptance.reservationBytes !== DAEMON_RESERVATION_BYTES
+      || !Number.isSafeInteger(acceptance.acceptedAt) || acceptance.acceptedAt < 0
+      || !matches(DIGEST, acceptance.daemonKey) || !Number.isSafeInteger(acceptance.daemonEpoch) || acceptance.daemonEpoch < 1
+      || !matches(UUID4, acceptance.watchId)) fail();
+    for (const key of ['requestId', 'principal', 'account', 'soul', 'operation']) if (action[key] !== acceptance[key]) fail();
+    if (acceptance.payloadDigest !== sha256(original.bytes)) fail();
+    return { action: original.bytes, acceptance: saved.bytes, record: acceptance };
+  } catch { fail('invalid-owner-journal-record'); }
+}
+
+function ownedDirectory(io, dir) {
+  const info = io.lstatSync(dir);
+  if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o7777) !== 0o700) fail();
+  return info;
+}
+
+function flushDirectory(io, dir) {
+  const fd = io.openSync(dir, O_RDONLY | O_NOFOLLOW);
+  try { io.fsyncSync(fd); } catch { fail('owner-journal-flush'); } finally { io.closeSync(fd); }
+}
+
+// A journal-specific, fixed-inode kernel lock: O_EXLOCK|O_NONBLOCK on one
+// private empty file that is never reclaimed, unlinked or replaced. Process
+// death closes it. Contention refuses instead of waiting or stealing.
+export function acquireDaemonJournalLock(root, { io = fs } = {}) {
+  if (process.platform !== 'darwin') fail('owner-journal-platform-unsupported');
+  let fd;
+  try {
+    const file = path.join(root, LOCK_NAME);
+    fd = io.openSync(file, O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC | O_EXLOCK);
+    const held = io.fstatSync(fd), named = io.lstatSync(file);
+    if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || held.size !== 0
+      || held.nlink !== 1 || held.dev !== named.dev || held.ino !== named.ino) fail();
+    return fd;
+  } catch (error) {
+    if (fd !== undefined) { try { io.closeSync(fd); } catch { /* the refusal below stands */ } }
+    fail(['EAGAIN', 'EWOULDBLOCK'].includes(error?.code) ? 'owner-journal-busy' : 'owner-journal-io');
+  }
+}
+
+// Creates an empty store once: the root, its lock inode and the request
+// container, each exclusively and flushed. Never repairs an existing store.
+export function initializeDaemonJournal(root, { io = fs } = {}) {
+  if (process.platform !== 'darwin') fail('owner-journal-platform-unsupported');
+  try {
+    if (typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0')) fail();
+    io.mkdirSync(root, { mode: 0o700 });
+    ownedDirectory(io, root);
+    io.closeSync(io.openSync(path.join(root, LOCK_NAME), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600));
+    io.mkdirSync(path.join(root, REQUESTS), { mode: 0o700 });
+    flushDirectory(io, root); flushDirectory(io, path.dirname(root));
+  } catch (error) { fail(error?.reason ?? 'owner-journal-io'); }
+}
+
+function readExactly(io, fd, size) {
+  const bytes = Buffer.alloc(size);
+  if (io.readSync(fd, bytes, 0, size, 0) !== size) fail('owner-journal-io');
+  return bytes;
+}
+
+function writeExactly(io, fd, bytes, position) {
+  if (io.writeSync(fd, bytes, 0, bytes.length, position) !== bytes.length) fail('owner-journal-io');
+}
+
+// Opens one established request file, refusing anything but our own private
+// single-link regular file at its fixed EOF. Never creates.
+function openFixed(io, file, size, flags) {
+  const fd = io.openSync(file, flags | O_NOFOLLOW);
+  try {
+    const held = io.fstatSync(fd), named = io.lstatSync(file);
+    if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || held.nlink !== 1
+      || held.size !== size || held.dev !== named.dev || held.ino !== named.ino) fail();
+    return fd;
+  } catch (error) { io.closeSync(fd); throw error; }
+}
+
+export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault = () => {} } = {}) {
+  if (process.platform !== 'darwin') fail('owner-journal-platform-unsupported');
+  if (typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0') || !matches(DIGEST, namespaceDigest)) {
+    fail('invalid-owner-journal-record');
+  }
+  const requests = path.join(root, REQUESTS);
+  // After any storage failure this instance refuses until reopened, so a
+  // half-known prefix is never written over by the same process.
+  let poisoned = false;
+
+  function locked(operation) {
+    if (poisoned) fail('owner-journal-reopen-required');
+    const fd = acquireDaemonJournalLock(root, { io });
+    try {
+      ownedDirectory(io, root); ownedDirectory(io, requests);
+      return operation();
+    } catch (error) {
+      if (!['invalid-owner-journal-record', 'owner-journal-capacity'].includes(error?.reason)) poisoned = true;
+      throw error?.reason ? error : journalError('owner-journal-io');
+    } finally {
+      try { io.closeSync(fd); } catch { poisoned = true; }
+    }
+  }
+
+  // Every entry in the request container is charged, whatever it holds: an
+  // orphan from interrupted admission is never fresh, refunded or reused.
+  function scan() {
+    const entries = io.readdirSync(requests);
+    // An unknown or excess entry stays for inspection and refuses every write.
+    if (entries.length > DAEMON_JOURNAL_LIMIT || !entries.every((entry) => matches(DIGEST, entry))) fail();
+    return entries;
+  }
+
+  function publish(dir, slot, payload, binding) {
+    const { size } = FILE_BY_SLOT.get(slot), file = path.join(dir, `${slot}.record`);
+    const frame = encodeDaemonJournalFrame(payload, { ...binding, slot });
+    const fd = openFixed(io, file, size, O_RDWR);
+    try {
+      if (decodeDaemonJournalFrame(readExactly(io, fd, size), { ...binding, slot }).kind !== 'empty') fail();
+      writeExactly(io, fd, frame.subarray(0, size - 128), 0); fault(`${slot}:body-written`);
+      try { io.fsyncSync(fd); } catch { fail('owner-journal-flush'); }
+      fault(`${slot}:body-flushed`);
+      writeExactly(io, fd, frame.subarray(size - 128), size - 128); fault(`${slot}:trailer-written`);
+      try { io.fsyncSync(fd); } catch { fail('owner-journal-flush'); }
+      fault(`${slot}:trailer-flushed`);
+    } finally { io.closeSync(fd); }
+    const check = openFixed(io, file, size, O_RDONLY);
+    try { if (!readExactly(io, check, size).equals(frame)) fail(); } finally { io.closeSync(check); }
+  }
+
+  return {
+    // Charged request directories, including orphans and unknown entries.
+    count: () => locked(() => scan().length),
+
+    // Fresh admission only: reserve the directory, create and zero-fill all 15
+    // fixed files, flush, validate, then publish the original action and the
+    // acceptance-context record in that order. An existing directory for this
+    // namespace/request is never admitted again here.
+    admit(actionBytes, acceptanceBytes) {
+      const saved = validateDaemonAdmission(actionBytes, acceptanceBytes, namespaceDigest);
+      const binding = { namespaceDigest, requestId: saved.record.requestId };
+      const name = requestDirectoryName(binding), dir = path.join(requests, name);
+      return locked(() => {
+        const entries = scan();
+        if (entries.includes(name)) fail('owner-journal-recovery-required');
+        if (entries.length >= DAEMON_JOURNAL_LIMIT) fail('owner-journal-capacity');
+        io.mkdirSync(dir, { mode: 0o700 }); fault('request:directory-created');
+        flushDirectory(io, requests); fault('request:directory-flushed');
+        ownedDirectory(io, dir);
+        for (const { name: fileName, size } of FILES) {
+          const fd = io.openSync(path.join(dir, fileName), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+          try {
+            fault(`initialize:${fileName}:created`);
+            writeExactly(io, fd, Buffer.alloc(size), 0); fault(`initialize:${fileName}:zeroed`);
+            try { io.fsyncSync(fd); } catch { fail('owner-journal-flush'); }
+            fault(`initialize:${fileName}:flushed`);
+          } finally { io.closeSync(fd); }
+        }
+        flushDirectory(io, dir); fault('request:files-flushed');
+        const names = io.readdirSync(dir).sort();
+        if (names.join('\n') !== FILES.map((file) => file.name).sort().join('\n')) fail();
+        for (const { name: fileName, size } of FILES) {
+          const fd = openFixed(io, path.join(dir, fileName), size, O_RDONLY);
+          try { if (!readExactly(io, fd, size).every((byte) => byte === 0)) fail(); } finally { io.closeSync(fd); }
+        }
+        publish(dir, 'original-action', saved.action, binding);
+        publish(dir, 'acceptance-context', saved.acceptance, binding);
+        return {
+          state: 'admitted', requestId: binding.requestId, directory: name,
+          physicalAllocationSupported: false, physicalFlushGuaranteed: false,
+        };
+      });
+    },
+  };
+}

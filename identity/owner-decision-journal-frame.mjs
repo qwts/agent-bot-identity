@@ -174,6 +174,11 @@ const FINDINGS = Object.freeze({
 
 // Strict canonical JSON: exact UTF-8 bytes that re-serialize identically, so
 // duplicate keys, whitespace, escapes and number spellings all refuse.
+// Returns the parsed value with its own byte snapshot.
+export function decodeCanonicalPayload(payloadBytes, max) {
+  try { const bytes = snapshot(payloadBytes, max); return { value: parseCanonical(bytes), bytes }; } catch { fail(); }
+}
+
 function parseCanonical(bytes) {
   const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   const value = JSON.parse(text);
