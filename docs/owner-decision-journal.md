@@ -163,3 +163,30 @@ Internal reasons stay in `error.reason`. Callers see only a public code:
 effect did not enter. Retained state is kept as found. An effect that entered
 without whole-effect completion stays `indeterminate` (`effect-uncertain`),
 never a terminal refusal.
+
+## Linked authoritative event
+
+`identity/owner-decision-linked-event.mjs` covers slot 13,
+`linked-authoritative-event` (16384 bytes). It holds pure checks only. The
+local revision writer is unchanged and does not yet emit the `ownerDecision`
+field, so nothing validates until a reviewed adapter adds it.
+
+- **Revisions only.** Approve, reject, adopt and edit link one authoritative
+  revision-journal event. A cold-wake change has none, so its slot stays
+  all-zero.
+- **Bounded before entering.** `assertLinkedEventFits` sizes the complete
+  event the adapter would append, including approve's copied legacy proposal
+  reason, with a worst-case 27-character `at` stamp. If it can't fit, the
+  operation refuses (`bad-request`) and the existing local ceremony stays the
+  path for that change. Legacy text is never truncated or rewritten.
+- **Verified after completion.** `verifyLinkedEvent` accepts only these exact
+  bytes: the journal file the caller read under the revision lock, matching
+  `completed.journalRecordDigest`, in the writer's own
+  `JSON.stringify(record) + '\n'` form. The event must be of the operation's
+  kind, for the same proposal, and carry exactly
+  `ownerDecision:{requestId,payloadDigest,receiptDigest,effectId,preparationDigest}`.
+  A coincidentally matching unlinked legacy event proves nothing.
+- **Revision store space.** The journal reservation can't cover the revision
+  store, which still publishes with a hard link (#1010). An effect must refuse
+  before entering, or stay indeterminate once entered, if that store hits
+  ENOSPC.

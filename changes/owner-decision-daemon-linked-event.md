@@ -1,0 +1,1 @@
+- Add disabled owner-decision linkage checks for the authoritative revision event: bounded before entering, exact journal bytes and request linkage after completion, none for cold-wake changes (#1007).
