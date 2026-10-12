@@ -36,7 +36,8 @@ All of these must hold before step 9 starts:
    in its own agent-bot release is still to do.
 3. **ENG-0128 amended.** agent-identity owns identity, and this repository
    owns soul, harness and the `agent-bot` facade (answer 1). The amendment
-   is recorded before step 9.
+   is recorded before step 9. *Met:* recorded in
+   [qwts-agent-sop#83](https://github.com/qwts/qwts-agent-sop/pull/83).
 4. **The contract is stable for one release.** One agent-bot release ships
    with identity at `identity/` and the shims in place, and nothing breaks.
 
