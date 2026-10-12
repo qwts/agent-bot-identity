@@ -1,0 +1,1 @@
+- Soul's credential custody callers (key migration, soul secrets, the env store, setup-worktree's reconciler and App metadata, and the in-process mint for packed spaces) reach identity through `identity-soul.mjs`, in-process; behavior is unchanged (#645, F7).

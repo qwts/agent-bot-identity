@@ -381,7 +381,9 @@ how each one is done, and §9 puts them in order.
   GeniusBar's `scripts/compat-driver.mjs:71`, which imports
   `mintAgentIdentity` by path, moves onto the same entry file, in a GeniusBar
   PR pinned to the agent-bot release that ships it.
-- **F7. Credential custody reached from outside identity.** These callers
+- **F7. Credential custody reached from outside identity.** *Soul's callers
+  reach custody through `identity-soul.mjs` since 2026-10-11 (owner answer:
+  in-process, so keys never cross a process boundary).* These callers
   move onto identity operations (D4), or onto the name rules in the F1 file,
   instead of importing the stores:
   - **soul:**
@@ -615,22 +617,17 @@ identity file, so its row in §1 records the baseline only.
 
 ## Appendix: every import of an identity file from outside identity
 
-There are 150 import statements, which make the 147 file edges. This list is
+There are 146 import statements, which make the 142 file edges. This list is
 regenerated from the import graph; contract files are included.
 
 - **`agent-principals.mjs`** (1):
   - cli: `cli/principal.mjs:7`
-- **`credential-reconciler.mjs`** (1):
-  - soul: `setup-worktree.mjs:14`
 - **`daemon-client.mjs`** (30):
   - soul: `agent-population.mjs:31`, `agent-space.mjs:29`, `claude-worktree-create.mjs:42`, `confinement.mjs:11`, `setup-worktree.mjs:13`, `sop.mjs:23`, `soul-build.mjs:9`, `soul-computer-use.mjs:9`, `soul-env-export.mjs:46`, `soul-env-migrate.mjs:23`, `soul-env.mjs:12`, `soul-fork.mjs:30`, `soul-home.mjs:13`, `soul-join.mjs:301`, `soul-join.mjs:34`, `soul-profile.mjs:9`, `soul-remove.mjs:22`, `soul-revisions.mjs:12`, `soul-stop.mjs:5`, `soul-templates.mjs:8`, `soul-tool-home.mjs:33`
   - host: `agent-daemon.mjs:89`, `agent-mcp.mjs:30`, `telegram-adapter.mjs:49`
   - cli: `agent-approvals.mjs:19`, `cli/identity.mjs:13`, `cli/soul-dream.mjs:7`, `cli/soul-skill.mjs:9`, `readiness.mjs:37`
   - comms: `daemon-status.mjs:12`
-- **`git-credential-bot.mjs`** (1):
-  - soul: `agent-space-pack.mjs:24`
-- **`identity-app-store.mjs`** (3):
-  - soul: `setup-worktree.mjs:17`, `soul-credential-migration.mjs:18`
+- **`identity-app-store.mjs`** (1):
   - cli: `cli/identity.mjs:17`
 - **`identity-apps.mjs`** (1):
   - cli: `cli/identity-apps.mjs:8`
@@ -643,13 +640,11 @@ regenerated from the import graph; contract files are included.
   - comms: `owner-principal.mjs:7`, `wake-dispatch.mjs:44`, `wake-webhook-store.mjs:6`
 - **`identity-host.mjs`** (12):
   - host: `agent-daemon.mjs:66`, `agent-hook.mjs:37`, `agent-interaction.mjs:29`, `agent-mcp.mjs:29`, `agent-web.mjs:33`, `daemon-mcp.mjs:55`, `delegation-grants.mjs:43`, `grant-github.mjs:22`, `keyd-supervisor.mjs:19`, `metrics.mjs:37`, `telegram-adapter.mjs:54`, `wake-plane.mjs:18`
-- **`identity-soul.mjs`** (11):
-  - soul: `agent-space-pack.mjs:25`, `claude-worktree-create.mjs:37`, `cold-wake-settings.mjs:13`, `confinement.mjs:18`, `setup-worktree.mjs:10`, `sop.mjs:28`, `soul-coauthor.mjs:18`, `soul-join.mjs:42`, `soul-tool-home.mjs:31`, `turn-registry.mjs:5`
+- **`identity-soul.mjs`** (15):
+  - soul: `agent-space-pack.mjs:24`, `claude-worktree-create.mjs:37`, `cold-wake-settings.mjs:13`, `confinement.mjs:18`, `setup-worktree.mjs:10`, `sop.mjs:28`, `soul-coauthor.mjs:18`, `soul-credential-migration.mjs:153`, `soul-credential-migration.mjs:35`, `soul-env.mjs:18`, `soul-join.mjs:42`, `soul-secrets.mjs:20`, `soul-tool-home.mjs:31`, `turn-registry.mjs:5`
   - comms: `wake-listen.mjs:28`
-- **`keyd-client.mjs`** (1):
-  - soul: `soul-credential-migration.mjs:150`
 - **`owner-gate.mjs`** (8):
-  - soul: `owner-action.mjs:21`, `owner-action.mjs:9`, `soul-asides.mjs:277`, `soul-computer-use.mjs:7`, `soul-credential-migration.mjs:20`, `soul-stop.mjs:8`
+  - soul: `owner-action.mjs:21`, `owner-action.mjs:9`, `soul-asides.mjs:277`, `soul-computer-use.mjs:7`, `soul-credential-migration.mjs:19`, `soul-stop.mjs:8`
   - cli: `agent-approvals.mjs:21`, `cli/soul-dream.mjs:8`
 - **`owner-presence.mjs`** (3):
   - soul: `owner-action.mjs:19`, `owner-action.mjs:24`
@@ -659,5 +654,3 @@ regenerated from the import graph; contract files are included.
   - cli: `agent-approvals.mjs:22`, `cli/owner.mjs:11`
 - **`resolve-agent.mjs`** (1):
   - cli: `cli/identity.mjs:18`
-- **`soul-credentials.mjs`** (3):
-  - soul: `soul-credential-migration.mjs:32`, `soul-env.mjs:18`, `soul-secrets.mjs:20`

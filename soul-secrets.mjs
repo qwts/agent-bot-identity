@@ -17,7 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
-import { credentialStores, defaultCredentialStore, deleteSoulSecret, readSoulSecret, writeSoulSecret } from './soul-credentials.mjs';
+import { credentialStores, defaultCredentialStore, deleteSoulSecret, readSoulSecret, writeSoulSecret } from './identity-soul.mjs';
 import { declaredProviders, secretNameOrThrow, secretSetCommand } from './soul-providers.mjs';
 import { readSoulManifest } from './soul-runtimes.mjs';
 
