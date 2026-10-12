@@ -244,9 +244,9 @@ test('a final refusal is legal from every prepared phase before entry, with the 
     await t.test(state, (tt) => {
       const j = journal(tt, 'revision.approve', { upTo, enter: false });
       const refused = j.refuse({ code: 'trust-unavailable', at: AT });
-      // The checked receipt is bound only once the successful check exists.
+      // The saved receipt is bound whenever one is saved (authorizing on).
       const record = { v: 1, kind: 'effect', requestId: j.tx.requestId, payloadDigest: j.tx.preparation.payloadDigest, preparationDigest: j.tx.preparationDigest,
-        receiptDigest: state === 'released' ? j.tx.receiptDigest : null, effectId: j.tx.preparation.effectId, phase: 'refused', at: AT, detail: { code: 'trust-unavailable' } };
+        receiptDigest: ['authorizing', 'released'].includes(state) ? j.tx.receiptDigest : null, effectId: j.tx.preparation.effectId, phase: 'refused', at: AT, detail: { code: 'trust-unavailable' } };
       const outcome = { code: REFUSAL_OUTCOMES['trust-unavailable'], effectDigest: sha256(canonicalJson(record)) };
       assert.equal(refused.state, 'refused'); assert.deepEqual(refused.outcome, outcome);
       assert.deepEqual(j.recover().outcome, outcome);
@@ -381,4 +381,16 @@ test('a held journal lock refuses both writers instead of waiting', darwin, (t) 
   }
   assert.equal(done.complete().state, 'applied');
   assert.equal(refused.refuse().state, 'refused');
+});
+
+// A refusal binds the saved receipt whenever one is saved: a refused record
+// that nulls it beside a saved receipt is not this request's refusal.
+test('a refused record must bind the saved receipt whenever one is saved', darwin, (t) => {
+  const j = journal(t, 'revision.approve', { upTo: 'receipt', enter: false });
+  const record = { v: 1, kind: 'effect', requestId: j.tx.requestId, payloadDigest: j.tx.preparation.payloadDigest, preparationDigest: j.tx.preparationDigest,
+    receiptDigest: null, effectId: j.tx.preparation.effectId, phase: 'refused', at: AT, detail: { code: 'expired' } };
+  j.write('pre-effect-refused', Buffer.from(canonicalJson(record)));
+  assert.throws(() => j.recover(), { reason: 'owner-journal-corrupt' });
+  j.write('pre-effect-refused', Buffer.from(canonicalJson({ ...record, receiptDigest: j.tx.receiptDigest })));
+  assert.equal(j.recover().state, 'refused');
 });

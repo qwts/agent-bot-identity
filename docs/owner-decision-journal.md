@@ -625,7 +625,9 @@ persisted format.
 - **`refusePreEffect(requestId, {code, at})`** publishes slot 8, the final
   pre-effect refusal.
   - It is legal from `preparing`, `prepared`, `authorizing` or `released`. It
-    binds the checked receipt, or `null` before the successful check.
+    binds the SHA-256 of the saved receipt whenever one is saved, including
+    in `authorizing` before the successful check, and `null` only when none
+    is. The reader requires exactly that.
   - `code` is one of the eight final-refusal reasons. The request is then
     `refused` with the mapped public outcome.
   - It refuses (`conflict`) once the request has entered, is applied, or is
@@ -849,17 +851,50 @@ using the effect-outcomes-v1 mapping, never from the record:
 
 | Phase | Allowed (`state`, `code`, `effectDigest`) |
 | --- | --- |
-| admitted, preparing, prepared | refused with validation-refused, authority-refused or deadline-expired (null); cancelled (null); expired, deadline-expired (null) |
-| authorizing | the same refusals and expiry, but no cancellation |
-| released | none: a refusal or expiry must first be the durable pre-effect refused record |
+| admitted | refused with validation-refused, authority-refused or deadline-expired (null): before a valid preparation, no record exists |
+| preparing, prepared, authorizing | none: from preparing on, a refusal must be proven by the durable `effect.refused` record (phase refused); a missing completion proves nothing |
+| released | indeterminate, effect-uncertain (null): released without effect proof |
 | refused | refused, with the mapped code of the refused record's reason and that record's digest |
 | indeterminate | indeterminate, effect-uncertain (null) |
 | applied | applied, with the completed record's digest |
 
-Storage-refused exists only with its durable refusal digest.
+Storage-refused exists only with its durable refusal digest. The daemon
+never reports `cancelled` or `expired` in slot 14; the broker owns those, and
+a deadline passing is refused / `deadline-expired`. If a broker cancellation
+is ever needed locally, it belongs in separately typed local bookkeeping.
+
+**Local outcome, not a wire result.** Slot 14 is the daemon's local record.
+- A normal broker-reportable result stays bound to the exact original
+  `daemonKey`, `daemonEpoch` and watch binding, with its saved receipt.
+- A local observation under a current epoch greater than or equal to the
+  acceptance's needs explicit projection or reconciliation, never direct
+  forwarding.
+- A corrupt graph with an unrecoverable receipt may keep only a
+  conservative local indeterminate diagnostic. It is never a normal broker
+  result with a null receipt.
+
+The vectors stay draft and claim no wire conformance.
 
 **Vectors.** The draft semantic vectors are
-`tests/fixtures/owner-decisions/local-lifecycle-outcome-v1-draft.json`: 13
-positive and 27 negative. Each carries its context, the exact record bytes,
+`tests/fixtures/owner-decisions/local-lifecycle-outcome-v1-draft.json`: 10
+positive and 34 negative. Each carries its context, the exact record bytes,
 their SHA-256 and the SHA-256 of the slot-14 frame for a fixed namespace and
 request.
+
+## Exact byte input (disabled decoders)
+
+Every owner-decision decoder that takes bytes reads only the input's intrinsic
+bytes, through `identity/owner-decision-bytes.mjs`. It applies to:
+- the frame codec and reconciliation pairs;
+- preparation and effect records;
+- the action decoder;
+- the linked event;
+- the trust observation validator;
+- the slot-14 local outcome.
+
+It checks the view's intrinsic `[[TypedArrayName]]` and byte length, using
+%TypedArray%.prototype getters by `Reflect.apply`, then decodes a private
+bounded copy. An input's own `length`, `byteLength`, `buffer`, `byteOffset`,
+`subarray` or `slice` is never read. So an oversized view that claims to be
+small can't pass a cap, a misleading property can't change what's decoded,
+and a Proxy, a lookalike or another typed array isn't bytes.

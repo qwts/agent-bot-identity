@@ -8,6 +8,7 @@
 // permission to do anything.
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 
 export const EVIDENCE_CAP = 4096;
 const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -51,9 +52,11 @@ export function evidenceError(reason) {
 }
 const fail = (reason = 'owner-evidence-invalid') => { throw evidenceError(reason); };
 
-// Strict canonical JSON within the 4096-byte record cap.
-function decodeCanonical(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length < 1 || bytes.length > EVIDENCE_CAP) fail();
+// Strict canonical JSON within the 4096-byte record cap, decoded from a
+// private copy of the input's intrinsic bytes.
+function decodeCanonical(input) {
+  const bytes = exactBytes(input, { max: EVIDENCE_CAP });
+  if (!bytes) fail();
   let value;
   try {
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -253,7 +256,7 @@ export function completedRecordFor({ entered, action, at, journalSeq, journalRec
 }
 
 // The final pre-effect refusal record for one prepared request. The receipt
-// digest is the checked receipt's, or null before a successful check.
+// digest is the saved receipt's whenever one is saved, or null when none is.
 export function refusedRecordFor({ preparation, preparationDigest, receiptDigest, code, at }) {
   return { v: 1, kind: 'effect', requestId: preparation.requestId, payloadDigest: preparation.payloadDigest, preparationDigest,
     receiptDigest, effectId: preparation.effectId, phase: 'refused', at, detail: { code } };
@@ -266,8 +269,10 @@ export function refusedRecordFor({ preparation, preparationDigest, receiptDigest
 export function bindEffect(r, { phase, preparation, preparationDigest, receiptDigest, action, entered = null }) {
   if (r.phase !== phase || r.requestId !== preparation.requestId || r.payloadDigest !== preparation.payloadDigest
     || r.preparationDigest !== preparationDigest || r.effectId !== preparation.effectId) fail('owner-evidence-binding');
+  // A refusal binds the saved receipt's digest whenever a receipt is saved
+  // (before or after the successful check), and null only when none is.
   if (phase === 'refused') {
-    if (r.receiptDigest !== null && r.receiptDigest !== receiptDigest) fail('owner-evidence-binding');
+    if (r.receiptDigest !== (receiptDigest ?? null)) fail('owner-evidence-binding');
     return r;
   }
   if (r.receiptDigest !== receiptDigest) fail('owner-evidence-binding');

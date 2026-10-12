@@ -21,6 +21,7 @@
 // - `refusalCode`: the refused record's reason (refused only).
 import { canonicalJson } from '../canonical-json.mjs';
 import { REFUSAL_OUTCOMES } from './owner-decision-evidence.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 
 export const LOCAL_OUTCOME_CAP = 4096;
 const KEYS = ['v', 'kind', 'requestId', 'payloadDigest', 'state', 'receiptDigest', 'outcome', 'source', 'reportingDaemonKey', 'reportingDaemonEpoch', 'at'];
@@ -42,18 +43,18 @@ const fail = (reason) => { throw localOutcomeError(reason); };
 // The outcomes the graph allows, as [state, code, effectDigest] triples.
 function allowed({ phase, effectDigest, refusalCode }) {
   switch (phase) {
-    // Before the decision arrives (the broker's preparing or prepared): an
-    // early refusal, a cancellation or an expiry, none proven by an effect
-    // record.
-    case 'admitted':
+    // Before a valid preparation: an early refusal, with no effect record
+    // (a deadline passing is refused / deadline-expired). The daemon never
+    // reports cancelled or expired: the broker owns those.
+    case 'admitted': return EARLY_REFUSALS.map((code) => ['refused', code, null]);
+    // From preparing on, a refusal must be proven by the durable
+    // effect.refused record (phase refused); a missing completion proves
+    // nothing, so these phases report nothing on their own.
     case 'preparing':
-    case 'prepared': return EARLY_REFUSALS.map((code) => ['refused', code, null])
-      .concat([['cancelled', 'cancelled', null], ['expired', 'deadline-expired', null]]);
-    // Presence and receipt arrived, not yet released: no cancellation.
-    case 'authorizing': return EARLY_REFUSALS.map((code) => ['refused', code, null]).concat([['expired', 'deadline-expired', null]]);
-    // Released: any refusal or expiry must first be the durable pre-effect
-    // refused record, so no local outcome stands on its own.
-    case 'released': return [];
+    case 'prepared':
+    case 'authorizing': return [];
+    // Released without effect proof: uncertain, never refused.
+    case 'released': return [['indeterminate', 'effect-uncertain', null]];
     case 'refused': return [['refused', REFUSAL_OUTCOMES[refusalCode], effectDigest]];
     // Entered alone proves neither application nor refusal.
     case 'indeterminate': return [['indeterminate', 'effect-uncertain', null]];
@@ -79,11 +80,13 @@ function checkContext(context) {
 
 // Validates exact slot-14 payload bytes against the request's graph. Returns
 // the record, or throws invalid-owner-decision-evidence with a fixed reason.
-export function validateLocalLifecycleOutcome(bytes, context) {
+export function validateLocalLifecycleOutcome(input, context) {
   checkContext(context);
   let r;
   try {
-    if (!(bytes instanceof Uint8Array) || bytes.length < 1 || bytes.length > LOCAL_OUTCOME_CAP) throw new Error();
+    // A private copy of the input's intrinsic bytes, never its own length.
+    const bytes = exactBytes(input, { max: LOCAL_OUTCOME_CAP });
+    if (!bytes) throw new Error();
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     r = JSON.parse(text);
     if (canonicalJson(r) !== text) throw new Error();

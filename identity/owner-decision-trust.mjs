@@ -19,6 +19,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { createHash, createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 import { vouchDaemonKey, vouchDaemonKeyPin, vouchKeyPath, vouchStateDir } from './vouch.mjs';
 import { presencePinPath } from './owner-presence.mjs';
 
@@ -505,8 +506,10 @@ const pinShape = (pin) => exact(pin, ['alg', 'publicKey', 'keyId']) && pin.alg =
 // (oversize, not-json, non-canonical, keys, kind, digest, range, daemonKey,
 // state-version, none, head, revoked-active, active, alias), exactly as the
 // vectors name them.
-export function validateOwnerDecisionTrustObservation(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length < 1 || bytes.length > TRUST_OBSERVATION_MAX_BYTES) return 'oversize';
+export function validateOwnerDecisionTrustObservation(input) {
+  // A private copy of the input's intrinsic bytes, never its own length.
+  const bytes = exactBytes(input, { max: TRUST_OBSERVATION_MAX_BYTES });
+  if (!bytes) return 'oversize';
   let o;
   try {
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);

@@ -332,6 +332,7 @@
     "identity/worktree-token.mjs": "identity",
     "identity-presence.mjs": "identity",
     "identity/owner-decision-action.mjs": "identity",
+    "identity/owner-decision-bytes.mjs": "identity",
     "identity/owner-decision-evidence.mjs": "identity",
     "identity/owner-decision-journal-frame.mjs": "identity",
     "identity/owner-decision-journal-store.mjs": "identity",

@@ -12,6 +12,7 @@
 // readOwnerDecisionTrust already refuses to be keyd's legacy presence seed.
 import { createHash, createPublicKey } from 'node:crypto';
 import { verifyPresence } from './presence-verifier.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 
 const MAX_BYTES = 32 * 1024;
 const MAX_DEPTH = 8;
@@ -51,8 +52,6 @@ function hasRejectedScalar(text) {
 }
 const matches = (pattern, value) => typeof value === 'string' && pattern.exec(value)?.[0] === value;
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
-const byteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'byteLength').get;
-const copyBytes = Uint8Array.prototype.set;
 
 export function actionError(reason) {
   return Object.assign(new Error('owner decision action refused'), { code: 'invalid-owner-decision', reason });
@@ -101,13 +100,9 @@ function boundedDepth(text) {
   if (depth !== 0 || quoted) fail('owner-action-encoding');
 }
 
+// A private copy of the input's intrinsic bytes (owner-decision-bytes.mjs).
 function snapshot(bytes) {
-  if (!(bytes instanceof Uint8Array)) fail('owner-action-encoding');
-  const length = byteLength.call(bytes);
-  if (length === 0 || length > MAX_BYTES) fail('owner-action-encoding');
-  const copy = new Uint8Array(length);
-  copyBytes.call(copy, bytes);
-  return copy;
+  return exactBytes(bytes, { max: MAX_BYTES }) ?? fail('owner-action-encoding');
 }
 
 function decodeCanonical(bytes) {

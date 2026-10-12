@@ -6,6 +6,7 @@
 // other role (or none) fails its context digest even with valid checksums.
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 
 // Exact daemon u16 IDs, names and payload caps from the producer slot table.
 export const DAEMON_JOURNAL_SLOTS = Object.freeze([
@@ -35,18 +36,11 @@ const matches = (pattern, value) => typeof value === 'string' && pattern.exec(va
 const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const REVISION = /^sha256:[a-f0-9]{64}$/;
-// Typed-array length and copy without calling a subclass's overridden accessors.
-const byteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'byteLength').get;
-const setBytes = Uint8Array.prototype.set;
 const zeros = (bytes) => bytes.every((byte) => byte === 0);
 
+// A private copy of the input's intrinsic bytes (owner-decision-bytes.mjs).
 function snapshot(bytes, max) {
-  if (!(bytes instanceof Uint8Array)) fail();
-  const length = byteLength.call(bytes);
-  if (length < 1 || length > max) fail();
-  const copy = Buffer.alloc(length);
-  setBytes.call(copy, bytes);
-  return copy;
+  return exactBytes(bytes, { max }) ?? fail();
 }
 
 function slotDescriptor(slot) {
