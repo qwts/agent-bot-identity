@@ -25,9 +25,9 @@ import { loadConfig } from '../config.mjs';
 
 // The App slug an unflagged invocation would resolve, or null — the "markers
 // present" test: GH_AGENT_APP, pin, agent account, or detected harness env.
-export function ambientSlug({ env = process.env, cwd = process.cwd(), config, account, git } = {}) {
+export function ambientSlug({ env = process.env, cwd = process.cwd(), config, account, git, detect = true } = {}) {
   const cfg = config ?? loadConfig({ env });
-  return resolveAgentSlug({ env, cwd, config: cfg, account, git });
+  return resolveAgentSlug({ env, cwd, config: cfg, account, git, detect });
 }
 
 export function explicitAppArg(argv = []) {
@@ -57,7 +57,14 @@ export function ownerApprovalRequired({
   // dummy env values alongside an explicit --app must not skip the dialog.
   if (!explicitApp && !env.GH_AGENT_APP
     && env.GH_APP_ID && (env.GH_APP_PRIVATE_KEY || env.GH_APP_PRIVATE_KEY_PATH)) return false;
-  if (ambientSlug({ env, cwd, config: cfg, account: acct, git })) return false;
+  // A stated identity (GH_AGENT_APP, pin, Agent ID) is mintForCaller's to
+  // check against the request, so it skips the dialog here.
+  if (ambientSlug({ env, cwd, config: cfg, account: acct, git, detect: false })) return false;
+  // Harness env markers are not a stated identity: mintForCaller resolves
+  // with detect:false and sees this caller as unmarked, minting whatever
+  // --app names (#1061). They skip the dialog only for the harness's own App.
+  const detected = ambientSlug({ env, cwd, config: cfg, account: acct, git });
+  if (detected && (!explicitApp || explicitApp === detected)) return false;
   return Boolean(explicitApp);
 }
 

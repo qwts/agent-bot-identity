@@ -87,6 +87,20 @@ test('harness env markers that resolve a slug are stated identity — no dialog'
   );
 });
 
+test('harness env markers asking for a different App still require the dialog (#1061)', () => {
+  // The Devin marker resolves you-devin-agent, but mintForCaller ignores
+  // markers and would mint any --app, so a different App is the owner's call.
+  assert.equal(
+    ownerApprovalRequired({
+      argv: ['node', 'mint-token.mjs', '--app', 'you-codex-agent'],
+      env: { ...OWNER, AI_AGENT: 'devin' },
+      cwd: plainCwd(),
+      config: CONFIG,
+    }),
+    true,
+  );
+});
+
 test('an agent marker that resolves no identity still requires the dialog', () => {
   // DEVIN_AGENT says a Devin agent is running but names no App — in the
   // owner's account that is the delegate, and the delegate needs approval.
