@@ -19,7 +19,11 @@ const matches = (pattern, value) => typeof value === 'string' && pattern.exec(va
 // bytes (44 for Ed25519), never of the PEM text.
 // Computed locally, so the broker's value is checked, never trusted.
 export function daemonKeyFromPublicKeyPem(publicKeyPem) {
-  const der = createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });
+  const key = createPublicKey(publicKeyPem);
+  const der = key.export({ type: 'spki', format: 'der' });
+  if (key.asymmetricKeyType !== 'ed25519' || der.length !== 44) {
+    throw Object.assign(new Error('the daemon vouch key is not an Ed25519 public key'), { code: 'owner-watch-identity' });
+  }
   return createHash('sha256').update(der).digest('hex');
 }
 

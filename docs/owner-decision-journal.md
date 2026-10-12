@@ -339,6 +339,10 @@ owner-decision relay intake (agent-comms#77).
   `daemonKey` that isn't ours, also bind nothing but are surfaced as an
   `owner-watch-identity` error in the watch's `lastError`. They are never a
   silent no-op.
+- **First ready only.** The identity binds at the first `ready` of a socket.
+  A repeated `ready` or `{ok:true}` on the same socket never replaces or
+  clears it, and is surfaced as an `owner-watch-identity` error. The expected
+  key must be an Ed25519 vouch key, 44 SPKI DER bytes.
 - **Reconnects.** A reconnect drops the identity, and nothing is replayed.
   `watchIdentity()` exposes the live identity; `daemon status` output is
   unchanged.
@@ -346,5 +350,6 @@ owner-decision relay intake (agent-comms#77).
   `owner-decision` or `owner-decision-cancel` event only when its three
   bindings equal the socket's identity exactly.
 - **Still disabled.** Intake doesn't happen yet. Every owner-decision event is
-  dropped before the wake path, and the daemon doesn't pass its expected
+  dropped before the wake path, and an event that isn't bound to the socket's
+  identity is surfaced as an error, and the daemon doesn't pass its expected
   `daemonKey` yet, so no identity is bound in production.

@@ -51,7 +51,7 @@ import {
   isWindowsSid,
   readWindowsBrokerPin,
 } from './comms-windows.mjs';
-import { OWNER_DECISION_EVENTS, watchIdentityFromReady } from './owner-decision-watch.mjs';
+import { OWNER_DECISION_EVENTS, ownerDecisionIntakeBound, watchIdentityFromReady } from './owner-decision-watch.mjs';
 
 export const COMMS_PROTOCOL_VERSION = 1;
 export const COMMS_MAX_LINE_BYTES = 128 * 1024;
@@ -816,17 +816,24 @@ export function createCommsSupervisor({
 
   async function watchOnce(pair, signal) {
     const client = clientFactory(clientOptions(paths, pair, windowsOptions));
+    // The owner-decision identity binds at the first ready of this socket only.
+    let identityDecided = false;
     await client.stream(
       { op: 'account-watch', auth: { daemon: pair.account, secret: pair.secret } },
       (event) => {
         if (event?.event === 'ready' || event?.ok === true) {
-          watchIdentity = null;
           state.connected = true;
           state.lastError = null;
-          if (event?.event === 'ready') {
+          if (identityDecided) {
+            // A repeat ready never replaces or clears this socket's binding.
+            noteError(Object.assign(new Error('owner-decision watch identity not rebound: repeated ready on the same watch'), { code: 'owner-watch-identity' }));
+          } else {
+            identityDecided = true;
             // A refused identity is surfaced, never silent, and never stops
             // the watch: wake and launch continue without owner intake.
-            try { watchIdentity = watchIdentityFromReady(event, { daemonKey }); } catch (error) { noteError(error); }
+            if (event?.event === 'ready') {
+              try { watchIdentity = watchIdentityFromReady(event, { daemonKey }); } catch (error) { noteError(error); }
+            }
           }
           backoffMs = COMMS_WATCH_MIN_BACKOFF_MS;
           Promise.resolve().then(() => onLaunch?.recover?.(launchPorts(pair))).catch(noteError);
@@ -840,9 +847,14 @@ export function createCommsSupervisor({
           return;
         }
         // Owner-decision relay intake is disabled: every such event is dropped
-        // here, even one ownerDecisionIntakeBound would accept for this
-        // socket's identity, and none reaches the wake path.
-        if (OWNER_DECISION_EVENTS.includes(event?.event)) return;
+        // here and none reaches the wake path. One that is not bound to this
+        // socket's identity is also surfaced, never silently ignored.
+        if (OWNER_DECISION_EVENTS.includes(event?.event)) {
+          if (!ownerDecisionIntakeBound(event, watchIdentity)) {
+            noteError(Object.assign(new Error(`owner-decision event not bound to this watch: ${event.event}`), { code: 'owner-watch-identity' }));
+          }
+          return;
+        }
         if (event?.event !== 'wake') return;
         let wake;
         try {

@@ -11,8 +11,13 @@ const pem = publicKey.export({ type: 'spki', format: 'pem' });
 const daemonKey = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
 const ready = { event: 'ready', watchId: '11111111-1111-4111-8111-111111111111', daemonEpoch: 3, daemonKey };
 
-test('the expected daemonKey is SHA-256 of our own vouch SPKI DER', () => {
+test('the expected daemonKey is SHA-256 of our own Ed25519 vouch SPKI DER, and only of that', () => {
   assert.equal(daemonKeyFromPublicKeyPem(pem), daemonKey);
+  assert.equal(publicKey.export({ type: 'spki', format: 'der' }).length, 44);
+  for (const [type, options] of [['rsa', { modulusLength: 2048 }], ['ec', { namedCurve: 'P-256' }], ['ed448', {}], ['x25519', {}]]) {
+    const other = generateKeyPairSync(type, options).publicKey.export({ type: 'spki', format: 'pem' });
+    assert.throws(() => daemonKeyFromPublicKeyPem(other), { code: 'owner-watch-identity' }, type);
+  }
 });
 
 test('a ready event binds only a complete, well-formed identity carrying our daemonKey', () => {

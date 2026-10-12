@@ -371,48 +371,77 @@ test('account-watch delivers wakes and the default handler answers waiting', asy
   }
 });
 
-// agent-comms#77 C0: the watch identity is recorded per socket at ready, and
-// owner-decision relay events are dropped before the wake path (disabled).
-test('the watch records its owner-decision identity per socket and drops owner-decision events', async () => {
+// agent-comms#77 C0: the watch identity is recorded at the first ready of
+// each socket, owner-decision relay events are dropped before the wake path,
+// and anything that cannot bind is surfaced rather than ignored.
+test('the watch binds its owner-decision identity once per socket and surfaces everything that cannot bind', async () => {
   const world = scratchWorld();
   const credential = { account: 'worker', secret: 's3cret', brokerUid: MY_UID, pairedAt: '2026-10-01T00:00:00.000Z' };
   const { publicKey } = generateKeyPairSync('ed25519');
   const daemonKey = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
-  const identity = { watchId: '11111111-1111-4111-8111-111111111111', daemonEpoch: 2, daemonKey };
-  let connections = 0;
-  let firstSocket = null;
-  const wakes = [];
+  const first = { watchId: '11111111-1111-4111-8111-111111111111', daemonEpoch: 2, daemonKey };
+  const third = { watchId: '22222222-2222-4222-8222-222222222222', daemonEpoch: 3, daemonKey };
+  const sockets = [];
   const broker = await startFakeBroker(world.socket, (line, { send, socket }) => {
-    if (line.op !== 'account-watch') return;
-    connections += 1;
-    if (connections === 1) {
-      firstSocket = socket;
-      send({ event: 'ready', ...identity });
-      for (const event of ['owner-decision-prepare', 'owner-decision', 'owner-decision-cancel']) {
-        send({ event, requestId: '33333333-3333-4333-8333-333333333333', agentId: 'agent_11111111-1111-4111-8111-111111111111',
-          messageIds: ['x'], ...identity });
-      }
-      send({ event: 'wake', agentId: 'agent_11111111-1111-4111-8111-111111111111', messageIds: ['m1'] });
-    } else send({ event: 'ready', ...identity, daemonKey: 'f'.repeat(64) });
+    if (line.op === 'account-watch') sockets.push({ send, socket });
   });
+  const wakes = [];
+  const atSleep = [];
   const supervisor = createCommsSupervisor({
     env: world.env, home: '/nonexistent', credential, paths: world.paths, daemonKey,
-    sleepImpl: async () => {},
+    // Called after a socket ends and before the next connect.
+    sleepImpl: async () => { atSleep.push(supervisor.watchIdentity()); },
     onWake: async (wake) => { wakes.push(wake.messageIds); },
   });
+  const lastError = () => supervisor.getState().lastError;
+  const owner = (event, identity) => ({ event, requestId: '33333333-3333-4333-8333-333333333333',
+    agentId: 'agent_11111111-1111-4111-8111-111111111111', messageIds: ['x'], ...identity });
   try {
     supervisor.start();
-    await waitFor(() => wakes.length === 1);
-    // Bound at ready; the owner-decision events never reached the wake path.
-    assert.deepEqual(supervisor.watchIdentity(), identity);
-    assert.deepEqual(wakes, [['m1']]);
+    await waitFor(() => sockets.length === 1);
+    const one = sockets[0];
+    one.send({ event: 'ready', ...first });
+    await waitFor(() => supervisor.watchIdentity() !== null);
+    assert.deepEqual(supervisor.watchIdentity(), first);
     assert.equal(Object.hasOwn(supervisor.getState(), 'watchIdentity'), false);
-    // A new socket starts over, and a foreign daemonKey binds nothing and is
-    // surfaced as a diagnosable error while the watch stays connected.
-    firstSocket.destroy();
-    await waitFor(() => connections === 2 && supervisor.getState().connected);
+
+    // Bound owner-decision events are dropped quietly and never reach the wake path.
+    for (const event of ['owner-decision-prepare', 'owner-decision', 'owner-decision-cancel']) one.send(owner(event, first));
+    one.send({ event: 'wake', agentId: 'agent_11111111-1111-4111-8111-111111111111', messageIds: ['m1'] });
+    await waitFor(() => wakes.length === 1);
+    assert.deepEqual(wakes, [['m1']]);
+    assert.equal(lastError(), null);
+
+    // An unbound one is dropped too, and surfaced.
+    one.send(owner('owner-decision', third));
+    await waitFor(() => lastError() !== null);
+    assert.match(lastError(), /^owner-watch-identity: owner-decision event not bound/);
+
+    // A repeat ready on the same socket never replaces the binding.
+    one.send({ event: 'ready', ...third });
+    await waitFor(() => /repeated ready/.test(lastError() ?? ''));
+    assert.deepEqual(supervisor.watchIdentity(), first);
+    one.send({ ok: true });
+    await waitFor(() => /repeated ready/.test(lastError() ?? ''));
+    assert.deepEqual(supervisor.watchIdentity(), first);
+
+    // The binding ends with its socket.
+    one.socket.destroy();
+    await waitFor(() => atSleep.length === 1);
+    assert.equal(atSleep[0], null);
+
+    // A foreign daemonKey binds nothing and is surfaced; the watch stays up.
+    await waitFor(() => sockets.length === 2);
+    sockets[1].send({ event: 'ready', ...third, daemonKey: 'f'.repeat(64) });
+    await waitFor(() => supervisor.getState().connected && /does not match/.test(lastError() ?? ''));
     assert.equal(supervisor.watchIdentity(), null);
-    assert.match(supervisor.getState().lastError, /^owner-watch-identity: .*does not match/);
+    sockets[1].socket.destroy();
+
+    // A reconnect with a valid new identity binds that one.
+    await waitFor(() => sockets.length === 3);
+    sockets[2].send({ event: 'ready', ...third });
+    await waitFor(() => supervisor.watchIdentity() !== null);
+    assert.deepEqual(supervisor.watchIdentity(), third);
   } finally {
     supervisor.stop();
     await broker.close();
