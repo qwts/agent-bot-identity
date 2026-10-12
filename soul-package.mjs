@@ -9,7 +9,7 @@ import { ACP_SPAWN_REGISTRY } from './acp-registry.mjs';
 import { canonicalJson } from './canonical-json.mjs';
 import { CREDENTIAL_STORES } from './identity-format.mjs';
 import { RUNTIME_NAMES, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity } from './runtime-catalog.mjs';
-import { buildHarnessFiles, envProblem, PERMISSION_RULE } from './soul-builder.mjs';
+import { buildHarnessFiles, envProblem, PERMISSION_RULE, sandboxProblem } from './soul-builder.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS, isGeneratedPath } from './soul-harness-contract.mjs';
 import { normalizeProvider, validateSecretsDeclaration } from './soul-providers.mjs';
 export { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, PACKAGE_IGNORE_LIST, PRIOR_PACKAGE_IGNORE_LISTS };
@@ -105,6 +105,9 @@ function validateHarnessSettings(settings, path, harness = null, secrets = {}) {
         const problem = envProblem(name, entry);
         if (problem) throw new Error(`${field}.${name} ${problem}`);
       }
+    } else if (key === 'sandbox') {
+      const problem = sandboxProblem(value);
+      if (problem) throw new Error(`${problem[0] === null ? field : `${field}.${problem[0]}`} ${problem[1]}`);
     } else if (key === 'permissions') {
       if (!object(value)) throw new Error(`${field} must be an object with allow and/or deny rule lists`);
       for (const [effect, rules] of Object.entries(value)) {

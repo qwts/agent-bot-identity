@@ -52,7 +52,7 @@ A native consumer receives no duplicate configuration folder.
 | Cursor | Native `AGENTS.md` | Uses shared `.claude/skills/`; no duplicate skills | `.cursor/mcp.json` | `.cursor/agents/<name>.md` | Won't do: replaced by skills upstream | `.cursor/hooks.json` |
 | Copilot CLI | Native instruction support | Uses shared `.claude/skills/`; `.github/` only for hooks and agents | Shared `.mcp.json` | `.github/agents/<name>.agent.md` | Shared `.claude/commands/<name>.md` | `.github/hooks/agent-bot-soul.json` |
 | Devin CLI | Claude-compatible consumer | Shared Claude skills; `.devin/` only for agents | Shared `.mcp.json` | `.devin/agents/<name>.md` | Shared `.claude/commands/<name>.md` (imported as skills) | Shared `.claude/settings.json` |
-| Muse | Won't do: no verified definition adapter | Won't do | Won't do | Won't do | Won't do | Won't do |
+| Muse | Won't do: no verified definition adapter | Won't do | Won't do | Won't do | Won't do | Won't do | Won't do |
 | Kiro | Native `AGENTS.md` | Uses shared `.claude/skills/` | `.kiro/settings/mcp.json` | `.kiro/agents/<name>.md` | Won't do: format undocumented upstream | Unsupported |
 | Qwen Code | Native `AGENTS.md` | `.qwen/skills/<name>/` (marked files only) | `.qwen/settings.json` | `.qwen/agents/<name>.md` | `.qwen/commands/<name>.md` | `.qwen/settings.json` `hooks` |
 
@@ -413,7 +413,7 @@ per-harness overrides in the top-level `harnesses` object:
 Both objects are optional. Each settings object accepts only `model` (a
 nonempty string), `reasoningEffort` (`low`, `medium`, `high`),
 `permissionMode` (`safe`, `autopilot`, the same mode names as `soul mode`),
-`env`, and `permissions` (both below). A per-harness override also accepts
+`env`, `permissions` (both below), and `sandbox` (Codex only, below). A per-harness override also accepts
 `provider` ([soul-providers.md](soul-providers.md)) and `install`
 ([soul-runtimes.md](soul-runtimes.md)); neither is accepted under the shared
 `harness`. Overrides replace only declared fields; omitted fields inherit
@@ -426,14 +426,14 @@ as unsupported. Unknown names, unknown settings keys,
 and invalid values fail package validation with their full declaration path.
 Other top-level manifest extensions retain their existing opaque behavior.
 
-| Harness / file | Model | Reasoning effort | Permission mode: safe / autopilot | Env | Allow / deny rules | Provider |
-| --- | --- | --- | --- | --- | --- | --- |
-| Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` | `env` | `permissions.allow` / `permissions.deny` | `env.ANTHROPIC_BASE_URL` (endpoint only) |
-| Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported | `model_provider` + `[model_providers.<id>]` |
-| Gemini / `.gemini/settings.json` | `model.name` | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
-| OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` | `provider.<id>` with `{env:KEY}` |
-| Cursor, Copilot, Devin, Kiro, Qwen Code | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
-| Muse | Won't do: no verified definition adapter | Won't do | Won't do | Won't do | Won't do | Won't do |
+| Harness / file | Model | Reasoning effort | Permission mode: safe / autopilot | Env | Allow / deny rules | Provider | Sandbox |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code / `.claude/settings.json` | `model` | `effortLevel` | `permissions.defaultMode`: `default` / `bypassPermissions` | `env` | `permissions.allow` / `permissions.deny` | `env.ANTHROPIC_BASE_URL` (endpoint only) | Unsupported |
+| Codex / `.codex/config.toml` | `model` | `model_reasoning_effort` | `approval_policy`: `on-request` / `never`; `sandbox_mode`: `workspace-write` / `danger-full-access` | `[shell_environment_policy.set]` | Unsupported | `model_provider` + `[model_providers.<id>]` | `[sandbox_workspace_write]` |
+| Gemini / `.gemini/settings.json` | `model.name` | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| OpenCode / `opencode.json` | `model` | Unsupported | `permission.edit` and `permission.bash`: `ask` / `allow` | Unsupported | `Bash`, `Bash(…)` → `permission.bash`; `Edit` / `Write` / `MultiEdit` → `permission.edit` | `provider.<id>` with `{env:KEY}` | Unsupported |
+| Cursor, Copilot, Devin, Kiro, Qwen Code | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
+| Muse | Won't do: no verified definition adapter | Won't do | Won't do | Won't do | Won't do | Won't do | Won't do |
 
 `tests/soul-builder-settings-matrix.test.mjs` keeps this table in step with
 the builder: every harness in the report has one row, and a cell says
@@ -555,9 +555,45 @@ The report adds `env` / `permissions` to `settings.received` and
 maps), and `unsupported.permissions`: `[{effect, rule}]` for each rule a harness
 did not render, allow before deny in declared order.
 
-Additional sandbox controls and other native settings are later slices; hooks
-are declared as files, below. Existing authored values for those keys are
+Other harnesses' sandbox controls and other native settings are later
+slices; hooks are declared as files, below. Existing authored values for those keys are
 preserved during a merge.
+
+### Codex sandbox (#379)
+
+```json
+{ "harnesses": { "codex": { "sandbox": {
+  "networkAccess": false, "writableRoots": ["/Users/me/scratch"],
+  "excludeTmpdirEnvVar": false, "excludeSlashTmp": false } } } }
+```
+
+`sandbox` sets Codex's workspace-write sandbox, the
+`[sandbox_workspace_write]` table in `.codex/config.toml` (owner decision,
+2026-10-11). The keys are the four fields of Codex's `SandboxWorkspaceWrite`
+at rust-v0.157.0
+([`types.rs`](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/config/src/types.rs#L1060-L1071)):
+`networkAccess` → `network_access`, `writableRoots` → `writable_roots`,
+`excludeTmpdirEnvVar` → `exclude_tmpdir_env_var`, `excludeSlashTmp` →
+`exclude_slash_tmp`. The booleans must be `true` or `false`; `writableRoots`
+is a list of distinct absolute paths, because Codex reads them as
+`AbsolutePathBuf`, so a package that names one is tied to that machine's
+layout. Any other key is refused. Codex applies the table only in
+`workspace-write` mode
+([`config_toml.rs`](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/config/src/config_toml.rs#L822-L845)),
+which is what `permissionMode: safe` renders. An override's `sandbox`
+replaces the shared one whole. Every other harness reports `sandbox` as
+unsupported.
+
+On merge, the declared keys replace their own names in an authored
+`[sandbox_workspace_write]` table, which is rebuilt at the end of the file;
+other authored keys there stay. A root or inline `sandbox_workspace_write`
+or a nested `[sandbox_workspace_write.*]` table is refused.
+
+A direct open in the soul's home reads the table as rendered. A daemon Codex
+turn still runs in ACP `workspace-write` with network access on
+(`CODEX_DAEMON_CONFIG` in `acp-registry.mjs`, so agent-comms is reachable).
+Whether it also reads the soul's project file depends on its Codex tool home,
+which #617 owns.
 
 ### Settings precedence
 
