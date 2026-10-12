@@ -4,12 +4,11 @@
 // user entry points. The CLI uses the owner gate (owner-gate.mjs, #293).
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, renameSync, rmSync, rmdirSync, writeFileSync, chmodSync } from 'node:fs';
+  readdirSync, renameSync, rmSync, rmdirSync, writeFileSync, chmodSync, closeSync, constants, fsyncSync, openSync } from 'node:fs';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
-import { recordAgentPackageRevision } from './agent-identity.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
@@ -53,21 +52,55 @@ function storedPackage(root, revision) {
   if (validateSoulPackage(file).revision !== revision) throw new Error('stored revision hash mismatch');
   return file;
 }
-function locked(id, options, operation) {
+// All local revision writers enter one synchronous critical section. Network
+// authorization and other asynchronous orchestration must finish before it.
+function mutateRevision(id, options, operation, expectedParent) {
   const root = rootFor(id, options);
+  const existed = existsSync(root);
   mkdirSync(root, { recursive: true, mode: 0o700 });
+  if (!existed) {
+    syncDirectory(dirname(root));
+    syncDirectory(dirname(dirname(root)));
+  }
   return withLock(join(root, '.lock'), 'soul revisions', () => {
     active(id, options);
+    if (expectedParent !== undefined) {
+      if (typeof expectedParent !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(expectedParent)) throw new Error('expectedParent must be a revision');
+      assertParent(root, expectedParent);
+    }
     return operation(root);
   }, { keepLiveOwners: true });
+}
+function syncDirectory(directory) {
+  // Windows local commands retain their existing filesystem semantics; they
+  // cannot claim the POSIX directory durability needed by a future adapter.
+  if (process.platform === 'win32') return;
+  const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+function syncPackageTree(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const file = join(directory, entry.name);
+    if (entry.isDirectory()) syncPackageTree(file);
+    else if (entry.isFile()) {
+      const fd = openSync(file, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0));
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+    } else throw new Error('stored revision contains an unsupported entry');
+  }
+  syncDirectory(directory);
 }
 function append(root, event, options) {
   const record = { schemaVersion: 1, ...event, at: (options.now ?? (() => new Date()))().toISOString() };
   const temp = join(root, `.${randomUUID()}.tmp`);
   try {
-    writeFileSync(temp, JSON.stringify(record) + '\n', { flag: 'wx', mode: 0o600 });
+    const fd = openSync(temp, 'wx', 0o600);
+    try { writeFileSync(fd, JSON.stringify(record) + '\n'); fsyncSync(fd); }
+    finally { closeSync(fd); }
     // Publish complete JSON exclusively; no partially written journal records.
     linkSync(temp, join(root, `${String(events(root).length).padStart(10, '0')}.json`));
+    // A failed directory sync is an uncertain publication, never success or
+    // permission to mirror/apply files. Keep the complete exclusive record.
+    syncDirectory(root);
   } finally { rmSync(temp, { force: true }); }
   if (record.kind === 'revision') mirrorRevision(basename(root), record, options);
   return record;
@@ -110,7 +143,13 @@ function snapshot(root, source, parentRevision, { preserve = false } = {}) {
     const destination = objectPath(root, manifest.revision);
     if (existsSync(destination)) {
       if (validateSoulPackage(destination).revision !== manifest.revision) throw new Error('stored revision is corrupt');
-    } else renameSync(tree, destination);
+      syncPackageTree(destination);
+    } else {
+      syncPackageTree(tree);
+      renameSync(tree, destination);
+    }
+    syncDirectory(join(root, 'objects'));
+    syncDirectory(root);
     return { revision: manifest.revision, parentRevision: manifest.parentRevision, packagePath: destination };
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
@@ -144,7 +183,7 @@ export function revisionPackagePath(id, revision, options = {}) {
 }
 export function adoptSoulPackage(id, packagePath, { reason = 'Adopt starting package', ...options } = {}) {
   text(reason, 'reason');
-  return locked(id, options, (root) => {
+  return mutateRevision(id, options, (root) => {
     if (head(root)) throw new Error('soul already has a revision chain');
     const identity = active(id, options);
     const stored = snapshot(root, packagePath, null, { preserve: true });
@@ -159,7 +198,7 @@ export function adoptSoulPackage(id, packagePath, { reason = 'Adopt starting pac
 export function createRevisionAppender(packagePath, { reason, author = 'user', ...options } = {}) {
   text(reason, 'reason');
   if (author !== 'user') throw new Error('soul changes must use proposeSoulRevision');
-  return ({ agentId, revision }) => locked(agentId, options, (root) => {
+  return ({ agentId, revision }) => mutateRevision(agentId, options, (root) => {
     const validated = validateSoulPackage(packagePath);
     if (validated.revision !== revision) throw new Error('revision changed before append');
     assertParent(root, validated.parentRevision);
@@ -170,29 +209,25 @@ export function createRevisionAppender(packagePath, { reason, author = 'user', .
 }
 export async function editSoulRevision(id, packagePath, { reason, expectedParent, apply = false, ...options } = {}) {
   text(reason, 'reason');
-  if (apply) return locked(id, options, (root) => {
-    if (expectedParent !== undefined) assertParent(root, expectedParent);
-    const directory = resolve(soulDirectory(id, { ...options, readOnly: true }));
-    assertApplyPath(resolve(packagePath));
-    assertApplyPath(directory);
+  return mutateRevision(id, options, (root) => {
+    let directory;
+    if (apply) {
+      directory = resolve(soulDirectory(id, { ...options, readOnly: true }));
+      assertApplyPath(resolve(packagePath));
+      assertApplyPath(directory);
+    }
     const stored = snapshot(root, packagePath, requireHead(root).revision);
     // Preflight the entire destination before recording or touching any file.
-    const publish = prepareApply(directory, stored, resolve(packagePath) === directory);
+    const publish = apply ? prepareApply(directory, stored, resolve(packagePath) === directory) : null;
     assertParent(root, stored.parentRevision);
     const record = append(root, { kind: 'revision', revision: stored.revision,
       parentRevision: stored.parentRevision, author: 'user', reason, ...authorized(options) }, options);
-    // withLock is synchronous: recording and applying must not cross an await.
+    // Both record-only and applying edits stay within this same lock; neither
+    // invokes an async append port or reacquires the revision lock.
     if (requireHead(root).revision !== stored.revision) throw new Error('stale apply: recorded head moved');
-    return { ...record, applied: true, changed: publish(), ...skillReport(root, stored.parentRevision, stored.packagePath) };
-  });
-  const stored = locked(id, options, (root) => {
-    if (expectedParent !== undefined) assertParent(root, expectedParent);
-    return snapshot(root, packagePath, requireHead(root).revision);
-  });
-  await recordAgentPackageRevision(id, computePackageRevision(stored.packagePath), { ...options,
-    appendRevision: createRevisionAppender(stored.packagePath, { ...options, reason }) });
-  return { ...revisionHistory(id, options).find((record) => record.revision === stored.revision),
-    ...skillReport(rootFor(id, options), stored.parentRevision, stored.packagePath) };
+    return { ...record, ...(apply ? { applied: true, changed: publish() } : {}),
+      ...skillReport(root, stored.parentRevision, stored.packagePath) };
+  }, expectedParent);
 }
 
 function assertApplyPath(file) {
@@ -332,9 +367,8 @@ export function listSoulProposals(id, options = {}) {
 }
 export function proposeSoulRevision(id, packagePath, { reason, expectedParent, ...options } = {}) {
   text(reason, 'reason');
-  return locked(id, options, (root) => {
+  return mutateRevision(id, options, (root) => {
     const current = requireHead(root);
-    if (expectedParent !== undefined) assertParent(root, expectedParent);
     const before = objectPath(root, current.revision);
     const policy = policyFor(before);
     const stored = snapshot(root, packagePath, current.revision);
@@ -348,21 +382,23 @@ export function proposeSoulRevision(id, packagePath, { reason, expectedParent, .
         author: 'soul', reason, proposalId: proposal.proposalId, approval: 'auto' }, options);
     }
     return listSoulProposals(id, options).find((item) => item.proposalId === proposal.proposalId);
-  });
+  }, expectedParent);
 }
-export function decideSoulProposal(id, proposalId, decision, { reason, ...options } = {}) {
+export function decideSoulProposal(id, proposalId, decision, { reason, expectedParent, ...options } = {}) {
   if (!['approve', 'reject'].includes(decision)) throw new Error('decision must be approve or reject');
   text(reason, 'reason');
-  return locked(id, options, (root) => {
+  return mutateRevision(id, options, (root) => {
     const proposal = listSoulProposals(id, options).find((item) => item.proposalId === proposalId);
     if (!proposal || proposal.status !== 'pending') throw new Error('proposal is not pending');
+    if (expectedParent !== undefined && proposal.parentRevision !== expectedParent) throw new Error('stale proposal: expectedParent does not match its base');
     if (decision === 'reject') return append(root, { kind: 'decision', proposalId, author: 'user', reason, ...authorized(options) }, options);
     assertParent(root, proposal.parentRevision);
-    storedPackage(root, proposal.revision);
+    syncPackageTree(storedPackage(root, proposal.revision));
+    syncDirectory(join(root, 'objects'));
     return append(root, { kind: 'revision', revision: proposal.revision, parentRevision: proposal.parentRevision,
       author: 'soul', reason: proposal.reason, proposalId, approval: 'user', approvedBy: 'user', approvalReason: reason,
       ...authorized(options) }, options);
-  });
+  }, expectedParent);
 }
 function safeRelative(value) {
   text(value, 'relative path');

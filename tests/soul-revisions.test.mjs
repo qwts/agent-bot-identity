@@ -341,3 +341,34 @@ test('v2 snapshots and proposal diffs exclude working state but include marked h
   for (const path of markedFiles) assert.equal(readFileSync(join(stored, path), 'utf8'), `${GENERATED_HARNESS_MARKER}\noutput`);
   assert.equal(existsSync(join(f.packagePath, '.soul-state/cache')), true, 'source working state survives');
 });
+
+
+test('typed expectedParent binds approve and reject to the locked head and proposal base', async (t) => {
+  for (const decision of ['approve', 'reject']) await t.test(decision, async (t) => {
+    const f = fixture(t); update(f, 'AGENTS.md', 'Proposed'); const proposal = propose(f);
+    const options = { ...f.options, reason: 'Reviewed', expectedParent: f.initial.revision };
+    for (const invalid of [null, '', 1, false, 'sha256:INVALID']) {
+      assert.throws(() => decideSoulProposal(f.id, proposal.proposalId, decision, { ...options, expectedParent: invalid }), /expectedParent/);
+      assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+    }
+    update(f, 'AGENTS.md', 'Local writer won');
+    const winner = await editSoulRevision(f.id, f.packagePath, { ...f.options, reason: 'Winner' });
+    assert.throws(() => decideSoulProposal(f.id, proposal.proposalId, decision, options), /stale/);
+    // A matching current head cannot disguise a proposal with a different base.
+    assert.throws(() => decideSoulProposal(f.id, proposal.proposalId, decision, { ...options, expectedParent: winner.revision }), /stale/);
+    assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
+    assert.equal(revisionHistory(f.id, f.options).at(-1).revision, winner.revision);
+    if (decision === 'reject') decide(f, proposal, 'reject'); // Legacy stale cleanup remains supported.
+  });
+});
+
+test('typed expectedParent is checked for both edit modes and proposals without null coercion', async (t) => {
+  const f = fixture(t); update(f, 'AGENTS.md', 'Changed');
+  for (const invalid of [null, '', 1, false]) {
+    for (const apply of [false, true]) {
+      await assert.rejects(editSoulRevision(f.id, f.packagePath, { ...f.options, reason: 'Edit', apply, expectedParent: invalid }), /expectedParent/);
+    }
+    assert.throws(() => propose(f, { expectedParent: invalid }), /expectedParent/);
+  }
+  assert.equal(revisionHistory(f.id, f.options).length, 1);
+});

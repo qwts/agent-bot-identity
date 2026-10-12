@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
   readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -272,4 +272,98 @@ test('application uses recorded bytes even when the private copy changes after s
   } });
   assert.equal(readFileSync(join(f.directory, 'AGENTS.md'), 'utf8'), 'Reviewed bytes');
   assert.equal(validateSoulPackage(f.directory).revision, record.revision);
+});
+
+
+test('record-only edit records under the shared revision lock without applying files', async (t) => {
+  const f = fixture(t), journal = join(f.options.stateDir, 'soul-revisions', f.id);
+  writeFileSync(join(f.copy, 'AGENTS.md'), 'Record-only change');
+  const original = fs.linkSync;
+  let observed = false;
+  try {
+    fs.linkSync = (...args) => {
+      if (args[1].startsWith(journal)) { observed = true; assert(existsSync(join(journal, '.lock', 'owner'))); }
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    const result = await editSoulRevision(f.id, f.copy, { ...f.options, reason: 'Record', apply: false, expectedParent: f.initial });
+    assert.equal(result.parentRevision, f.initial); assert(observed);
+  } finally { fs.linkSync = original; syncBuiltinESMExports(); }
+  assert(!existsSync(join(journal, '.lock')));
+  assert.equal(readFileSync(join(f.directory, 'AGENTS.md'), 'utf8'), 'Original instructions\n');
+});
+
+const posix = { skip: process.platform === 'win32' ? 'requires POSIX directory fsync' : false };
+test('snapshot and journal sync failures never acknowledge or begin working-file application', posix, async (t) => {
+  for (const boundary of ['object-file', 'journal-file', 'journal-directory']) await t.test(boundary, async (t) => {
+    const f = fixture(t), before = definition(tree(f.directory));
+    const journal = join(f.options.stateDir, 'soul-revisions', f.id);
+    const mirror = join(f.directory, '.soul-state', 'runs', 'revisions.jsonl');
+    const mirrorBefore = existsSync(mirror) ? readFileSync(mirror) : null;
+    writeFileSync(join(f.copy, 'AGENTS.md'), 'Must not apply');
+    const original = { open: fs.openSync, close: fs.closeSync, sync: fs.fsyncSync, link: fs.linkSync };
+    const paths = new Map(); let published = false, injected = false;
+    try {
+      fs.openSync = (file, ...args) => { const fd = original.open(file, ...args); paths.set(fd, String(file)); return fd; };
+      fs.closeSync = (fd) => { paths.delete(fd); return original.close(fd); };
+      fs.linkSync = (...args) => { const result = original.link(...args); if (args[1].startsWith(journal)) published = true; return result; };
+      fs.fsyncSync = (fd) => {
+        const file = paths.get(fd) ?? '';
+        const fails = boundary === 'object-file' ? file.includes('/package.soul/')
+          : boundary === 'journal-file' ? file.startsWith(`${journal}/.`) && file.endsWith('.tmp')
+            : published && file === journal;
+        if (fails) { injected = true; throw Object.assign(new Error('injected sync failure'), { code: 'EIO' }); }
+        return original.sync(fd);
+      };
+      syncBuiltinESMExports();
+      await assert.rejects(editSoulRevision(f.id, f.copy, { ...f.options, reason: 'No ack', apply: true }), { code: 'EIO' });
+    } finally {
+      fs.openSync = original.open; fs.closeSync = original.close; fs.fsyncSync = original.sync; fs.linkSync = original.link; syncBuiltinESMExports();
+    }
+    assert(injected); assert.deepEqual(definition(tree(f.directory)), before);
+    assert.deepEqual(existsSync(mirror) ? readFileSync(mirror) : null, mirrorBefore);
+    assert(!existsSync(join(journal, '.lock')));
+    assert.equal(revisionHistory(f.id, f.options).length, boundary === 'journal-directory' ? 2 : 1);
+    // Complete published-but-uncertain JSON is retained; no partial record and no mirror/apply acknowledgment.
+    for (const name of readdirSync(journal).filter(name => /^\d{10}\.json$/.test(name))) JSON.parse(readFileSync(join(journal, name), 'utf8'));
+    assert(!readdirSync(journal).some(name => name.endsWith('.tmp')));
+  });
+});
+
+test('independent apply and record-only writers with one expected head have exactly one winner', async (t) => {
+  const f = fixture(t), second = join(f.home, 'second.soul'); cpSync(f.copy, second, { recursive: true, verbatimSymlinks: true });
+  writeFileSync(join(f.copy, 'AGENTS.md'), 'Applying candidate');
+  writeFileSync(join(second, 'AGENTS.md'), 'Record-only candidate');
+  const script = `import { editSoulRevision } from './soul-revisions.mjs';
+    const x=JSON.parse(process.argv[1]);
+    try { const result=await editSoulRevision(x.id,x.input,{...x.options,apply:x.apply,expectedParent:x.expectedParent,reason:'Concurrent'}); console.log(JSON.stringify(result)); }
+    catch(e) { console.error(e.message); process.exitCode=1; }`;
+  const run = (input, apply) => new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, JSON.stringify({ id: f.id, input, apply, options: f.options, expectedParent: f.initial })],
+      { cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), error;
+    const exited = new Promise(done => child.once('close', done));
+    const timer = setTimeout(() => { error = 'child exceeded 15-second deadline'; child.kill('SIGKILL'); }, 15_000);
+    const collect = (previous, chunk) => {
+      const combined = Buffer.concat([previous, chunk]);
+      if (combined.length > 16 * 1024) { error = 'child exceeded bounded output'; child.kill('SIGKILL'); }
+      return combined.subarray(0, 16 * 1024);
+    };
+    child.stdout.on('data', x => { stdout = collect(stdout, x); });
+    child.stderr.on('data', x => { stderr = collect(stderr, x); });
+    child.on('error', e => { error = e.message; });
+    child.on('close', code => { clearTimeout(timer); resolve({ code, stdout: stdout.toString(), stderr: stderr.toString(), apply, error }); });
+    t.after(async () => {
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited;
+    });
+  });
+  const results = await Promise.all([run(f.copy, true), run(second, false)]);
+  assert(results.every(x => x.error === undefined), JSON.stringify(results));
+  const winners = results.filter(x => x.code === 0), losers = results.filter(x => x.code !== 0);
+  assert.equal(winners.length, 1, JSON.stringify(results)); assert.equal(losers.length, 1); assert.match(losers[0].stderr, /stale/);
+  const winner=JSON.parse(winners[0].stdout), history=revisionHistory(f.id, f.options);
+  assert.equal(history.length, 2); assert.equal(history[1].parentRevision, f.initial); assert.equal(history[1].revision, winner.revision);
+  assert.equal(readFileSync(join(f.directory, 'AGENTS.md'), 'utf8'), winners[0].apply ? 'Applying candidate' : 'Original instructions\n');
 });
