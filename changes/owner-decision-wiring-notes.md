@@ -1,0 +1,1 @@
+- Document two owner-decision items to settle before wiring: one consistent state tree across the identity, census, comms, trust and journal paths, and custody for the comms pairing credential read (agent-comms#77).
