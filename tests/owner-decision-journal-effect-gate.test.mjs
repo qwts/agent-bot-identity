@@ -50,7 +50,7 @@ function d1(broker, payload) {
 // the enrolled presence signer and broker (a forger's keys).
 function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce = nonceOf(1), storedP1Nonce = nonce, upTo = 'successful-check',
   receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token, shared,
-  p1Key, d1Key } = {}) {
+  p1Key, d1Key, d1Fields = {} } = {}) {
   const base = shared?.base ?? fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-gate-')));
   if (!shared) t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
@@ -76,7 +76,7 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   const presence = p1(p1Key ?? signer, { actionText, nonce: storedP1Nonce });
   const receipt = Buffer.from(receiptToken(d1(d1Key ?? broker, { v: 1, aud: 'agent-comms-owner-decision', ...receiptKeys(broker, signer), requestId,
     principal, account, soul, operation: 'revision.approve', payloadDigest: acceptance.payloadDigest, nonce,
-    presenceDigest: sha256(Buffer.from(presence, 'ascii')), iat: 2_000_000_001, exp: 2_000_000_060 })), 'ascii');
+    presenceDigest: sha256(Buffer.from(presence, 'ascii')), iat: 2_000_000_001, exp: 2_000_000_060, ...d1Fields })), 'ascii');
   const receiptDigest = sha256(receipt);
   const check = { requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, daemonKey: acceptance.daemonKey, daemonEpoch: 1,
     watchId: acceptance.watchId, state: 'released', mayApply: true, exp: 2_000_000_060 };
@@ -343,4 +343,44 @@ test('intake under stale pins after a rotation releases, but the gate with real 
       assert.equal(r.recover().state, 'released');
     });
   }
+});
+
+// The gate re-verifies the stored d1 itself, not only the key IDs it names: a
+// receipt planted straight into the journal (never through intake) refuses.
+test('a planted d1 that names the real key IDs refuses at entry and writes nothing', darwin, async (t) => {
+  const garbage = (token) => `${token.split('.').slice(0, 2).join('.')}.${Buffer.alloc(64, 7).toString('base64url')}`;
+  const cases = [
+    ['a garbage signature', { receiptToken: garbage }],
+    ['a forger\'s signature', { d1Key: generateKeyPairSync('ed25519') }],
+    ['another challenge (nonce)', { d1Fields: { nonce: nonceOf(9) } }],
+    ['another request', { d1Fields: { requestId: '33333333-3333-4333-8333-333333333333' } }],
+    ['another p1', { d1Fields: { presenceDigest: 'e'.repeat(64) } }],
+    ['outliving its challenge', { d1Fields: { exp: 2_000_000_200, iat: 2_000_000_150 } }],
+  ];
+  for (const [name, options] of cases) {
+    await t.test(name, (tt) => {
+      const r = released(tt, options);
+      const refused = r.enter();
+      assert.deepEqual(refused, { state: 'refused', reason: 'validation-failed', code: 'storage-failed' });
+      assert.equal(r.recover().state, 'released');
+    });
+  }
+});
+
+// The d1 is checked as issued (its own iat as the verifier's clock), so entry
+// stays bounded only by the p1 on the daemon clock: past the receipt's exp but
+// inside the p1's freshness, a valid flow still enters.
+test('re-verifying the d1 does not tighten entry beyond the p1', darwin, async (t) => {
+  await t.test('after the receipt expired, within the p1 skew', (tt) => {
+    const r = released(tt);
+    assert.equal(r.enter({ nowMilliseconds: (2_000_000_060 + 20) * 1000 }).state, 'entered');
+  });
+  await t.test('a receipt expiring before its p1', (tt) => {
+    const r = released(tt, { d1Fields: { exp: 2_000_000_030 } });
+    assert.equal(r.enter({ nowMilliseconds: 2_000_000_045_000 }).state, 'entered');
+  });
+  await t.test('the p1 still bounds entry', (tt) => {
+    const r = released(tt);
+    assert.equal(r.enter({ nowMilliseconds: (2_000_000_060 + 31) * 1000 }).reason, 'validation-failed');
+  });
 });

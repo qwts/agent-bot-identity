@@ -1,0 +1,1 @@
+- The disabled owner-decision effect-entry gate now re-verifies the stored broker receipt's signature and bindings under the current receipt pin, so a receipt planted in the journal without passing intake can no longer enter; entry timing is unchanged (agent-comms#77).
