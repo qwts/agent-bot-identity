@@ -545,6 +545,18 @@ second, or one stamped earlier after a clock rollback, would pass it.
   the trust version persisted at preparation, which is a new persisted field
   and an owner decision; it is not done here.
 
+**Completion through the gate.** An `entered` result is frozen and carries
+`complete(result)`, bound to the store instance that entered and to that
+instance's one-shot entry handle. The raw handle isn't exposed.
+- It completes only this request. A request ID inside `result` is ignored.
+- It works once. A second call throws `owner-journal-entry-required`.
+- Every journal refusal is thrown as the journal's own error.
+- A refusal from the gate carries no completer.
+- If the caller crashes or drops it, nothing can complete the request: a
+  later gate call is consumed, and recovery reports `effect-uncertain`.
+- A storage failure poisons the completer's instance, so the request stays
+  `effect-uncertain`.
+
 **What consumption means.** Durable `entered` is consumption. It is keyed per
 request by the daemon-generated nonce in its preparation, never by
 `presenceDigest`. A crash after it is `effect-uncertain`. Every refusal writes
@@ -589,9 +601,8 @@ persisted format.
   - It refuses (`conflict`) if `completed` already holds anything.
   - It refuses (`storage-failed`) if the `entered` record is damaged or
     changed, or a cold-wake request carries a linked event.
-  - The effect-entry gate opens its own store, so its caller can't complete
-    yet. Composing entry, the effect step and completion in one instance is
-    a later slice.
+  - Through the effect-entry gate, completion is the gate's bound
+    `complete(result)` (below).
 - **`refusePreEffect(requestId, {code, at})`** publishes slot 7, the final
   pre-effect refusal.
   - It is legal from `preparing`, `prepared`, `authorizing` or `released`. It

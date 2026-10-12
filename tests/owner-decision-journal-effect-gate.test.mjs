@@ -45,17 +45,21 @@ function d1(broker, payload) {
 // A complete released request. `storedP1Nonce` lets a test store a p1 signed
 // for another request's nonce; `receiptKeys(broker, signer)` overrides the
 // key IDs the stored receipt names, and `receiptToken(token)` rewrites the whole token.
+// `shared` (an earlier released request) puts this one in the same journal,
+// trust, identity and census.
 function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce = nonceOf(1), storedP1Nonce = nonce, upTo = 'successful-check',
-  receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token } = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-gate-')));
-  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token, shared } = {}) {
+  const base = shared?.base ?? fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-gate-')));
+  if (!shared) t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
-  loadOrCreateVouchKey(vouchStateDir({ env }));
-  const signer = generateKeyPairSync('ed25519'), broker = generateKeyPairSync('ed25519');
+  const signer = shared?.signer ?? generateKeyPairSync('ed25519'), broker = shared?.broker ?? generateKeyPairSync('ed25519');
   const trustRoot = path.join(base, 'trust');
   const trustWriter = (now) => createOwnerDecisionTrustWriter({ root: trustRoot, env, home, now: () => now, legacyPresenceKey: null });
-  trustWriter(1_999_999_000).enrollNamespace({ namespaceDigest });
-  trustWriter(1_999_999_000).enrollKeys({ receiptKey: rawKey(broker), presenceKey: rawKey(signer), brokerUid: process.getuid() + 1 });
+  if (!shared) {
+    loadOrCreateVouchKey(vouchStateDir({ env }));
+    trustWriter(1_999_999_000).enrollNamespace({ namespaceDigest });
+    trustWriter(1_999_999_000).enrollKeys({ receiptKey: rawKey(broker), presenceKey: rawKey(signer), brokerUid: process.getuid() + 1 });
+  }
 
   const { principal, account, soul } = template;
   const action = Buffer.from(canonicalJson({ v: 1, requestId, principal, account, soul, operation: 'revision.approve',
@@ -63,7 +67,7 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   const acceptance = { v: 1, kind: 'acceptance', requestId, principal, account, soul, operation: 'revision.approve', payloadDigest: sha256(action),
     namespaceDigest, acceptedAt: 2_000_000_000, daemonKey: template.daemonKey, daemonEpoch: 1, watchId: template.watchId, reservationBytes: 524288 };
   const journalRoot = path.join(base, 'journal');
-  initializeDaemonJournal(journalRoot);
+  if (!shared) initializeDaemonJournal(journalRoot);
   createDaemonJournalStore({ root: journalRoot, namespaceDigest }).admit(action, Buffer.from(canonicalJson(acceptance)));
   const preparation = { ...template, requestId, payloadDigest: acceptance.payloadDigest, nonce, acceptedAt: 2_000_000_000, preparedAt: 2_000_000_000, exp: 2_000_000_180 };
   const { actionText } = decodeOwnerDecisionAction(action);
@@ -81,17 +85,66 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   for (const [slot, payload] of order) { write(slot, payload); if (slot === upTo) break; }
 
   const stateDir = path.join(base, 'identity'), censusFile = path.join(base, 'population.json');
-  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  mintAgentIdentity({ useGithub: false, gate: () => false, appSlug: null, harness: 'codex', transcript: { provider: 'codex', id: 't' },
-    stateDir, idFactory: () => soul, now: () => new Date('2026-10-12T00:00:00.000Z') });
-  upsertSoul({ id: soul, appSlug: null, parentId: null, status: 'active', spacePath: `/spaces/${soul}`, worktree: null, worktrees: [],
-    transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file: censusFile });
+  if (!shared) {
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    mintAgentIdentity({ useGithub: false, gate: () => false, appSlug: null, harness: 'codex', transcript: { provider: 'codex', id: 't' },
+      stateDir, idFactory: () => soul, now: () => new Date('2026-10-12T00:00:00.000Z') });
+    upsertSoul({ id: soul, appSlug: null, parentId: null, status: 'active', spacePath: `/spaces/${soul}`, worktree: null, worktrees: [],
+      transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file: censusFile });
+  }
   const options = { journalRoot, namespaceDigest, trustRoot, env, home, daemonAccount: account, censusFile,
     identityPort: createOwnerDecisionIdentityPort({ stateDir }), nowMilliseconds: NOW };
   const recover = () => createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recover(requestId);
   const enter = (overrides = {}, token = presence) => enterOwnerDecisionEffect({ requestId, presenceToken: token }, { ...options, ...overrides });
-  return { requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText };
+  return { base, requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText };
 }
+
+// What the effect reports for this approve: its revision-journal sequence and
+// record digest, and no working tree (record-only).
+const reported = { at: 2_000_000_011, journalSeq: 7, journalRecordDigest: 'b'.repeat(64), working: null };
+
+test('the gate returns a bound completer that completes this request once', darwin, (t) => {
+  const r = released(t);
+  const entered = r.enter();
+  assert(Object.isFrozen(entered));
+  assert.deepEqual(Object.keys(entered).sort(), ['complete', 'effectId', 'enteredDigest', 'physicalFlushGuaranteed', 'requestId', 'state']);
+  const done = entered.complete(reported);
+  // A revision is complete but stays indeterminate until its linked event.
+  assert.equal(done.state, 'indeterminate'); assert.equal(done.requestId, r.requestId); assert.match(done.completedDigest, /^[a-f0-9]{64}$/);
+  assert.throws(() => entered.complete(reported), { reason: 'owner-journal-entry-required' });
+  assert.equal(r.recover().state, 'indeterminate');
+});
+
+test('the completer is for its own request only', darwin, (t) => {
+  const a = released(t), b = released(t, { shared: a, requestId: '22222222-2222-4222-8222-222222222222', nonce: nonceOf(2) });
+  const enteredA = a.enter(), enteredB = b.enter();
+  // A request ID in the result is not an input: A's completer completes A.
+  assert.equal(enteredA.complete({ ...reported, requestId: b.requestId }).requestId, a.requestId);
+  assert.throws(() => enteredA.complete(reported), { reason: 'owner-journal-entry-required' });
+  const read = (r) => fs.readFileSync(path.join(r.journalRoot, 'requests', requestDirectoryName({ namespaceDigest, requestId: r.requestId }), 'completed.record'));
+  assert(read(b).every((byte) => byte === 0));
+  assert.equal(enteredB.complete(reported).requestId, b.requestId);
+});
+
+test('after a crash or reopen nothing completes the entered request', darwin, async (t) => {
+  await t.test('the completer is dropped (a crash) and the gate is called again', (tt) => {
+    const r = released(tt);
+    r.enter();
+    const again = r.enter();
+    assert.deepEqual(again, { state: 'refused', reason: 'owner-journal-consumed', code: 'conflict' });
+    assert.equal('complete' in again, false);
+    assert.deepEqual(r.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+  });
+  await t.test('a storage failure poisons the completer\'s instance', (tt) => {
+    const r = released(tt);
+    const entered = r.enter(), unknown = path.join(r.journalRoot, 'requests', 'not-a-request');
+    fs.mkdirSync(unknown);
+    assert.throws(() => entered.complete(reported), { reason: 'owner-journal-corrupt' });
+    fs.rmdirSync(unknown);
+    assert.throws(() => entered.complete(reported), { reason: 'owner-journal-reopen-required' });
+    assert.deepEqual(r.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+  });
+});
 
 test('a released request enters once; replay is consumed and a crash after entry is effect-uncertain', darwin, (t) => {
   const r = released(t);
@@ -105,9 +158,11 @@ test('a released request enters once; replay is consumed and a crash after entry
   assert.deepEqual(recovered.outcome, { code: 'effect-uncertain', effectDigest: null });
 });
 
-// Every refusal below writes nothing: the request stays released.
+// Every refusal below writes nothing, returns no completer, and leaves the
+// request released.
 function refusedWithoutWrite(r, result, reason) {
   assert.deepEqual(result, { state: 'refused', reason, code: 'storage-failed' });
+  assert(Object.isFrozen(result) && !('complete' in result));
   assert.equal(r.recover().state, 'released');
 }
 

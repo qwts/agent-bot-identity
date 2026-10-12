@@ -20,7 +20,10 @@
 //   4. let the journal publish the request's entered record: the consumption,
 //      keyed per request by its daemon-generated nonce, never by presenceDigest.
 // A request already entered, applied or refused is consumed and refuses. No
-// effect runs here; the caller's domain step follows a returned `entered`.
+// effect runs here; the caller's domain step follows a returned `entered`,
+// then calls its bound `complete(result)`: completion through the same store
+// instance that entered, with that instance's one-shot entry handle. Nothing
+// else can complete it, so a crash or reopen leaves it effect-uncertain.
 import { createDaemonJournalStore, readOwnerDecisionTrust, verifyOwnerDecisionPresence } from './identity-host.mjs';
 import { resolveOwnerDecisionTargetLocked } from './owner-decision-target.mjs';
 import { createHash, createPublicKey } from 'node:crypto';
@@ -36,7 +39,13 @@ function keyIdOf(pin) {
   } catch { return null; }
 }
 
-// Returns { state: 'entered', ... } or a frozen { state: 'refused', reason, code }.
+// Returns a frozen { state: 'entered', requestId, effectId, enteredDigest,
+// physicalFlushGuaranteed: false, complete } or a frozen
+// { state: 'refused', reason, code } with no completer.
+// `complete(result)` takes the store's completion result ({ at }, plus a
+// revision's journalSeq, journalRecordDigest and working) and returns the
+// settled request, for this request only; it works once, and every journal
+// refusal (used, poisoned, invalid result) is thrown as the journal's error.
 // Refusal reasons are the final-refusal reasons (trust-unavailable,
 // validation-failed, target-unavailable); a consumed request or a storage
 // failure reports the journal's own code and reason. Nothing is written for
@@ -47,7 +56,7 @@ export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
   try {
     if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) refuse('validation-failed');
     const store = createDaemonJournalStore({ root: journalRoot, namespaceDigest });
-    return store.enterEffect(requestId, (view) => {
+    const entered = store.enterEffect(requestId, (view) => {
       let trust;
       try { trust = readOwnerDecisionTrust({ root: trustRoot, namespaceDigest, env, home }); } catch { refuse('trust-unavailable'); }
       const brokerKey = keyIdOf(trust.receiptKey), presenceKey = keyIdOf(trust.presenceKey);
@@ -63,6 +72,9 @@ export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
       if (target.state !== 'resolved') refuse('target-unavailable');
       return { at: Math.floor(nowMilliseconds / 1000) };
     });
+    const { entry } = entered;
+    return Object.freeze({ state: 'entered', requestId: entered.requestId, effectId: entered.effectId, enteredDigest: entered.enteredDigest,
+      physicalFlushGuaranteed: false, complete: (result) => store.completeEffect(entry, result) });
   } catch (error) {
     return Object.freeze({ state: 'refused', reason: error?.refusal ?? error?.reason ?? 'storage-unavailable', code: error?.code ?? 'storage-failed' });
   }
