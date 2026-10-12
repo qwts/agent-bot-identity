@@ -18,14 +18,18 @@ const namespaceDigest = 'a'.repeat(64);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const refused = (reason, code) => (error) => error.reason === reason && (code === undefined || error.code === code);
 const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
-const keys = () => ({ receiptKey: rawKey(), presenceKey: rawKey(), brokerUid: 501 });
+// This daemon's own vouch key ID, and a broker service uid that is neither
+// root nor the owner running the tests.
+const daemonKey = sha256(generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }));
+const brokerUid = process.getuid() + 1;
+const keys = () => ({ receiptKey: rawKey(), presenceKey: rawKey(), brokerUid, daemonKey });
 
 function freshRoot(t) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   return path.join(base, 'trust');
 }
-const read = (root, options = {}) => readOwnerDecisionTrust({ root, ...options });
+const read = (root, options = {}) => readOwnerDecisionTrust({ root, daemonKey, ...options });
 const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, ...options });
 // Every file under the root, for "kept as found" checks.
 function snapshot(root) {
@@ -83,16 +87,16 @@ test('one active enrollment: enroll, revoke exactly it, enroll again; never two,
   assert.throws(() => read(root, { namespaceDigest: 'b'.repeat(64) }), refused('owner-trust-corrupt', 'storage-failed'));
   assert.throws(() => w.enrollKeys(keys()), refused('owner-trust-conflict'));
   const same = rawKey();
-  assert.throws(() => w.enrollKeys({ receiptKey: same, presenceKey: same, brokerUid: 1 }), refused('owner-trust-invalid-input'));
+  assert.throws(() => w.enrollKeys({ receiptKey: same, presenceKey: same, brokerUid, daemonKey }), refused('owner-trust-invalid-input'));
 
   const v1 = sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json')));
   assert.throws(() => w.revokeKeys({ revokes: 'f'.repeat(64), reason: 'rotated' }), refused('owner-trust-conflict'));
   assert.equal(w.revokeKeys({ revokes: v1, reason: 'rotated' }).state, 'revoked');
   assert.throws(() => read(root), refused('owner-trust-no-active-key'));
   assert.throws(() => w.revokeKeys({ revokes: v1, reason: 'rotated' }), refused('owner-trust-conflict'));
-  const second = keys(), rotated = w.enrollKeys({ ...second, brokerUid: 502 });
+  const second = keys(), rotated = w.enrollKeys({ ...second, brokerUid: brokerUid + 1 });
   assert.equal(rotated.version, 3); assert.deepEqual(rotated.presenceKey, ed25519KeyPin(second.presenceKey));
-  assert.equal(rotated.service.brokerUid, 502); assert.equal(rotated.namespaceDigest, namespaceDigest);
+  assert.equal(rotated.service.brokerUid, brokerUid + 1); assert.equal(rotated.namespaceDigest, namespaceDigest);
   assert.equal(fs.statSync(path.join(root, 'namespace.json')).mode & 0o7777, 0o600);
 });
 
@@ -329,4 +333,51 @@ test('reconcile checks custody first and keeps any pending bytes it cannot match
     assert.equal(fs.readFileSync(`${root}-target`, 'utf8'), 'outside');
     assert(fs.lstatSync(path.join(keysDir, '.pending.json')).isSymbolicLink());
   });
+});
+
+test('the broker service uid is never root or the owner, and no pin may be this daemon\'s own key', darwin, (t) => {
+  const root = freshRoot(t), w = writer(root);
+  w.enrollNamespace({ namespaceDigest });
+  const invalidInput = refused('owner-trust-invalid-input', 'bad-request');
+  for (const uid of [0, process.getuid(), -1, 2 ** 32, 1.5, '600']) {
+    assert.throws(() => w.enrollKeys({ ...keys(), brokerUid: uid }), invalidInput, String(uid));
+  }
+  // A pin equal to our daemonKey, or no daemonKey to compare with, refuses at enrollment.
+  const own = generateKeyPairSync('ed25519').publicKey, ownKey = own.export({ format: 'jwk' }).x;
+  const ownId = sha256(own.export({ type: 'spki', format: 'der' }));
+  assert.throws(() => w.enrollKeys({ ...keys(), receiptKey: ownKey, daemonKey: ownId }), invalidInput);
+  assert.throws(() => w.enrollKeys({ ...keys(), presenceKey: ownKey, daemonKey: ownId }), invalidInput);
+  assert.throws(() => w.enrollKeys({ ...keys(), daemonKey: undefined }), invalidInput);
+  assert.equal(fs.existsSync(path.join(root, 'keys')), false);
+
+  // Readiness requires our daemonKey and refuses an active pin equal to it.
+  const enrolled = keys(), pin = ed25519KeyPin(enrolled.receiptKey);
+  w.enrollKeys(enrolled);
+  assert.equal(read(root).state, 'ready');
+  assert.throws(() => readOwnerDecisionTrust({ root }), invalidInput);
+  assert.throws(() => read(root, { daemonKey: pin.keyId }), refused('owner-trust-role', 'owner-decision-unsupported'));
+  assert.throws(() => read(root, { daemonKey: ed25519KeyPin(enrolled.presenceKey).keyId }), refused('owner-trust-role'));
+});
+
+test('a stored enrollment naming root or the owner as the broker is refused as damage', darwin, async (t) => {
+  for (const uid of [0, process.getuid()]) {
+    await t.test(String(uid), (tt) => {
+      const root = freshRoot(tt), w = writer(root);
+      w.enrollNamespace({ namespaceDigest });
+      w.enrollKeys(keys());
+      // Rewrite version 1 with the forbidden uid, re-binding its audit line
+      // and confirmation, so only the uid rule can refuse it.
+      const file = path.join(root, 'keys', '0000000001.json');
+      const value = { ...JSON.parse(fs.readFileSync(file, 'utf8')) };
+      value.service = { ...value.service, brokerUid: uid };
+      const bytes = Buffer.from(canonicalJson(value));
+      fs.writeFileSync(file, bytes);
+      const audit = path.join(root, 'audit.jsonl'), lines = fs.readFileSync(audit, 'utf8').trim().split('\n');
+      const last = { ...JSON.parse(lines.at(-1)), recordDigest: sha256(bytes) }, line = `${canonicalJson(last)}\n`;
+      fs.writeFileSync(audit, `${[...lines.slice(0, -1), canonicalJson(last)].join('\n')}\n`);
+      const confirm = path.join(root, 'keys', '0000000001.confirm.json');
+      fs.writeFileSync(confirm, canonicalJson({ ...JSON.parse(fs.readFileSync(confirm, 'utf8')), recordDigest: sha256(bytes), auditLineDigest: sha256(line) }));
+      assert.throws(() => read(root), refused('owner-trust-corrupt', 'storage-failed'));
+    });
+  }
 });

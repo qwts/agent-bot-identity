@@ -59,14 +59,14 @@ test('namespace.json accepts each published digest and refuses every other spell
         assert.throws(() => writer.enrollNamespace({ namespaceDigest: value }), { code: 'bad-request', reason: 'owner-trust-invalid-input' });
       }
       assert.equal(writer.enrollNamespace({ namespaceDigest: vector.namespaceDigest }).state, 'enrolled');
-      assert.throws(() => readOwnerDecisionTrust({ root, namespaceDigest: vector.namespaceDigest }), { reason: 'owner-trust-no-active-key' });
+      assert.throws(() => readOwnerDecisionTrust({ root, namespaceDigest: vector.namespaceDigest, daemonKey: 'f'.repeat(64) }), { reason: 'owner-trust-no-active-key' });
       // A stored record carrying any other spelling is refused as damage, and kept.
       const file = path.join(root, 'namespace.json');
       const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
       for (const value of rejected.filter((candidate) => !candidate.endsWith('\n'))) {
         fs.writeFileSync(file, canonicalJson({ ...stored, namespaceDigest: value }), { mode: 0o600 });
         const before = fs.readFileSync(file);
-        assert.throws(() => readOwnerDecisionTrust({ root }), { code: 'storage-failed' });
+        assert.throws(() => readOwnerDecisionTrust({ root, daemonKey: 'f'.repeat(64) }), { code: 'storage-failed' });
         assert(fs.readFileSync(file).equals(before));
       }
     });

@@ -1,0 +1,1 @@
+- Owner-decision trust pins refuse a broker service uid of root or the owner, and any receipt or presence key equal to this daemon's own vouch key (agent-comms#77).

@@ -57,6 +57,7 @@ const PUBLIC = Object.freeze({
   'owner-trust-platform-unsupported': 'owner-decision-unsupported',
   'owner-trust-invalid-input': 'bad-request',
   'owner-trust-conflict': 'conflict',
+  'owner-trust-role': 'owner-decision-unsupported',
 });
 export function trustError(reason) {
   return Object.assign(new Error('owner decision trust refused'), { code: PUBLIC[reason] ?? 'storage-failed', reason });
@@ -105,13 +106,18 @@ function chainFields(value, namespaceDigest) {
     && seconds(value.at) && matches(UUID4, value.auditId);
 }
 
+// The broker runs in its own service account: never root, never the owner.
+function validBrokerUid(uid) {
+  return Number.isSafeInteger(uid) && uid > 0 && uid <= 0xffffffff && uid !== process.getuid();
+}
+
 function enrollmentRecord(value, namespaceDigest) {
   return exact(value, ['v', 'kind', 'namespaceDigest', 'version', 'previousDigest', 'receiptKey', 'presenceKey', 'service', 'at', 'auditId'])
     && value.kind === 'owner-decision-key-enrollment' && chainFields(value, namespaceDigest)
     && validPin(value.receiptKey) && validPin(value.presenceKey)
     && value.receiptKey.publicKey !== value.presenceKey.publicKey && value.receiptKey.keyId !== value.presenceKey.keyId
     && exact(value.service, ['platform', 'brokerUid']) && value.service.platform === 'darwin'
-    && Number.isSafeInteger(value.service.brokerUid) && value.service.brokerUid >= 0 && value.service.brokerUid <= 0xffffffff;
+    && validBrokerUid(value.service.brokerUid);
 }
 
 function revocationRecord(value, namespaceDigest) {
@@ -356,11 +362,13 @@ function readAudit(io, root) {
   return lines;
 }
 
-function ready(graph, expectedNamespaceDigest) {
+function ready(graph, expectedNamespaceDigest, daemonKey) {
   if (expectedNamespaceDigest !== undefined && graph.namespaceDigest !== expectedNamespaceDigest) fail();
   if (graph.pending.length > 0) fail('owner-trust-audit-pending');
   if (!graph.active) fail('owner-trust-no-active-key');
   const { value } = graph.active;
+  // A pin that is this daemon's own vouch key confuses roles: no authority.
+  if (daemonKey !== undefined && (value.receiptKey.keyId === daemonKey || value.presenceKey.keyId === daemonKey)) fail('owner-trust-role');
   return {
     state: 'ready', namespaceDigest: graph.namespaceDigest, version: value.version,
     receiptKey: value.receiptKey, presenceKey: value.presenceKey, service: value.service,
@@ -375,12 +383,14 @@ function platformCheck() {
 // Readiness for one use: the pinned namespace and the single active,
 // completely audited key enrollment. Missing trust is unsupported; anything
 // unsettled, damaged or foreign is storage-failed and kept as found.
-export function readOwnerDecisionTrust({ root, namespaceDigest, io = fs } = {}) {
+// `daemonKey` (SHA-256 of this daemon's vouch SPKI DER) is required, so a
+// pin equal to it is always refused.
+export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, io = fs } = {}) {
   platformCheck();
-  if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
+  if (typeof root !== 'string' || !path.isAbsolute(root) || !matches(DIGEST, daemonKey)) fail('owner-trust-invalid-input');
   try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }
   const lock = acquireLock(io, root);
-  try { return ready(readGraph(io, root), namespaceDigest); }
+  try { return ready(readGraph(io, root), namespaceDigest, daemonKey); }
   catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
   finally { io.closeSync(lock); }
 }
@@ -530,10 +540,12 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
 
     // A new enrollment is legal only with no active one: rotation is a
     // confirmed revocation first. Keys come only from the owner ceremony.
-    enrollKeys({ receiptKey, presenceKey, brokerUid, at = now(), auditId = randomUUID() } = {}) {
+    // `daemonKey` is this daemon's own vouch key ID; neither pin may equal it.
+    enrollKeys({ receiptKey, presenceKey, brokerUid, daemonKey, at = now(), auditId = randomUUID() } = {}) {
       const receipt = ed25519KeyPin(receiptKey), presence = ed25519KeyPin(presenceKey);
-      if (receipt.keyId === presence.keyId) fail('owner-trust-invalid-input');
-      if (!Number.isSafeInteger(brokerUid) || brokerUid < 0 || brokerUid > 0xffffffff || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
+      if (receipt.keyId === presence.keyId || !matches(DIGEST, daemonKey)
+        || receipt.keyId === daemonKey || presence.keyId === daemonKey) fail('owner-trust-invalid-input');
+      if (!validBrokerUid(brokerUid) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
       return appendKeyRecord((graph, chain) => {
         if (graph.active) fail('owner-trust-conflict');
         return { v: 1, kind: 'owner-decision-key-enrollment', ...chain, receiptKey: receipt, presenceKey: presence,

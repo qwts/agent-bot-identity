@@ -47,7 +47,12 @@ record kinds:
 
 A key is canonical unpadded base64url of exactly 32 bytes and a valid Ed25519
 point. Its `keyId` is SHA-256 of the Ed25519 SPKI DER, matching agent-comms.
-The receipt and presence keys must differ.
+The receipt and presence keys must differ, and neither may be this daemon's
+own vouch key. That key's ID, `daemonKey` (SHA-256 of the vouch SPKI DER), is
+required at enrollment and at every readiness check. An active pin equal to
+it refuses (`owner-decision-unsupported`). `service.brokerUid` is the broker's
+own service account: never 0 and never the owner's uid. A stored enrollment
+that breaks this rule is refused as damage.
 
 At most one enrollment is ever active:
 - a new enrollment is legal only when none is active;
