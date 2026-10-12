@@ -38,6 +38,7 @@ export const MODULES = new Map([
   ['sop', 'sop.mjs'],
   ['sandbox', 'sandbox.mjs'],
   ['metrics', 'metrics.mjs'],
+  ['diagnostics', 'diagnostics-cli.mjs'],
   ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'],
   ['gh-inbox-query', 'gh-inbox-query.mjs'],

@@ -136,6 +136,7 @@
     "daemon-supervisor.mjs": "host",
     "delegation-grants.mjs": "host",
     "diagnostic-redact.mjs": "shared",
+    "diagnostics-cli.mjs": "cli",
     "diagnostics.mjs": "shared",
     "detect-harness.mjs": "harness",
     "doctor.mjs": "cli",

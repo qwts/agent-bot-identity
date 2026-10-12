@@ -13,7 +13,7 @@ const USAGE = 'usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--a
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 5000;
 
-function sinceTime(value, now) {
+export function sinceTime(value, now) {
   // Relative ISO durations use fixed units; calendar months/years are ambiguous.
   const duration = /^-P(?:(\d+(?:\.\d+)?)W)?(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(value);
   if (duration && duration.slice(1).some((part) => part !== undefined)) {

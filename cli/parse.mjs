@@ -31,6 +31,7 @@ const PUBLIC_COMMANDS = new Set([
   'sop',
   'sandbox',
   'metrics',
+  'diagnostics',
 ]);
 
 const INTERNAL_COMMANDS = new Set([
