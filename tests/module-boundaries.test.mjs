@@ -251,7 +251,7 @@ test('a re-exporting contract holds only named re-exports from identity/', () =>
     "import './identity/x.mjs';",
     "export { a } from 'identity/x.mjs';",
     "export { a } from '/identity/x.mjs';",
-    "// x\rawait import('node:child_process');",
+    "export { a } from './identity/x.mjs';\n// x\rawait import('node:child_process');",
     "export { a } from './identity/x.mjs';\n// x\u2028const b = 1;",
     "export { a } from './identity/x.mjs';\n// x\u2029const b = 1;",
   ]) {
