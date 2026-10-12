@@ -29,15 +29,24 @@ const namespaceDigest = 'a'.repeat(64);
 const NOW = 2_000_000_010_000;
 const nonceOf = (byte) => Buffer.alloc(32, byte).toString('base64url');
 const rawKey = (keyPair) => keyPair.publicKey.export({ format: 'jwk' }).x;
+const keyIdOf = (keyPair) => sha256(keyPair.publicKey.export({ type: 'spki', format: 'der' }));
 
 function p1(signer, { actionText, nonce, iat = 2_000_000_000, exp = 2_000_000_060 }) {
   const segment = Buffer.from(JSON.stringify({ v: 1, aud: 'agent-bot-owner', kind: 'presence', action: sha256(Buffer.from(actionText, 'utf8')), nonce, iat, exp })).toString('base64url');
   return `p1.${segment}.${sign(null, Buffer.from(segment), signer.privateKey).toString('base64url')}`;
 }
 
+// A d1-shaped receipt naming the given broker and presence key IDs.
+function d1(broker, payload) {
+  const segment = Buffer.from(canonicalJson(payload)).toString('base64url');
+  return `d1.${segment}.${sign(null, Buffer.from(segment), broker.privateKey).toString('base64url')}`;
+}
+
 // A complete released request. `storedP1Nonce` lets a test store a p1 signed
-// for another request's nonce.
-function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce = nonceOf(1), storedP1Nonce = nonce, upTo = 'successful-check' } = {}) {
+// for another request's nonce; `receiptKeys(broker, signer)` overrides the
+// key IDs the stored receipt names, and `receiptToken(token)` rewrites the whole token.
+function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce = nonceOf(1), storedP1Nonce = nonce, upTo = 'successful-check',
+  receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token } = {}) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-gate-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
@@ -59,7 +68,10 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   const preparation = { ...template, requestId, payloadDigest: acceptance.payloadDigest, nonce, acceptedAt: 2_000_000_000, preparedAt: 2_000_000_000, exp: 2_000_000_180 };
   const { actionText } = decodeOwnerDecisionAction(action);
   const presence = p1(signer, { actionText, nonce: storedP1Nonce });
-  const receipt = Buffer.from('d1.receipt.signature'), receiptDigest = sha256(receipt);
+  const receipt = Buffer.from(receiptToken(d1(broker, { v: 1, aud: 'agent-comms-owner-decision', ...receiptKeys(broker, signer), requestId,
+    principal, account, soul, operation: 'revision.approve', payloadDigest: acceptance.payloadDigest, nonce,
+    presenceDigest: sha256(Buffer.from(presence, 'ascii')), iat: 2_000_000_001, exp: 2_000_000_060 })), 'ascii');
+  const receiptDigest = sha256(receipt);
   const check = { requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, daemonKey: acceptance.daemonKey, daemonEpoch: 1,
     watchId: acceptance.watchId, state: 'released', mayApply: true, exp: 2_000_000_060 };
   const dir = path.join(journalRoot, 'requests', requestDirectoryName({ namespaceDigest, requestId }));
@@ -136,6 +148,51 @@ test('trust revoked, rotated or re-enrolled since preparation refuses', darwin, 
   await t.test('re-enrolled with the same pair after preparation', (tt) => {
     const r = released(tt); revoke(r);
     r.trustWriter(2_000_000_006).enrollKeys({ receiptKey: rawKey(r.broker), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+});
+
+// The receipt's key binding: any change of either key refuses in any second,
+// including across a clock rollback; the timestamp layer refuses a same-pair
+// re-enroll in the preparation's own second. preparedAt is 2_000_000_000.
+test('a broker-only rotation, or a same-pair re-enroll in the preparation\'s second, refuses', darwin, async (t) => {
+  const revokeAt = (r, at) => {
+    const keys = path.join(r.trustRoot, 'keys');
+    const head = fs.readdirSync(keys).filter((n) => /^\d{10}\.json$/.test(n)).sort().at(-1);
+    r.trustWriter(at).revokeKeys({ revokes: sha256(fs.readFileSync(path.join(keys, head))), reason: 'rotated' });
+  };
+  const enrollAt = (r, at, broker) => r.trustWriter(at).enrollKeys({ receiptKey: rawKey(broker), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+  await t.test('broker-only rotation in the same second', (tt) => {
+    const r = released(tt); revokeAt(r, 2_000_000_000); enrollAt(r, 2_000_000_000, generateKeyPairSync('ed25519'));
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+  await t.test('broker-only rotation after a clock rollback', (tt) => {
+    // The new enrollment is stamped before preparedAt, so only the key binding catches it.
+    const r = released(tt); revokeAt(r, 2_000_000_005); enrollAt(r, 1_999_999_500, generateKeyPairSync('ed25519'));
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+  await t.test('same-pair re-enroll in the same second', (tt) => {
+    const r = released(tt); revokeAt(r, 2_000_000_000); enrollAt(r, 2_000_000_000, r.broker);
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+});
+
+test('a stored receipt naming other keys, or none readable, refuses', darwin, async (t) => {
+  const other = generateKeyPairSync('ed25519');
+  await t.test('another broker key', (tt) => {
+    const r = released(tt, { receiptKeys: (broker, signer) => ({ brokerKey: keyIdOf(other), presenceKey: keyIdOf(signer) }) });
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+  await t.test('another presence key', (tt) => {
+    const r = released(tt, { receiptKeys: (broker) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(other) }) });
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+  await t.test('an unreadable receipt', (tt) => {
+    const r = released(tt, { receiptToken: () => 'd1.receipt.signature' });
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+  await t.test('a token that is not a d1', (tt) => {
+    const r = released(tt, { receiptToken: (token) => token.replace(/^d1\./, 'x1.') });
     refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
   });
 });

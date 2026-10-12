@@ -305,6 +305,20 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     return { slots, acceptance, action, preparation, preparationDigest, receiptDigest, typed };
   }
 
+  // The broker and presence key IDs the stored receipt names, read
+  // structurally (its signature was verified at the successful check, which
+  // binds this exact receipt by receiptDigest). Null when unreadable, so the
+  // entry gate refuses instead of skipping its key binding; the gate compares
+  // them with key IDs it recomputes, so no other shape check is needed here.
+  function receiptKeyIds(bytes) {
+    try {
+      const parts = bytes.toString('latin1').split('.');
+      if (parts.length !== 3 || parts[0] !== 'd1') return null;
+      const { brokerKey, presenceKey } = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+      return Object.freeze({ brokerKey, presenceKey });
+    } catch { return null; }
+  }
+
   function preEffectGraph(decode, saved) {
     const { slots, acceptance, action, preparation, preparationDigest, receiptDigest, typed } = evidence(decode, saved);
     // Nothing after entry can exist without it; pairs and the local outcome
@@ -329,7 +343,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     }
     if (slots['successful-check']) {
       return { state: 'released', view: Object.freeze({ action, actionBytes: saved.action, acceptance, preparation, preparationDigest,
-        receiptDigest, presenceToken: slots.presence.toString('latin1') }) };
+        receiptDigest, receiptKeys: receiptKeyIds(slots.receipt), presenceToken: slots.presence.toString('latin1') }) };
     }
     if (slots.presence || slots.receipt) return { state: 'authorizing' };
     return { state: slots['prepared-challenge'] ? 'prepared' : 'preparing' };

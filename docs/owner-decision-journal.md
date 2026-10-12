@@ -518,8 +518,11 @@ with soul's locked target resolution. There is no route.
    (`conflict`).
 2. Re-read the current trust. It refuses with `trust-unavailable` if:
    - no pair is ready;
-   - the active pair was enrolled after this request's `preparedAt`, which
-     covers a revocation, a rotation, or a re-enrollment of the same pair.
+   - the stored receipt's `brokerKey` and `presenceKey` are not the active
+     pair's key IDs, which the gate recomputes from the active public keys
+     (or the stored receipt is unreadable);
+   - the active pair was enrolled at or after this request's `preparedAt`
+     (daemon wall-clock seconds; equality refuses).
 3. The presented p1 must be exactly the one stored for the request, so an
    alias with flipped signature bits refuses. It is re-verified against the
    active presence pin, the preparation's own nonce and the daemon's clock.
@@ -528,6 +531,19 @@ with soul's locked target resolution. There is no route.
    no longer live refuses with `target-unavailable`.
 5. The journal builds the `entered` record itself, from the saved preparation
    and action, and publishes it to slot 9.
+
+**What covers revoke, rotate and re-enroll.** The timestamp alone does not:
+both sides are wall-clock seconds, so an enrollment in the preparation's own
+second, or one stamped earlier after a clock rollback, would pass it.
+- A revocation with nothing re-enrolled leaves no ready pair, so trust readiness
+  refuses.
+- A rotation of either key, in any second and across a clock rollback, is
+  caught by the receipt key binding.
+- A re-enrollment of the same pair is caught by the timestamp layer when it is
+  stamped in or after the preparation's second. One stamped before
+  `preparedAt` after a clock rollback is not detected. Strict binding needs
+  the trust version persisted at preparation, which is a new persisted field
+  and an owner decision; it is not done here.
 
 **What consumption means.** Durable `entered` is consumption. It is keyed per
 request by the daemon-generated nonce in its preparation, never by
