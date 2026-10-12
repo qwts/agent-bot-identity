@@ -321,3 +321,23 @@ and the reconciliation pairs and local outcome slot.
   with the fixed outcome and the saved binding. No prepared event is sent.
 - **Cancel.** Cancel wins only before the broker's durable authorization.
   After that, the daemon's cancel event is a hint and never effect authority.
+
+## Watch identity for relay intake
+
+`owner-decision-watch.mjs` is the comms-side dependency for any
+owner-decision relay intake (agent-comms#77).
+
+- **Recording.** The broker's account-watch `ready` event carries `watchId`,
+  `daemonEpoch` and `daemonKey`. `daemonKey` is SHA-256 of the exact daemon
+  vouch SPKI DER presented at pairing. The supervisor records these once per
+  socket, in memory only, and only if the fields are well formed and
+  `daemonKey` equals the value we compute ourselves from our own vouch key.
+- **Reconnects.** A reconnect drops the identity, and nothing is replayed.
+  `watchIdentity()` exposes the live identity; `daemon status` output is
+  unchanged.
+- **Intake.** `ownerDecisionIntakeBound` accepts an `owner-decision-prepare`,
+  `owner-decision` or `owner-decision-cancel` event only when its three
+  bindings equal the socket's identity exactly.
+- **Still disabled.** Intake doesn't happen yet. Every owner-decision event is
+  dropped before the wake path, and the daemon doesn't pass its expected
+  `daemonKey` yet, so no identity is bound in production.

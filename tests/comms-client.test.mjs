@@ -371,6 +371,52 @@ test('account-watch delivers wakes and the default handler answers waiting', asy
   }
 });
 
+// agent-comms#77 C0: the watch identity is recorded per socket at ready, and
+// owner-decision relay events are dropped before the wake path (disabled).
+test('the watch records its owner-decision identity per socket and drops owner-decision events', async () => {
+  const world = scratchWorld();
+  const credential = { account: 'worker', secret: 's3cret', brokerUid: MY_UID, pairedAt: '2026-10-01T00:00:00.000Z' };
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const daemonKey = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
+  const identity = { watchId: '11111111-1111-4111-8111-111111111111', daemonEpoch: 2, daemonKey };
+  let connections = 0;
+  let firstSocket = null;
+  const wakes = [];
+  const broker = await startFakeBroker(world.socket, (line, { send, socket }) => {
+    if (line.op !== 'account-watch') return;
+    connections += 1;
+    if (connections === 1) {
+      firstSocket = socket;
+      send({ event: 'ready', ...identity });
+      for (const event of ['owner-decision-prepare', 'owner-decision', 'owner-decision-cancel']) {
+        send({ event, requestId: '33333333-3333-4333-8333-333333333333', agentId: 'agent_11111111-1111-4111-8111-111111111111',
+          messageIds: ['x'], ...identity });
+      }
+      send({ event: 'wake', agentId: 'agent_11111111-1111-4111-8111-111111111111', messageIds: ['m1'] });
+    } else send({ event: 'ready', ...identity, daemonKey: 'f'.repeat(64) });
+  });
+  const supervisor = createCommsSupervisor({
+    env: world.env, home: '/nonexistent', credential, paths: world.paths, daemonKey,
+    sleepImpl: async () => {},
+    onWake: async (wake) => { wakes.push(wake.messageIds); },
+  });
+  try {
+    supervisor.start();
+    await waitFor(() => wakes.length === 1);
+    // Bound at ready; the owner-decision events never reached the wake path.
+    assert.deepEqual(supervisor.watchIdentity(), identity);
+    assert.deepEqual(wakes, [['m1']]);
+    assert.equal(Object.hasOwn(supervisor.getState(), 'watchIdentity'), false);
+    // A new socket starts over, and a foreign daemonKey binds nothing.
+    firstSocket.destroy();
+    await waitFor(() => connections === 2 && supervisor.getState().connected);
+    assert.equal(supervisor.watchIdentity(), null);
+  } finally {
+    supervisor.stop();
+    await broker.close();
+  }
+});
+
 test('the watch reconnects with capped exponential backoff', async () => {
   const world = scratchWorld();
   const credential = {

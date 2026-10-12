@@ -51,6 +51,7 @@ import {
   isWindowsSid,
   readWindowsBrokerPin,
 } from './comms-windows.mjs';
+import { OWNER_DECISION_EVENTS, watchIdentityFromReady } from './owner-decision-watch.mjs';
 
 export const COMMS_PROTOCOL_VERSION = 1;
 export const COMMS_MAX_LINE_BYTES = 128 * 1024;
@@ -772,7 +773,13 @@ export function createCommsSupervisor({
   platform = process.platform,
   windowsCustody = null,
   windowsCreateConnection = null,
+  // Expected owner-decision daemonKey (agent-comms#77): SHA-256 of this
+  // daemon's vouch SPKI DER. Without it no watch identity is ever bound.
+  daemonKey = null,
 } = {}) {
+  // The current socket's owner-decision watch identity, recorded at `ready`
+  // and dropped with the socket. In memory only; never persisted or replayed.
+  let watchIdentity = null;
   const state = {
     connected: false,
     lastWakeAt: null,
@@ -813,6 +820,7 @@ export function createCommsSupervisor({
       { op: 'account-watch', auth: { daemon: pair.account, secret: pair.secret } },
       (event) => {
         if (event?.event === 'ready' || event?.ok === true) {
+          watchIdentity = event?.event === 'ready' ? watchIdentityFromReady(event, { daemonKey }) : null;
           state.connected = true;
           state.lastError = null;
           backoffMs = COMMS_WATCH_MIN_BACKOFF_MS;
@@ -826,6 +834,10 @@ export function createCommsSupervisor({
               detail: 'daemon launch handler is unavailable' })).catch(noteError);
           return;
         }
+        // Owner-decision relay intake is disabled: every such event is dropped
+        // here, even one ownerDecisionIntakeBound would accept for this
+        // socket's identity, and none reaches the wake path.
+        if (OWNER_DECISION_EVENTS.includes(event?.event)) return;
         if (event?.event !== 'wake') return;
         let wake;
         try {
@@ -872,6 +884,7 @@ export function createCommsSupervisor({
       } catch (error) {
         if (!stopped) noteError(error);
       }
+      watchIdentity = null;
       state.connected = false;
       if (stopped) break;
       state.reconnects += 1;
@@ -883,6 +896,11 @@ export function createCommsSupervisor({
   return {
     getState() {
       return { ...state };
+    },
+    // The live socket's bound owner-decision watch identity, or null. Not
+    // part of status output.
+    watchIdentity() {
+      return watchIdentity;
     },
     report(fields) {
       const pair = credential ?? loadCommsCredential({ env, home });
