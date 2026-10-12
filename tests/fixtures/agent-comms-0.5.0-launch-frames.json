@@ -1,0 +1,19 @@
+{
+  "description": "Raw account-watch lines written by the real agent-comms 0.5.0 broker to a paired daemon after a principal SDK launch with a valid and with an invalid (uppercase) traceparent. Recorded in a scratch HOME on temporary sockets with AGENT_COMMS_NO_KEYCHAIN=1; nothing touched a real broker or daemon. The account is the capturing host's OS user.",
+  "source": {
+    "release": "v0.5.0",
+    "commit": "d3422393fea89c7af29a043e2b1faa4e97882b89",
+    "archive": "https://github.com/qwts/agent-comms/releases/download/v0.5.0/agent-comms-0.5.0.tar.gz",
+    "archiveSha256": "32a778d5ef7825541f233b79986204957feefdf60b3d37e06be7259971f6513e",
+    "recordedAt": "2026-10-12"
+  },
+  "ready": "{\"event\":\"ready\"}",
+  "valid": {
+    "sent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "frame": "{\"event\":\"launch\",\"requestId\":\"launch_b33f9c8c-c70c-4bc2-a123-5152092f770e\",\"principal\":\"principal_69d9a294-3774-444e-a6ca-30771d05afde\",\"account\":\"user\",\"soul\":\"agent_c7091b6f-6c0e-4d21-9723-96d2d56b334d\",\"harness\":\"test\",\"name\":\"Bob\",\"traceparent\":\"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\"}"
+  },
+  "invalid": {
+    "sent": "00-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01",
+    "frame": "{\"event\":\"launch\",\"requestId\":\"launch_1300bfa2-baea-483f-9ffb-06f9e4f26fe6\",\"principal\":\"principal_69d9a294-3774-444e-a6ca-30771d05afde\",\"account\":\"user\",\"soul\":\"agent_c7091b6f-6c0e-4d21-9723-96d2d56b334d\",\"harness\":\"test\",\"name\":\"Bob\"}"
+  }
+}
