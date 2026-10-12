@@ -8,6 +8,7 @@
 // permission to do anything.
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 
 export const EVIDENCE_CAP = 4096;
 const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -51,9 +52,11 @@ export function evidenceError(reason) {
 }
 const fail = (reason = 'owner-evidence-invalid') => { throw evidenceError(reason); };
 
-// Strict canonical JSON within the 4096-byte record cap.
-function decodeCanonical(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length < 1 || bytes.length > EVIDENCE_CAP) fail();
+// Strict canonical JSON within the 4096-byte record cap, decoded from a
+// private copy of the input's intrinsic bytes.
+function decodeCanonical(input) {
+  const bytes = exactBytes(input, { max: EVIDENCE_CAP });
+  if (!bytes) fail();
   let value;
   try {
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);

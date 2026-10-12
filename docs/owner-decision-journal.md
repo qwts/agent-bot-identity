@@ -863,3 +863,21 @@ Storage-refused exists only with its durable refusal digest.
 positive and 27 negative. Each carries its context, the exact record bytes,
 their SHA-256 and the SHA-256 of the slot-14 frame for a fixed namespace and
 request.
+
+## Exact byte input (disabled decoders)
+
+Every owner-decision decoder that takes bytes reads only the input's intrinsic
+bytes, through `identity/owner-decision-bytes.mjs`. It applies to:
+- the frame codec and reconciliation pairs;
+- preparation and effect records;
+- the action decoder;
+- the linked event;
+- the trust observation validator;
+- the slot-14 local outcome.
+
+It checks the view's intrinsic `[[TypedArrayName]]` and byte length, using
+%TypedArray%.prototype getters by `Reflect.apply`, then decodes a private
+bounded copy. An input's own `length`, `byteLength`, `buffer`, `byteOffset`,
+`subarray` or `slice` is never read. So an oversized view that claims to be
+small can't pass a cap, a misleading property can't change what's decoded,
+and a Proxy, a lookalike or another typed array isn't bytes.

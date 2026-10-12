@@ -21,6 +21,7 @@
 // - `refusalCode`: the refused record's reason (refused only).
 import { canonicalJson } from '../canonical-json.mjs';
 import { REFUSAL_OUTCOMES } from './owner-decision-evidence.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 
 export const LOCAL_OUTCOME_CAP = 4096;
 const KEYS = ['v', 'kind', 'requestId', 'payloadDigest', 'state', 'receiptDigest', 'outcome', 'source', 'reportingDaemonKey', 'reportingDaemonEpoch', 'at'];
@@ -79,11 +80,13 @@ function checkContext(context) {
 
 // Validates exact slot-14 payload bytes against the request's graph. Returns
 // the record, or throws invalid-owner-decision-evidence with a fixed reason.
-export function validateLocalLifecycleOutcome(bytes, context) {
+export function validateLocalLifecycleOutcome(input, context) {
   checkContext(context);
   let r;
   try {
-    if (!(bytes instanceof Uint8Array) || bytes.length < 1 || bytes.length > LOCAL_OUTCOME_CAP) throw new Error();
+    // A private copy of the input's intrinsic bytes, never its own length.
+    const bytes = exactBytes(input, { max: LOCAL_OUTCOME_CAP });
+    if (!bytes) throw new Error();
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     r = JSON.parse(text);
     if (canonicalJson(r) !== text) throw new Error();
