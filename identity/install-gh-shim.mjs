@@ -24,8 +24,8 @@ import {
 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
-import { isGateEnabled } from './config.mjs';
-import { ensureBlock, zshStartupDir } from './shell-path.mjs';
+import { isGateEnabled } from '../config.mjs';
+import { ensureBlock, zshStartupDir } from '../shell-path.mjs';
 
 function optionalStat(path, lstat) {
   try {
@@ -344,7 +344,7 @@ export function installGhShim({
 } = {}) {
   const binDir = join(home, '.config', 'agent-bot', 'bin');
   const shimPath = join(binDir, 'gh');
-  const shim = buildGhShim(null, { configModule: fileURLToPath(new URL('./config.mjs', import.meta.url)) });
+  const shim = buildGhShim(null, { configModule: fileURLToPath(new URL('../config.mjs', import.meta.url)) });
   if (!isGateEnabled('github-identity', { env, home })) {
     // An older managed shim has no invocation-time gate check and would keep
     // intercepting; replace it with this one, which passes through while off.
@@ -476,7 +476,9 @@ export function main(argv = process.argv.slice(2), { home = homedir() } = {}) {
   return result;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../install-gh-shim.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   try {
     main();
   } catch (error) {

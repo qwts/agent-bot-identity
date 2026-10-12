@@ -1,0 +1,1 @@
+- The gh shim, its installer and the GitHub App inbox worker move into `identity/`; their old paths stay as shims, the installed gh shim's marker and paths don't change, and `wrangler.toml` deploys the worker from its new path (#645, ADR-0645 step 6).

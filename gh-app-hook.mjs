@@ -1,0 +1,3 @@
+// Moved to identity/gh-app-hook.mjs (#645, ADR-0645 step 6). This path keeps working
+// for callers that import it here; it re-exports the moved file.
+export { BACKOFF_SCHEDULE_MS, DEAD_LETTER_TTL_MS, DELIVERED_TTL_MS, InboxDurable, MAX_DELIVERY_ATTEMPTS, PULL_ONLY_TTL_MS, PUSH_TIMEOUT_MS, TEXT_LIMIT, acceptDelivery, applyDeliveryAttempt, backoffMs, buildDeliveryEnvelope, classifyRetryable, collectAndPush, createMailbox, default, deliverToSubscriber, handleHookRequest, normalizeRecord, parseSubscribers, pruneRecords, redactSecrets, selectSubscribers, signBody, takeRecord, verifyGithubSignature } from './identity/gh-app-hook.mjs';

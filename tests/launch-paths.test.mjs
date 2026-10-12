@@ -41,7 +41,7 @@ const LAUNCH_PATHS = {
   'agent-daemon.mjs': [3, 'first-party: the daemon re-executing its own module; the login shell probe for PATH; git'],
   'bootstrap.mjs': [1, 'first-party: the installed agent-bot'],
   'install.mjs': [3, 'first-party: the installed agent-bot; git'],
-  'install-gh-shim.mjs': [1, 'owner-run: zsh-profile via ensureBlock, from the owner\'s install'],
+  'identity/install-gh-shim.mjs': [1, 'owner-run: zsh-profile via ensureBlock, from the owner\'s install'],
   'cli/dispatch.mjs': [2, 'first-party: agent-bot subcommands'],
   'claude-worktree-create.mjs': [2, 'first-party: setup-worktree; git'],
   'identity/daemon-client.mjs': [1, 'first-party: identity-entry.mjs under the caller\'s own env, the env the operation would see in-process (identityOp, #645)'],
