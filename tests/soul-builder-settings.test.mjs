@@ -12,7 +12,7 @@ import { GENERATED_HARNESS_MARKER as MARKER, isGeneratedPath } from '../soul-har
 
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const defaults = { model: 'shared-model', reasoningEffort: 'medium', permissionMode: 'safe' };
-const names = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro'];
+const names = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro', 'qwen'];
 const supported = { claude: ['model', 'permissionMode', 'reasoningEffort'], codex: ['model', 'permissionMode', 'reasoningEffort'],
   gemini: ['model'], opencode: ['model', 'permissionMode'] };
 const entry = (path, content) => ({ path, mode: '100644', bytes: Buffer.from(content) });
@@ -58,10 +58,11 @@ for (const harness of names) {
         assert.equal(value.model, settings.model);
         assert.deepEqual(value.permission, { edit: override ? 'allow' : 'ask', bash: override ? 'allow' : 'ask' });
       } else {
-        // Only the MCP file is theirs (Cursor, Kiro); it carries no settings.
+        // Only the MCP file is theirs (Cursor, Kiro, Qwen); it carries no settings.
         const mcp = MCP_TARGETS.find((target) => target.harness === harness)?.path;
         assert.ok(![...output.keys()].some((path) => path.startsWith(`.${harness}/`) && path !== mcp));
-        if (mcp) assert.deepEqual(Object.keys(json(output, mcp)), ['_comment', 'mcpServers']);
+        // Qwen's settings file also carries its always-on guard hooks.
+        if (mcp) assert.deepEqual(Object.keys(json(output, mcp)), ['_comment', 'mcpServers', ...(harness === 'qwen' ? ['hooks'] : [])]);
       }
       if (override && harness !== 'claude') assert.equal(json(output, '.claude/settings.json').model, defaults.model);
     });
