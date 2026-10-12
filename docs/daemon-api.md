@@ -196,7 +196,7 @@ and a soul binding, are refused on each owner route.
 | `POST /v1/invocations/{id}/cancel` | principal | |
 | `GET /v1/invocations/{id}/artifacts` | principal | |
 
-The `/ui` pages use their own browser session and never see the bearer.
+The `/ui` pages use their own browser session and never see the bearer. Pairing a browser takes the bearer, so a web session is principal class; its approval decision (`POST /ui/api/approvals/{id}/decision`) is owner class like `/v1`, and asks the owner every time (#1060).
 
 **Open for the owner.** These stay bearer-only for now. Each one is a call for
 the owner:

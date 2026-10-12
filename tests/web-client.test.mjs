@@ -82,13 +82,16 @@ function seedPrincipal(env, {
 
 // Full-stack harness: a real daemon server on 127.0.0.1 with an injectable
 // executor and an adjustable clock, plus browser-shaped fetch helpers.
-async function withServer(env, run, { executor } = {}) {
+// The owner gate is always a stub here: nothing in this file may reach keyd,
+// Touch ID, or the admin dialog.
+async function withServer(env, run, { executor, ownerGate = async () => ({ method: 'presence', via: 'test' }) } = {}) {
   const clock = { value: new Date('2026-08-12T09:00:00.000Z') };
   const server = createDaemonServer({
     env,
     home: '/nonexistent',
     config: {},
     executor,
+    ownerGate,
     now: () => clock.value,
   });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
@@ -674,6 +677,58 @@ test('approvals are immutable digest-bound proposals; stale or mismatched digest
     const drained = await (await ui('/ui/api/approvals', { cookie })).json();
     assert.deepEqual(drained.proposals, []);
   }, { executor });
+});
+
+test('a web approval asks the owner every time; a paired session alone decides nothing (#1060)', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  const approver = seedPrincipal(env);
+  const operation = { kind: 'deploy', target: 'production', ref: 'v9.9.9' };
+  const outcomes = [];
+  const executor = async ({ requestApproval }) => {
+    outcomes.push(await requestApproval({ operation, summary: 'Deploy v9.9.9 to production' }));
+  };
+  const asked = [];
+  let ownerSays = 'no';
+  const ownerGate = async (action, options) => {
+    asked.push({ action, request: options.request });
+    if (ownerSays !== 'yes') throw new Error('the person declined');
+    return { method: 'presence', via: 'test' };
+  };
+  await withServer(env, async ({ ui, pairCookie }) => {
+    // Pairing needs only the daemon bearer, which any same-account process
+    // can read, so this session must not carry owner authority.
+    const cookie = await pairCookie(approver.principalId);
+    const { session } = await (await ui('/ui/api/sessions', {
+      method: 'POST', body: { agentId: AGENT_ID }, cookie,
+    })).json();
+    await ui(`/ui/api/sessions/${session.sessionId}/messages`, {
+      method: 'POST', body: { message: 'please deploy', idempotencyKey: 'deploy-owner' }, cookie,
+    });
+    const proposal = await waitFor(async () => {
+      const { proposals } = await (await ui('/ui/api/approvals', { cookie })).json();
+      return proposals[0] ?? null;
+    });
+
+    const refused = await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: proposal.operationDigest }, cookie,
+    });
+    assert.equal(refused.status, 403);
+    assert.match((await refused.json()).error, /owner did not confirm/);
+    assert.deepEqual(asked.map((entry) => entry.request), [proposal.proposalId]);
+    const still = await (await ui('/ui/api/approvals', { cookie })).json();
+    assert.equal(still.proposals.length, 1, 'a refused owner decides nothing');
+    assert.deepEqual(outcomes, []);
+
+    ownerSays = 'yes';
+    const approved = await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: proposal.operationDigest }, cookie,
+    });
+    assert.equal(approved.status, 200);
+    assert.equal(asked.length, 2, 'the owner is asked again for the next decision');
+    await waitFor(async () => outcomes.length === 1);
+    assert.deepEqual(outcomes, [{ decision: 'approve' }]);
+  }, { executor, ownerGate });
 });
 
 // --- artifacts -------------------------------------------------------------------
