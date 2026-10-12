@@ -726,6 +726,11 @@ route. None is built here.
   reads on POSIX non-blocking as a regular file only, but still following
   links. Before wiring, that read needs custody: no-follow, owned by this
   uid, mode 0600.
+- **Seal the reconciliation capability at start.** The store's
+  record-only capability check is sealed by whichever module calls
+  `sealRecordOnlyReconciliation` first. Wiring must import
+  `owner-decision-reconcile.mjs` at daemon start, before any other host
+  code runs, and treat a failed seal (the import throwing) as fatal.
 - **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.
@@ -995,9 +1000,12 @@ from a ceremony's preimage is mechanism-only.
 `reconcileOwnerDecisionRecordOnly({requestId})` (host,
 `owner-decision-reconcile.mjs`) completes a record-only revision that crashed
 between slot 13 and slot 10. It has no route and nothing calls it. Like the
-gate, it takes only the request ID. The journal root, the namespace (from
+gate, it takes only the request ID, and any other argument (a ceremony, a
+reader) is ignored. The journal root, the namespace (from
 `readOwnerDecisionTrust()`), the state directory and the clock are the
-daemon's own.
+daemon's own. It is the module's only export: the ceremony is always the
+local owner gate and can't be injected (tests swap it in through a
+test-only resolve hook).
 
 **Steps**
 1. `readRecordOnlyReconcilable(requestId)`, under the journal lock, refuses
@@ -1007,7 +1015,9 @@ daemon's own.
    - one already completed but without its terminal pair (a crash between
      the two writes).
    An applying edit, a cold-wake request or a request without slot 13 refuses
-   `owner-journal-transition-refused`. A slot 10 that isn't a valid
+   `owner-journal-transition-refused`. Slot 13 must already verify as this
+   request's linked event (against itself) and name the entered
+   after-revision, or it refuses `owner-journal-linked-event-refused`. A slot 10 that isn't a valid
    completion, or a request already settled, is `owner-journal-conflict`.
    This happens before any ceremony.
 2. The owner ceremony: the existing local owner gate (`revisionOwnerGate`),
@@ -1023,9 +1033,13 @@ daemon's own.
    ceremony's preimage. That match is mechanism-only, not daemon-verified
    actual state.
 5. `reconcileRecordOnlyCompletion`, under the journal lock:
+   - It writes only with the reconciler's capability (below), or refuses
+     `owner-journal-capability-refused` with nothing written.
    - It refuses a non-empty slot 12, or a non-empty slot 10, as
      `owner-journal-conflict`.
-   - It re-reads the linked event at `journalSeq`. That event must be
+   - It re-reads the linked event at `journalSeq` through the grant's
+     reader (the reconciler's own revision port over the daemon's state
+     directory, for the request's soul). That event must be
      exactly slot 13's bytes and verify as this request's
      (`verifyLinkedEvent`), and a revision's must name the entered
      after-revision. Otherwise it refuses `owner-journal-linked-event-refused`.
@@ -1035,6 +1049,16 @@ daemon's own.
    - It writes slot 10, then the terminal pair (slot 12, finding `applied`,
      basis the completed record). For one already completed, it writes the
      pair only. Nothing is ever overwritten.
+
+**The write capability.** The store takes no caller-supplied reader and
+writes for no direct caller. At load, the reconciler seals the store's
+capability check once (`sealRecordOnlyReconciliation`) with a check over
+its own module-private grants. A second seal throws. Only after the
+ceremony resolves does it mint a frozen capability for that request, for one
+use, carrying its own port's reader. A direct store call, with no capability
+or a forged one, refuses with nothing written. The reconciler-side
+request match and one-use deletion can't be reached from outside: no
+capability leaves the module except into that store call.
 
 **auditId.** The owner chose, in session on 2026-10-12, to mint the
 `auditId` per ceremony (a random UUID). The terminal pair is the durable

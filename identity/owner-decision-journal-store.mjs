@@ -187,6 +187,20 @@ export function ownerDecisionJournalRoot({ env = process.env, home = homedir() }
 
 // Without `root`, the store is this daemon's own journal (the effect-entry
 // gate always opens it that way).
+// The record-only reconciliation's capability check (C2). The reconciler
+// (owner-decision-reconcile.mjs) seals it once, at load, with a check over
+// its own module-private grants, which it mints only after the owner
+// ceremony resolves. For a granted capability (one use, one request) the
+// check returns the grant's linked-event reader: the reconciler's own
+// revision port over the daemon's state directory, as the gate's completion
+// uses. A store write without a capability the check accepts refuses; a
+// second seal throws. Nothing else can grant one.
+let recordOnlyCapability = null;
+export function sealRecordOnlyReconciliation(check) {
+  if (recordOnlyCapability !== null || typeof check !== 'function') throw journalError('owner-journal-capability-refused');
+  recordOnlyCapability = check;
+}
+
 export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), namespaceDigest, io = fs, fault = () => {} } = {}) {
   if (process.platform !== 'darwin') fail('owner-journal-platform-unsupported');
   if (typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0') || !matches(DIGEST, namespaceDigest)) {
@@ -445,6 +459,19 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
       if (slots['linked-authoritative-event']) return null;
       return Object.freeze({ action, preparation, preparationDigest, receiptDigest, entered, enteredDigest: effectDigest(slots.entered) });
     } catch { return null; }
+  }
+
+  // Slot 13 verified as this request's linked event against `journalBytes`
+  // (slot 13 itself before the ceremony, the revision journal's record at
+  // the write), naming the entered after-revision. Refuses otherwise.
+  function linkedEventOf({ action, preparation, preparationDigest, receiptDigest, acceptance, entered, linked }, journalBytes) {
+    try {
+      const event = verifyLinkedEvent(linked, { operation: action.operation, journalBytes, journalRecordDigest: effectDigest(linked),
+        proposalId: action.parameters.proposalId,
+        linkage: { requestId: acceptance.requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest } });
+      if (event.kind === 'revision' && event.revision !== entered.detail.afterRevision) throw new Error();
+      return event;
+    } catch { return fail('owner-journal-linked-event-refused'); }
   }
 
   // A record-only revision (approve, reject, adopt, or edit without apply)
@@ -852,6 +879,9 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
         const context = graph.recordOnly ?? graph.recordOnlyApplied;
         if (!context) fail(graph.state === 'applied' || graph.state === 'refused' ? 'owner-journal-conflict' : 'owner-journal-transition-refused');
         const { action, entered, linked } = context;
+        // Slot 13 must already verify as this request's linked event (against
+        // itself), before any ceremony is asked.
+        if (graph.recordOnly) linkedEventOf(context, linked);
         return Object.freeze({ requestId, soul: action.soul, operation: action.operation, proposalId: action.parameters.proposalId ?? null,
           beforeRevision: entered.detail.beforeRevision, afterRevision: entered.detail.afterRevision, linked: Buffer.from(linked),
           completed: graph.state === 'applied' });
@@ -875,12 +905,17 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
     // daemon's original key/epoch as reporter. Both are validated before
     // anything is written. A non-empty slot 10 or 12 otherwise is a
     // conflict; nothing is ever overwritten.
-    reconcileRecordOnlyCompletion(requestId, { journalSeq, readLinkedEvent, at, auditId, preimage } = {}) {
-      // Early refusal before the lock. The pair encoder and the completion
-      // bind refuse a bad `at`, `auditId` or `preimage` again, so those three
-      // checks have no test of their own.
+    reconcileRecordOnlyCompletion(requestId, { capability, journalSeq, at, auditId, preimage } = {}) {
+      // Only with a capability the sealed reconciler granted for this request
+      // after its ceremony (one use). Any other argument, a reader included,
+      // is ignored: the linked event is read only through the grant's reader.
+      const grant = recordOnlyCapability === null ? null : recordOnlyCapability(capability, requestId);
+      if (grant === null || typeof grant !== 'object' || typeof grant.readLinkedEvent !== 'function') fail('owner-journal-capability-refused');
+      // Early refusal before the lock. The reconciler always passes valid
+      // values, and the pair encoder and completion bind refuse a bad `at`,
+      // `auditId` or `preimage` again, so these have no test of their own.
       if (!matches(UUID4, requestId) || !Number.isSafeInteger(journalSeq) || journalSeq < 0 || journalSeq > 9_999_999_999
-        || typeof readLinkedEvent !== 'function' || !Number.isSafeInteger(at) || at < 0 || !matches(UUID4, auditId) || !plain(preimage)) {
+        || !Number.isSafeInteger(at) || at < 0 || !matches(UUID4, auditId) || !plain(preimage)) {
         fail('invalid-owner-journal-record');
       }
       const name = requestDirectoryName({ namespaceDigest, requestId });
@@ -914,15 +949,14 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
         const context = graph.recordOnly;
         if (!context) fail('owner-journal-transition-refused');
         const { action, preparation, preparationDigest, receiptDigest, acceptance, entered, linked } = context;
-        // The linked event, read back at journalSeq, must be exactly slot 13
-        // and verify as this request's (verifyLinkedEvent compares the two
-        // byte strings through private copies of their intrinsic bytes).
-        try {
-          const event = verifyLinkedEvent(linked, { operation: action.operation, journalBytes: readLinkedEvent(journalSeq), journalRecordDigest: effectDigest(linked),
-            proposalId: action.parameters.proposalId,
-            linkage: { requestId: acceptance.requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest } });
-          if (event.kind === 'revision' && event.revision !== entered.detail.afterRevision) throw new Error();
-        } catch { fail('owner-journal-linked-event-refused'); }
+        // The linked event, read back at journalSeq through the grant's
+        // reader (the daemon's own revision port, for this request's soul),
+        // must be exactly slot 13 and verify as this request's
+        // (verifyLinkedEvent compares the two byte strings through private
+        // copies of their intrinsic bytes).
+        let journalBytes;
+        try { journalBytes = grant.readLinkedEvent(journalSeq); } catch { fail('owner-journal-linked-event-refused'); }
+        linkedEventOf(context, journalBytes);
         let completed;
         try {
           if (at < entered.at) throw new Error();

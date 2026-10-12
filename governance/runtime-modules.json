@@ -502,6 +502,7 @@
         "resolveAgentSlug",
         "resolvePrincipal",
         "scanGitPublish",
+        "sealRecordOnlyReconciliation",
         "signBindingProof",
         "signSoulToken",
         "spawnChildIdentity",

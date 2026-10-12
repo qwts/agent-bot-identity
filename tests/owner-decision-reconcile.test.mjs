@@ -2,9 +2,13 @@
 // C2). Each test builds a real soul and revision journal and an owner-decision
 // request that entered and published its linked event (slot 13) but crashed
 // before slot 10, all in the scratch daemon's own state, then reconciles it as
-// the daemon, with an injected owner ceremony.
+// the daemon. The production module takes no ceremony: a test-only resolve
+// hook gives it an injected one (helpers/reconcile-ceremony-hook.mjs), so the
+// reconciler is imported dynamically, after the hook is registered.
+import './helpers/reconcile-ceremony-hook.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,13 +21,14 @@ import { adoptSoulPackage, decideSoulProposal, editSoulRevision, proposeSoulRevi
 import { stateDirectory } from '../state-paths.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
 import { createOwnerDecisionTrustWriter, ownerDecisionTrustRoot } from '../identity/owner-decision-trust.mjs';
-import { createDaemonJournalStore, initializeDaemonJournal, ownerDecisionJournalRoot } from '../identity/owner-decision-journal-store.mjs';
+import { createDaemonJournalStore, initializeDaemonJournal, ownerDecisionJournalRoot, sealRecordOnlyReconciliation } from '../identity/owner-decision-journal-store.mjs';
 import { decodeDaemonJournalFrame, encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { challengeFor, completedRecordFor, enteredRecordFor } from '../identity/owner-decision-evidence.mjs';
-import { createOwnerDecisionReconciler } from '../owner-decision-reconcile.mjs';
+import { useCeremony } from './helpers/reconcile-ceremony.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 import { asDaemonAsync } from './helpers/owner-decision-daemon-env.mjs';
 
+const { reconcileOwnerDecisionRecordOnly } = await import('../owner-decision-reconcile.mjs');
 const darwin = { skip: process.platform !== 'darwin' && 'the journal and trust locks are Darwin-only' };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const evidence = JSON.parse(fs.readFileSync(new URL('./fixtures/owner-decisions/effect-evidence-v1.json', import.meta.url), 'utf8'));
@@ -133,14 +138,19 @@ async function crashed(t, operation, { apply = false, noLinked = false, adoptDig
   const recordFile = record && path.join(revisionJournalRoot(soul, { stateDir }), `${String(record.journalSeq).padStart(10, '0')}.json`);
   if (!noLinked) write('linked-authoritative-event', record ? fs.readFileSync(recordFile) : Buffer.from('{"not":"linked"}\n'));
 
-  // The store's write, called directly (the reconciler checks most of what
-  // it refuses first), with the journal record as the linked-event reader.
+  // The store's write called directly, as any other caller could: with an
+  // otherwise valid request and a reader returning the journal record.
   const journalRecord = (seq) => fs.readFileSync(path.join(revisionJournalRoot(soul, { stateDir }), `${String(seq).padStart(10, '0')}.json`));
   const direct = (overrides = {}) => open().reconcileRecordOnlyCompletion(requestId, { journalSeq: record?.journalSeq ?? 0, readLinkedEvent: journalRecord,
     at: 2_000_000_015, auditId: '44444444-4444-4444-8444-444444444444', preimage: { v: 1, head: null, proposal: null, working: null }, ...overrides });
-  const reconcile = (ceremony = () => ({ method: 'consent' })) => asDaemonAsync({ env, home, now: NOW }, () => createOwnerDecisionReconciler({ ceremony })({ requestId }));
+  // The reconciler as the daemon, with `ceremony` as the owner gate.
+  const reconcile = (ceremony = () => ({ method: 'consent' }), { now = NOW } = {}) => {
+    useCeremony(ceremony);
+    return asDaemonAsync({ env, home, now }, () => reconcileOwnerDecisionRecordOnly({ requestId }));
+  };
+  const empty = (slot) => fs.writeFileSync(path.join(dir, `${slot}.record`), Buffer.alloc(fs.statSync(path.join(dir, `${slot}.record`)).size));
   const recover = () => open().recover(requestId);
-  return { soul, stateDir, options, record, recordFile, write, read, payload, reconcile, direct, recover, open, preparation, trust, action: actionValue, entered: enteredRecordFor({ preparation,
+  return { base, env, home, soul, stateDir, options, record, recordFile, write, empty, read, payload, reconcile, direct, recover, open, preparation, trust, action: actionValue, entered: enteredRecordFor({ preparation,
     preparationDigest, receiptDigest, action: actionValue, at: AT }) };
 }
 const SLOTS = ['completed', 'terminal-pair', 'linked-authoritative-event'];
@@ -203,7 +213,15 @@ test('a linked event that is not in the revision journal, or not this request\'s
     fs.chmodSync(c.recordFile, 0o600);
     fs.writeFileSync(c.recordFile, changed);
     c.write('linked-authoritative-event', changed);
-    await unchanged(c, () => c.reconcile(), { reason: 'owner-journal-linked-event-refused' });
+    let asked = false;
+    await unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-linked-event-refused' });
+    assert.equal(asked, false, 'an invalid slot 13 reached the ceremony');
+  });
+  await t.test('a linked adopt whose revision is not the entered after-revision', async (tt) => {
+    const c = await crashed(tt, 'revision.adopt', { adoptDigest: 'f'.repeat(64) });
+    let asked = false;
+    await unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-linked-event-refused' });
+    assert.equal(asked, false, 'an invalid slot 13 reached the ceremony');
   });
 });
 
@@ -251,11 +269,10 @@ test('a tampered stored package refuses', darwin, async (t) => {
 
 test('a crash between slot 10 and the pair is safe: applied, and a retry writes only the pair', darwin, async (t) => {
   const c = await crashed(t, 'revision.approve');
-  // The first reconciliation stops right after slot 10 is durable.
-  const first = c.open({ fault: (at) => { if (at === 'completed:trailer-flushed') throw new Error('crash'); } });
-  const port = (seq) => fs.readFileSync(path.join(revisionJournalRoot(c.soul, { stateDir: c.stateDir }), `${String(seq).padStart(10, '0')}.json`));
-  assert.throws(() => first.reconcileRecordOnlyCompletion(requestId, { journalSeq: c.record.journalSeq, readLinkedEvent: port, at: 2_000_000_015,
-    auditId: '44444444-4444-4444-8444-444444444444', preimage: { v: 1, head: null, proposal: null, working: null } }));
+  // The state a crash right after slot 10 leaves: slot 10 durable, slot 12
+  // empty.
+  await c.reconcile();
+  c.empty('terminal-pair');
   const completedBefore = c.read('completed');
   assert.equal(c.recover().state, 'applied');
   assert(c.read('terminal-pair').every((byte) => byte === 0));
@@ -281,51 +298,79 @@ test('a completed cold-wake request without its pair is not offered', darwin, as
 
 test('the reconciler refuses a malformed request ID and an unreadable trust store', darwin, async (t) => {
   const c = await crashed(t, 'revision.approve');
-  await assert.rejects(asDaemonAsync({ env: c.trust.env, home: c.trust.home, now: NOW },
-    () => createOwnerDecisionReconciler({ ceremony: () => {} })({ requestId: 'not-a-request' })), { reason: 'invalid-owner-journal-record' });
+  useCeremony(() => {});
+  await assert.rejects(asDaemonAsync({ env: c.env, home: c.home, now: NOW }, () => reconcileOwnerDecisionRecordOnly({ requestId: 'not-a-request' })),
+    { reason: 'invalid-owner-journal-record' });
   fs.rmSync(path.join(c.trust.root, 'namespace.json'));
   await unchanged(c, () => c.reconcile(), { reason: 'trust-unavailable' });
 });
 
-// The store's write refuses on its own, whatever the reconciler checked first.
-test('the store write refuses bad input, a filled slot, and a linked event that is not exactly this request\'s', darwin, async (t) => {
-  await t.test('malformed input', async (tt) => {
+// The store writes only with the capability the reconciler grants after its
+// ceremony: never for a direct caller, whatever it passes.
+test('a direct store write without the reconciler\'s capability refuses and writes nothing', darwin, async (t) => {
+  const c = await crashed(t, 'revision.approve');
+  await unchanged(c, () => c.direct(), { reason: 'owner-journal-capability-refused' });
+  for (const capability of [{}, Object.freeze({}), 'capability', null]) {
+    await unchanged(c, () => c.direct({ capability }), { reason: 'owner-journal-capability-refused' });
+  }
+  // The seal is the reconciler's, set at its load; no other check can be set.
+  assert.throws(() => sealRecordOnlyReconciliation(() => true), { reason: 'owner-journal-capability-refused' });
+  await unchanged(c, () => c.direct({ capability: {} }), { reason: 'owner-journal-capability-refused' });
+  // The reconciler itself still completes it (its own port, not a reader).
+  assert.equal((await c.reconcile()).reconciled, 'completed');
+});
+
+// The production export, with no test hook (a fresh process), always runs the
+// real local owner gate: a passed ceremony is ignored, and the gate refuses a
+// caller with a soul's Agent ID, before any presence or consent.
+test('the production export ignores a passed ceremony and runs the owner gate', darwin, async (t) => {
+  const c = await crashed(t, 'revision.approve');
+  const before = snapshot(c);
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+const { reconcileOwnerDecisionRecordOnly } = await import(${JSON.stringify(new URL('../owner-decision-reconcile.mjs', import.meta.url).href)});
+try {
+  await reconcileOwnerDecisionRecordOnly({ requestId: ${JSON.stringify(requestId)}, ceremony: () => ({ method: 'consent' }), readLinkedEvent: () => null });
+  console.log('reconciled');
+} catch (error) { console.log(error.reason); }`], {
+    cwd: c.base, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { PATH: process.env.PATH, HOME: c.home, XDG_STATE_HOME: c.env.XDG_STATE_HOME, AGENT_BOT_ID: c.soul },
+  });
+  assert.equal(child.stdout.trim(), 'ceremony-refused', child.stderr);
+  assert.deepEqual(snapshot(c), before);
+  assert.deepEqual(c.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+});
+
+// What changes between the ceremony and the write is refused at the write.
+test('the store write re-checks under its lock what may change during the ceremony', darwin, async (t) => {
+  await t.test('a terminal pair written meanwhile', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
-    for (const bad of [{ journalSeq: -1 }, { journalSeq: 1.5 }, { readLinkedEvent: null }, { at: -1 }, { auditId: 'audit' }, { preimage: null }]) {
-      await unchanged(c, () => c.direct(bad), { reason: 'invalid-owner-journal-record' });
-    }
-    await unchanged(c, () => c.direct({ preimage: { v: 1, pad: 'x'.repeat(4096) } }), { reason: 'invalid-owner-journal-record' });
-    assert.throws(() => c.open().reconcileRecordOnlyCompletion('not-a-request', { journalSeq: 0, readLinkedEvent: () => null, at: 0,
-      auditId: '44444444-4444-4444-8444-444444444444', preimage: {} }), { reason: 'invalid-owner-journal-record' });
+    await assert.rejects(c.reconcile(() => { c.write('terminal-pair', Buffer.from('{}')); }), { reason: 'owner-journal-conflict' });
+    assert(c.read('completed').every((byte) => byte === 0));
   });
-  await t.test('a filled terminal pair or completed slot', async (tt) => {
+  await t.test('a completed record written meanwhile', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
-    c.write('terminal-pair', Buffer.from('{}'));
-    await unchanged(c, () => c.direct(), { reason: 'owner-journal-conflict' });
-    const d = await crashed(tt, 'revision.approve');
-    d.write('completed', Buffer.from('{}'));
-    await unchanged(d, () => d.direct(), { reason: 'owner-journal-conflict' });
+    await assert.rejects(c.reconcile(() => { c.write('completed', Buffer.from('{}')); }), { reason: 'owner-journal-conflict' });
+    assert(c.read('terminal-pair').every((byte) => byte === 0));
   });
-  await t.test('no linked event', async (tt) => {
-    const c = await crashed(tt, 'revision.approve', { noLinked: true });
-    await unchanged(c, () => c.direct(), { reason: 'owner-journal-transition-refused' });
-  });
-  await t.test('the reader returns other bytes than slot 13', async (tt) => {
+  await t.test('slot 13 emptied meanwhile', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
-    await unchanged(c, () => c.direct({ readLinkedEvent: () => Buffer.from('{}\n') }), { reason: 'owner-journal-linked-event-refused' });
+    const linked = c.read('linked-authoritative-event');
+    // The resync still finds the record; the store sees no linked event.
+    await assert.rejects(c.reconcile(() => { c.empty('linked-authoritative-event'); }), (error) => ['owner-journal-transition-refused', 'linked-event-missing'].includes(error.reason));
+    assert(c.read('completed').every((byte) => byte === 0));
+    assert.notDeepEqual(c.read('linked-authoritative-event'), linked);
   });
-  await t.test('slot 13 and the reader agree on bytes that are not this request\'s event', async (tt) => {
+  await t.test('slot 13 replaced meanwhile', async (tt) => {
+    // The resync matches the journal record against slot 13 as read before
+    // the ceremony; the store re-reads that record through its own port and
+    // finds it is no longer slot 13.
     const c = await crashed(tt, 'revision.approve');
-    const other = Buffer.from('{"kind":"note"}\n');
-    c.write('linked-authoritative-event', other);
-    await unchanged(c, () => c.direct({ readLinkedEvent: () => other }), { reason: 'owner-journal-linked-event-refused' });
+    const changed = Buffer.from(fs.readFileSync(c.recordFile, 'utf8').replace(c.preparation.effectId, '33333333-3333-4333-8333-333333333333'));
+    await assert.rejects(c.reconcile(() => { c.write('linked-authoritative-event', changed); }), { reason: 'owner-journal-linked-event-refused' });
+    assert(c.read('completed').every((byte) => byte === 0));
   });
-  await t.test('a linked adopt whose revision is not the entered after-revision', async (tt) => {
-    const c = await crashed(tt, 'revision.adopt', { adoptDigest: 'f'.repeat(64) });
-    await unchanged(c, () => c.direct(), { reason: 'owner-journal-linked-event-refused' });
-  });
-  await t.test('a completion time before entry', async (tt) => {
+  await t.test('a clock before entry', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
-    await unchanged(c, () => c.direct({ at: AT - 1 }), { reason: 'invalid-owner-journal-record' });
+    await unchanged(c, () => c.reconcile(undefined, { now: (AT - 1) * 1000 }), { reason: 'invalid-owner-journal-record' });
   });
 });
