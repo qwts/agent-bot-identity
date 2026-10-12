@@ -6,7 +6,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { isAgentId } from './identity-format.mjs';
 import { dreamInputMetadataDigest, isMemoryItemKey, validateDreamInputMetadata } from './skill-dream-inputs.mjs';
-import { detachDreamPreview, dreamOutcomeDigest, validateDreamOutcome } from './skill-dream-outcomes.mjs';
+import { detachDreamPreview, dreamOutcomeCountLimit, dreamOutcomeDigest, validateDreamOutcome, DREAM_OUTCOME_LIMITS } from './skill-dream-outcomes.mjs';
 import { validProcessOwnership } from './process-ownership.mjs';
 import { acknowledgeDreamNotice, applyDreamNoticeRecovery, applyDreamNoticeRun, emptyDreamNoticeLedger, validateDreamNoticeLedger, DREAM_NOTICE_LIMITS } from './skill-dream-notices.mjs';
 
@@ -46,7 +46,7 @@ const emptyAt = schemaVersion => ({ schemaVersion, revision: 0, registrations: [
   ...(schemaVersion >= 2 ? { inputReceipts: [] } : {}), ...(schemaVersion >= 3 ? { outcomeReceipts: [] } : {}),
   ...(schemaVersion >= 4 ? { selectionCheckpoints: [] } : {}), ...(schemaVersion >= 5 ? { noticeLedgers: [] } : {}),
   ...(schemaVersion >= 9 ? { processingCheckpoints: [] } : {}) });
-export const emptyDreamState = () => emptyAt(10);
+export const emptyDreamState = () => emptyAt(11);
 function inputReceipt(value) {
   keys(value, ['runId', 'journalRevision', 'startingRevision', 'digest']);
   const hash = value => typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
@@ -155,7 +155,7 @@ function runRecord(run, settled, version) {
 }
 export function validateDreamState(state) {
   keys(state, ['schemaVersion', 'revision', 'registrations', 'flights', ...(state?.schemaVersion >= 2 ? ['inputReceipts'] : []), ...(state?.schemaVersion >= 3 ? ['outcomeReceipts'] : []), ...(state?.schemaVersion >= 4 ? ['selectionCheckpoints'] : []), ...(state?.schemaVersion >= 5 ? ['noticeLedgers'] : []), ...(state?.schemaVersion >= 9 ? ['processingCheckpoints'] : [])]);
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(state.schemaVersion) || !Number.isSafeInteger(state.revision) || state.revision < 0
     || !Array.isArray(state.registrations) || state.registrations.length > DREAM_REGISTRATION_LIMIT
     || !Array.isArray(state.flights) || state.flights.length > DREAM_REGISTRATION_LIMIT) invalid();
   const agents = new Set(), generations = new Set(), flying = new Set(), runs = new Set();
@@ -338,7 +338,10 @@ export function validateDreamEvents(events, { state = null } = {}) {
       if (state && state.schemaVersion < 10 && [...event.processed, ...event.checkpoint.entries].some(source => isMemoryItemKey(source.path))) invalid();
       try { validateDreamInputMetadata(event.inputs); } catch { invalid(); }
       const selection = events.find(row => row.kind === 'selection-advanced' && isDeepStrictEqual(row.run, event.run))?.checkpoint;
-      const outcome = events.find(row => row.kind === 'outcome-recorded' && isDeepStrictEqual(row.run, event.run))?.outcome;
+      const recorded = events.find(row => row.kind === 'outcome-recorded' && isDeepStrictEqual(row.run, event.run));
+      const outcome = recorded?.outcome;
+      // From version 11 the outcome names its input format, which must be this run's.
+      if (recorded && Object.hasOwn(recorded, 'inputFormat') && recorded.inputFormat !== event.inputs?.schemaVersion) invalid();
       if (!selection || selection.inputReceipt.digest !== dreamInputMetadataDigest(event.inputs)
         || selection.sourceRevision !== event.inputs.revision) invalid();
       try { validateDreamOutcome(outcome, { runId: event.run.runId, inputs: event.inputs }); } catch { invalid(); }
@@ -368,9 +371,15 @@ export function validateDreamEvents(events, { state = null } = {}) {
       continue;
     }
     if (event?.kind === 'outcome-recorded') {
-      keys(event, ['kind', 'at', 'run', 'receipt', 'outcome']);
-      if (!date(event.at)) invalid();
+      // Version 11 (#929) records the run's input format, so the count bound
+      // is exact: 164 for format 3, 100 for formats 1 and 2. Older events keep
+      // the bound of their journal version: 164 in version 10, 100 before.
+      const formatted = event !== null && typeof event === 'object' && Object.hasOwn(event, 'inputFormat');
+      keys(event, ['kind', 'at', 'run', 'receipt', 'outcome', ...(formatted ? ['inputFormat'] : [])]);
+      if (!date(event.at) || formatted && ![1, 2, 3].includes(event.inputFormat)) invalid();
       runRecord(event.run, true, version(event.run)); inputReceipt(event.receipt); validateDreamOutcome(event.outcome, { runId: event.run.runId });
+      const limit = formatted ? dreamOutcomeCountLimit(event.inputFormat) : state && state.schemaVersion < 10 ? dreamOutcomeCountLimit(1) : DREAM_OUTCOME_LIMITS.total;
+      if (event.outcome.unreported + event.outcome.items.length > limit || state && (state.schemaVersion >= 11) !== formatted) invalid();
       if (event.receipt.runId !== event.run.runId || event.receipt.startingRevision !== event.outcome.startingRevision
         || event.receipt.digest !== dreamOutcomeDigest(event.outcome)) invalid();
       // Version 8 journals record outcomes with the preview text detached.
@@ -447,17 +456,18 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
   const read = () => {
     const observed = synchronous(store.read());
     const state = structuredClone(validateDreamState(observed === null ? emptyDreamState() : observed));
-    if (state.schemaVersion >= 10) return state;
-    // Version 10 (#903) lets processing checkpoints hold memory items, so a
-    // daemon that cannot read them refuses the journal; nothing else moves.
-    if (state.schemaVersion === 9) return { ...state, schemaVersion: 10 };
+    if (state.schemaVersion >= 11) return state;
+    // Version 10 (#903) lets processing checkpoints hold memory items, and
+    // version 11 (#929) records each outcome's input format, so a daemon that
+    // cannot read them refuses the journal; nothing else moves.
+    if (state.schemaVersion >= 9) return { ...state, schemaVersion: 11 };
     // Version 9 adds processing checkpoints; version 8 changed only how
     // outcome events store preview text.
-    if (state.schemaVersion >= 7) return { ...state, schemaVersion: 10, processingCheckpoints: [] };
+    if (state.schemaVersion >= 7) return { ...state, schemaVersion: 11, processingCheckpoints: [] };
     // Upgrade only the next transaction, leaving historical v1 bytes intact.
     // An older run recorded no ownership, so its interruption stays ambiguous.
     const unowned = run => run === null ? null : { ...run, ownership: null };
-    return { ...state, schemaVersion: 10, processingCheckpoints: [], inputReceipts: state.inputReceipts ?? [],
+    return { ...state, schemaVersion: 11, processingCheckpoints: [], inputReceipts: state.inputReceipts ?? [],
       outcomeReceipts: state.outcomeReceipts ?? [], selectionCheckpoints: state.selectionCheckpoints ?? [], noticeLedgers: state.noticeLedgers ?? [],
       registrations: state.registrations.map(row => ({ ...row, lastRun: unowned(row.lastRun) })), flights: state.flights.map(unowned) };
   };
@@ -607,7 +617,7 @@ export function createDreamScheduler({ store, execute, soulDirectory, isPaused =
           }
           const receipt = { runId: run.runId, journalRevision, startingRevision: outcome.startingRevision, digest: dreamOutcomeDigest(outcome) };
           current.outcomeReceipts.push(receipt);
-          events.push({ kind: 'outcome-recorded', at: endedAt, run: result, receipt, outcome });
+          events.push({ kind: 'outcome-recorded', at: endedAt, run: result, receipt, outcome, inputFormat: entry.inputs.schemaVersion });
         }
         if (owner && status === 'completed' && result.cancelRequestedAt === null && entry.inputs !== null
           && entry.outcome?.report.status === 'structured') {

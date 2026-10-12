@@ -618,6 +618,16 @@ event hold memory items under their `memory:` keys, which a version-9 state
 refuses. A version-9 state reads as version 10 unchanged, upgrading on the next
 write; a daemon that predates version 10 refuses the journal rather than
 misreading a memory key as a package path.
+Version 11 (#929, owner decision 2026-10-12) records the run's input format
+on each `outcome-recorded` event as `inputFormat` (1, 2 or 3; the outcome and
+its receipt digest are unchanged). Its count bound is then exact: 164 counted
+items (100 package sources and 64 memory items) for format 3, and 100 for
+formats 1 and 2. In the same transaction, a `processing-advanced` event's input
+metadata must have that format. A version-11 state requires the field and
+older states refuse it. Older events keep the bound of their journal version:
+164 in version 10, 100 before. A version-9 or version-10 state reads as version
+11 unchanged, upgrading on the next write; a daemon that predates version 11
+refuses the journal.
 `agent-bot soul dream status` lists the soul's processing checkpoint.
 
 ### Outcome, checkpoint and notice contract
