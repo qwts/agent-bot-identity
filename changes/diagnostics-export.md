@@ -1,0 +1,1 @@
+- New `agent-bot diagnostics export [--since ISO-8601|-P1D] (--output FILE | --preview)` bundles the local diagnostics store (version, platform, a summary of outcomes and codes, and the re-checked, redacted events in the window) into a new 0600 file, or prints it with `--preview`. It never uploads. See `docs/diagnostics.md` (#983).

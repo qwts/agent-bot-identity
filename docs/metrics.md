@@ -61,3 +61,6 @@ There is one checkpoint per source, made of the file identity and a byte offset:
 - Repeated lines for one API message resolve to the latest.
 
 Everything lives in `~/.local/state/agent-bot/metrics/`: `latest.json`, `checkpoints.json` and `sessions.json`. The directory is mode 0700 and the files are 0600.
+
+Engine diagnostics (launch stages, outcomes and codes) are separate; see
+[diagnostics](diagnostics.md).

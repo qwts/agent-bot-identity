@@ -96,6 +96,38 @@ export function diagnosticEvent(fields, { component, version, now = () => new Da
   return record;
 }
 
+const EVENT_ID = HEX(16);
+const AGENT_HASH = HEX(16);
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/**
+ * A stored event re-checked field by field for reading out: the store can be
+ * edited by anything running as the user, so nothing is passed through
+ * unchecked and `detail` is redacted again. Null when it is not a v1 event.
+ */
+export function cleanStoredEvent(stored, { env = process.env, home = homedir() } = {}) {
+  if (!stored || typeof stored !== 'object' || stored.v !== DIAGNOSTICS_SCHEMA) return null;
+  if (typeof stored.at !== 'string' || !ISO.test(stored.at) || !name(stored.component) || !name(stored.event)) return null;
+  const event = { v: DIAGNOSTICS_SCHEMA, at: stored.at };
+  if (EVENT_ID.test(stored.id ?? '')) event.id = stored.id;
+  event.component = stored.component;
+  if (typeof stored.version === 'string' && VERSION.test(stored.version)) event.version = stored.version;
+  event.event = stored.event;
+  if (name(stored.stage)) event.stage = stored.stage;
+  if (OUTCOMES.includes(stored.outcome)) event.outcome = stored.outcome;
+  if (name(stored.code)) event.code = stored.code;
+  if (Number.isSafeInteger(stored.durationMs) && stored.durationMs >= 0) event.durationMs = stored.durationMs;
+  if (TRACE_ID.test(stored.traceId ?? '')) event.traceId = stored.traceId;
+  if (SPAN_ID.test(stored.spanId ?? '')) event.spanId = stored.spanId;
+  if (SPAN_ID.test(stored.parentSpanId ?? '')) event.parentSpanId = stored.parentSpanId;
+  if (AGENT_HASH.test(stored.agent ?? '')) event.agent = stored.agent;
+  if (typeof stored.detail === 'string') {
+    const detail = redactDiagnostic(stored.detail, { env, home, maxLength: DETAIL_MAX });
+    if (detail) event.detail = detail;
+  }
+  return event;
+}
+
 function openAppend(path) {
   // O_NOFOLLOW: a symlink planted at the log path is refused, not followed.
   const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600);
