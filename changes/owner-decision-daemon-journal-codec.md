@@ -1,0 +1,1 @@
+- Add the disabled daemon codec for owner-decision journal frames and paired reconciliation records, checked against the shared agent-comms vectors; no route or activation (#1007).
