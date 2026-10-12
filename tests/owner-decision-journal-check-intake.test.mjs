@@ -208,6 +208,44 @@ test('the successful check is legal only after both tokens, once, and only as th
   });
 });
 
+// agent-comms 52477: the broker sets the check's exp to the receipt's, and
+// its lifecycle validator requires them equal. The check's exp must be
+// exactly the saved receipt's and no later than the preparation's.
+test('the check expires exactly with the saved receipt, and never after the preparation', darwin, async (t) => {
+  const bad = { reason: 'invalid-owner-journal-record', code: 'bad-request' };
+  await t.test('equal to the receipt\'s', (tt) => {
+    const j = prepared(tt); j.decide();
+    assert.equal(j.check.exp, 2_000_000_060);
+    assert.equal(j.record().state, 'released');
+  });
+  for (const [name, exp] of [['later than the receipt\'s', 2_000_000_061], ['earlier than the receipt\'s', 2_000_000_059]]) {
+    await t.test(name, (tt) => {
+      const j = prepared(tt); j.decide();
+      unchanged(j, () => j.record({ check: { ...j.check, exp } }), bad);
+      assert.equal(j.record().state, 'released');
+    });
+  }
+  // A receipt written around decision intake (which would refuse it: a
+  // verified receipt never outlives its challenge) whose exp is past the
+  // preparation's: a check naming that exp still refuses.
+  await t.test('later than the preparation\'s', (tt) => {
+    const j = prepared(tt);
+    const exp = 2_000_000_181, presence = j.p1({ exp }), receipt = j.d1(presence, { exp });
+    j.write('presence', Buffer.from(presence, 'ascii'));
+    j.write('receipt', Buffer.from(receipt, 'ascii'));
+    const check = { ...j.check, exp, receiptDigest: sha256(Buffer.from(receipt, 'ascii')) };
+    unchanged(j, () => j.record({ check }), bad);
+    assert.equal(j.recover().state, 'authorizing');
+  });
+  await t.test('a saved receipt with no readable exp', (tt) => {
+    const j = prepared(tt);
+    const receipt = j.d1(j.presenceToken, { exp: 'soon' });
+    j.write('presence', Buffer.from(j.presenceToken, 'ascii'));
+    j.write('receipt', Buffer.from(receipt, 'ascii'));
+    unchanged(j, () => j.record({ check: { ...j.check, receiptDigest: sha256(Buffer.from(receipt, 'ascii')) } }), bad);
+  });
+});
+
 test('every intake writer scans first: an unknown entry refuses and poisons, an unknown request refuses', darwin, async (t) => {
   for (const [name, setup, run] of [
     ['decision', () => {}, (j, store) => j.decide({}, store)],

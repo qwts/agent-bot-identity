@@ -676,6 +676,12 @@ No persisted format changes.
   - The check must decode as a released `mayApply:true` check naming exactly
     the acceptance binding and the saved receipt's digest. Otherwise it
     refuses as `bad-request`.
+  - Its `exp` must equal the saved receipt's `exp` exactly (read from the
+    saved d1, which was verified before it was saved) and be no later than
+    the preparation's. Otherwise it refuses as `bad-request`. This follows
+    agent-comms 52477: the broker sets the check's exp to the receipt's,
+    and its lifecycle validator requires them equal. The check is bound only
+    at intake; a slot 7 already in the journal is read as before.
   - It must be unexpired now (`now < exp`, in seconds). Otherwise it refuses
     with `refusal:"check-expired"`.
   - The request is then `released`. A saved check is a conflict, never
@@ -757,9 +763,12 @@ route. None is built here.
   written straight into the journal, bypassing the writer, could still claim
   any version. As with slot 7, only the daemon's custody of its own journal
   protects against that.
-- **The check's expiry is not bounded by the receipt or preparation.**
-  `check.exp` is checked only against the daemon clock at intake. The gate's
-  re-verification of p1 freshness at entry is what bounds the window in
+- **The check's expiry is bounded at intake only.** Intake requires
+  `check.exp` to equal the saved receipt's and to be no later than the
+  preparation's. A slot 7 written straight into the journal, bypassing
+  intake, isn't re-checked when the graph is read; as with the rest of slot
+  7, only the daemon's custody of its own journal protects against that. The
+  gate's re-verification of p1 freshness at entry still bounds the window in
   which a released request can enter.
 - **The successful check isn't re-verified at entry.** It's unsigned, so
   there is nothing to re-verify; only the daemon's custody of its own journal

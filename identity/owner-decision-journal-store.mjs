@@ -359,6 +359,18 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
     } catch { return null; }
   }
 
+  // The saved d1's `exp`, read structurally: the receipt was verified at
+  // decision intake before it was saved, and its signature covers the
+  // field. Null when it can't be read. A check's exp is whole seconds
+  // (decodeSuccessfulCheck), so anything else here is never equal to it.
+  function receiptExpOf(bytes) {
+    try {
+      const parts = bytes.toString('latin1').split('.');
+      if (parts.length !== 3 || parts[0] !== 'd1') return null;
+      return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')).exp ?? null;
+    } catch { return null; }
+  }
+
   // Re-verifies the stored d1 at entry with the existing verifier: its
   // signature under the current receipt pin, the acceptance daemonKey, the
   // exact saved challenge and the stored p1. The verifier's clock is the
@@ -427,8 +439,11 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
         verifyReceipt: (trust) => reverifyReceipt(slots, acceptance, trust) }) };
     }
     // The saved authorization a successful check must name, once both
-    // presence and receipt are present.
-    const checkable = slots.presence && slots.receipt ? Object.freeze({ acceptance, receiptDigest }) : null;
+    // presence and receipt are present: its digest, and the expiries the
+    // check's own must match (the saved receipt's) and stay within (the
+    // preparation's).
+    const checkable = slots.presence && slots.receipt
+      ? Object.freeze({ acceptance, receiptDigest, receiptExp: receiptExpOf(slots.receipt), preparationExp: preparation.exp }) : null;
     if (slots.presence || slots.receipt) return { state: 'authorizing', refusable, checkable };
     if (!slots['prepared-challenge']) return { state: 'preparing', refusable };
     // What decision intake verifies against: the saved action, acceptance,
@@ -769,6 +784,12 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
         try {
           bytes = Buffer.from(canonicalJson(check));
           saved = decodeSuccessfulCheck(bytes, graph.checkable);
+          // agent-comms 52477: the broker sets the check's exp to the
+          // receipt's, and its lifecycle validator requires them equal. So
+          // the check's exp is exactly the saved receipt's, and never later
+          // than the preparation's.
+          if (saved.exp !== graph.checkable.receiptExp) throw new Error('check exp');
+          if (saved.exp > graph.checkable.preparationExp) throw new Error('check exp');
         } catch { fail('invalid-owner-journal-record'); }
         if (Math.floor(nowMilliseconds / 1000) >= saved.exp) {
           throw Object.assign(journalError('owner-journal-intake-refused'), { refusal: 'check-expired' });
