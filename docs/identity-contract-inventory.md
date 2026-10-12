@@ -611,12 +611,12 @@ reviewed contract (ADR-0645 step 7) and the extraction plan (step 8) follow.
 identity files other than the sanctioned contracts fell from 192 to 156,
 from 81 files into 29 files: soul 74, host 42, cli 35, comms 5. Identity owns
 43 of 201 runtime files. `windows-account-custody.mjs` is no longer an
-identity file, so its rows in §1 and the appendix record the baseline only.
+identity file, so its row in §1 records the baseline only.
 
 ## Appendix: every import of an identity file from outside identity
 
-There are 193 import statements, which make the 192 file edges.
-`owner-action.mjs` imports `owner-gate.mjs` twice.
+There are 161 import statements, which make the 158 file edges. This list is
+regenerated from the import graph; contract files are included.
 
 - **`agent-binding.mjs`** (10):
   - soul: `confinement.mjs:14`, `setup-worktree.mjs:11`, `sop.mjs:25`, `soul-join.mjs:34`, `soul-tool-home.mjs:31`
@@ -666,11 +666,9 @@ There are 193 import statements, which make the 192 file edges.
 - **`owner-gate.mjs`** (9):
   - soul: `owner-action.mjs:20`, `owner-action.mjs:9`, `soul-asides.mjs:275`, `soul-computer-use.mjs:8`, `soul-credential-migration.mjs:21`, `soul-stop.mjs:8`
   - cli: `agent-approvals.mjs:21`, `cli/soul-dream.mjs:8`
-  - comms: `owner-principal.mjs:7`
 - **`owner-presence.mjs`** (3):
-  - soul: `owner-action.mjs:22`
-  - host: `delegation-grants.mjs:44`
-  - cli: `cli/owner.mjs:9`
+  - soul: `owner-action.mjs:19`, `owner-action.mjs:24`
+  - cli: `cli/owner.mjs:10`
 - **`owner-statement.mjs`** (3):
   - soul: `owner-action.mjs:10`
   - cli: `agent-approvals.mjs:22`, `cli/owner.mjs:10`
