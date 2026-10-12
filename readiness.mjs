@@ -21,8 +21,12 @@ import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile, PRESENCE_
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthors } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
-import { inspectAppCredentials } from './credential-reconciler.mjs';
-import { appKeyStores } from './soul-credentials.mjs';
+import {
+  appKeyStores, BUILTIN_SECRET_PROVIDERS, createSecretProviderRegistry, inspectAppCredentials,
+  inspectConfiguredCodexDesktopGh, inspectShellGhShim, isSoulBound, keydStatus, keydVersionAction,
+  pinnedSlug, probeSecretStore, readBindToken, readBinding, readGitConfig, resolveAgentSlug,
+  territoryHarness,
+} from './identity-cli.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
 import { CANONICAL_EVENTS, DIALECTS, vendorEvent } from './hook-dialects.mjs';
@@ -30,31 +34,19 @@ import { OPENCODE_PLUGIN_PATH, opencodeHookPlugin } from './soul-builder.mjs';
 import { buildSoulDirectory } from './soul-build.mjs';
 import { GENERATED_HARNESS_MARKER } from './soul-harness-contract.mjs';
 import { daemonStatus } from './agent-daemon.mjs';
-import { keydStatus, keydVersionAction } from './keyd-client.mjs';
-import { readBindToken, readBinding } from './agent-binding.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { readSopPolicyState } from './sop.mjs';
-import { isSoulBound } from './git-credential-bot.mjs';
 import { inspectSupervisor, supervisorSkipLoad, supervisorUnitCredentialNames } from './daemon-supervisor.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
-import { inspectConfiguredCodexDesktopGh, inspectShellGhShim } from './install-gh-shim.mjs';
 import {
   OrganizationProfileError,
   profileAppSlugs,
   profileStatusForSlug,
   runtimeProfileInfo,
 } from './organization-profile.mjs';
-import {
-  pinnedSlug,
-  readGitConfig,
-  resolveAgentSlug,
-  territoryHarness,
-} from './resolve-agent.mjs';
 import { AGENT_ID_KEYS, credentialNamespace, credentialVault, GIT_HOOK_NAMES, NAMESPACE_VARIABLE, PIN_KEYS, VAULT_VARIABLE } from './identity-format.mjs';
 import { credentialHelperCommand } from './setup-worktree.mjs';
-import { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
-import { createSecretProviderRegistry, probeSecretStore } from './secret-store.mjs';
 
 export const READINESS_SCHEMA_VERSION = 1;
 const ROOT = dirname(fileURLToPath(import.meta.url));

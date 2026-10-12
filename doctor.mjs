@@ -12,8 +12,7 @@ import {
   requireReadinessSchema,
 } from './readiness.mjs';
 
-import { cacheAppDoctorRows, legacyAppFolderStatus } from './identity-app-store.mjs';
-import { probeInboxReachability } from './inbox-probe.mjs';
+import { cacheAppDoctorRows, legacyAppFolderStatus, probeInboxReachability } from './identity-cli.mjs';
 
 export { hookCoverage };
 

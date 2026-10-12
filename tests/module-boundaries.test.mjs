@@ -148,6 +148,16 @@ test('each old identity path is only a re-export shim of its moved file', () => 
       + '// for callers that import it here; it re-exports the moved file.\n'
       + `export { ${exportedNames(target).join(', ')} } from '${spec}';\n`, `${old}: not a plain shim of ${moved}`);
   }
+// cli's readiness, doctor, bootstrap and hook-sync code reaches identity only
+// through listed contracts (identity-cli.mjs, identity-format.mjs and
+// daemon-client.mjs), never through another identity file (#645, F13 step 3).
+test('readiness, doctor, bootstrap and sync-hooks import identity only through listed contracts', () => {
+  const callers = new Set(['readiness.mjs', 'doctor.mjs', 'bootstrap.mjs', 'sync-hooks.mjs']);
+  const reached = moduleEdges(ROOT, runtimeFiles())
+    .filter(({ from, to }) => callers.has(from) && MAP.files[to] === 'identity')
+    .filter(({ to }) => !MAP.contracts?.[to]?.importable_by?.includes('cli'))
+    .map(({ from, to }) => `${from} -> ${to}`);
+  assert.deepEqual(reached, [], 'import these through identity-cli.mjs');
 });
 
 
