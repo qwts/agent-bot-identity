@@ -66,7 +66,11 @@ At most one enrollment is ever active:
 - a revocation must name the active enrollment's digest exactly;
 - rotating keys, or changing the service identity, means a revocation followed
   by a new enrollment;
-- the namespace and the journal are never touched.
+- the namespace and the journal are never touched;
+- the last version (1024) is reserved for a terminal revocation, so an
+  enrollment is refused at version 1024 or above and every enrollment can be
+  revoked. After that terminal revocation, growth stops: there is no new
+  namespace, reset or fallback, and owner decisions are unsupported.
 
 **Audit and confirmation.** Each record is published under a fixed
 `.pending.json` name: write it and fsync, link it to the final name, fsync the

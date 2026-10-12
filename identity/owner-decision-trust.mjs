@@ -326,7 +326,8 @@ function readGraph(io, root, { allowPending = false } = {}) {
       if (value.version !== version || value.previousDigest !== previous) fail();
       const digest = sha256(bytes);
       if (enrollmentRecord(value, namespaceDigest)) {
-        if (active !== null) fail();
+        // An enrollment in the reserved last slot could never be revoked.
+        if (active !== null || version >= TRUST_LIMITS.versions) fail();
         active = { digest, value };
       } else if (revocationRecord(value, namespaceDigest)) {
         if (active === null || value.revokes !== active.digest) fail();
@@ -502,7 +503,9 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     return locked(() => {
       const graph = settledGraph();
       const version = graph.records.length;
-      if (version > capacity) fail('owner-trust-bounds');
+      // The last version is reserved for a terminal revocation, so an
+      // enrollment can always be revoked; at capacity growth just stops.
+      if (version >= capacity) fail('owner-trust-bounds');
       const previous = graph.records.at(-1);
       const value = build(graph, { version, previousDigest: previous.digest, namespaceDigest: graph.namespaceDigest });
       const bytes = encode(value, TRUST_LIMITS.record);

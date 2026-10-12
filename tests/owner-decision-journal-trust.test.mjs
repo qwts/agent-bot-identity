@@ -106,6 +106,31 @@ test('one active enrollment: enroll, revoke exactly it, enroll again; never two,
   assert.equal(fs.statSync(path.join(root, 'namespace.json')).mode & 0o7777, 0o600);
 });
 
+test('the last version is reserved for a terminal revocation, after which nothing is possible', darwin, (t) => {
+  // Enrolling into the last slot is refused.
+  {
+    const root = freshRoot(t), w = writer(root, { maxVersions: 3 });
+    w.enrollNamespace({ namespaceDigest });
+    w.enrollKeys(keys());
+    w.revokeKeys({ revokes: sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json'))), reason: 'rotated' });
+    const before = snapshot(root);
+    assert.throws(() => w.enrollKeys(keys()), refused('owner-trust-bounds'));
+    assert.deepEqual(snapshot(root), before);
+  }
+  // Revoking into the last slot succeeds, and then growth stops.
+  const root = freshRoot(t), w = writer(root, { maxVersions: 2 });
+  w.enrollNamespace({ namespaceDigest });
+  w.enrollKeys(keys());
+  assert.equal(w.revokeKeys({ revokes: sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json'))), reason: 'decommissioned' }).version, 2);
+  const before = snapshot(root);
+  assert.throws(() => w.enrollKeys(keys()), refused('owner-trust-bounds'));
+  assert.throws(() => w.revokeKeys({ revokes: 'f'.repeat(64), reason: 'rotated' }), refused('owner-trust-conflict'));
+  assert.equal(w.enrollNamespace({ namespaceDigest }).state, 'enrolled');
+  assert.throws(() => w.enrollNamespace({ namespaceDigest: 'b'.repeat(64) }), refused('owner-trust-conflict'));
+  assert.throws(() => read(root), refused('owner-trust-no-active-key', 'owner-decision-unsupported'));
+  assert.deepEqual(snapshot(root), before);
+});
+
 test('capacity refuses growth and keeps every record', darwin, (t) => {
   const root = freshRoot(t), w = writer(root, { maxVersions: 2 });
   w.enrollNamespace({ namespaceDigest });
