@@ -407,10 +407,12 @@ test('the watch records its owner-decision identity per socket and drops owner-d
     assert.deepEqual(supervisor.watchIdentity(), identity);
     assert.deepEqual(wakes, [['m1']]);
     assert.equal(Object.hasOwn(supervisor.getState(), 'watchIdentity'), false);
-    // A new socket starts over, and a foreign daemonKey binds nothing.
+    // A new socket starts over, and a foreign daemonKey binds nothing and is
+    // surfaced as a diagnosable error while the watch stays connected.
     firstSocket.destroy();
     await waitFor(() => connections === 2 && supervisor.getState().connected);
     assert.equal(supervisor.watchIdentity(), null);
+    assert.match(supervisor.getState().lastError, /^owner-watch-identity: .*does not match/);
   } finally {
     supervisor.stop();
     await broker.close();

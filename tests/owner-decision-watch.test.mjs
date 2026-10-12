@@ -20,13 +20,18 @@ test('a ready event binds only a complete, well-formed identity carrying our dae
   assert(Object.isFrozen(watchIdentityFromReady(ready, { daemonKey })));
   // Extra ready fields are not part of the identity.
   assert.deepEqual(watchIdentityFromReady({ ...ready, extra: 1 }, { daemonKey }), { watchId: ready.watchId, daemonEpoch: 3, daemonKey });
-  for (const event of [{ event: 'ready' }, { ...ready, watchId: undefined }, { ...ready, watchId: `${ready.watchId}x` },
+  // Silent: an old broker's bare ready, a non-object, or owner intake not configured here.
+  for (const event of [{ event: 'ready' }, { ok: true }, null, 'ready']) assert.equal(watchIdentityFromReady(event, { daemonKey }), null);
+  for (const options of [{}, { daemonKey: null }]) assert.equal(watchIdentityFromReady(ready, options), null);
+  // Diagnosable: partial or malformed fields, and above all a daemonKey that is not ours.
+  const diagnosable = { code: 'owner-watch-identity' };
+  for (const event of [{ ...ready, watchId: undefined }, { event: 'ready', watchId: ready.watchId }, { ...ready, watchId: `${ready.watchId}x` },
     { ...ready, watchId: '11111111-1111-1111-8111-111111111111' }, { ...ready, daemonEpoch: 0 }, { ...ready, daemonEpoch: '3' },
-    { ...ready, daemonEpoch: 1.5 }, { ...ready, daemonKey: 'f'.repeat(64) }, { ...ready, daemonKey: daemonKey.toUpperCase() }, null, 'ready']) {
-    assert.equal(watchIdentityFromReady(event, { daemonKey }), null, JSON.stringify(event));
+    { ...ready, daemonEpoch: 1.5 }, { ...ready, daemonKey: daemonKey.toUpperCase() }]) {
+    assert.throws(() => watchIdentityFromReady(event, { daemonKey }), diagnosable, JSON.stringify(event));
   }
-  // Without our own expected key nothing binds.
-  for (const options of [{}, { daemonKey: null }, { daemonKey: 'x' }]) assert.equal(watchIdentityFromReady(ready, options), null);
+  assert.throws(() => watchIdentityFromReady({ ...ready, daemonKey: 'f'.repeat(64) }, { daemonKey }), { code: 'owner-watch-identity', message: /does not match/ });
+  assert.throws(() => watchIdentityFromReady(ready, { daemonKey: 'x' }), diagnosable);
 });
 
 test('owner-decision intake is bound to exactly the socket identity', () => {

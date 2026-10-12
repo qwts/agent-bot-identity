@@ -328,10 +328,17 @@ and the reconciliation pairs and local outcome slot.
 owner-decision relay intake (agent-comms#77).
 
 - **Recording.** The broker's account-watch `ready` event carries `watchId`,
-  `daemonEpoch` and `daemonKey`. `daemonKey` is SHA-256 of the exact daemon
-  vouch SPKI DER presented at pairing. The supervisor records these once per
-  socket, in memory only, and only if the fields are well formed and
-  `daemonKey` equals the value we compute ourselves from our own vouch key.
+  `daemonEpoch` and `daemonKey`, per agent-comms `a6e9901` (#210). `daemonKey`
+  is SHA-256 of the exact daemon vouch SPKI DER bytes presented at pairing,
+  never of the PEM. The supervisor records these once per socket, in memory
+  only, and only if the fields are well formed and `daemonKey` equals the
+  value we compute ourselves from our own vouch key.
+- **When nothing binds.** An old broker's bare `ready` binds nothing,
+  silently, and so does a daemon with no expected key configured. Wake and
+  launch keep working either way. Partial or malformed fields, or a
+  `daemonKey` that isn't ours, also bind nothing but are surfaced as an
+  `owner-watch-identity` error in the watch's `lastError`. They are never a
+  silent no-op.
 - **Reconnects.** A reconnect drops the identity, and nothing is replayed.
   `watchIdentity()` exposes the live identity; `daemon status` output is
   unchanged.

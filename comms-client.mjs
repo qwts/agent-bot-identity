@@ -820,9 +820,14 @@ export function createCommsSupervisor({
       { op: 'account-watch', auth: { daemon: pair.account, secret: pair.secret } },
       (event) => {
         if (event?.event === 'ready' || event?.ok === true) {
-          watchIdentity = event?.event === 'ready' ? watchIdentityFromReady(event, { daemonKey }) : null;
+          watchIdentity = null;
           state.connected = true;
           state.lastError = null;
+          if (event?.event === 'ready') {
+            // A refused identity is surfaced, never silent, and never stops
+            // the watch: wake and launch continue without owner intake.
+            try { watchIdentity = watchIdentityFromReady(event, { daemonKey }); } catch (error) { noteError(error); }
+          }
           backoffMs = COMMS_WATCH_MIN_BACKOFF_MS;
           Promise.resolve().then(() => onLaunch?.recover?.(launchPorts(pair))).catch(noteError);
           return;
