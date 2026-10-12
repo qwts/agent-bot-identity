@@ -1,0 +1,1 @@
+- `agent-bot mint-token --app <slug>` run unbound in the owner's account under a harness asks the owner when `<slug>` is not the harness's own App: harness env markers are not a stated identity, and the mint path ignores them, so they no longer skip the dialog for a different App (#1061).
