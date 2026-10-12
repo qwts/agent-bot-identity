@@ -1,0 +1,1 @@
+- Owner-decision target resolution performs only its fixed census and identity reads, with no injectable resolver, and documents that the reporting caller attaches the saved request binding to the uniform refusal (agent-comms#77).

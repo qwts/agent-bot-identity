@@ -24,24 +24,29 @@ export const TARGET_REFUSAL = Object.freeze({
   outcome: Object.freeze({ code: 'validation-refused', effectDigest: null }),
 });
 
-// `census` and `identityRead` are the fixed local reads (overridable only so
-// tests can observe them); this is not a resolver callback.
-export function resolveOwnerDecisionTarget({ account, soul } = {}, {
-  daemonAccount,
-  file = populationFile(),
-  stateDir,
-  census = (id) => showSoul(id, { file }),
-  identityRead = (id) => identityOp('read', { id, ...(stateDir ? { stateDir } : {}) }),
-} = {}) {
-  const wellFormed = matches(SOUL, soul) && typeof account === 'string' && account.length > 0
-    && typeof daemonAccount === 'string' && daemonAccount.length > 0;
+// Pure classification of one request from the two read results (values, not
+// functions): the resolved target, or TARGET_REFUSAL.
+export function classifyOwnerDecisionTarget({ account, soul } = {}, { daemonAccount, row = null, record = null } = {}) {
   const id = matches(SOUL, soul) ? soul : PLACEHOLDER_SOUL;
-  // Both reads always run, whatever the earlier checks found.
-  let row = null, record = null;
-  try { row = census(id); } catch { row = null; }
-  try { record = identityRead(id); } catch { record = null; }
-  const live = wellFormed && account === daemonAccount
+  const live = matches(SOUL, soul) && typeof account === 'string' && account.length > 0
+    && typeof daemonAccount === 'string' && daemonAccount.length > 0 && account === daemonAccount
     && row !== null && typeof row === 'object' && row.status !== 'retired'
     && record !== null && typeof record === 'object' && record.id === id && ['active', 'finalized'].includes(record.status);
   return live ? Object.freeze({ state: 'resolved', target: Object.freeze({ account, soul: id }) }) : TARGET_REFUSAL;
+}
+
+// Resolves at prepare time with the fixed local reads only: the census at
+// `file` and the identity entry's read under `stateDir`. No resolver or read
+// function can be injected. Both reads always run, of the request's Agent ID
+// or of the fixed placeholder, whatever the request holds.
+//
+// The refusal deliberately carries no request binding. The caller that
+// reports it (C2's owner-decision-result) attaches the saved acceptance
+// binding {requestId, payloadDigest, daemonKey, daemonEpoch, watchId} itself.
+export function resolveOwnerDecisionTarget(request = {}, { daemonAccount, file = populationFile(), stateDir } = {}) {
+  const id = matches(SOUL, request?.soul) ? request.soul : PLACEHOLDER_SOUL;
+  let row = null, record = null;
+  try { row = showSoul(id, { file }); } catch { row = null; }
+  try { record = identityOp('read', { id, ...(stateDir ? { stateDir } : {}) }); } catch { record = null; }
+  return classifyOwnerDecisionTarget(request, { daemonAccount, row, record });
 }
