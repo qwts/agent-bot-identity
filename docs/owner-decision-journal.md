@@ -968,3 +968,34 @@ is mechanism-only.
 - The read is exact. Its size, mtime, link count and named identity must be
   unchanged after it.
 - macOS ACLs aren't checked (see Before wiring).
+
+## What the effect-entry gate takes from its caller
+
+`enterOwnerDecisionEffect({requestId, presenceToken})` takes only the request
+it is presented. Everything that names a location of state or proof, an
+identity or the clock is derived from the daemon's own launch environment
+and home, and any other argument is ignored.
+
+| Input | Source |
+| --- | --- |
+| The journal | `ownerDecisionJournalRoot()`, the daemon's own root |
+| The broker namespace | the daemon's own trust store (`readOwnerDecisionTrust()`) |
+| The trust records | the daemon's own trust store |
+| The identity and revision-journal ports | built over `stateDirectory()` |
+| The census | `populationFile()` |
+| The daemon's account | its own comms pairing credential (`loadCommsCredential().account`) |
+| The time | `Date.now()` |
+
+The pairing credential is read with the comms client's file-level custody;
+on POSIX that is a plain read of the daemon's own state file.
+
+**Still caller-supplied, and why:**
+- `requestId` names which request is presented. It only selects a journal
+  entry, which must be exactly `released`.
+- `presenceToken` is the p1 being presented. It must equal the stored p1 byte
+  for byte, and it is re-verified against live trust and the clock.
+- The completer's `{at, journalSeq, working}` is what the effect step reports:
+  - `at` is a timestamp, bounded to no earlier than entry;
+  - `journalSeq` only selects which record the gate's own port reads, and
+    those bytes are verified;
+  - `working` is mechanism-only, not proof (see Before wiring).

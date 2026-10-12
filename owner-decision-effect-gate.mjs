@@ -34,6 +34,8 @@ import { resolveOwnerDecisionTargetLocked } from './owner-decision-target.mjs';
 import { createOwnerDecisionIdentityPort } from './owner-decision-identity-port.mjs';
 import { createOwnerDecisionRevisionPort } from './owner-decision-revision-port.mjs';
 import { stateDirectory } from './state-paths.mjs';
+import { populationFile } from './agent-population.mjs';
+import { loadCommsCredential } from './comms-client.mjs';
 import { createHash, createPublicKey } from 'node:crypto';
 
 const refuse = (reason) => { throw Object.assign(new Error('owner decision effect entry refused'), { reason }); };
@@ -61,18 +63,28 @@ function keyIdOf(pin) {
 // validation-failed, target-unavailable); a consumed request or a storage
 // failure reports the journal's own code and reason. Nothing is written for
 // any refusal.
-export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
-  journalRoot, namespaceDigest, daemonAccount, censusFile, nowMilliseconds,
-} = {}) {
+// The caller supplies only the request it presents: `requestId` and the p1
+// `presenceToken`, both checked against what the journal holds. Everything
+// that names a location of state or proof, an identity, or the clock is this
+// daemon's own and derived here, never taken from the caller (any further
+// argument is ignored): the journal (its own root), the broker namespace (its
+// own trust store), the trust records, the identity and revision-journal
+// ports (its own state directory), the census (its own population file), its
+// paired account (its own comms pairing credential) and the time (Date.now).
+export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}) {
   try {
-    if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) refuse('validation-failed');
-    // The identity and revision-journal ports are always built here over this
-    // daemon's own state directory (from its launch env and home, as the trust
-    // root is), never taken from the caller: no caller can stand in a port
-    // that answers with bytes the daemon never wrote.
-    const stateDir = stateDirectory();
+    const nowMilliseconds = Date.now();
+    // The enrolled broker namespace, from the daemon's own trust store; the
+    // journal is opened only under it.
+    let namespaceDigest;
+    try { ({ namespaceDigest } = readOwnerDecisionTrust()); } catch { refuse('trust-unavailable'); }
+    // This daemon's paired account (its own comms pairing credential). With
+    // none, the target check below refuses (it requires a named account).
+    let daemonAccount;
+    try { daemonAccount = loadCommsCredential()?.account; } catch { daemonAccount = undefined; }
+    const stateDir = stateDirectory(), censusFile = populationFile();
     const identityPort = createOwnerDecisionIdentityPort({ stateDir }), revisionPort = createOwnerDecisionRevisionPort({ stateDir });
-    const store = createDaemonJournalStore({ root: journalRoot, namespaceDigest });
+    const store = createDaemonJournalStore({ namespaceDigest });
     let soul;
     const entered = store.enterEffect(requestId, (view) => {
       soul = view.action.soul;

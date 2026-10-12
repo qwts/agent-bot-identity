@@ -7,6 +7,7 @@
 import * as fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import {
   DAEMON_JOURNAL_SLOTS, FRAME_OVERHEAD, SCRATCH_BYTES, decodeCanonicalPayload, decodeDaemonJournalFrame, decodeReconciliationPair,
@@ -174,7 +175,16 @@ function openFixed(io, file, size, flags) {
   } catch (error) { io.closeSync(fd); throw error; }
 }
 
-export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault = () => {} } = {}) {
+// This daemon's own journal root, from its launch env and home (beside the
+// trust store and vouch key).
+export function ownerDecisionJournalRoot({ env = process.env, home = homedir() } = {}) {
+  const stateHome = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
+  return path.join(stateHome, 'agent-bot', 'owner-decision-journal');
+}
+
+// Without `root`, the store is this daemon's own journal (the effect-entry
+// gate always opens it that way).
+export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), namespaceDigest, io = fs, fault = () => {} } = {}) {
   if (process.platform !== 'darwin') fail('owner-journal-platform-unsupported');
   if (typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0') || !matches(DIGEST, namespaceDigest)) {
     fail('invalid-owner-journal-record');
