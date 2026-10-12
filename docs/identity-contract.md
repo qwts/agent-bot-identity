@@ -54,6 +54,40 @@ covers the daemon state file, the loopback client and the health probe. It
 also holds `identityOp`, the client for identity's record entry, and
 `spawnIdentity` for `agent-bot identity spawn`.
 
+### `identity-presence.mjs`
+
+Pure keyd p1 verification, importable by soul, host, cli and comms. It exports
+`actionDigest(action)` (SHA-256 of the exact UTF-8 action) and
+`verifyPresence(token, { key, action, nonce, now })`, returning the original
+signed payload. `key` is the existing base64-encoded raw Ed25519 public key;
+`now` is milliseconds and defaults to `Date.now()`. The caller must obtain the
+key from its trusted enrollment or pinned native helper and reconstruct the
+exact action and nonce from authenticated saved context. Successful verification
+is not enrollment, authorization, nonce consumption or permission to mutate.
+
+The existing p1 signature covers the encoded payload segment. Its audience,
+kind, nonce, action digest, maximum 120-second declared lifetime and inclusive
+30-second clock skew checks remain unchanged. Existing p1 JSON/base64 decoding
+is unchanged; another protocol's stricter canonical JSON and deadline checks
+belong to that protocol's binding layer. Callers receiving external frames must
+bound their inputs and validate a supplied clock value before calling; broker
+bindings must separately enforce their preparation, staging and receipt caps.
+The original `owner-presence.mjs`
+entry continues to re-export the same functions. This entry and its internal
+verification leaf import only Node built-ins and perform no prompt, filesystem,
+process launch, key lookup or secret access. Trusted host composition may pass
+this fixed implementation to a separate broker binding layer; callers cannot
+select a verifier through request data.
+
+The standalone agent-comms broker may consume a reviewed build-time snapshot
+of `identity-presence.mjs` and its `identity/presence-verifier.mjs` closure,
+byte-identical to a pinned bot source commit. The snapshot records both source
+hashes, license and provenance, and mandatory hash/parity tests enforce it.
+Agent-bot remains the sole implementation owner; agent-comms makes no local
+patches. This is a public verification dependency, with no mutable installed
+path lookup, runtime npm dependency or request-selected verifier. A future
+extracted identity package may replace the snapshot under this same contract.
+
 ### `identity-host.mjs`
 
 Host's one entry (D5, F9), importable by host only. It holds the binding

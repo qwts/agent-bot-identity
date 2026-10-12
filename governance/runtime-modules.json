@@ -291,7 +291,9 @@
     "wake-plane.mjs": "host",
     "wake-resume.mjs": "soul",
     "wake-webhook.mjs": "comms",
-    "worktree-token.mjs": "identity"
+    "worktree-token.mjs": "identity",
+    "identity-presence.mjs": "identity",
+    "identity/presence-verifier.mjs": "identity"
   },
   "assets": {
     "hooks/": "identity",
@@ -499,6 +501,19 @@
         "appUsers"
       ],
       "reason": "Owner decision on #645 (2026-10-09): identity's in-process minters (git credential helper, signed-commit) learn which soul declares an App, and which census souls use it, through this read-only soul contract rather than soul internals, so minting works without the daemon."
+    },
+    "identity-presence.mjs": {
+      "importable_by": [
+        "soul",
+        "host",
+        "cli",
+        "comms"
+      ],
+      "exports": [
+        "actionDigest",
+        "verifyPresence"
+      ],
+      "reason": "Reviewed pure p1 verification entry for broker owner-decision binding (#77); preserves existing agent-bot semantics without exposing custody or prompting."
     }
   },
   "baseline": []
