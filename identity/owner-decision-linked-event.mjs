@@ -20,6 +20,9 @@ const LINKED_OPERATIONS = Object.freeze({
 const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const REVISION = /^sha256:[a-f0-9]{64}$/;
+// Typed-array length without a subclass's overridden accessor, checked before
+// any copy so an oversized input is never duplicated.
+const byteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'byteLength').get;
 const matches = (pattern, value) => typeof value === 'string' && pattern.exec(value)?.[0] === value;
 const plain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const refuse = (reason) => { throw Object.assign(new Error('owner decision linked event refused'), { code: 'bad-request', reason }); };
@@ -62,8 +65,11 @@ export function verifyLinkedEvent(payloadBytes, { operation, journalBytes, journ
   const kind = kindFor(operation);
   linkage(expected);
   if (!(payloadBytes instanceof Uint8Array) || !(journalBytes instanceof Uint8Array)) refuse('owner-decision-linked-event-invalid');
-  const bytes = Buffer.from(payloadBytes);
-  if (bytes.length < 1 || bytes.length > LINKED_EVENT_CAP || !bytes.equals(Buffer.from(journalBytes))
+  const length = byteLength.call(payloadBytes);
+  if (length < 1 || length > LINKED_EVENT_CAP || byteLength.call(journalBytes) !== length) refuse('owner-decision-linked-event-mismatch');
+  const bytes = Buffer.alloc(length);
+  bytes.set(payloadBytes);
+  if (!bytes.equals(Buffer.from(journalBytes))
     || !matches(DIGEST, journalRecordDigest) || createHash('sha256').update(bytes).digest('hex') !== journalRecordDigest) {
     refuse('owner-decision-linked-event-mismatch');
   }

@@ -82,6 +82,13 @@ test('a retained event verifies only as the exact journal bytes carrying exactly
     assert.throws(() => verify(raw, { journalBytes: raw, journalRecordDigest: digest(raw), ...overrides }), refused(reason), name);
   }
   assert.throws(() => verify(bytes, { linkage: { ...linkage, effectId: 'x' } }), refused('owner-decision-linkage-invalid'));
+  // An oversized input is refused by its length before anything is copied.
+  class Huge extends Uint8Array { [Symbol.iterator]() { assert.fail('oversized input was copied'); } }
+  const huge = new Huge(LINKED_EVENT_CAP + 1);
+  const originalFrom = Buffer.from;
+  Buffer.from = (...args) => { if (args[0] === huge) assert.fail('oversized input was copied'); return originalFrom.apply(Buffer, args); };
+  try { assert.throws(() => verify(huge, { journalBytes: huge, journalRecordDigest: 'f'.repeat(64) }), refused('owner-decision-linked-event-mismatch')); }
+  finally { Buffer.from = originalFrom; }
   assert.throws(() => verifyLinkedEvent('not bytes', { operation: 'revision.approve', journalBytes: bytes, journalRecordDigest: digest(bytes), linkage, proposalId }),
     refused('owner-decision-linked-event-invalid'));
 });
