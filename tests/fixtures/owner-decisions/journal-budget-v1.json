@@ -831,5 +831,376 @@
       },
       "wrapperBytes": 29
     }
-  ]
+  ],
+  "preparedWrapperBounds": {
+    "purpose": "Conservative structural superset of legal actions; maximal escaped reasons/timestamps may fail native display/clock validation. Every legal action is no larger. No live preparation claim.",
+    "records": [
+      {
+        "id": "approve",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "revision.approve",
+          "parameters": {
+            "proposalId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "expectedRevision": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "reason": "\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\""
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "revision.approve",
+            "payloadDigest": "344d722766e2458f39f281db074d72a927472d6eca7e01934086881048549f53",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZiIsInByb3Bvc2FsSWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJyZWFzb24iOiJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiIn0sInByaW5jaXBhbCI6InByaW5jaXBhbF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJyZXF1ZXN0SWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJzb3VsIjoiYWdlbnRfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwidiI6MX0",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": null
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFwcHJvdmUiLCJwYXJhbWV0ZXJzIjp7ImV4cGVjdGVkUmV2aXNpb24iOiJzaGEyNTY6ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZiIsInByb3Bvc2FsSWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJyZWFzb24iOiJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiIn0sInByaW5jaXBhbCI6InByaW5jaXBhbF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJyZXF1ZXN0SWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJzb3VsIjoiYWdlbnRfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwidiI6MX0\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"revision.approve\",\"payloadDigest\":\"344d722766e2458f39f281db074d72a927472d6eca7e01934086881048549f53\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":null,\"v\":1}",
+        "utf8Bytes": 2632,
+        "actionBytes": 1451,
+        "challengeBytes": 2599,
+        "stageBytes": 4,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "350337bb1e9ce161ba96574730f8ecb2456261778fe1fff6f026fee5afd726f8"
+      },
+      {
+        "id": "reject",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "revision.reject",
+          "parameters": {
+            "proposalId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "expectedRevision": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "reason": "\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\""
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "revision.reject",
+            "payloadDigest": "7b8204d203ea1e4efb419a3e46e54c9b9917a84cc5c51d0f2d6e8f9b64bcfab3",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLnJlamVjdCIsInBhcmFtZXRlcnMiOnsiZXhwZWN0ZWRSZXZpc2lvbiI6InNoYTI1NjpmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmIiwicHJvcG9zYWxJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlYXNvbiI6IlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCIifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": null
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLnJlamVjdCIsInBhcmFtZXRlcnMiOnsiZXhwZWN0ZWRSZXZpc2lvbiI6InNoYTI1NjpmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmIiwicHJvcG9zYWxJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlYXNvbiI6IlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCIifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"revision.reject\",\"payloadDigest\":\"7b8204d203ea1e4efb419a3e46e54c9b9917a84cc5c51d0f2d6e8f9b64bcfab3\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":null,\"v\":1}",
+        "utf8Bytes": 2630,
+        "actionBytes": 1450,
+        "challengeBytes": 2597,
+        "stageBytes": 4,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "2caf3a6f771ca0427f8ec36edcb2b188fc0b7b5df19b98e1080d04d1c545c02c"
+      },
+      {
+        "id": "adopt",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "revision.adopt",
+          "parameters": {
+            "stagingId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "packageDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "expectedRevision": null,
+            "reason": "\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\""
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "revision.adopt",
+            "payloadDigest": "0523599233bb81b64955dcf19f81e65545a9a50627022bd15a8010ad4501fc9d",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFkb3B0IiwicGFyYW1ldGVycyI6eyJleHBlY3RlZFJldmlzaW9uIjpudWxsLCJwYWNrYWdlRGlnZXN0IjoiZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZiIsInJlYXNvbiI6IlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCIiLCJzdGFnaW5nSWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": {
+            "stagingId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "kind": "package",
+            "contentDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "expiresAt": 9007199254740991
+          }
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmFkb3B0IiwicGFyYW1ldGVycyI6eyJleHBlY3RlZFJldmlzaW9uIjpudWxsLCJwYWNrYWdlRGlnZXN0IjoiZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZiIsInJlYXNvbiI6IlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCIiLCJzdGFnaW5nSWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"revision.adopt\",\"payloadDigest\":\"0523599233bb81b64955dcf19f81e65545a9a50627022bd15a8010ad4501fc9d\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":{\"contentDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"expiresAt\":9007199254740991,\"kind\":\"package\",\"stagingId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"v\":1}",
+        "utf8Bytes": 2822,
+        "actionBytes": 1462,
+        "challengeBytes": 2612,
+        "stageBytes": 181,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "740f7c8caef6561e6265564996496e973fd8b1935d9a26bfb7c7159029ecfeaf"
+      },
+      {
+        "id": "edit",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "revision.edit",
+          "parameters": {
+            "stagingId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "packageDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "expectedRevision": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "reason": "\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"",
+            "apply": false
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "revision.edit",
+            "payloadDigest": "99128ed4d263930beefddff1794ccd43d7fd9de42ed962a95441e664efc5d57a",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmVkaXQiLCJwYXJhbWV0ZXJzIjp7ImFwcGx5IjpmYWxzZSwiZXhwZWN0ZWRSZXZpc2lvbiI6InNoYTI1NjpmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmIiwicGFja2FnZURpZ2VzdCI6ImZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmYiLCJyZWFzb24iOiJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiIiwic3RhZ2luZ0lkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIn0sInByaW5jaXBhbCI6InByaW5jaXBhbF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJyZXF1ZXN0SWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJzb3VsIjoiYWdlbnRfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwidiI6MX0",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": {
+            "stagingId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "kind": "package",
+            "contentDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "expiresAt": 9007199254740991
+          }
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6InJldmlzaW9uLmVkaXQiLCJwYXJhbWV0ZXJzIjp7ImFwcGx5IjpmYWxzZSwiZXhwZWN0ZWRSZXZpc2lvbiI6InNoYTI1NjpmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmIiwicGFja2FnZURpZ2VzdCI6ImZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmYiLCJyZWFzb24iOiJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiXCJcIlwiIiwic3RhZ2luZ0lkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIn0sInByaW5jaXBhbCI6InByaW5jaXBhbF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJyZXF1ZXN0SWQiOiJmZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJzb3VsIjoiYWdlbnRfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwidiI6MX0\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"revision.edit\",\"payloadDigest\":\"99128ed4d263930beefddff1794ccd43d7fd9de42ed962a95441e664efc5d57a\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":{\"contentDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"expiresAt\":9007199254740991,\"kind\":\"package\",\"stagingId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"v\":1}",
+        "utf8Bytes": 2930,
+        "actionBytes": 1544,
+        "challengeBytes": 2720,
+        "stageBytes": 181,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "bb3e3206008fcf9f5f5f596d16a01cc9672a5e82342c5ac62425696d5f2c7c9a"
+      },
+      {
+        "id": "off",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "cold-wake.set",
+          "parameters": {
+            "mode": "off"
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "cold-wake.set",
+            "payloadDigest": "11e3d49f0ebe6df2bfc9ebef2cd28f01c0bdc800de0d5da7c334934b23c49e4e",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJvZmYifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": null
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJvZmYifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"cold-wake.set\",\"payloadDigest\":\"11e3d49f0ebe6df2bfc9ebef2cd28f01c0bdc800de0d5da7c334934b23c49e4e\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":null,\"v\":1}",
+        "utf8Bytes": 1100,
+        "actionBytes": 304,
+        "challengeBytes": 1067,
+        "stageBytes": 4,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "db7934d3aacf1bcad9ed31df09bf504f5a61555387e107567b9399b99bf1c305"
+      },
+      {
+        "id": "on",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "cold-wake.set",
+          "parameters": {
+            "mode": "on"
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "cold-wake.set",
+            "payloadDigest": "2d803be54b0f07c8ed491981e70a2bc9624f713253391e66285ed090a903162f",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJvbiJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwicmVxdWVzdElkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwic291bCI6ImFnZW50X2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInYiOjF9",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": null
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJvbiJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwicmVxdWVzdElkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwic291bCI6ImFnZW50X2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInYiOjF9\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"cold-wake.set\",\"payloadDigest\":\"2d803be54b0f07c8ed491981e70a2bc9624f713253391e66285ed090a903162f\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":null,\"v\":1}",
+        "utf8Bytes": 1098,
+        "actionBytes": 303,
+        "challengeBytes": 1065,
+        "stageBytes": 4,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "e7e996a26816e3a2111de38cb8613e30099fe288895ccd5d1445b74849c24803"
+      },
+      {
+        "id": "resume",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "cold-wake.set",
+          "parameters": {
+            "mode": "resume",
+            "policy": "workspace"
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "cold-wake.set",
+            "payloadDigest": "bc7d8834acc05908e17bf8f79d8cf469c9c4f572d0a7f27ac4a6f246a7bfc211",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJyZXN1bWUiLCJwb2xpY3kiOiJ3b3Jrc3BhY2UifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": null
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7Im1vZGUiOiJyZXN1bWUiLCJwb2xpY3kiOiJ3b3Jrc3BhY2UifSwicHJpbmNpcGFsIjoicHJpbmNpcGFsX2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInJlcXVlc3RJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInNvdWwiOiJhZ2VudF9mZmZmZmZmZi1mZmZmLTRmZmYtYmZmZi1mZmZmZmZmZmZmZmYiLCJ2IjoxfQ\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"cold-wake.set\",\"payloadDigest\":\"bc7d8834acc05908e17bf8f79d8cf469c9c4f572d0a7f27ac4a6f246a7bfc211\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":null,\"v\":1}",
+        "utf8Bytes": 1132,
+        "actionBytes": 328,
+        "challengeBytes": 1099,
+        "stageBytes": 4,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "4793930fd6405bc0f712e3b315a74d490ae5faaeb056b83903c4c78b4bfae110"
+      },
+      {
+        "id": "webhook",
+        "action": {
+          "v": 1,
+          "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "operation": "cold-wake.set",
+          "parameters": {
+            "mode": "webhook",
+            "stagingId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "configurationDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }
+        },
+        "record": {
+          "v": 1,
+          "challenge": {
+            "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "principal": "principal_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "soul": "agent_ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "operation": "cold-wake.set",
+            "payloadDigest": "b956278148995d02f7051ff0c019ffc9214c07d1dbd87f0e131d2e64516a6e66",
+            "action": "eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7ImNvbmZpZ3VyYXRpb25EaWdlc3QiOiJmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmIiwiaG9zdCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYS5iYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIuY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjLmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQiLCJtb2RlIjoid2ViaG9vayIsInN0YWdpbmdJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwicmVxdWVzdElkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwic291bCI6ImFnZW50X2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInYiOjF9",
+            "nonce": "__________________________________________8",
+            "acceptedAt": 9007199254740811,
+            "preparedAt": 9007199254740811,
+            "exp": 9007199254740991,
+            "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "daemonEpoch": 9007199254740991,
+            "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+          },
+          "stage": {
+            "stagingId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "kind": "webhook",
+            "contentDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "expiresAt": 9007199254740991
+          }
+        },
+        "canonicalJson": "{\"challenge\":{\"acceptedAt\":9007199254740811,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"eyJhY2NvdW50IjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsIm9wZXJhdGlvbiI6ImNvbGQtd2FrZS5zZXQiLCJwYXJhbWV0ZXJzIjp7ImNvbmZpZ3VyYXRpb25EaWdlc3QiOiJmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmIiwiaG9zdCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYS5iYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIuY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjLmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQiLCJtb2RlIjoid2ViaG9vayIsInN0YWdpbmdJZCI6ImZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiJ9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwicmVxdWVzdElkIjoiZmZmZmZmZmYtZmZmZi00ZmZmLWJmZmYtZmZmZmZmZmZmZmZmIiwic291bCI6ImFnZW50X2ZmZmZmZmZmLWZmZmYtNGZmZi1iZmZmLWZmZmZmZmZmZmZmZiIsInYiOjF9\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"nonce\":\"__________________________________________8\",\"operation\":\"cold-wake.set\",\"payloadDigest\":\"b956278148995d02f7051ff0c019ffc9214c07d1dbd87f0e131d2e64516a6e66\",\"preparedAt\":9007199254740811,\"principal\":\"principal_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"soul\":\"agent_ffffffff-ffff-4fff-bfff-ffffffffffff\",\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"stage\":{\"contentDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"expiresAt\":9007199254740991,\"kind\":\"webhook\",\"stagingId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"},\"v\":1}",
+        "utf8Bytes": 1819,
+        "actionBytes": 711,
+        "challengeBytes": 1609,
+        "stageBytes": 181,
+        "wrapperBytes": 29,
+        "cap": 32768,
+        "sha256": "8db595eeb5f4125d37f1c14a78b7fc1a270ec0e27c975e139c0263324d1f26f8"
+      }
+    ]
+  }
 }
