@@ -131,6 +131,34 @@ test('a soul with a revision chain records the change as an owner edit; a failed
   assert.equal(showSoul(ID, { file: g.file }).comms, true);
 });
 
+// An uncertain journal publication may already record the change (#1010):
+// the command fails with that code and leaves soul.json and the census as the
+// record may have them, instead of rolling back under it.
+test('an uncertain revision publication fails without rolling soul.json or the census back', async (t) => {
+  const g = fixture(t);
+  const uncertain = () => Object.assign(new Error('soul revision journal record may have been published'), { code: 'revision-publication-uncertain' });
+  await assert.rejects(soulCommsCommand([ID, 'off'], { ...g.options,
+    revisions: { history: () => [{}], edit: async () => { throw uncertain(); } } }), { code: 'revision-publication-uncertain' });
+  assert.equal(manifestOf(g.soulDir).comms, false);
+  assert.equal(showSoul(ID, { file: g.file }).comms, false);
+
+  const { recordLaunchComms } = await import('../agent-daemon.mjs');
+  const h = fixture(t);
+  await assert.rejects(recordLaunchComms({ agentId: ID, package: null, comms: false }, { env: h.env, home: h.home, config: { souls: [] },
+    revisions: { history: () => [{}], edit: async () => { throw uncertain(); } } }), { code: 'revision-publication-uncertain' });
+  assert.equal(manifestOf(h.soulDir).comms, false);
+  assert.equal(showSoul(ID, { file: h.file }).comms, false);
+
+  // A clean refusal still restores both.
+  const r = fixture(t);
+  const before = readFileSync(path.join(r.soulDir, 'soul.json'), 'utf8');
+  await assert.rejects(soulCommsCommand([ID, 'off'], { ...r.options, revisions: { history: () => [{}], edit: async () => {
+    throw Object.assign(new Error('soul revision journal record was not published'), { code: 'revision-storage-failed' });
+  } } }), { code: 'revision-storage-failed' });
+  assert.equal(readFileSync(path.join(r.soulDir, 'soul.json'), 'utf8'), before);
+  assert.equal(showSoul(ID, { file: r.file }).comms, true);
+});
+
 test('usage errors and unknown souls fail clearly', async (t) => {
   const f = fixture(t);
   await assert.rejects(soulCommsCommand([], f.options), /usage: agent-bot soul comms/);

@@ -234,6 +234,24 @@ test('--trash: an archive edit recorded but not fully published still finishes, 
   assert.equal(result.json.revision, f.head());
 });
 
+// An archive edit whose journal publication is uncertain (#1010) may be
+// recorded: the skill is neither put back nor trashed, and the code surfaces.
+test('--trash: an uncertain archive edit neither puts the skill back nor trashes it', async t => {
+  const f = await trashFixture(t), before = f.head();
+  const result = await f.run(['uninstall', 'demo', '--soul', f.id, '--trash', '--json'], { ...f.owner, trashOptions: f.trashOptions,
+    runRevision: async (args, options) => {
+      await options.assertUser(`soul revision edit ${f.id}`, {});
+      throw Object.assign(new Error('soul revision journal record may have been published but is not known durable (ENOSPC)'), { code: 'revision-publication-uncertain' });
+    } });
+  assert.equal(result.code, 1);
+  assert.equal(result.json.error.code, 'revision-publication-uncertain');
+  assert.match(result.json.error.message, /not known durable \(ENOSPC\); skills\/demo was left at archive\//);
+  assert.equal(existsSync(path.join(f.directory, 'skills/demo')), false, 'not put back');
+  assert.ok(existsSync(path.join(f.directory, 'archive')), 'left in the archive');
+  assert.deepEqual(f.trashed(), []);
+  assert.equal(f.head(), before);
+});
+
 test('--trash: the skill is archived and recorded before it moves to the trash', async t => {
   const f = await trashFixture(t), before = f.head();
   let headAtMove, liveAtMove;

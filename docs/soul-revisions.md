@@ -69,7 +69,18 @@ On POSIX, snapshot files and directories are synchronized before journal
 publication. Journal-file fsync precedes its exclusive link, and directory fsync
 precedes success, history mirroring or working-file application. Sync failures
 throw; a complete record already linked before directory-fsync failure remains
-an uncertain publication, with no working files applied. Windows local commands
+an uncertain publication, with no working files applied.
+
+Each journal failure carries one of two codes (#1010). `revision-storage-failed`
+means the record never reached its final name: nothing was recorded, and a
+caller may undo its own preparation. `revision-publication-uncertain` means the
+record may be published but is not known durable: it is never success and never
+a refusal. The hard link itself can fail with ENOSPC after the record's data was
+written (the agent-comms#77 APFS lab), so after a failed link the final name is
+checked: proven absent or another file is a refusal, and anything else is
+uncertain. On an uncertain result, `soul comms`, launch comms, credential
+declaration and `soul skill uninstall --trash` keep the folder as it is instead of
+rolling it back, and the daemon returns the code. Windows local commands
 synchronize files but retain existing directory semantics; this does not claim
 POSIX crash durability there. None of these local records proves a request-linked
 owner-decision effect or enables broker owner-decision routes.
