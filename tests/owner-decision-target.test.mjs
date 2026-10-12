@@ -71,7 +71,7 @@ function counted({ file, stateDir }, request, options = {}) {
 }
 
 test('only the resolver that performs its own reads is exported', () => {
-  assert.deepEqual(Object.keys(target).sort(), ['TARGET_REFUSAL', 'resolveOwnerDecisionTarget']);
+  assert.deepEqual(Object.keys(target).sort(), ['TARGET_REFUSAL', 'resolveOwnerDecisionTarget', 'resolveOwnerDecisionTargetLocked']);
 });
 
 test('a live local soul of this account resolves after one census and one identity read', (t) => {

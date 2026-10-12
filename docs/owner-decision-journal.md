@@ -479,3 +479,28 @@ owner-decision action grammar: agent-comms `docs/owner-decisions.md` and
 The tests reproduce every category in the shared `v1.json` vectors: positive,
 display boundaries, serialization, negative encodings, primitives and native
 clock cases.
+
+## Final-entry identity port (disabled)
+
+The locked final entry can't launch a process or await, so it reads identity
+through an in-process port instead of `identityOp('read')`.
+
+- **The port.** `owner-decision-identity-port.mjs` (host) builds a frozen
+  `{ kind: "owner-decision-identity-read-v1", read(id) }`. It uses identity's
+  already-published `readAgentIdentity` (`identity-host.mjs`) in its new
+  opt-in `custody: "strict"` mode.
+- **Strict custody.** The record file is opened without following a link.
+  Through the same descriptor it must be a regular file with one link, owned by
+  this uid, writable by neither group nor others, the same object as its
+  name, and at most 64 KiB. It then passes the
+  same `validateIdentity`. Every existing caller keeps the default read
+  unchanged, and `identity-soul.mjs` is untouched.
+- **Trusted parents.** No-follow covers only the record's final path
+  component, so `stateDir` and its parent directories must themselves be
+  trusted (owned by this account or root, not writable by others).
+- **The locked resolver.** `resolveOwnerDecisionTargetLocked` (soul) takes only
+  that port. It checks the port's exact frozen shape, does the same fixed
+  census read, and calls `read` synchronously. Each of these gives the same
+  uniform target refusal: a missing or malformed port, a result that is a
+  promise or thenable, or any strict-custody failure (symlink, extra hard link,
+  foreign owner, oversize, invalid record).
