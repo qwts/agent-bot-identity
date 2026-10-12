@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
-import { daemonModeFor, daemonModelFor, daemonReasoningEffortFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
+import { ALLOW_RULES_NEED_OWNER, ALLOW_RULES_TOOL, daemonClaudeOptionsFor, daemonModeFor, daemonModelFor, daemonReasoningEffortFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
 import { listProposals } from '../agent-jobs.mjs';
 import { auditFile } from '../identity-format.mjs';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
@@ -664,4 +664,105 @@ test('an answer that cannot be receipted is neither applied nor kept', async (t)
   assert.equal(await modeFor(ID, { harness: 'claude', cwd: soulDir }), 'safe');
   assert.match(log[0], /could not be receipted; running safe/);
   assert.deepEqual(answers(env, home), []);
+});
+
+// Claude allow rules on a daemon turn (#379, owner decision 2026-10-11).
+// One Claude turn with the daemon's mode and allow-rule checks: the SDK
+// options the adapter received on session/new.
+async function allowTurn({ cwd, env, home, ask, modeFor = () => 'safe', effort = null, log = () => {} }) {
+  const chunks = [];
+  const executor = acpExecutorFor({
+    identities: () => ({}), baseEnv: { ...process.env, HOME: home }, policy: { version: 1, rules: [], fallback: 'approval' },
+    modeFor, reasoningEffortFor: () => effort, claudeOptionsFor: daemonClaudeOptionsFor({ env, home, config: {}, ask, log }),
+    createExecutor: (options) => createAcpExecutor({ ...options, registry: REGISTRY }),
+  })({ agentId: ID, harness: 'claude', cwd, env: {} });
+  await executor({ invocation: { agentId: ID }, message: 'model-probe', attachments: [],
+    appendEvent: (_type, data) => { if (data?.content?.text) chunks.push(data.content.text); return {}; },
+    addArtifact: () => ({}), signal: new AbortController().signal, requestApproval: async () => ({ decision: 'deny' }) });
+  return JSON.parse(chunks.at(-1)).sessionMeta?.claudeCode?.options ?? null;
+}
+const askRules = (options) => (options?.extraArgs ? JSON.parse(options.extraArgs.settings).permissions.ask : null);
+const allowAnswers = (env, home) => listProposals({}, { env, home }).filter((proposal) => proposal.tool === ALLOW_RULES_TOOL).map(({ status }) => status).sort();
+const allowReceipts = (env, home) => {
+  try { return readFileSync(auditFile({ env, home }), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.operation === 'loosen-allow-rules'); }
+  catch { return []; }
+};
+const declined = () => { throw Object.assign(new Error('the owner did not approve (cancelled)'), { code: 'owner-declined' }); };
+
+test('claude: a package allow rule nobody approved asks the daemon; the direct open reads it as rendered', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'safe', { permissions: { allow: ['Bash(git status)', 'Edit'], deny: ['Bash(rm *)'] } });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(soulDir, '.claude/settings.json'), 'utf8')).permissions.allow, ['Bash(git status)', 'Edit']);
+  const logs = [];
+  const options = await allowTurn({ cwd: soulDir, env, home, ask: headless, log: (line) => logs.push(line) });
+  assert.deepEqual(askRules(options), ['Bash(git status)', 'Edit']);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], new RegExp(`${ALLOW_RULES_NEED_OWNER}: ${ID}: the soul declares Claude allow rules; they ask the daemon, the owner could not be asked`));
+  // Nothing is kept, so the next turn asks again.
+  assert.deepEqual(allowAnswers(env, home), []);
+  const { asked, ask } = asker(() => ({ method: 'presence', via: 'agent-bot-keyd' }));
+  assert.equal(await allowTurn({ cwd: soulDir, env, home, ask }), null);
+  assert.equal(asked.length, 1);
+});
+
+test('claude: an approved allow rule set applies, is remembered, and a changed file asks again', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'safe', { permissions: { allow: ['Bash(git status)'] } });
+  const file = path.join(soulDir, '.claude/settings.json');
+  const { asked, ask } = asker(() => ({ method: 'presence', via: 'agent-bot-keyd' }));
+  assert.equal(await allowTurn({ cwd: soulDir, env, home, ask }), null);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], new RegExp(`^soul allow-rules ${ID} soul sha256:[0-9a-f]{64} ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+  assert.deepEqual(allowAnswers(env, home), ['approved']);
+  assert.deepEqual(allowReceipts(env, home).map(({ event, decision, reason }) => ({ event, decision, reason })), [{ event: 'soul-mode', decision: 'approved', reason: 'presence' }]);
+  assert.equal(await allowTurn({ cwd: soulDir, env, home, ask: () => assert.fail('remembered') }), null);
+  // A widened rule set is a new question.
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), permissions: { allow: ['Bash'] } }));
+  assert.deepEqual(askRules(await allowTurn({ cwd: soulDir, env, home, ask: declined })), ['Bash']);
+  assert.deepEqual(allowAnswers(env, home), ['approved', 'denied']);
+  assert.deepEqual(askRules(await allowTurn({ cwd: soulDir, env, home, ask: () => assert.fail('remembered') })), ['Bash']);
+});
+
+test('claude: a repo\'s project and local allow rules are one question, and a declined answer keeps them asking', async (t) => {
+  const { root, env, home } = fixture(t, 'safe');
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ permissions: { allow: ['Read', 'Bash(npm test)'], deny: ['Bash(curl *)'] } }));
+  writeFileSync(path.join(repo, '.claude/settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(npm test)', 'WebFetch'] } }));
+  const { asked, ask } = asker(declined);
+  // The effort the turn carries is kept beside the settings layer.
+  const options = await allowTurn({ cwd: repo, env, home, ask, effort: 'high' });
+  assert.deepEqual(askRules(options), ['Read', 'Bash(npm test)', 'WebFetch']);
+  assert.equal(options.effort, 'high');
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], / repo sha256:[0-9a-f]{64} .*settings\.json .*settings\.local\.json$/);
+  assert.deepEqual(allowReceipts(env, home).map(({ decision }) => decision), ['declined']);
+});
+
+test('claude: autopilot turns, no allow rules, and other harnesses are not checked', async (t) => {
+  const { root, env, home, soulDir } = fixture(t, 'safe', { permissions: { deny: ['Bash(rm *)'] } });
+  const never = () => assert.fail('nothing to ask');
+  assert.equal(await allowTurn({ cwd: soulDir, env, home, ask: never }), null);
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ permissions: { allow: ['Bash'] } }));
+  assert.equal(await allowTurn({ cwd: repo, env, home, ask: never, modeFor: () => 'autopilot' }), null);
+  const optionsFor = daemonClaudeOptionsFor({ env, home, config: {}, ask: never });
+  assert.equal(optionsFor(ID, { harness: 'codex', cwd: repo, mode: 'safe' }), null);
+  assert.equal(optionsFor(ID, { harness: 'claude', cwd: path.join(root, 'nowhere'), mode: 'safe' }), null);
+});
+
+test('claude: an allow file that cannot be read here is never approved blind; every tool asks', async (t) => {
+  const { root, env, home } = fixture(t, 'safe');
+  const repo = path.join(root, 'repo');
+  mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  writeFileSync(path.join(repo, '.claude/settings.json'), JSON.stringify({ permissions: { allow: ['Bash(make)'] } }));
+  writeFileSync(path.join(repo, '.claude/settings.local.json'), `{"permissions":{"allow":["Bash"]},"pad":"${'x'.repeat(1024 * 1024)}"}`);
+  const logs = [];
+  const options = await allowTurn({ cwd: repo, env, home, ask: () => assert.fail('not asked about unknown rules'), log: (line) => logs.push(line) });
+  assert.deepEqual(askRules(options), ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Bash(make)']);
+  assert.match(logs[0], new RegExp(`${ALLOW_RULES_NEED_OWNER}: ${ID}: a repo Claude settings file could not be read; every tool asks the daemon`));
+  // A linked file is read as Claude reads it.
+  rmSync(path.join(repo, '.claude/settings.local.json'));
+  writeFileSync(path.join(root, 'shared.json'), JSON.stringify({ permissions: { allow: ['WebSearch'] } }));
+  symlinkSync(path.join(root, 'shared.json'), path.join(repo, '.claude/settings.local.json'));
+  assert.deepEqual(askRules(await allowTurn({ cwd: repo, env, home, ask: declined })), ['Bash(make)', 'WebSearch']);
 });

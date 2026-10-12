@@ -1,0 +1,1 @@
+- On a safe daemon turn, Claude `permissions.allow` rules from the soul's rendered settings or a repo's `.claude/settings.json` / `.claude/settings.local.json` now go through the owner's ask-before-loosening prompt. If the owner declines, or can't be asked, those rules become `ask` for the session, so each matching call reaches the daemon's approval queue (#379).

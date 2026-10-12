@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -130,6 +130,47 @@ export function resolveSoulMode(agentId, { harness = null, cwd = null, soulDir =
   const stricter = layers.slice(index + 1).some(([, { mode }]) => mode === 'safe');
   if (declared === 'autopilot' && stricter) return { mode: 'safe', source, declared, code: LOOSENING_NEEDS_OWNER, file, digest };
   return { mode: declared, source, declared, code: null };
+}
+
+// Claude Code's `permissions.allow` rules in the turn's working directory
+// (#379, owner decision 2026-10-11). The pinned Claude adapter loads the
+// project and local settings there (`settingSources`), and the CLI runs a
+// matching tool without asking, so on a daemon turn an allow rule skips the
+// daemon's approval queue. They are a loosening like a declared autopilot:
+// the source is `soul` in the soul's own home (the package's rendering),
+// otherwise `repo`. Returns null when no file declares an allow rule, else
+// `{ source, files, digest, allow, unreadable }`. Unlike the mode layers, a
+// file is read even through a link, as Claude reads it; one that cannot be
+// read or is too large to read here is `unreadable`, so its rules are unknown.
+export const CLAUDE_ALLOW_FILES = Object.freeze(['.claude/settings.json', '.claude/settings.local.json']);
+const ALLOW_FILE_MAX = 1024 * 1024;
+export function claudeAllowLayer({ harness = null, cwd = null, soulDir = null } = {}) {
+  if (harness !== 'claude' || !cwd || !path.isAbsolute(cwd)) return null;
+  const real = (dir) => { try { return realpathSync(dir); } catch { return path.resolve(dir); } };
+  const files = [], allow = [], hashes = [];
+  let unreadable = false;
+  for (const name of CLAUDE_ALLOW_FILES) {
+    const file = path.join(cwd, name);
+    let text;
+    try {
+      if (statSync(file).size > ALLOW_FILE_MAX) throw new Error('too large');
+      text = readFileSync(file, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue;
+      files.push(file); hashes.push(`${file}\0unreadable`); unreadable = true;
+      continue;
+    }
+    let rules = null;
+    try { rules = JSON.parse(text)?.permissions?.allow; } catch { /* Claude cannot read it either */ }
+    const declared = Array.isArray(rules) ? rules.filter((rule) => typeof rule === 'string' && rule.length > 0) : [];
+    if (!declared.length) continue;
+    files.push(file);
+    hashes.push(`${file}\0${createHash('sha256').update(text, 'utf8').digest('hex')}`);
+    for (const rule of declared) if (!allow.includes(rule)) allow.push(rule);
+  }
+  if (!files.length) return null;
+  const source = soulDir && path.isAbsolute(soulDir) && real(cwd) === real(soulDir) ? 'soul' : 'repo';
+  return { source, files, digest: createHash('sha256').update(hashes.join('\n'), 'utf8').digest('hex'), allow, unreadable };
 }
 
 export function setSoulMode(agentId, mode, { env = process.env, home = homedir(), now = () => new Date() } = {}) {
