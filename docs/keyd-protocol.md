@@ -39,6 +39,20 @@ denies souls `vouch-key.pem` and keyd's directory and sockets in every tool,
 which is a cooperative hook, not an OS boundary
 ([confinement](confinement.md)).
 
+### Connection budgets (#1067)
+
+Each socket admits a bounded number of connections: 256 on the soul socket
+and 32 on the owner socket. The owner's budget is its own, so souls holding
+connections cannot crowd out an owner request. A connection past the budget is
+answered with JSON-RPC error `-32000` ("too many open connections") and closed.
+Once a message's first byte arrives, the whole line (at most 1 MiB) must
+follow within 10 seconds. An owner connection idle for 30 seconds is closed,
+because its clients send one request and leave. A soul connection may idle
+between messages, because the MCP relay (`agent-bot-keyd mcp`) holds one
+open for a whole harness session. Writes give up after 10 seconds, so a client
+that never reads its answers cannot hold a thread either. The limits are
+`LIMITS` in `keyd/src/server.rs`.
+
 ## Grants (agent-bot → keyd)
 
 ### Format
