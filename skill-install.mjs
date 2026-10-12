@@ -12,7 +12,7 @@ import { diffSkillManifest } from './skill-manifest.mjs';
 import { projectSkillSourceProvenance } from './skill-source-provenance.mjs';
 import { validateAgentId } from './identity-format.mjs';
 import { soulDirectory } from './agent-population.mjs';
-import { discardRevisionStaging, editSoulRevision, prepareRevisionEdit, revisionHistory } from './soul-revisions.mjs';
+import { discardRevisionStaging, editSoulRevision, prepareRevisionEdit, revisionHistory, revisionPublicationUncertain } from './soul-revisions.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -228,6 +228,11 @@ export async function trashSoulSkill(stage, agentId, { commit, trash = moveToTra
     });
   } catch (error) {
     if (!moved) { for (const dir of created.reverse()) try { rmdirSync(dir); } catch { /* not empty or gone */ } throw error; }
+    // The archive edit may be recorded but is not known durable (#1010):
+    // neither put the skill back nor go on to trash it.
+    if (revisionPublicationUncertain(error)) {
+      fail(error.code, `${error.message}; skills/${name} was left at ${archive}`);
+    }
     if (revisionHistory(agentId, options).at(-1)?.revision === before) {
       if (exists(path.join(target, 'install.json'))) renameSync(path.join(target, 'install.json'), record);
       renameSync(path.join(target, 'skill'), live);

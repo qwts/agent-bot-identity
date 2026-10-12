@@ -16,7 +16,7 @@ import { populationFile, setSoulComms, showSoul, showSoulByName, soulDirectory, 
 import { daemonStatus } from './daemon-status.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
 import { soulCommsSetting, writeSoulComms } from './soul-package.mjs';
-import { revisionHistory, editSoulRevision } from './soul-revisions.mjs';
+import { revisionHistory, editSoulRevision, revisionPublicationUncertain } from './soul-revisions.mjs';
 
 const USAGE = 'usage: agent-bot soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin]';
 
@@ -103,6 +103,9 @@ export async function soulCommsCommand(argv, {
         ...(authorization?.method ? { authorization } : {}) });
     }
   } catch (error) {
+    // An uncertain revision may already record the change (#1010); undoing
+    // the folder and census under it would contradict the journal.
+    if (revisionPublicationUncertain(error)) throw error;
     if (censusWritten) { try { setSoulComms(soul.id, census, { file }); } catch { /* reported by the original error */ } }
     if (previous !== null) writeFileSync(path.join(before.directory, 'soul.json'), previous);
     throw error;

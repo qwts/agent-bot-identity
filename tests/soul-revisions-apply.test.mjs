@@ -316,7 +316,10 @@ test('snapshot and journal sync failures never acknowledge or begin working-file
         return original.sync(fd);
       };
       syncBuiltinESMExports();
-      await assert.rejects(editSoulRevision(f.id, f.copy, { ...f.options, reason: 'No ack', apply: true }), { code: 'EIO' });
+      // Before the journal: the raw error. The journal record itself never
+      // reached its name: refused. Linked but not synced: uncertain (#1010).
+      await assert.rejects(editSoulRevision(f.id, f.copy, { ...f.options, reason: 'No ack', apply: true }), {
+        code: { 'object-file': 'EIO', 'journal-file': 'revision-storage-failed', 'journal-directory': 'revision-publication-uncertain' }[boundary] });
     } finally {
       fs.openSync = original.open; fs.closeSync = original.close; fs.fsyncSync = original.sync; fs.linkSync = original.link; syncBuiltinESMExports();
     }
@@ -327,6 +330,52 @@ test('snapshot and journal sync failures never acknowledge or begin working-file
     // Complete published-but-uncertain JSON is retained; no partial record and no mirror/apply acknowledgment.
     for (const name of readdirSync(journal).filter(name => /^\d{10}\.json$/.test(name))) JSON.parse(readFileSync(join(journal, name), 'utf8'));
     assert(!readdirSync(journal).some(name => name.endsWith('.tmp')));
+  });
+});
+
+// The agent-comms#77 APFS lab: the hard link that publishes a journal record
+// can fail with ENOSPC after the record's data was written and synced
+// (#1010). A link that left no final name is a clean refusal; one whose name
+// may exist is uncertain. Neither mirrors history or applies files.
+test('ENOSPC at the journal link step refuses cleanly or reports uncertainty, never success', posix, async (t) => {
+  for (const variant of ['no-name', 'name-created']) await t.test(variant, async (t) => {
+    const f = fixture(t), before = definition(tree(f.directory));
+    const journal = join(f.options.stateDir, 'soul-revisions', f.id);
+    const mirror = join(f.directory, '.soul-state', 'runs', 'revisions.jsonl');
+    const mirrorBefore = existsSync(mirror) ? readFileSync(mirror) : null;
+    writeFileSync(join(f.copy, 'AGENTS.md'), 'Must not apply');
+    const original = fs.linkSync;
+    let injected = false;
+    try {
+      fs.linkSync = (from, to) => {
+        if (String(to).startsWith(`${journal}/`) && /\/\d{10}\.json$/.test(String(to))) {
+          injected = true;
+          if (variant === 'name-created') original(from, to);
+          throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+        }
+        return original(from, to);
+      };
+      syncBuiltinESMExports();
+      await assert.rejects(editSoulRevision(f.id, f.copy, { ...f.options, reason: 'No space', apply: true }), (error) => {
+        assert.equal(error.code, variant === 'no-name' ? 'revision-storage-failed' : 'revision-publication-uncertain');
+        assert.equal(error.cause?.code, 'ENOSPC');
+        assert.match(error.message, variant === 'no-name' ? /not published \(ENOSPC\); nothing was recorded/ : /may have been published/);
+        return true;
+      });
+    } finally { fs.linkSync = original; syncBuiltinESMExports(); }
+    assert(injected);
+    assert.deepEqual(definition(tree(f.directory)), before, 'no working file applied');
+    assert.deepEqual(existsSync(mirror) ? readFileSync(mirror) : null, mirrorBefore, 'no history mirror');
+    assert(!existsSync(join(journal, '.lock')));
+    assert(!readdirSync(journal).some((name) => name.endsWith('.tmp')));
+    assert.equal(revisionHistory(f.id, f.options).length, variant === 'no-name' ? 1 : 2);
+    if (variant === 'no-name') {
+      // Nothing half-published: once space returns, the same edit records at
+      // the same position.
+      const record = await editSoulRevision(f.id, f.copy, { ...f.options, reason: 'Space returned', apply: true });
+      assert.equal(revisionHistory(f.id, f.options).at(-1).revision, record.revision);
+      assert.equal(readFileSync(join(f.directory, 'AGENTS.md'), 'utf8'), 'Must not apply');
+    }
   });
 });
 

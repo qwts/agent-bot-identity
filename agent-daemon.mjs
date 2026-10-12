@@ -119,7 +119,8 @@ import { computePackageRevision, soulCredentialsDeclaration, validateSoulPackage
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
 import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
-import { editSoulRevision, listSoulProposals, revisionCommand, revisionHistory } from './soul-revisions.mjs';
+import { editSoulRevision, listSoulProposals, REVISION_PUBLICATION_UNCERTAIN, REVISION_STORAGE_FAILED, revisionCommand, revisionHistory,
+  revisionPublicationUncertain } from './soul-revisions.mjs';
 import { acpExecutorFor, composeTurnEnv, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
 import { recordSoulSession } from './metrics.mjs';
 import { createTaskReporter } from './task-turns.mjs';
@@ -988,7 +989,8 @@ export function createDaemonServer({
       const failure = operationError(error);
       // Dream, inbox and grant codes are fixed identifiers, so clients can act on them.
       sendJson(res, failure.statusCode, { error: failure.message,
-        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES].includes(error.code)
+        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES,
+          REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN].includes(error.code)
           || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
         // The unsigned challenges a decision route asks the owner to sign (#753).
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
@@ -1640,7 +1642,9 @@ export async function recordLaunchComms({ agentId, package: packagePath, comms, 
     }
     return recorded;
   } catch (error) {
-    if (previous !== null) {
+    // An uncertain revision may already hold the new setting (#1010): the
+    // launch fails, but the folder is not rolled back under it.
+    if (previous !== null && !revisionPublicationUncertain(error)) {
       writeFileSync(path.join(directory, 'soul.json'), previous);
       if (census !== null) { try { setSoulComms(agentId, census, { file }); } catch { /* the launch fails either way */ } }
     }

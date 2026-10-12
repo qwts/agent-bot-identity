@@ -89,19 +89,58 @@ function syncPackageTree(directory) {
   }
   syncDirectory(directory);
 }
+// Journal publication outcomes (#1010). A record that was proven not to
+// reach its final name is a clean refusal: nothing was recorded, and the
+// caller may undo its own preparation. One that may have reached it, but is
+// not known durable, is uncertain: never success, never a refusal, and never
+// permission to mirror, apply or roll back. The APFS lab (agent-comms#77)
+// showed the hard link itself can fail with ENOSPC after the record's data
+// was written, so the link step decides which one it is.
+export const REVISION_STORAGE_FAILED = 'revision-storage-failed';
+export const REVISION_PUBLICATION_UNCERTAIN = 'revision-publication-uncertain';
+export function revisionPublicationUncertain(error) {
+  return error?.code === REVISION_PUBLICATION_UNCERTAIN;
+}
+function journalFailure(published, cause) {
+  const reason = cause?.code ?? 'error';
+  return Object.assign(new Error(published
+    ? `soul revision journal record may have been published but is not known durable (${reason}); read the revision history before retrying`
+    : `soul revision journal record was not published (${reason}); nothing was recorded`),
+  { code: published ? REVISION_PUBLICATION_UNCERTAIN : REVISION_STORAGE_FAILED, cause });
+}
+// After a failed link: false only when the final name is proven absent or
+// proven to be another file. Anything that cannot be proven is a possible
+// publication.
+function maybeLinked(temp, final) {
+  let ours;
+  try { ours = lstatSync(temp); } catch { return true; }
+  try {
+    const found = lstatSync(final);
+    return found.ino === ours.ino && found.dev === ours.dev;
+  } catch (error) { return error.code !== 'ENOENT'; }
+}
 function append(root, event, options) {
   const record = { schemaVersion: 1, ...event, at: (options.now ?? (() => new Date()))().toISOString() };
   const temp = join(root, `.${randomUUID()}.tmp`);
+  const final = join(root, `${String(events(root).length).padStart(10, '0')}.json`);
   try {
-    const fd = openSync(temp, 'wx', 0o600);
-    try { writeFileSync(fd, JSON.stringify(record) + '\n'); fsyncSync(fd); }
-    finally { closeSync(fd); }
+    try {
+      const fd = openSync(temp, 'wx', 0o600);
+      try { writeFileSync(fd, JSON.stringify(record) + '\n'); fsyncSync(fd); }
+      finally { closeSync(fd); }
+    } catch (error) { throw journalFailure(false, error); }
     // Publish complete JSON exclusively; no partially written journal records.
-    linkSync(temp, join(root, `${String(events(root).length).padStart(10, '0')}.json`));
+    try { linkSync(temp, final); }
+    catch (error) { throw journalFailure(maybeLinked(temp, final), error); }
     // A failed directory sync is an uncertain publication, never success or
     // permission to mirror/apply files. Keep the complete exclusive record.
-    syncDirectory(root);
-  } finally { rmSync(temp, { force: true }); }
+    try { syncDirectory(root); }
+    catch (error) { throw journalFailure(true, error); }
+  } finally {
+    // The temporary name is never read as a record; a leftover one changes
+    // no outcome above.
+    try { rmSync(temp, { force: true }); } catch { /* ignored by events() */ }
+  }
   if (record.kind === 'revision') mirrorRevision(basename(root), record, options);
   return record;
 }

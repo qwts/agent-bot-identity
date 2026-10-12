@@ -37,7 +37,7 @@ import {
 import { declaredProviders } from './soul-providers.mjs';
 import { readSoulManifest } from './soul-runtimes.mjs';
 import { soulCredentialsDeclaration, writeSoulCredentialsDeclaration } from './soul-package.mjs';
-import { editSoulRevision, revisionHistory } from './soul-revisions.mjs';
+import { editSoulRevision, revisionHistory, revisionPublicationUncertain } from './soul-revisions.mjs';
 
 const USAGE = 'usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli | --from-namespace OLD [--from-vault OLD] | --from-vault OLD] [--dry-run] [--json] [--principal-stdin]';
 
@@ -142,7 +142,8 @@ export async function migrateCredentialsCommand(argv, {
           ...(authorization?.method ? { authorization } : {}) });
       }
     } catch (error) {
-      writeFileSync(path.join(soulDir, 'soul.json'), previous);
+      // Not under an uncertain revision that may already record it (#1010).
+      if (!revisionPublicationUncertain(error)) writeFileSync(path.join(soulDir, 'soul.json'), previous);
       throw error;
     }
   };
