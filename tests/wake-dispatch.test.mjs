@@ -496,3 +496,100 @@ test('the broker\'s numeric sequence cursor is accepted and forwarded (#256)', a
   assert.equal(sent[0].cursor, 42);
   assert.equal(reports.length, 1);
 });
+
+// --- diagnostics (#983, #1027) ----------------------------------------------
+
+const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
+const SPAN = '00f067aa0ba902b7';
+const TRACEPARENT = `00-${TRACE}-${SPAN}-01`;
+
+function recorded() {
+  const events = [];
+  return { events, diagnostics: { record: (fields) => { events.push(fields); return true; } } };
+}
+
+test('every dispatch path records one wake event with its stage, outcome and code', async () => {
+  const cases = [
+    ['warm', { pool: fakePool({ sockets: { [AGENT_ID]: 1 } }) }, ['warm', 'ok', undefined]],
+    ['warm failed', { pool: fakePool({ sockets: { [AGENT_ID]: 1 }, failing: [AGENT_ID] }) }, ['warm', 'failed', 'wake-warm-failed']],
+    ['cold', { pool: fakePool(), coldWake: async () => ({ outcome: 'cold', detail: 'turn started' }) }, ['cold', 'ok', undefined]],
+    ['merged', { pool: fakePool(), coldWake: async () => ({ outcome: 'cold', detail: 'merged into the active turn', merged: true }) }, ['merged', 'ok', undefined]],
+    ['cold off', { pool: fakePool(), coldWake: async () => null }, ['waiting', 'refused', 'wake-cold-off']],
+    ['cold waiting', { pool: fakePool(), coldWake: async () => ({ outcome: 'waiting' }) }, ['waiting', 'refused', 'wake-cold-off']],
+    ['no cold path', { pool: fakePool() }, ['waiting', 'refused', 'wake-cold-off']],
+    ['cold threw', { pool: fakePool(), coldWake: async () => { throw new Error('acp stderr secret'); } }, ['cold', 'failed', 'wake-cold-failed']],
+    ['paused', { pool: fakePool({ sockets: { [AGENT_ID]: 1 } }), isPaused: () => true }, ['waiting', 'refused', 'wake-paused']],
+  ];
+  for (const [name, ports, expected] of cases) {
+    const { events, diagnostics } = recorded();
+    const sinks = fakeSinks();
+    await dispatchWake(wakeEvent(), { report: sinks.report, receipt: sinks.receipt, ...ports, diagnostics });
+    assert.equal(events.length, 1, name);
+    assert.deepEqual([events[0].stage, events[0].outcome, events[0].code], expected, name);
+    assert.equal(events[0].event, 'wake');
+    assert.equal(events[0].agentId, AGENT_ID);
+    assert.ok(events[0].durationMs >= 0);
+    assert.equal(Object.hasOwn(events[0], 'detail'), false, `${name}: no detail is recorded`);
+  }
+});
+
+test('a valid traceparent makes the wake a child span; none or an invalid one starts a new root', async () => {
+  const spanOf = async (overrides) => {
+    const { events, diagnostics } = recorded();
+    const sinks = fakeSinks();
+    await dispatchWake(wakeEvent(overrides), { pool: fakePool({ sockets: { [AGENT_ID]: 1 } }), report: sinks.report, receipt: sinks.receipt, diagnostics });
+    return events[0];
+  };
+  const child = await spanOf({ traceparent: TRACEPARENT });
+  assert.deepEqual([child.traceId, child.parentSpanId], [TRACE, SPAN]);
+  assert.notEqual(child.spanId, SPAN);
+  for (const overrides of [{}, { traceparent: 'garbage' }, { traceparent: TRACEPARENT.toUpperCase() }, { traceparent: ` ${TRACEPARENT}` }, { traceparent: 42 }]) {
+    const root = await spanOf(overrides);
+    assert.match(root.traceId, /^[0-9a-f]{32}$/);
+    assert.notEqual(root.traceId, TRACE);
+    assert.equal(root.parentSpanId, undefined);
+  }
+});
+
+test('the traceparent never reaches the warm frame, the broker report, the receipt or the cold path input', async () => {
+  const { diagnostics } = recorded();
+  const sinks = fakeSinks();
+  const pool = fakePool({ sockets: { [AGENT_ID]: 1 } });
+  await dispatchWake(wakeEvent({ traceparent: TRACEPARENT }), { pool, report: sinks.report, receipt: sinks.receipt, diagnostics });
+  let coldInput = null;
+  await dispatchWake(wakeEvent({ traceparent: TRACEPARENT }), {
+    pool: fakePool(), report: sinks.report, receipt: sinks.receipt, diagnostics,
+    coldWake: async (event) => { coldInput = event; return { outcome: 'cold' }; },
+  });
+  const text = JSON.stringify([pool.state.frames, sinks.reports, sinks.receipts]);
+  assert.equal(text.includes('traceparent'), false);
+  assert.equal(text.includes(TRACE), false);
+  // The cold waker reads only agentId, count, cursor and messageIds (cold-wake.mjs).
+  assert.ok(coldInput);
+});
+
+test('wake diagnostics never change a dispatch, even when the recorder or the report fails', async () => {
+  const sinks = fakeSinks();
+  const result = await dispatchWake(wakeEvent({ traceparent: TRACEPARENT }), {
+    pool: fakePool({ sockets: { [AGENT_ID]: 1 } }), report: sinks.report, receipt: sinks.receipt,
+    diagnostics: { record: () => { throw new Error('disk full'); } },
+  });
+  assert.equal(result.outcome, 'warm');
+  assert.equal(sinks.reports.length, 1);
+  const { events, diagnostics } = recorded();
+  await assert.rejects(dispatchWake(wakeEvent(), {
+    pool: fakePool({ sockets: { [AGENT_ID]: 1 } }), report: async () => { throw new Error('broker away'); }, diagnostics,
+  }), /broker away/);
+  assert.deepEqual([events[0].stage, events[0].outcome, events[0].code], ['warm', 'failed', 'wake-report-failed']);
+  // Without a diagnostics port nothing is recorded and nothing changes.
+  const plain = await dispatchWake(wakeEvent({ traceparent: TRACEPARENT }), { pool: fakePool({ sockets: { [AGENT_ID]: 1 } }), report: fakeSinks().report });
+  assert.equal(plain.outcome, 'warm');
+});
+
+test('wake codes are registered with the kinds the dispatcher gives them', async () => {
+  const { readFileSync } = await import('node:fs');
+  const registry = JSON.parse(readFileSync(new URL('../governance/error-codes.json', import.meta.url), 'utf8'));
+  const kinds = new Map(registry.codes.map((entry) => [entry.code, entry.kind]));
+  assert.deepEqual(['wake-paused', 'wake-cold-off', 'wake-warm-failed', 'wake-cold-failed', 'wake-report-failed'].map((code) => kinds.get(code)),
+    ['refusal', 'refusal', 'failure', 'failure', 'failure']);
+});

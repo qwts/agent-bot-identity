@@ -194,7 +194,7 @@ export function createColdWaker({ isPaused = () => false, executor, settings, sn
           if (!isPaused(agentId)) await takeOwnerReplies(flight.soul, await relay.read(flight.soul), { strict: false });
         }).catch((error) => log(`owner reply scan for ${agentId} failed: ${describeError(error)}`));
       }
-      return { outcome: 'cold', detail: 'merged into the active turn' };
+      return { outcome: 'cold', detail: 'merged into the active turn', merged: true };
     }
     // `done` covers the whole flight, setup included, so idle() never
     // returns while a wake is still resolving its binding.
