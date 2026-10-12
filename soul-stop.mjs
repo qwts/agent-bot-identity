@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { daemonClient } from './daemon-client.mjs';
 import { validateAgentId } from './identity-format.mjs';
 import { populationFile, showSoul, showSoulByName } from './agent-population.mjs';
-import { soulMarkers } from './owner-gate.mjs';
+import { soulMarkers } from './identity-soul.mjs';
 
 export async function soulControlCommand(action, argv, {
   env = process.env, home = homedir(), cwd = process.cwd(),

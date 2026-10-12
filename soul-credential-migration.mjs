@@ -16,9 +16,9 @@ import { listSouls, populationFile, showSoul, showSoulByName, soulDirectory } fr
 import { appendAuditReceipt, credentialNamespace, credentialVault, itemTitle, managedAppItem, NAMESPACE_VARIABLE, soulAppItem, soulSecretItem, validateAgentId, VAULT_VARIABLE } from './identity-format.mjs';
 import { loadConfig } from './config.mjs';
 import { profileAppSlugs } from './organization-profile.mjs';
-import { assertOwnerAction, soulMarkers } from './owner-gate.mjs';
 import {
   appStoreTarget,
+  assertOwnerAction,
   credentialStores,
   defaultCredentialStore,
   legacyAppFolderStatus,
@@ -29,6 +29,7 @@ import {
   readManagedAppCredential,
   readSoulCredential,
   readSoulSecret,
+  soulMarkers,
   verifyAppCredential,
   writeSoulCredential,
   writeSoulSecret,
