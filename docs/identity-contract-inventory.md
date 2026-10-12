@@ -490,7 +490,6 @@ how each one is done, and §9 puts them in order.
   and bot reads. The three files kept in cli in step 2 stay in cli and keep
   passing soul into identity's functions. A module-boundaries test now holds
   every cli file to listed contracts.
-- **F14. Assign the non-`.mjs` identity assets.** The extraction plan has to
 - **F14. Assign the non-`.mjs` identity assets.** *Done (2026-10-11, owner
   answer):*
   - The module map's `assets` assigns `keyd/`,
