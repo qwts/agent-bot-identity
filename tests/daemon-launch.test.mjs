@@ -1296,3 +1296,28 @@ test('the broker gets a redacted failure detail with its code and fix-it command
   await long.handler(event, long.ports);
   assert.ok(long.reports[0].detail.length <= 512);
 });
+
+test('a launch continues only an exact v00 traceparent; near misses start a new trace (#1027)', async (t) => {
+  const trace = '4bf92f3577b34da6a3ce929d0e0e4736';
+  const span = '00f067aa0ba902b7';
+  const exact = `00-${trace}-${span}-01`;
+  const launchOf = async (traceparent, requestId) => {
+    const recorded = [];
+    const f = fixture(t, { joinSoul: async () => 'addr', diagnostics: { record: (fields) => { recorded.push(fields); return true; } } });
+    await f.handler({ ...event, requestId, ...(traceparent === undefined ? {} : { traceparent }) }, f.ports);
+    assert.equal(f.reports[0].status, 'launched', 'the trace never changes the launch');
+    return recorded.find((e) => e.event === 'launch');
+  };
+  const continued = await launchOf(exact, 'exact');
+  assert.deepEqual([continued.traceId, continued.parentSpanId], [trace, span]);
+  const nearMisses = [` ${exact}`, `${exact} `, `${exact}\n`, `01-${trace}-${span}-01`, `01-${trace}-${span}-01-future`,
+    `00-${trace.toUpperCase()}-${span}-01`, `00-${'0'.repeat(32)}-${span}-01`, `00-${trace}-${'0'.repeat(16)}-01`, `${exact}-extra`, 42, null];
+  for (const [index, traceparent] of nearMisses.entries()) {
+    const root = await launchOf(traceparent, `miss-${index}`);
+    assert.notEqual(root.traceId, trace, JSON.stringify(traceparent));
+    assert.equal(root.parentSpanId, undefined, JSON.stringify(traceparent));
+    assert.match(root.traceId, /^[0-9a-f]{32}$/);
+  }
+  const none = await launchOf(undefined, 'none');
+  assert.equal(none.parentSpanId, undefined);
+});

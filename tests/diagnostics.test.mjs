@@ -127,7 +127,13 @@ test('traceparent parses only valid W3C values and links child spans', () => {
     `ff-${TRACE}-${SPAN}-01`, `00-${'0'.repeat(32)}-${SPAN}-01`, `00-${TRACE}-${'0'.repeat(16)}-01`,
     `00-${TRACE.toUpperCase()}-${SPAN}-01`, `00-${TRACE}-${SPAN}-01-extra`, 'garbage', null, 42,
   ]) assert.equal(parseTraceparent(bad), null, String(bad));
-  assert.deepEqual(parseTraceparent(`01-${TRACE}-${SPAN}-00-future`), { traceId: TRACE, spanId: SPAN, flags: '00' });
+  // Exactly the grammar agent-comms forwards: v00, 55 characters, no trim, no other version (#1027).
+  for (const bad of [
+    `01-${TRACE}-${SPAN}-00-future`, `01-${TRACE}-${SPAN}-00`, ` 00-${TRACE}-${SPAN}-01`, `00-${TRACE}-${SPAN}-01 `,
+    `00-${TRACE}-${SPAN}-01\n`, `\t00-${TRACE}-${SPAN}-01`, `00-${TRACE}-${SPAN}-0`, `00-${TRACE}-${SPAN}-001`,
+    `00-${TRACE}-${SPAN}-0g`, `00_${TRACE}-${SPAN}-01`,
+  ]) assert.equal(parseTraceparent(bad), null, JSON.stringify(bad));
+  assert.deepEqual(parseTraceparent(`00-${TRACE}-${SPAN}-00`), { traceId: TRACE, spanId: SPAN, flags: '00' });
 
   const child = startSpan(valid);
   assert.equal(child.traceId, TRACE);
