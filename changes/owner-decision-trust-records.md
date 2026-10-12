@@ -1,0 +1,1 @@
+- Add disabled owner-decision trust records: an immutable pinned broker namespace and one-active, hash-chained receipt/presence key pins with durable audit confirmation; no ceremony, route or activation (#1007).
