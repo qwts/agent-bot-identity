@@ -20,6 +20,7 @@ import process from 'node:process';
 import { createHash, createPublicKey, randomUUID } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
 import { vouchDaemonKey } from './vouch.mjs';
+import { presencePinPath } from './owner-presence.mjs';
 
 export const TRUST_LIMITS = Object.freeze({ versions: 1024, record: 1024, confirmation: 512, auditLine: 512 });
 // One namespace line plus one line per key version; reconcile appends only
@@ -122,6 +123,24 @@ function ownDaemonKey(supplied, { env, home }) {
   if (supplied !== undefined && supplied !== derived) fail('owner-trust-daemon-key-mismatch');
   return derived;
 }
+
+// keyd's legacy presence key (raw 32 bytes), which the native p1 presenceKey
+// must never be. A test or caller may inject it (base64 or base64url, or null
+// for none); by default it is read from keyd's cached pin, presence.pub, as a
+// plain file read. The code-signed re-derivation (pinnedPresenceKey) is not
+// run here: it executes codesign and keyd, may touch keyd's Keychain item,
+// and writes the cache and audit receipts. The cache is a deny-list only: a
+// wrong or missing cache can add refusals or miss one, never grant trust.
+function legacyPresenceRaw(injected, { env, home }) {
+  const decode = (text) => {
+    if (typeof text !== 'string' || !/^[A-Za-z0-9+/_-]{43}=?$/.test(text)) return null;
+    const raw = Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    return raw.length === 32 ? raw : null;
+  };
+  if (injected !== undefined) return injected === null ? null : decode(injected);
+  try { return decode(fs.readFileSync(presencePinPath({ env, home }), 'utf8').trim()); } catch { return null; }
+}
+const isLegacyPresence = (pin, legacy) => legacy !== null && Buffer.from(pin.publicKey, 'base64url').equals(legacy);
 
 // The broker runs in its own service account: never root, never the owner.
 function validBrokerUid(uid) {
@@ -380,13 +399,15 @@ function readAudit(io, root) {
   return lines;
 }
 
-function ready(graph, expectedNamespaceDigest, daemonKey) {
+function ready(graph, expectedNamespaceDigest, daemonKey, legacyPresence = null) {
   if (expectedNamespaceDigest !== undefined && graph.namespaceDigest !== expectedNamespaceDigest) fail();
   if (graph.pending.length > 0) fail('owner-trust-audit-pending');
   if (!graph.active) fail('owner-trust-no-active-key');
   const { value } = graph.active;
   // A pin that is this daemon's own vouch key confuses roles: no authority.
   if (daemonKey !== undefined && (value.receiptKey.keyId === daemonKey || value.presenceKey.keyId === daemonKey)) fail('owner-trust-role');
+  // The presence pin is the native p1 signer, never keyd's legacy seed.
+  if (isLegacyPresence(value.presenceKey, legacyPresence)) fail('owner-trust-role');
   return {
     state: 'ready', namespaceDigest: graph.namespaceDigest, version: value.version,
     receiptKey: value.receiptKey, presenceKey: value.presenceKey, service: value.service,
@@ -404,13 +425,13 @@ function platformCheck() {
 // The daemonKey (SHA-256 of this daemon's vouch SPKI DER) is derived from the
 // vouch key under `env`/`home`; a supplied `daemonKey` must equal it. A pin
 // equal to it is always refused.
-export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, env = process.env, home = homedir(), io = fs } = {}) {
+export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, legacyPresenceKey, env = process.env, home = homedir(), io = fs } = {}) {
   platformCheck();
   if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
   const ownKey = ownDaemonKey(daemonKey, { env, home });
   try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }
   const lock = acquireLock(io, root);
-  try { return ready(readGraph(io, root), namespaceDigest, ownKey); }
+  try { return ready(readGraph(io, root), namespaceDigest, ownKey, legacyPresenceRaw(legacyPresenceKey, { env, home })); }
   catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
   finally { io.closeSync(lock); }
 }
@@ -420,7 +441,7 @@ export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, env =
 // `maxVersions` may only lower the fixed capacity (tests use it to reach the
 // limit); the reader always enforces TRUST_LIMITS.versions.
 export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}, now = () => Math.floor(Date.now() / 1000),
-  maxVersions = TRUST_LIMITS.versions, env = process.env, home = homedir() } = {}) {
+  maxVersions = TRUST_LIMITS.versions, env = process.env, home = homedir(), legacyPresenceKey } = {}) {
   platformCheck();
   if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
   const capacity = Math.min(TRUST_LIMITS.versions, maxVersions);
@@ -567,7 +588,8 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     enrollKeys({ receiptKey, presenceKey, brokerUid, daemonKey, at = now(), auditId = randomUUID() } = {}) {
       const receipt = ed25519KeyPin(receiptKey), presence = ed25519KeyPin(presenceKey);
       const ownKey = ownDaemonKey(daemonKey, { env, home });
-      if (receipt.keyId === presence.keyId || receipt.keyId === ownKey || presence.keyId === ownKey) fail('owner-trust-invalid-input');
+      if (receipt.keyId === presence.keyId || receipt.keyId === ownKey || presence.keyId === ownKey
+        || isLegacyPresence(presence, legacyPresenceRaw(legacyPresenceKey, { env, home }))) fail('owner-trust-invalid-input');
       if (!validBrokerUid(brokerUid) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
       return appendKeyRecord((graph, chain) => {
         if (graph.active) fail('owner-trust-conflict');

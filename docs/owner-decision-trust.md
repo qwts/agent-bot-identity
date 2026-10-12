@@ -57,7 +57,33 @@ the trust root, never creating a key).
   derived value. A mismatch refuses with `bad-request`.
 - A missing or invalid vouch key refuses with `owner-decision-unsupported`.
   The key is never derived from input.
-- An active pin equal to it refuses (`owner-decision-unsupported`). `service.brokerUid` is the broker's
+- An active pin equal to it refuses (`owner-decision-unsupported`).
+
+**Four distinct key roles.** Never confuse these four:
+
+| Key | Role |
+| --- | --- |
+| The native enrollment key | Used only for enrollment. |
+| The native agent-bot-owner p1 signer | The trust record's `presenceKey`. |
+| The broker's `receiptKey` | Signs receipts. |
+| This daemon's vouch key | The source of `daemonKey`. |
+
+`presenceKey` must pin the future native p1 signer, **never keyd's legacy
+presence seed**.
+- **Refusal.** An enrollment whose `presenceKey` equals keyd's legacy presence
+  key refuses with `bad-request`. Readiness with such an active pin refuses
+  with `owner-decision-unsupported`.
+- **Where the legacy key comes from.** By default it is read, prompt-free, from
+  keyd's cached pin `presence.pub` (`presencePinPath`). A caller or test may
+  inject it as `legacyPresenceKey`; `null` means none.
+- **The cache is a deny-list only.** A soul could write that file, so it can
+  add refusals or miss one, but it never grants trust.
+- **Why not re-derive it.** The code-signed re-derivation
+  (`pinnedPresenceKey` / `pinnedPresenceKeyWithoutDialog`) is deliberately not
+  run in trust checks. It executes `codesign` and the keyd binary, may touch
+  keyd's Keychain item, and writes the cache and audit receipts. Its stronger
+  check is left to the enrollment ceremony, which independently verifies the
+  native signer. `service.brokerUid` is the broker's
 own service account: never 0 and never the owner's uid. A stored enrollment
 that breaks this rule is refused as damage.
 

@@ -13,6 +13,7 @@ import {
   TRUST_LIMITS, createOwnerDecisionTrustWriter, ed25519KeyPin, ownerDecisionTrustRoot, readOwnerDecisionTrust, trustError,
 } from '../identity/owner-decision-trust.mjs';
 import { loadOrCreateVouchKey, vouchDaemonKey, vouchStateDir } from '../identity/vouch.mjs';
+import { presencePinPath } from '../identity/owner-presence.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);
@@ -35,8 +36,9 @@ function freshRoot(t) {
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   return path.join(base, 'trust');
 }
-const read = (root, options = {}) => readOwnerDecisionTrust({ root, env, ...options });
-const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, env, ...options });
+// home is the scratch directory too, so keyd's presence cache is never the real one.
+const read = (root, options = {}) => readOwnerDecisionTrust({ root, env, home: vouchState, ...options });
+const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, env, home: vouchState, ...options });
 // Every file under the root, for "kept as found" checks.
 function snapshot(root) {
   const out = {};
@@ -429,4 +431,36 @@ test('a stored enrollment naming root or the owner as the broker is refused as d
       assert.throws(() => read(root), refused('owner-trust-corrupt', 'storage-failed'));
     });
   }
+});
+
+test('the presence pin is the native p1 signer, never keyd\'s legacy presence key', darwin, async (t) => {
+  const asBase64 = (x) => Buffer.from(x, 'base64url').toString('base64');
+  await t.test('an injected legacy key refuses enrollment and readiness, in either encoding', (tt) => {
+    const root = freshRoot(tt);
+    writer(root).enrollNamespace({ namespaceDigest });
+    const enrolled = keys();
+    for (const legacyPresenceKey of [enrolled.presenceKey, asBase64(enrolled.presenceKey)]) {
+      assert.throws(() => writer(root, { legacyPresenceKey }).enrollKeys(enrolled), refused('owner-trust-invalid-input', 'bad-request'));
+    }
+    assert.equal(fs.existsSync(path.join(root, 'keys')), false);
+    // The rule is about presence only: a receipt key equal to it is a different role check.
+    writer(root, { legacyPresenceKey: rawKey() }).enrollKeys(enrolled);
+    assert.equal(read(root, { legacyPresenceKey: null }).state, 'ready');
+    assert.throws(() => read(root, { legacyPresenceKey: asBase64(enrolled.presenceKey) }), refused('owner-trust-role', 'owner-decision-unsupported'));
+    assert.equal(read(root, { legacyPresenceKey: enrolled.receiptKey }).state, 'ready');
+  });
+  await t.test('by default keyd\'s cached pin is read, prompt-free, as a deny-list', (tt) => {
+    const root = freshRoot(tt);
+    writer(root).enrollNamespace({ namespaceDigest });
+    const enrolled = keys(), cache = presencePinPath({ env, home: vouchState });
+    fs.mkdirSync(path.dirname(cache), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(cache, `${asBase64(enrolled.presenceKey)}\n`, { mode: 0o600 });
+    tt.after(() => fs.rmSync(cache, { force: true }));
+    assert.throws(() => writer(root).enrollKeys(enrolled), refused('owner-trust-invalid-input'));
+    writer(root, { legacyPresenceKey: null }).enrollKeys(enrolled);
+    assert.throws(() => read(root), refused('owner-trust-role'));
+    // An unreadable or malformed cache excludes nothing; it never grants trust either.
+    fs.writeFileSync(cache, 'not a key\n');
+    assert.equal(read(root).state, 'ready');
+  });
 });

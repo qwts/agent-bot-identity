@@ -66,14 +66,14 @@ test('namespace.json accepts each published digest and refuses every other spell
         assert.throws(() => writer.enrollNamespace({ namespaceDigest: value }), { code: 'bad-request', reason: 'owner-trust-invalid-input' });
       }
       assert.equal(writer.enrollNamespace({ namespaceDigest: vector.namespaceDigest }).state, 'enrolled');
-      assert.throws(() => readOwnerDecisionTrust({ root, namespaceDigest: vector.namespaceDigest, env: vouchEnv }), { reason: 'owner-trust-no-active-key' });
+      assert.throws(() => readOwnerDecisionTrust({ root, namespaceDigest: vector.namespaceDigest, env: vouchEnv, home: vouchState }), { reason: 'owner-trust-no-active-key' });
       // A stored record carrying any other spelling is refused as damage, and kept.
       const file = path.join(root, 'namespace.json');
       const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
       for (const value of rejected.filter((candidate) => !candidate.endsWith('\n'))) {
         fs.writeFileSync(file, canonicalJson({ ...stored, namespaceDigest: value }), { mode: 0o600 });
         const before = fs.readFileSync(file);
-        assert.throws(() => readOwnerDecisionTrust({ root, env: vouchEnv }), { code: 'storage-failed' });
+        assert.throws(() => readOwnerDecisionTrust({ root, env: vouchEnv, home: vouchState }), { code: 'storage-failed' });
         assert(fs.readFileSync(file).equals(before));
       }
     });
