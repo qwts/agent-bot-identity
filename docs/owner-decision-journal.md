@@ -455,7 +455,11 @@ owner-decision action grammar: agent-comms `docs/owner-decisions.md` and
   and paragraph separators.
   - The policy is a frozen literal table of 25 inclusive ranges
     (`OWNER_DISPLAY_REJECTED_RANGES`), never an ambient `\p{}` property, and
-    it equals `display-rejections-v1.json`.
+    it equals `display-rejections-v1.json`. That file is vendored from
+    agent-comms `62aaba9` (merged #221, reviewed signed head `cb7b8e9`),
+    SHA-256 `2c2c7b75…`.
+  - The decoder is still disabled: nothing here enables owner decisions at
+    runtime.
   - Everything else is kept exactly, with no trimming or normalization:
     right-to-left scripts, combining marks, variation selectors, and a
     literal `\u202E` written as text.

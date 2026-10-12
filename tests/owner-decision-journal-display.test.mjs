@@ -1,6 +1,7 @@
 // The owner-display rejection policy (agent-comms#77): agent-comms
-// tests/fixtures/owner-decisions/display-rejections-v1.json, copied byte for
-// byte (SHA-256 2c2c7b75...; upstream merge commit pending). Every Unicode
+// tests/fixtures/owner-decisions/display-rejections-v1.json at 62aaba9 (merged
+// PR #221, reviewed signed head cb7b8e9), copied byte for byte (SHA-256
+// 2c2c7b75...). Every Unicode
 // 17.0.0 Cc, Cf, Zl and Zp scalar is refused in a reason and in the rebuilt
 // display text; everything else is kept exactly, with no trimming or
 // normalization.
