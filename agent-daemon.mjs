@@ -109,6 +109,7 @@ import { diagnosticsOtlpEndpointSetting, isGateEnabled, loadConfig } from './con
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDiagnostics, runtimeVersion } from './diagnostics.mjs';
 import { createOtlpExporter, otlpHeaders } from './otlp-export.mjs';
+import { diagnosedApprovals, recordDaemonShutdown, recordDaemonStart, withTurnDiagnostics } from './daemon-diagnostics.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLaunchRefusal, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
@@ -1752,7 +1753,30 @@ export function diagnosticsExporter({ env = process.env, home = homedir(), confi
   return endpoint ? create({ endpoint, headers: otlpHeaders(env), version: runtimeVersion() }) : null;
 }
 
-export async function runDaemon({
+// The daemon's one diagnostics recorder (#983, ADR-0983): local, best
+// effort, and exported only when the user config names an OTLP endpoint.
+function daemonRecorder({ env, home, config }) {
+  return createDiagnostics({ component: 'daemon', version: runtimeVersion(), env, home, sink: diagnosticsExporter({ env, home, config })?.enqueue ?? null });
+}
+
+// Runs the daemon, recording its start: `ok` once it serves, or the code
+// for a start that stopped before it was ready (the error is rethrown).
+export async function runDaemon(options = {}) {
+  const { env = process.env, home = homedir(), config } = options;
+  const startedAt = Date.now();
+  const diagnostics = daemonRecorder({ env, home, config });
+  let started;
+  try {
+    started = await serveDaemon({ ...options, diagnostics, startedAt });
+  } catch (error) {
+    recordDaemonStart(diagnostics, { startedAt, error });
+    throw error;
+  }
+  recordDaemonStart(diagnostics, { startedAt });
+  return started;
+}
+
+async function serveDaemon({
   env = process.env,
   home = homedir(),
   config,
@@ -1760,6 +1784,8 @@ export async function runDaemon({
   port = env.AGENT_BOT_DAEMON_PORT ?? '0',
   onListening = null,
   now = () => new Date(),
+  diagnostics = null,
+  startedAt = Date.now(),
 } = {}) {
   assertLoopbackHost(host);
   const requestedPort = Number(port);
@@ -1859,7 +1885,7 @@ export async function runDaemon({
   };
   const turns = createTurnRegistry({ isPaused, policy, history, now, onStop: agentId => dream?.stopSoul(agentId) ?? false });
   const executorFor = configuredExecutorFor
-    ? (request) => withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse })
+    ? (request) => withTurnDiagnostics(withPermissionReceipts(configuredExecutorFor(request), { env, home, now, computerUse }), { diagnostics })
     : null;
   const executor = executorFor
     ? (input) => {
@@ -1900,9 +1926,8 @@ export async function runDaemon({
   };
   const onLaunch = createLaunchHandler({
     turns, isPaused,
-    // Local launch diagnostics (#983, ADR-0983), best effort. They leave the
-    // machine only when the user config names an OTLP endpoint.
-    diagnostics: createDiagnostics({ component: 'daemon', version: runtimeVersion(), env, home, sink: diagnosticsExporter({ env, home, config })?.enqueue ?? null }),
+    // Launch diagnostics (#983, ADR-0983) through the daemon's recorder.
+    diagnostics,
     file: path.join(path.dirname(daemonStateFile({ env, home })), 'launch-requests.json'),
     identities,
     identityFor,
@@ -2043,7 +2068,7 @@ export async function runDaemon({
   });
   server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns, asideRelay: relay });
   dream = createDreamService({ directory: path.join(path.dirname(daemonStateFile({ env, home })), 'dream'),
-    turns, executorFor, isPaused, now, approvals: request => server.interaction.requestTurnApproval(request),
+    turns, executorFor, isPaused, now, approvals: diagnosedApprovals(request => server.interaction.requestTurnApproval(request), { diagnostics }),
     verifyRevisionEvidence: request => verifyDreamRevisionEvidence({ ...request, stateDir: stateDirectory({ env, home }) }),
     // The soul's own conversation (#603): the session its wake record names.
     recordedSession: (agentId, harness) => createWakeSessions({ file: wakeSessionsFile({ env, home }) }).recorded(agentId, harness),
@@ -2094,7 +2119,7 @@ export async function runDaemon({
     receipt: ({ event, agentId, decision, outcome, detail = null }) => appendAuditReceipt({ event, agentId, decision: decision ?? outcome, detail }, { env, home, now }),
     // A policy `approval` outcome in a cold turn waits on a proposal the
     // owner can decide (#85: `agent-bot approvals`, GeniusBar's panel).
-    approvals: (request) => server.interaction.requestTurnApproval(request),
+    approvals: diagnosedApprovals((request) => server.interaction.requestTurnApproval(request), { diagnostics }),
     // The owner's signed reply to a challenge, read from the soul's inbox (#753).
     ownerReply: server.ownerReply,
   });
@@ -2117,7 +2142,8 @@ export async function runDaemon({
   const logTimer = setInterval(checkLog, DAEMON_LOG_CHECK_INTERVAL_MS);
   logTimer.unref();
   server.once('close', () => { clearInterval(logTimer); dream.shutdown(); });
-  const shutdown = () => {
+  const shutdown = (signal) => {
+    recordDaemonShutdown(diagnostics, { signal, startedAt });
     clearInterval(logTimer);
     dream.shutdown();
     try {

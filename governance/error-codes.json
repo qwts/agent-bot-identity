@@ -209,6 +209,94 @@
       "kind": "failure",
       "registered": "0.10.64",
       "summary": "A metrics source could not be collected for an unspecified reason."
+    },
+    {
+      "n": 27,
+      "code": "diagnostics-dropped",
+      "component": "diagnostics",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "Diagnostic events could not be recorded; the count is in the detail."
+    },
+    {
+      "n": 28,
+      "code": "daemon-start-failed",
+      "component": "daemon",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The daemon stopped before it was ready to serve."
+    },
+    {
+      "n": 29,
+      "code": "daemon-already-running",
+      "component": "daemon",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A daemon is already running for this account."
+    },
+    {
+      "n": 30,
+      "code": "turn-failed",
+      "component": "turn",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A harness turn failed for a reason without its own code."
+    },
+    {
+      "n": 31,
+      "code": "turn-cancelled",
+      "component": "turn",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A harness turn was cancelled before it finished."
+    },
+    {
+      "n": 32,
+      "code": "harness-exited",
+      "component": "turn",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The harness process exited before the turn finished."
+    },
+    {
+      "n": 33,
+      "code": "harness-start-failed",
+      "component": "turn",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The harness process could not be started."
+    },
+    {
+      "n": 34,
+      "code": "approval-denied",
+      "component": "approval",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The owner denied a turn approval."
+    },
+    {
+      "n": 35,
+      "code": "approval-expired",
+      "component": "approval",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A turn approval expired before the owner decided."
+    },
+    {
+      "n": 36,
+      "code": "approval-cancelled",
+      "component": "approval",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A turn approval was cancelled with its turn."
+    },
+    {
+      "n": 37,
+      "code": "approval-failed",
+      "component": "approval",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "A turn approval request failed."
     }
   ]
 }

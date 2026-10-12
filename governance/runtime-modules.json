@@ -131,6 +131,7 @@
     "identity/daemon-client.mjs": "identity",
     "identity-entry.mjs": "identity",
     "identity/identity-entry.mjs": "identity",
+    "daemon-diagnostics.mjs": "host",
     "daemon-launch.mjs": "soul",
     "daemon-log.mjs": "shared",
     "daemon-mcp.mjs": "host",
