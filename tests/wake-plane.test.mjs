@@ -407,3 +407,43 @@ test('acpExecutorFor puts the provider secret in the launched harness env only: 
   const missing = Object.assign(new Error('codex needs the secret "github-models"'), { code: 'provider-secret-missing', action: `agent-bot soul secret ${agentId} set github-models` });
   assert.throws(() => acpExecutorFor({ identities: () => ({}), policy: {}, baseEnv: {}, createExecutor, providerEnvFor: () => { throw missing; } })({ agentId, harness: 'codex', cwd: '/repo', env: {} }), (error) => error.code === 'provider-secret-missing');
 });
+
+test('a wake\'s cold turn is a child span of the wake, carried outside the turn input (#1027)', async () => {
+  const { withTurnDiagnostics } = await import('../daemon-diagnostics.mjs');
+  const events = [];
+  const diagnostics = { record: (fields) => { events.push(fields); return true; } };
+  const inputs = [];
+  let finish;
+  const onWake = createWakePlane({
+    pool: coldPool, settings: { [ID]: true }, lookupSoul: () => soul,
+    identities: () => ({ harness: 'codex', github: { appSlug: 'you-codex-agent' } }),
+    executorFor: () => withTurnDiagnostics(async (value) => { inputs.push(value); await new Promise((resolve) => { finish = resolve; }); }, { diagnostics }),
+    receipt: () => {}, diagnostics,
+  });
+  const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+  const reports = [];
+  await onWake({ ...wake(['m1']), traceparent }, { report: async (fields) => reports.push(fields) });
+  // A second wake merges into the running turn and starts no turn of its own.
+  await onWake(wake(['m2']), { report: async (fields) => reports.push(fields) });
+  finish();
+  await onWake.idle();
+  const wakes = events.filter((e) => e.event === 'wake');
+  const turns = events.filter((e) => e.event === 'turn');
+  assert.deepEqual(wakes.map((e) => e.stage), ['cold', 'merged']);
+  assert.equal(turns.length, 1);
+  assert.equal(wakes[0].traceId, '4bf92f3577b34da6a3ce929d0e0e4736', 'the wake continues the sender trace');
+  assert.equal(turns[0].traceId, wakes[0].traceId, 'the turn is in the wake trace');
+  assert.equal(turns[0].parentSpanId, wakes[0].spanId, 'the turn is a child of the wake span');
+  assert.notEqual(turns[0].spanId, wakes[0].spanId);
+  // Nothing about the trace reaches the turn's input (and so its prompt) or the broker.
+  const text = JSON.stringify([inputs.map(({ invocation, message, env, wake: lane }) => ({ invocation, message, env, lane })), reports]);
+  for (const leak of ['traceparent', '4bf92f3577b34da6a3ce929d0e0e4736', wakes[0].spanId]) assert.equal(text.includes(leak), false, leak);
+});
+
+test('a turn started outside any wake stays its own root', async () => {
+  const { withTurnDiagnostics } = await import('../daemon-diagnostics.mjs');
+  const events = [];
+  const run = withTurnDiagnostics(async () => 'done', { diagnostics: { record: (fields) => { events.push(fields); return true; } } });
+  await run({ invocation: { agentId: ID, harness: 'codex' }, signal: new AbortController().signal });
+  assert.equal(events[0].parentSpanId, undefined);
+});

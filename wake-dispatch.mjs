@@ -51,7 +51,7 @@
 // carried — the audit trail must not become a second copy of the mailbox.
 
 import { isAgentId } from './identity-format.mjs';
-import { startSpan } from './traceparent.mjs';
+import { startSpan, withActiveSpan } from './traceparent.mjs';
 
 export const WAKE_OUTCOMES = Object.freeze(['warm', 'cold', 'waiting', 'failed']);
 export const WAKE_FRAME_EVENT = 'wake';
@@ -198,7 +198,9 @@ export async function dispatchWake(event, ports) {
     stage = 'cold';
     let cold = null;
     try {
-      cold = await coldWake(wake);
+      // The cold turn it starts is a child of this wake's span (#1027),
+      // carried by async context, never by the event or the turn's input.
+      cold = await withActiveSpan(span, () => coldWake(wake));
     } catch {
       // An ACP error can carry stderr or payload, so it never reaches the
       // broker: the detail is fixed.

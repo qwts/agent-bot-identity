@@ -8,7 +8,7 @@
 // and the agent (hashed by the store). Messages go only into `detail`, which
 // the store redacts and the exporter never sends.
 
-import { startSpan } from './traceparent.mjs';
+import { activeSpanContext, startSpan } from './traceparent.mjs';
 
 const NAME = /^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$/;
 const stageName = (value) => (typeof value === 'string' && value.length <= 64 && NAME.test(value) ? value : undefined);
@@ -31,14 +31,19 @@ export function turnFailureCode(error, { aborted = false } = {}) {
   return 'turn-failed';
 }
 
-/** An executor that records one `turn` event per turn, under its own span. */
+/**
+ * An executor that records one `turn` event per turn, under its own span: a
+ * child of the active span when the turn was started inside one (a wake's
+ * cold turn, #1027), else a new root.
+ */
 export function withTurnDiagnostics(executor, { diagnostics, nowMs = () => Date.now() } = {}) {
   if (!diagnostics) return executor;
   return async (input) => {
-    const span = startSpan();
+    const span = startSpan(activeSpanContext());
     const startedAt = nowMs();
     const base = {
       event: 'turn', stage: stageName(input?.invocation?.harness), traceId: span.traceId, spanId: span.spanId,
+      parentSpanId: span.parentSpanId ?? undefined,
       agentId: typeof input?.invocation?.agentId === 'string' ? input.invocation.agentId : undefined,
     };
     try {

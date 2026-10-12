@@ -10,6 +10,7 @@
 // before or after. A value the broker would drop is dropped here too, so the
 // two ends never disagree about what continues a trace.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/;
@@ -53,4 +54,20 @@ export function startSpan(parent = null) {
   const spanId = randomHex(8, ZERO_SPAN);
   const flags = context?.flags ?? '01';
   return { traceId, spanId, parentSpanId: context?.spanId ?? null, flags, traceparent: formatTraceparent({ traceId, spanId, flags }) };
+}
+
+// The span an operation runs under, carried by async context (#1027) rather
+// than by any argument, so it can parent later spans in the same operation
+// (a wake's cold turn) without riding in a turn's input, where it could reach
+// a prompt or a record. Only diagnostics read it.
+const activeSpan = new AsyncLocalStorage();
+
+/** Runs `fn` with `span` as the active span for everything it starts. */
+export function withActiveSpan(span, fn) {
+  return span ? activeSpan.run(span, fn) : fn();
+}
+
+/** The active span, or null outside withActiveSpan. */
+export function activeSpanContext() {
+  return activeSpan.getStore() ?? null;
 }

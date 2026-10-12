@@ -23,7 +23,10 @@ started), `merged` (it joined a cold turn already running) or `waiting`. A
 paused soul (`wake-paused`) or cold wake being off (`wake-cold-off`) is an
 expected refusal; a warm or cold path that failed, or a report the broker did
 not take, is `failed`. A wake that carries an exact version-00 `traceparent`
-continues that trace; otherwise it starts its own. Daemon starts and
+continues that trace; otherwise it starts its own. A cold turn the wake
+starts is a child span of the wake, so the sender, the wake and the turn read
+as one trace; the trace context travels beside the turn, never in its input
+or prompt. Daemon starts and
 shutdowns, harness turns, approvals and credential refreshes are recorded
 the same way.
 
