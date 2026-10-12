@@ -34,7 +34,7 @@ import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { daemonPreference, harnessForSlug, isGateEnabled, loadConfig } from './config.mjs';
 import { configuredAccountIdentity } from './detect-harness.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
+import { resolveAgentSlug } from './identity-soul.mjs';
 import { AGENT_ID_KEYS } from './identity-format.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { showSoul, upsertIdentitySoul } from './agent-population.mjs';

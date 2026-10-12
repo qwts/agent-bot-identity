@@ -14,9 +14,8 @@ import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, soulDirectory } from './agent-population.mjs';
 import { revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
-import { readBinding } from './agent-binding.mjs';
 import { confinementEvents, supportsContext, vendorEvent } from './hook-dialects.mjs';
-import { vouchKeyPath, vouchStateDir } from './vouch.mjs';
+import { readBinding, vouchKeyPath, vouchStateDir } from './identity-soul.mjs';
 import { skillLibraryRoot } from './skill-library-paths.mjs';
 
 // The session's Agent ID: the environment first, so the common case starts

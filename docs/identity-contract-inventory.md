@@ -538,6 +538,29 @@ question in the F9 and F13 design note:
   cli only, with an exact export list, so readiness keeps its test hooks
   (see F13 step 3 under F13).
 
+**Soul, custody, owner prompts and assets (2026-10-11).** The owner picked
+option (a) on each remaining question:
+
+- **Soul's and comms' helpers:** one published entry, `identity-soul.mjs`,
+  is a contract importable by soul and comms, with an exact export list.
+  It is in-process, as host's and cli's entries are.
+  - It covers the binding reader, the bot and App resolver, the vouch key
+    paths, the co-author rules, session grants and comms' binding-proof
+    signing.
+  - These replace F1's plan to put the binding readers and `pinnedSlug` in
+    the format file. That file imports only node built-ins, and these read
+    git config, the daemon config and Windows key custody.
+- **F7, credential custody:** the custody functions soul uses are listed in
+  the same soul entry, in-process, so keys never cross a process boundary.
+- **F8, owner prompts:** the owner-gate, statement and presence functions
+  are listed in the soul and cli entries, in-process, so presence prompts
+  keep the caller's terminal. `cli/principal.mjs`, `cli/owner.mjs` and
+  `cli/identity-apps.mjs` move with them (F13 step 4), with
+  `agent-approvals.mjs` and `cli/soul-dream.mjs`.
+- **F14, assets:** `keyd/`, `scripts/ensure-identity.sh` and `wrangler.toml`
+  go to identity. `hooks/*` are split into identity's pieces and a soul hook
+  adapter.
+
 ## 9. Order of work
 
 There is one PR per step. Each step keeps observable behavior, and each one
@@ -606,10 +629,9 @@ There are 193 import statements, which make the 192 file edges.
 - **`agent-principals.mjs`** (25):
   - soul: `cold-wake-settings.mjs:8`, `sandbox-export.mjs:35`, `sandbox-remove.mjs:18`, `skill-workspace.mjs:16`, `soul-computer-use.mjs:5`, `soul-credential-migration.mjs:16`, `soul-env-clean.mjs:22`, `soul-env-export.mjs:48`, `soul-env-migrate.mjs:25`, `soul-fork.mjs:31`, `soul-mode.mjs:8`, `soul-model.mjs:8`, `soul-remove.mjs:21`, `soul-revisions.mjs:17`, `soul-runtimes.mjs:29`, `soul-secrets.mjs:18`, `soul-template-refresh.mjs:17`, `soul-tool-home.mjs:30`
   - host: `agent-daemon.mjs:82`, `agent-interaction.mjs:65`, `agent-web.mjs:33`, `delegation-grants.mjs:42`, `telegram-adapter.mjs:52`
-  - cli: `cli/owner.mjs:7`, `cli/principal.mjs:7`
-- **`binding-proof.mjs`** (3):
+  - cli: `cli/mint-token.mjs:8`, `cli/owner.mjs:7`, `cli/principal.mjs:7`
+- **`binding-proof.mjs`** (2):
   - host: `agent-daemon.mjs:91`, `daemon-mcp.mjs:57`
-  - comms: `wake-listen.mjs:28`
 - **`credential-names.mjs`** (6):
   - soul: `soul-credential-migration.mjs:19`, `soul-package.mjs:10`, `soul-providers.mjs:20`
   - host: `daemon-supervisor.mjs:37`, `grant-github.mjs:21`

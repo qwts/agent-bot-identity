@@ -262,7 +262,8 @@ test('every consumer that mints or commits shares this resolver', async () => {
     })),
   );
   for (const { path, text } of sources) {
-    assert.match(text, /resolve-agent\.mjs/, `${path} resolves identity through the shared order`);
+    // Soul files reach it through identity's published soul entry (#645).
+    assert.match(text, /resolve-agent\.mjs|identity-soul\.mjs/, `${path} resolves identity through the shared order`);
     assert.doesNotMatch(text, /detectHarness\(/, `${path} does not call detection directly`);
     // ENG-0339: there is no directory question left to ask. A call site that
     // still passed the retired `worktree:` flag would be asking it.

@@ -2,7 +2,7 @@
 // runs through, so pause, stop and history see all of them. Soul lifecycle,
 // not the wake plane; wake-plane.mjs re-exports it for the daemon host.
 
-import { createSessionGrants } from './session-approvals.mjs';
+import { createSessionGrants } from './identity-soul.mjs';
 import { assertSoulUnpaused } from './agent-population.mjs';
 
 // Shared by cold, launch and interactive turns. Keep each controller until

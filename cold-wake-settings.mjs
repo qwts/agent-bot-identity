@@ -10,7 +10,7 @@ import { assertColdWakeLock, coldWakeFile, withColdWakeLock } from './cold-wake-
 export { coldWakeFile } from './cold-wake-lock.mjs';
 import { loadConfig } from './config.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
-import { resolveAgentSlug } from './resolve-agent.mjs';
+import { resolveAgentSlug } from './identity-soul.mjs';
 import { RESUME_POLICIES } from './wake-resume.mjs';
 import { checkWebhook, readWebhookLocked, removeWebhookLocked, saveWebhookLocked } from './wake-webhook-store.mjs';
 

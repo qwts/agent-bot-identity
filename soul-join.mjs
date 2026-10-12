@@ -31,7 +31,6 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
-import { readBinding } from './agent-binding.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
 import { stateDirectory } from './state-paths.mjs';
@@ -40,7 +39,7 @@ import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSett
 import { initAgentSpace } from './agent-space.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { daemonPreference, isGateEnabled, loadConfig } from './config.mjs';
-import { pinnedSlug, resolveAgentSlug } from './resolve-agent.mjs';
+import { pinnedSlug, readBinding, resolveAgentSlug } from './identity-soul.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulNpmHarnessDirs } from './soul-home.mjs';
 import { bundledStarter, spawnSoulTemplate } from './soul-templates.mjs';
 export { bundledStarter } from './soul-templates.mjs';

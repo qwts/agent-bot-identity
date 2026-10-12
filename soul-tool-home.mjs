@@ -28,7 +28,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
-import { readBinding } from './agent-binding.mjs';
+import { readBinding } from './identity-soul.mjs';
 import { withLock } from './file-lock.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { assertOwnerAction, presenceOrConsent, soulMarkers } from './owner-action.mjs';
