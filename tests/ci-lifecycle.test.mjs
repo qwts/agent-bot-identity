@@ -45,13 +45,14 @@ test('stable CI gate covers manual, PR, and main fallback lanes', () => {
   assert.match(ci, /test "\$WORKFLOW_RUNTIME" = success/);
   assert.match(ci, /test "\$SKILL_GATE" = success/);
   assert.match(ci, /test "\$WINDOWS_NATIVE" = success/);
+  assert.match(ci, /test "\$DARWIN_JOURNAL" = success/);
 });
 
 test('the ENG-0055 skill gate checks the packaged tree in every lane', () => {
   assert.match(ci, /cli-skill-gate@[0-9a-f]{40}/);
   assert.match(ci, /git archive HEAD \| tar -x/);
   assert.match(ci, /skill-workflows\.test\.mjs/);
-  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd, windows-native\]/);
+  assert.match(ci, /needs: \[policy, merge-evidence, preflight-evidence, complete, codeql, workflow-runtime, skill-gate, linux-bundle, keyd, windows-native, darwin-journal\]/);
 });
 
 // ADR-0332 decision 1 makes the headless-Linux archives a release artifact, so
@@ -136,6 +137,21 @@ test('the Windows native preflight uses a hosted runner and the stable gate', ()
   assert.doesNotMatch(lane, /runs-on:.*(?:vars\.|self-hosted)/);
   assert.doesNotMatch(lane, /\$\{\{\s*secrets\./);
   assert.match(ci, /WINDOWS_NATIVE: \$\{\{ needs\.windows-native\.result \}\}/);
+});
+
+// #1007: the owner-decision journal's Darwin-only storage, lock and recovery
+// tests run on a hosted macOS runner, gated like the Windows preflight.
+test('the Darwin owner-decision journal lane uses a hosted runner and the stable gate', () => {
+  const lane = ci.slice(ci.indexOf('\n  darwin-journal:\n'), ci.indexOf('\n  codeql:\n'));
+  assert.match(lane, /runs-on: macos-latest\n/);
+  assert.match(lane, /needs: policy\n/);
+  assert.match(lane, /node --test tests\/owner-decision-journal\*\.test\.mjs/);
+  assert.match(lane, /persist-credentials: false/);
+  assert.match(lane, /actions\/checkout@[0-9a-f]{40}\n/);
+  assert.match(lane, /actions\/setup-node@[0-9a-f]{40}\n/);
+  assert.doesNotMatch(lane, /runs-on:.*(?:vars\.|self-hosted)/);
+  assert.doesNotMatch(lane, /\$\{\{\s*secrets\./);
+  assert.match(ci, /DARWIN_JOURNAL: \$\{\{ needs\.darwin-journal\.result \}\}/);
 });
 
 // #752: a runner variable may name a self-hosted runner, so every runner that
