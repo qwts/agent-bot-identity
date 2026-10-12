@@ -1,0 +1,1 @@
+- Add the disabled owner-decision reconciliation pair writers: under the journal lock, record the indeterminate observation pair (slot 11) or the immutable applied/refused terminal pair (slot 12), each bound to the request, its preparation and its exact proof, against agent-comms' typed pair vectors (agent-comms#77).

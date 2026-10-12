@@ -285,6 +285,36 @@ export function bindEffect(r, { phase, preparation, preparationDigest, receiptDi
   return r;
 }
 
+// One structurally valid reconciliation pair (decodeReconciliationPair) bound
+// to this request and the finding its slot and proof allow (agent-comms
+// d071a9b journal records, effect companion):
+// - the acceptance's request, payload and original daemon key/epoch;
+// - the saved preparation's effectId, or null only when no preparation exists
+//   (an indeterminate observation);
+// - basisDigest: SHA-256 of the exact completed record for applied, of the
+//   exact pre-effect refused record for refused, and null for an
+//   indeterminate observation, which has no proof;
+// - the preimage kind of the operation: a cold state for cold-wake.set, a
+//   revision observation otherwise, whose working digests are present exactly
+//   when the action is an applying edit.
+// The reporting daemon key/epoch and the observed state are the reporting
+// ceremony's; this binds them to nothing else.
+export function bindReconciliationPair(pair, { finding, acceptance, action, preparation = null, basisBytes = null }) {
+  const r = pair.record, p = pair.preimage;
+  if (r.finding !== finding) fail('owner-evidence-binding');
+  // The pair codec binds requestId to the frame's request.
+  if (r.payloadDigest !== acceptance.payloadDigest || r.originalDaemonKey !== acceptance.daemonKey || r.originalDaemonEpoch !== acceptance.daemonEpoch) fail('owner-evidence-binding');
+  if (r.effectId !== (preparation ? preparation.effectId : null)) fail('owner-evidence-binding');
+  if (r.finding === 'indeterminate' ? (r.basisDigest !== null || basisBytes !== null)
+    : (basisBytes === null || r.basisDigest !== sha256(basisBytes))) fail('owner-evidence-binding');
+  const cold = acceptance.operation === 'cold-wake.set', revisionShape = Object.hasOwn(p, 'head');
+  if (cold === revisionShape) fail('owner-evidence-binding');
+  if (revisionShape && (p.working !== null) !== (acceptance.operation === 'revision.edit' && action.parameters.apply === true)) {
+    fail('owner-evidence-binding');
+  }
+  return pair;
+}
+
 // The owner-local reconciliation finding for one recovery scenario, exactly
 // the agent-comms classification: refused only from durable pre-effect
 // refusal before entry; applied only with the owner ceremony and matching

@@ -9,11 +9,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
 import {
-  DAEMON_JOURNAL_SLOTS, FRAME_OVERHEAD, SCRATCH_BYTES, decodeCanonicalPayload, decodeDaemonJournalFrame,
-  encodeDaemonJournalFrame, peekAcceptanceContextFrame, requestDirectoryName,
+  DAEMON_JOURNAL_SLOTS, FRAME_OVERHEAD, SCRATCH_BYTES, decodeCanonicalPayload, decodeDaemonJournalFrame, decodeReconciliationPair,
+  encodeDaemonJournalFrame, encodeReconciliationPair, peekAcceptanceContextFrame, requestDirectoryName,
 } from './owner-decision-journal-frame.mjs';
 import {
-  bindEffect, bindPreparation, challengeFor, completedRecordFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
+  bindEffect, bindPreparation, bindReconciliationPair, challengeFor, completedRecordFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
   effectOutcome, enteredRecordFor, refusedRecordFor,
 } from './owner-decision-evidence.mjs';
 import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
@@ -287,7 +287,10 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     }
     if (uncertain) {
       try { return { ...graph, ...effectGraph(decode, saved) }; }
-      catch { return { ...graph, state: 'indeterminate', outcome: { code: 'effect-uncertain', effectDigest: null }, awaiting: awaitingCompletion(decode, saved) }; }
+      catch {
+        return { ...graph, state: 'indeterminate', outcome: { code: 'effect-uncertain', effectDigest: null }, awaiting: awaitingCompletion(decode, saved),
+          observable: observableContext(decode, saved) };
+      }
     }
     if (!zeros(bytes.get('scratch.record'))) fail('owner-journal-scratch-pending');
     return { ...graph, ...preEffectGraph(decode, saved) };
@@ -340,13 +343,33 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       presenceToken: slots.presence.toString('latin1'), nowMilliseconds: Number.isSafeInteger(iat) ? iat * 1000 : NaN });
   }
 
+  // One terminal pair, structurally and against this request's proof.
+  function terminalPair(bytes, context) {
+    return bindReconciliationPair(decodeReconciliationPair(bytes, { slot: 'terminal-pair', requestId: context.acceptance.requestId }), context);
+  }
+
+  // What an indeterminate observation binds to: the acceptance, the action
+  // and the saved preparation, or none when no preparation was ever
+  // committed. A damaged preparation leaves nothing to observe against (null).
+  function observableContext(decode, saved) {
+    try {
+      const acceptance = saved.record, action = JSON.parse(saved.action.toString('utf8'));
+      const frame = decode('preparation');
+      if (frame.kind !== 'empty' && frame.kind !== 'committed') return null;
+      const preparation = frame.kind === 'committed' ? bindPreparation(decodePreparation(frame.payload), { acceptance, action }) : null;
+      return Object.freeze({ finding: 'indeterminate', acceptance, action, preparation, basisBytes: null });
+    } catch { return null; }
+  }
+
   function preEffectGraph(decode, saved) {
     const { slots, acceptance, action, preparation, preparationDigest, receiptDigest, typed } = evidence(decode, saved);
     // Nothing after entry can exist without it; pairs and the local outcome
     // belong to later phases.
-    for (const slot of ['completed', 'observation-pair', 'terminal-pair', 'linked-authoritative-event', 'local-lifecycle-outcome']) {
+    for (const slot of ['completed', 'observation-pair', 'linked-authoritative-event', 'local-lifecycle-outcome']) {
       if (slots[slot]) fail(slot === 'completed' || slot === 'linked-authoritative-event' ? 'owner-journal-corrupt' : 'owner-journal-unsupported-phase');
     }
+    // A terminal pair before entry exists only beside a proven pre-effect refusal.
+    if (slots['terminal-pair'] && !slots['pre-effect-refused']) fail('owner-journal-unsupported-phase');
     if (!preparation) {
       if (['prepared-challenge', 'presence', 'receipt', 'successful-check', 'pre-effect-refused'].some((slot) => slots[slot])) fail();
       return { state: 'admitted' };
@@ -360,7 +383,9 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     if (slots['pre-effect-refused']) {
       const refused = typed(() => bindEffect(decodeEffect(slots['pre-effect-refused']),
         { phase: 'refused', preparation, preparationDigest, receiptDigest, action }));
-      return { ...effectOutcome(slots['pre-effect-refused']), refusalReason: refused.detail.code };
+      const terminal = Object.freeze({ finding: 'refused', acceptance, action, preparation, basisBytes: slots['pre-effect-refused'] });
+      if (slots['terminal-pair']) typed(() => terminalPair(slots['terminal-pair'], terminal));
+      return { ...effectOutcome(slots['pre-effect-refused']), refusalReason: refused.detail.code, terminal };
     }
     // What a final pre-effect refusal binds: the checked receipt, or none
     // before the successful check.
@@ -388,7 +413,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     const { slots, action, preparation, preparationDigest, receiptDigest, acceptance } = ev;
     if (!preparation || !slots['prepared-challenge'] || !slots['prepared-challenge'].equals(challengeFor(preparation, saved.action))
       || !slots.presence || !slots.receipt || !slots['successful-check'] || slots['pre-effect-refused'] || !slots.entered
-      || slots['observation-pair'] || slots['terminal-pair'] || slots['local-lifecycle-outcome']) fail();
+      || slots['observation-pair'] || slots['local-lifecycle-outcome']) fail();
     decodeSuccessfulCheck(slots['successful-check'], { acceptance, receiptDigest });
     return { ...ev, entered: bindEffect(decodeEffect(slots.entered), { phase: 'entered', preparation, preparationDigest, receiptDigest, action }) };
   }
@@ -424,7 +449,9 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       });
       if (event.kind === 'revision' && event.revision !== completed.detail.afterRevision) fail();
     }
-    return { state: 'applied', outcome: { code: 'applied', effectDigest: effectDigest(slots.completed) } };
+    const terminal = Object.freeze({ finding: 'applied', acceptance, action, preparation, basisBytes: slots.completed });
+    if (slots['terminal-pair']) terminalPair(slots['terminal-pair'], terminal);
+    return { state: 'applied', outcome: { code: 'applied', effectDigest: effectDigest(slots.completed) }, terminal };
   }
 
   // Visible committed frames prove nothing about their final flush. Before
@@ -442,6 +469,36 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       } finally { io.closeSync(fd); }
     }
     flushDirectory(io, dir); flushDirectory(io, requests); fault('recovery:directories-flushed');
+  }
+
+  // One pair write: scan first, the whole graph, the phase's binding context,
+  // an exact duplicate or conflict check against the slot, the recovery
+  // flush, then one publication and the settled graph after it.
+  function writePair(requestId, pair, slot, contextFor) {
+    if (!matches(UUID4, requestId) || !plain(pair)) fail('invalid-owner-journal-record');
+    const name = requestDirectoryName({ namespaceDigest, requestId });
+    return locked(() => {
+      if (!scan().includes(name)) fail('owner-journal-transition-refused');
+      const graph = readGraph(name, requestId);
+      const context = contextFor(graph);
+      let bytes;
+      try {
+        bytes = encodeReconciliationPair(pair, { slot, requestId });
+        bindReconciliationPair(decodeReconciliationPair(bytes, { slot, requestId }), context);
+      } catch { fail('invalid-owner-journal-record'); }
+      const present = graph.bytes.get(`${slot}.record`);
+      if (!zeros(present)) {
+        const frame = decodeDaemonJournalFrame(present, { ...graph.binding, slot });
+        if (frame.kind === 'committed' && frame.payload.equals(bytes)) {
+          recoveryFlush(graph);
+          return settled(graph, { duplicate: true });
+        }
+        fail('owner-journal-conflict');
+      }
+      recoveryFlush(graph);
+      publish(graph.dir, slot, bytes, graph.binding);
+      return settled(readGraph(name, requestId), {});
+    });
   }
 
   const settled = (graph, extra) => ({
@@ -623,6 +680,36 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
         }
         publish(graph.dir, 'successful-check', bytes, graph.binding);
         return settled(readGraph(name, requestId), {});
+      });
+    },
+
+    // The indeterminate observation pair (slot 11; C2, disabled, no route),
+    // under the journal lock: the owner-local reconciliation ceremony's
+    // canonical {preimage, record, v:1}, with finding indeterminate. Legal
+    // only while the request is indeterminate after entry. It binds to the
+    // acceptance and the saved preparation (or none), with no basis. The same
+    // bytes again are an idempotent duplicate; anything else in the slot is a
+    // conflict (replacement is a separately reviewed recovery), as is any
+    // terminal pair. It reads and records only: no effect, repair or replay.
+    recordObservationPair(requestId, pair) {
+      return writePair(requestId, pair, 'observation-pair', (graph) => {
+        if (['applied', 'refused'].includes(graph.state) || !zeros(graph.bytes.get('terminal-pair.record'))) fail('owner-journal-conflict');
+        // Only the indeterminate graph after entry carries an observable context.
+        if (!graph.observable) fail('owner-journal-transition-refused');
+        return graph.observable;
+      });
+    },
+
+    // The immutable terminal pair (slot 12; C2, disabled, no route), under the
+    // journal lock: finding applied for an applied request (its basis the
+    // exact completed record) or refused for a proven pre-effect refusal (its
+    // basis that record). Entered without completion never justifies refused,
+    // so any other phase refuses. Published once: the same bytes again are an
+    // idempotent duplicate, and anything else is a conflict.
+    recordTerminalPair(requestId, pair) {
+      return writePair(requestId, pair, 'terminal-pair', (graph) => {
+        if (!graph.terminal) fail('owner-journal-transition-refused');
+        return graph.terminal;
       });
     },
 
