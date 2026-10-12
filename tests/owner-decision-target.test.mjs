@@ -50,7 +50,7 @@ function fixtures(t) {
 }
 
 // Runs the real resolver while counting its census and identity reads.
-function counted({ file, stateDir }, request) {
+function counted({ file, stateDir }, request, options = {}) {
   const reads = { census: 0, identity: [] };
   const readFileSync = fs.readFileSync, execFileSync = childProcess.execFileSync;
   fs.readFileSync = function counting(target, ...rest) {
@@ -63,7 +63,7 @@ function counted({ file, stateDir }, request) {
   };
   syncBuiltinESMExports();
   try {
-    return { result: resolveOwnerDecisionTarget(request, { daemonAccount, file, stateDir }), reads };
+    return { result: resolveOwnerDecisionTarget(request, { daemonAccount, file, stateDir, ...options }), reads };
   } finally {
     fs.readFileSync = readFileSync; childProcess.execFileSync = execFileSync;
     syncBuiltinESMExports();
@@ -96,8 +96,11 @@ test('every unavailable target is the identical refusal after exactly the same r
     'malformed soul': { account: daemonAccount, soul: '../../etc/passwd' },
     'missing soul': { account: daemonAccount },
   };
-  for (const [name, request] of Object.entries(cases)) {
-    const { result, reads } = counted(state, request);
+  // No daemon account configured: the live soul still refuses identically.
+  cases['no daemon account'] = [{ account: daemonAccount, soul: ids.live }, { daemonAccount: undefined }];
+  for (const [name, entry] of Object.entries(cases)) {
+    const [request, options] = Array.isArray(entry) ? entry : [entry, {}];
+    const { result, reads } = counted(state, request, options);
     assert.equal(result, TARGET_REFUSAL, name);
     assert.equal(reads.census, 1, `${name}: one census read`);
     assert.equal(reads.identity.length, 1, `${name}: one identity read`);
