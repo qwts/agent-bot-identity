@@ -420,9 +420,10 @@ nonempty string), `reasoningEffort` (`low`, `medium`, `high`),
 shared defaults.
 Model IDs are copied verbatim, so use overrides for harness-specific IDs.
 The supported override names are `claude`, `codex`, `gemini`, `opencode`,
-`cursor`, `copilot`, `devin`, `muse`, and `kiro`. Qwen Code has no override
-name: it is in the report, and the shared `harness` settings are listed there
-as unsupported. Unknown names, unknown settings keys,
+`cursor`, `copilot`, `devin`, `muse`, `kiro`, and `qwen`. Qwen Code renders
+no settings yet (owner decision, 2026-10-11, #379): a `harnesses.qwen`
+override is validated and listed under `unsupported.settings` in its report,
+never written. Unknown names, unknown settings keys,
 and invalid values fail package validation with their full declaration path.
 Other top-level manifest extensions retain their existing opaque behavior.
 

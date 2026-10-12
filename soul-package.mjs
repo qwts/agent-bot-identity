@@ -78,7 +78,7 @@ export function validateRuntimesDeclaration(runtimes) {
 // harness and never for one whose adapter is an npm pin (ADR-0276).
 // `provider` (#583 slice 4) is per harness too: the id must be one the
 // builder renders for that harness, and its credential a declared secret.
-const HARNESS_NAMES = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro'];
+const HARNESS_NAMES = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'copilot', 'devin', 'muse', 'kiro', 'qwen'];
 function validateHarnessSettings(settings, path, harness = null, secrets = {}) {
   if (!object(settings)) throw new Error(`${path} must be an object`);
   for (const [key, value] of Object.entries(settings)) {

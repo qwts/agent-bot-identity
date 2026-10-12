@@ -1,0 +1,1 @@
+- `soul.json` accepts `harnesses.qwen` as a settings override. It is report-only: Qwen Code renders no settings yet, so a declaration is validated and listed under `unsupported.settings` in `soul build --check --json`, never written (#379).
