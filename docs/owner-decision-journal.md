@@ -365,3 +365,31 @@ owner-decision relay intake (agent-comms#77).
   dropped before the wake path, and an event that isn't bound to the socket's
   identity is surfaced as an error, and the daemon doesn't pass its expected
   `daemonKey` yet, so no identity is bound in production.
+
+## Prepare-side target resolution
+
+`owner-decision-target.mjs` (soul) resolves an owner decision's target at
+prepare time. It is disabled, with no route or transport.
+
+- **How it resolves.** By Agent ID, from this daemon's own local state: the
+  population census (`showSoul`) and the identity record (`identityOp('read')`),
+  read before any lock is taken. It never consults comms hub membership or
+  receive allowlists. The account must equal the daemon's own paired account.
+- **One refusal.** A target is refused if any of these hold:
+  - the Agent ID or account is malformed;
+  - it belongs to another account;
+  - it is missing from the census;
+  - it is retired in the census or in its identity record;
+  - its identity record names a different soul;
+  - either read fails.
+
+  Every such case gets the same frozen early refusal:
+  `{state:"refused", receiptDigest:null, outcome:{code:"validation-refused", effectDigest:null}}`,
+  with no detail.
+- **Same work every time.** Every case does exactly one census read and one
+  identity read. A malformed Agent ID reads a fixed placeholder, never its
+  input.
+- **What it doesn't promise.** The timing is equal in kind (local reads, no
+  network), not constant-time. A resolved target only means "local and live
+  at prepare time". Final entry rechecks under its locks, through the
+  in-process identity read that is still pending an owner decision.
