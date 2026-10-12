@@ -970,9 +970,9 @@ only way forward is explicit owner-local reconciliation:
 - **Applying edits and cold-wake** need whole-effect proof and otherwise stay
   uncertain.
 
-That reconciliation writer is a later, separately owned capability. Until
-actual state is verified by the daemon, matching from a ceremony's preimage
-is mechanism-only.
+The record-only half is now a disabled writer (see "Record-only
+reconciliation" below). Until the daemon verifies actual state, matching
+from a ceremony's preimage is mechanism-only.
 
 **Port custody.** For `<stateDir>/soul-revisions/<agentId>/<seq>.json`:
 - The fixed ancestry (the state directory, `soul-revisions/` and the agent
@@ -989,6 +989,63 @@ is mechanism-only.
   and named identity must be unchanged, and so must the device and inode of
   every directory in the fixed ancestry.
 - macOS ACLs aren't checked (see Before wiring).
+
+## Record-only reconciliation (disabled)
+
+`reconcileOwnerDecisionRecordOnly({requestId})` (host,
+`owner-decision-reconcile.mjs`) completes a record-only revision that crashed
+between slot 13 and slot 10. It has no route and nothing calls it. Like the
+gate, it takes only the request ID. The journal root, the namespace (from
+`readOwnerDecisionTrust()`), the state directory and the clock are the
+daemon's own.
+
+**Steps**
+1. `readRecordOnlyReconcilable(requestId)`, under the journal lock, refuses
+   anything but one of these:
+   - a record-only revision (approve, reject, adopt, or edit with apply
+     false) that entered with a non-empty slot 13 and an empty slot 10;
+   - one already completed but without its terminal pair (a crash between
+     the two writes).
+   An applying edit, a cold-wake request or a request without slot 13 refuses
+   `owner-journal-transition-refused`. A slot 10 that isn't a valid
+   completion, or a request already settled, is `owner-journal-conflict`.
+   This happens before any ceremony.
+2. The owner ceremony: the existing local owner gate (`revisionOwnerGate`),
+   naming the request and soul. A refusal writes nothing
+   (`ceremony-refused`).
+3. For a revision that changes the head, the stored package at the entered
+   after-revision must still validate to it (`package-invalid`).
+4. A resync through the daemon's read-only revision port: the record in the
+   soul's revision journal whose exact bytes are slot 13 gives `journalSeq`
+   (`linked-event-missing` if none). The current head and proposal form the
+   ceremony's preimage. That match is mechanism-only, not daemon-verified
+   actual state.
+5. `reconcileRecordOnlyCompletion`, under the journal lock:
+   - It refuses a non-empty slot 12, or a non-empty slot 10, as
+     `owner-journal-conflict`.
+   - It re-reads the linked event at `journalSeq`. That event must be
+     exactly slot 13's bytes and verify as this request's
+     (`verifyLinkedEvent`), and a revision's must name the entered
+     after-revision. Otherwise it refuses `owner-journal-linked-event-refused`.
+   - It builds the typed completed record from the retained entered record:
+     `journalSeq`, `journalRecordDigest` (SHA-256 of slot 13), `working`
+     null, and a time not before entry.
+   - It writes slot 10, then the terminal pair (slot 12, finding `applied`,
+     basis the completed record). For one already completed, it writes the
+     pair only. Nothing is ever overwritten.
+
+**auditId.** The owner chose, in session on 2026-10-12, to mint the
+`auditId` per ceremony (a random UUID). The terminal pair is the durable
+record, with no separate audit record type.
+
+**Crash between slot 10 and the pair.** The request reads `applied` (slot 10
+alone is a valid completion). A retried reconciliation writes only the
+pair. Once the pair exists, a further one is a conflict, refused before any
+ceremony.
+
+The store's early checks of `at`, `auditId` and `preimage`, and its bind of
+the completed record and the pair it builds, are repeated by the encoders
+and are self-checks with no separate test.
 
 ## What the effect-entry gate takes from its caller
 

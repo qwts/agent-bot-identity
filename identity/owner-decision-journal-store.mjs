@@ -305,7 +305,7 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
       try { return { ...graph, ...effectGraph(decode, saved) }; }
       catch {
         return { ...graph, state: 'indeterminate', outcome: { code: 'effect-uncertain', effectDigest: null }, awaiting: awaitingCompletion(decode, saved),
-          observable: observableContext(decode, saved) };
+          observable: observableContext(decode, saved), recordOnly: recordOnlyContext(decode, saved) };
       }
     }
     if (!zeros(bytes.get('scratch.record'))) fail('owner-journal-scratch-pending');
@@ -447,6 +447,19 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
     } catch { return null; }
   }
 
+  // A record-only revision (approve, reject, adopt, or edit without apply)
+  // entered with its linked authoritative event (slot 13): what the
+  // owner-local reconciliation may complete. Null otherwise. Only a revision
+  // detail has `apply`, so this also excludes cold-wake. Both callers refuse
+  // a non-empty completed slot themselves.
+  function recordOnlyContext(decode, saved) {
+    try {
+      const { slots, action, preparation, preparationDigest, receiptDigest, acceptance, entered } = enteredPrefix(decode, saved);
+      if (!slots['linked-authoritative-event'] || entered.detail.apply !== false) return null;
+      return Object.freeze({ action, preparation, preparationDigest, receiptDigest, acceptance, entered, linked: slots['linked-authoritative-event'] });
+    } catch { return null; }
+  }
+
   // Throws on anything short of a fully validated completion; the caller maps
   // every throw to indeterminate.
   function effectGraph(decode, saved) {
@@ -468,7 +481,12 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
     }
     const terminal = Object.freeze({ finding: 'applied', acceptance, action, preparation, basisBytes: slots.completed });
     if (slots['terminal-pair']) terminalPair(slots['terminal-pair'], terminal);
-    return { state: 'applied', outcome: { code: 'applied', effectDigest: effectDigest(slots.completed) }, terminal };
+    // A record-only revision applied without its terminal pair yet: what an
+    // explicit reconciliation may still add (the pair only). Only a revision
+    // detail has `apply`.
+    const recordOnlyApplied = !slots['terminal-pair'] && entered.detail.apply === false
+      ? Object.freeze({ ...terminal, entered, linked: slots['linked-authoritative-event'] }) : null;
+    return { state: 'applied', outcome: { code: 'applied', effectDigest: effectDigest(slots.completed) }, terminal, recordOnlyApplied };
   }
 
   // Visible committed frames prove nothing about their final flush. Before
@@ -814,6 +832,110 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
         publish(graph.dir, 'preparation', bytes, graph.binding);
         publish(graph.dir, 'prepared-challenge', challenge, graph.binding);
         return settled(readGraph(name, requestId), {});
+      });
+    },
+
+    // The owner-local, record-only reconciliation (C2; disabled, no route):
+    // what it reads first. Under the journal lock, a record-only revision
+    // that entered with its linked event but no completed record, or one
+    // already completed but without its terminal pair (a crash between the
+    // two writes). Returns the soul, operation, revisions, proposal and the
+    // exact slot-13 bytes, or refuses.
+    readRecordOnlyReconcilable(requestId) {
+      if (!matches(UUID4, requestId)) fail('invalid-owner-journal-record');
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        // A completed slot holding anything but a valid completion is never written over.
+        if (!zeros(graph.bytes.get('completed.record')) && !graph.recordOnlyApplied) fail('owner-journal-conflict');
+        const context = graph.recordOnly ?? graph.recordOnlyApplied;
+        if (!context) fail(graph.state === 'applied' || graph.state === 'refused' ? 'owner-journal-conflict' : 'owner-journal-transition-refused');
+        const { action, entered, linked } = context;
+        return Object.freeze({ requestId, soul: action.soul, operation: action.operation, proposalId: action.parameters.proposalId ?? null,
+          beforeRevision: entered.detail.beforeRevision, afterRevision: entered.detail.afterRevision, linked: Buffer.from(linked),
+          completed: graph.state === 'applied' });
+      });
+    },
+
+    // The owner-local, record-only reconciliation's write (C2; disabled, no
+    // route), after the ceremony. Under the journal lock:
+    // - for a record-only revision entered with its linked event and no
+    //   completed record: the linked event read back through the reader at
+    //   `journalSeq` must be exactly slot 13's bytes and verify as this
+    //   request's; the store builds the typed completed record from the
+    //   retained entered record (journalSeq, journalRecordDigest = SHA-256 of
+    //   those bytes, working null) and publishes slot 10 only when it is
+    //   empty, then the terminal pair (slot 12, finding applied, basis the
+    //   completed record);
+    // - for one already completed without its terminal pair (a crash between
+    //   the two writes): the terminal pair only.
+    // The pair carries the ceremony's `auditId` (minted per ceremony; the
+    // pair is the durable record), `at`, the observed `preimage` and this
+    // daemon's original key/epoch as reporter. Both are validated before
+    // anything is written. A non-empty slot 10 or 12 otherwise is a
+    // conflict; nothing is ever overwritten.
+    reconcileRecordOnlyCompletion(requestId, { journalSeq, readLinkedEvent, at, auditId, preimage } = {}) {
+      // Early refusal before the lock. The pair encoder and the completion
+      // bind refuse a bad `at`, `auditId` or `preimage` again, so those three
+      // checks have no test of their own.
+      if (!matches(UUID4, requestId) || !Number.isSafeInteger(journalSeq) || journalSeq < 0 || journalSeq > 9_999_999_999
+        || typeof readLinkedEvent !== 'function' || !Number.isSafeInteger(at) || at < 0 || !matches(UUID4, auditId) || !plain(preimage)) {
+        fail('invalid-owner-journal-record');
+      }
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        if (!zeros(graph.bytes.get('terminal-pair.record'))) fail('owner-journal-conflict');
+        const pairFor = (context, completedBytes) => {
+          const { acceptance, preparation } = context;
+          const pair = { v: 1, preimage, record: { v: 1, kind: 'reconciliation', requestId, payloadDigest: acceptance.payloadDigest,
+            effectId: preparation.effectId, auditId, originalDaemonKey: acceptance.daemonKey, originalDaemonEpoch: acceptance.daemonEpoch,
+            reportingDaemonKey: acceptance.daemonKey, reportingDaemonEpoch: acceptance.daemonEpoch, at, finding: 'applied',
+            basisDigest: effectDigest(completedBytes), observedDigest: effectDigest(Buffer.from(canonicalJson(preimage))) } };
+          // Encoding refuses an oversized or malformed preimage; the bind is a
+          // self-check of the store's own pair against the graph it read.
+          try {
+            const bytes = encodeReconciliationPair(pair, { slot: 'terminal-pair', requestId });
+            bindReconciliationPair(decodeReconciliationPair(bytes, { slot: 'terminal-pair', requestId }),
+              { finding: 'applied', acceptance, action: context.action, preparation, basisBytes: completedBytes });
+            return bytes;
+          } catch { return fail('invalid-owner-journal-record'); }
+        };
+        // Completed already (a crash before the pair): the pair only.
+        if (graph.recordOnlyApplied) {
+          const pair = pairFor(graph.recordOnlyApplied, graph.recordOnlyApplied.basisBytes);
+          recoveryFlush(graph);
+          publish(graph.dir, 'terminal-pair', pair, graph.binding);
+          return settled(readGraph(name, requestId), { reconciled: 'pair' });
+        }
+        if (!zeros(graph.bytes.get('completed.record'))) fail('owner-journal-conflict');
+        const context = graph.recordOnly;
+        if (!context) fail('owner-journal-transition-refused');
+        const { action, preparation, preparationDigest, receiptDigest, acceptance, entered, linked } = context;
+        // The linked event, read back at journalSeq, must be exactly slot 13
+        // and verify as this request's (verifyLinkedEvent compares the two
+        // byte strings through private copies of their intrinsic bytes).
+        try {
+          const event = verifyLinkedEvent(linked, { operation: action.operation, journalBytes: readLinkedEvent(journalSeq), journalRecordDigest: effectDigest(linked),
+            proposalId: action.parameters.proposalId,
+            linkage: { requestId: acceptance.requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest } });
+          if (event.kind === 'revision' && event.revision !== entered.detail.afterRevision) throw new Error();
+        } catch { fail('owner-journal-linked-event-refused'); }
+        let completed;
+        try {
+          if (at < entered.at) throw new Error();
+          completed = Buffer.from(canonicalJson(completedRecordFor({ entered, action, at, journalSeq, journalRecordDigest: effectDigest(linked), working: null })));
+          // Self-check of the store's own bytes, as the completer does: no
+          // input reaches it that the checks above have not refused.
+          bindEffect(decodeEffect(completed), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
+        } catch { fail('invalid-owner-journal-record'); }
+        const pair = pairFor(context, completed);
+        recoveryFlush(graph);
+        publish(graph.dir, 'completed', completed, graph.binding);
+        publish(graph.dir, 'terminal-pair', pair, graph.binding);
+        return settled(readGraph(name, requestId), { reconciled: 'completed' });
       });
     },
 
