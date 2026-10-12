@@ -106,13 +106,26 @@ directory exists. Otherwise it reads the request as one complete graph.
   match. Only then are the frames decoded with the full
   role/slot/request/context binding, and the original action checked against
   the acceptance. Nothing follows from the peek alone.
-- **What is accepted.** The only accepted graph is the exact committed
-  admission prefix: `original-action` and `acceptance-context` committed,
-  every later slot and scratch all zero.
+- **What is accepted.** Two graphs are accepted:
+  - `admitted`: the exact committed admission prefix, meaning
+    `original-action` and `acceptance-context` committed, with every later
+    slot and scratch all zero;
+  - `indeterminate`: that prefix plus nonzero `entered` bytes, committed or
+    damaged, that are not a clean partial write. A durable entered record is
+    consumption, so the effect may have started. Without validated
+    whole-effect completion it reports `outcome:{code:"effect-uncertain",
+    effectDigest:null}`. It is never refused, applied or retried. The
+    request's later slots are flushed and retained but not yet validated,
+    because their typed validators (including completion, and therefore
+    `applied`) are a later slice.
+
+  A body-only `entered` with no trailer is a partial write that happened
+  before any effect, so it refuses like any other unsupported phase.
 - **What refuses.** Each of these refuses as `storage-failed` and is left
   exactly as found:
   - an orphan;
-  - a partial or committed later phase, until its typed validator exists;
+  - any other partial or committed later phase, until its typed validator
+    exists;
   - nonzero scratch;
   - a corrupt or foreign-role frame;
   - another request's context;

@@ -129,3 +129,46 @@ test('strict graph refusal: every damaged, foreign or unsupported graph refuses 
     });
   }
 });
+
+test('a committed or damaged entered slot is effect-uncertain, never refused, applied or retried', darwin, async (t) => {
+  const enteredFrame = (input) => encodeDaemonJournalFrame(Buffer.from('{}'), { namespaceDigest, requestId: input.requestId, slot: 'entered' });
+  const cases = [
+    ['committed entered with empty completed', ({ file, input }) => fs.writeFileSync(file('entered'), enteredFrame(input))],
+    ['committed entered and an unvalidated completed', ({ file, input }) => {
+      fs.writeFileSync(file('entered'), enteredFrame(input));
+      fs.writeFileSync(file('completed'), encodeDaemonJournalFrame(Buffer.from('{}'), { namespaceDigest, requestId: input.requestId, slot: 'completed' }));
+    }],
+    ['a damaged entered frame', ({ file, input }) => { const frame = enteredFrame(input); frame[300] ^= 1; fs.writeFileSync(file('entered'), frame); }],
+  ];
+  for (const [name, damage] of cases) {
+    await t.test(name, (tt) => {
+      const journal = admitted(tt);
+      damage(journal);
+      const before = journal.snapshot(), seen = [];
+      const recovered = reopen(journal.root, { fault: (at) => seen.push(at) }).recover(journal.input.requestId);
+      assert.equal(recovered.state, 'indeterminate');
+      assert.deepEqual(recovered.outcome, { code: 'effect-uncertain', effectDigest: null });
+      assert.equal(recovered.authorizationSupported, false);
+      // The nonzero entered bytes are flushed before anything is reported.
+      assert(seen.includes('recovery:entered:flushed'));
+      const duplicate = reopen(journal.root).admit(journal.input.action, journal.input.acceptance);
+      assert.equal(duplicate.state, 'indeterminate'); assert.equal(duplicate.duplicate, true);
+      assert.deepEqual(journal.snapshot(), before);
+    });
+  }
+  // A body without its trailer is a partial entered write: no effect can have started.
+  const partial = admitted(t);
+  const frame = enteredFrame(partial.input); frame.fill(0, 4096 + 128); fs.writeFileSync(partial.file('entered'), frame);
+  assert.throws(() => reopen(partial.root).recover(partial.input.requestId), refused('owner-journal-unsupported-phase'));
+});
+
+test('a request directory past its 15 files refuses without listing it whole', darwin, (t) => {
+  const journal = admitted(t);
+  for (let index = 0; index < 100; index++) fs.writeFileSync(path.join(journal.dir, `extra-${index}`), '');
+  let read = 0;
+  const io = { ...fs, readdirSync: () => assert.fail('directories are never read whole'),
+    opendirSync: (dir) => { const handle = fs.opendirSync(dir); return { readSync: () => { read++; return handle.readSync(); }, closeSync: () => handle.closeSync() }; } };
+  assert.throws(() => reopen(journal.root, { io }).recover(journal.input.requestId), refused('owner-journal-corrupt'));
+  // Two reads for the one-entry request container, then 16 stopping the request directory.
+  assert.equal(read, 2 + 16);
+});

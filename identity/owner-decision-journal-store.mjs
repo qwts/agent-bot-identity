@@ -216,13 +216,21 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
 
   const zeros = (bytes) => bytes.every((byte) => byte === 0);
 
-  // Reads one request directory as a complete graph. Only an exact, fully
-  // committed admission prefix with every later slot and scratch still zero is
-  // accepted; anything else refuses without creating, repairing or clearing.
+  // Reads one request directory as a complete graph, without creating,
+  // repairing or clearing anything. Two outcomes are accepted:
+  // - the exact committed admission prefix with every later slot and scratch
+  //   still zero (`admitted`);
+  // - that prefix plus a nonzero `entered` slot that is not a cleanly partial
+  //   write (`indeterminate`). Durable entered is consumption: an effect may
+  //   have started, and without validated whole-effect completion it stays
+  //   effect-uncertain, never refused and never retried. The later slots of
+  //   such a graph are retained unvalidated; their typed validators are a
+  //   later slice, so this never reports applied.
+  // Anything else refuses.
   function readGraph(name, expectedRequestId) {
     const dir = path.join(requests, name);
     ownedDirectory(io, dir);
-    const present = io.readdirSync(dir);
+    const present = listBounded(io, dir, FILES.length);
     if (!present.every((entry) => FILES.some((file) => file.name === entry))) fail();
     // Interrupted admission: files still missing, or acceptance-context (the
     // first file created and the last published) not committed. Charged, kept
@@ -245,22 +253,35 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     if (!matches(UUID4, requestId) || requestDirectoryName({ namespaceDigest, requestId }) !== name) fail();
     if (expectedRequestId !== undefined && requestId !== expectedRequestId) fail();
     const binding = { namespaceDigest, requestId };
-    const decoded = new Map(DAEMON_JOURNAL_SLOTS.map(({ slot }) => [slot, decodeDaemonJournalFrame(bytes.get(`${slot}.record`), { ...binding, slot })]));
-    if (!ADMISSION_SLOTS.every((slot) => decoded.get(slot).kind === 'committed')) fail('owner-journal-orphan');
-    for (const [slot, { kind }] of decoded) if (!ADMISSION_SLOTS.includes(slot) && kind !== 'empty') fail('owner-journal-unsupported-phase');
-    if (!zeros(bytes.get('scratch.record'))) fail('owner-journal-scratch-pending');
+    const decode = (slot) => decodeDaemonJournalFrame(bytes.get(`${slot}.record`), { ...binding, slot });
+    if (!ADMISSION_SLOTS.every((slot) => decode(slot).kind === 'committed')) fail('owner-journal-orphan');
     let saved;
-    try { saved = validateDaemonAdmission(decoded.get('original-action').payload, decoded.get('acceptance-context').payload, namespaceDigest); }
+    try { saved = validateDaemonAdmission(decode('original-action').payload, decode('acceptance-context').payload, namespaceDigest); }
     catch { fail(); }
-    return { dir, name, binding, saved, bytes };
+    // A body without its trailer is a partial entered write: the effect starts
+    // only after entered is durable, so that alone is not uncertainty. Any
+    // other nonzero entered bytes, committed or damaged, may be consumption.
+    const entered = bytes.get('entered.record');
+    let uncertain = false;
+    if (!zeros(entered)) {
+      try { uncertain = decode('entered').kind !== 'uncommitted'; } catch { uncertain = true; }
+    }
+    if (uncertain) {
+      const flush = [...ADMISSION_SLOTS, ...DAEMON_JOURNAL_SLOTS.map(({ slot }) => slot)
+        .filter((slot) => !ADMISSION_SLOTS.includes(slot) && !zeros(bytes.get(`${slot}.record`)))];
+      return { dir, name, binding, saved, bytes, flush, uncertain };
+    }
+    for (const { slot } of DAEMON_JOURNAL_SLOTS) if (!ADMISSION_SLOTS.includes(slot) && decode(slot).kind !== 'empty') fail('owner-journal-unsupported-phase');
+    if (!zeros(bytes.get('scratch.record'))) fail('owner-journal-scratch-pending');
+    return { dir, name, binding, saved, bytes, flush: ADMISSION_SLOTS, uncertain };
   }
 
   // Visible committed frames prove nothing about their final flush. Before
   // anything is acknowledged again, flush every committed frame and both
   // directories, then require the bytes to be unchanged. A failed flush keeps
   // the prefix unsettled and refuses. This is node's logical fsync only.
-  function recoveryFlush({ dir, bytes }) {
-    for (const slot of ADMISSION_SLOTS) {
+  function recoveryFlush({ dir, bytes, flush }) {
+    for (const slot of flush) {
       const { name: fileName, size } = FILE_BY_SLOT.get(slot);
       const fd = openFixed(io, path.join(dir, fileName), size, O_RDONLY);
       try {
@@ -273,7 +294,8 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   }
 
   const settled = (graph, extra) => ({
-    state: 'admitted', requestId: graph.binding.requestId, directory: graph.name, ...extra,
+    state: graph.uncertain ? 'indeterminate' : 'admitted', requestId: graph.binding.requestId, directory: graph.name,
+    ...(graph.uncertain ? { outcome: { code: 'effect-uncertain', effectDigest: null } } : {}), ...extra,
     authorizationSupported: false, physicalAllocationSupported: false, physicalFlushGuaranteed: false,
   });
 
