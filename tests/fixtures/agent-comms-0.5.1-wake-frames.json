@@ -1,0 +1,47 @@
+{
+  "description": "Raw account-watch event:wake lines written by the real agent-comms 0.5.1 broker to a paired daemon. Senders used op:send with the listed traceparent values (null = none). Recorded in a scratch HOME on temporary sockets with AGENT_COMMS_NO_KEYCHAIN=1 and a 300 ms wake window; nothing touched a real broker or daemon.",
+  "source": {
+    "release": "v0.5.1",
+    "commit": "f42c05bdaa5e6255e0a2d7793e51713e0893a5dc",
+    "archive": "https://github.com/qwts/agent-comms/releases/download/v0.5.1/agent-comms-0.5.1.tar.gz",
+    "archiveBytes": 792618,
+    "archiveSha256": "931b386420856871e4931eacc5e52cdfd0ff18f427bae48d45e70b74ce44814e",
+    "recordedAt": "2026-10-12"
+  },
+  "ready": "{\"event\":\"ready\"}",
+  "cases": {
+    "valid": {
+      "sent": [
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      ],
+      "frame": "{\"event\":\"wake\",\"agentId\":\"agent_bb4e90e5-5949-48e8-b6af-a445456a4abe\",\"count\":1,\"cursor\":2,\"messageIds\":[\"msg_30eb1719-dd92-41fa-999f-43042384084f\"],\"traceparent\":\"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\"}"
+    },
+    "mixed": {
+      "sent": [
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "00-abcdef1234567890abcdef1234567890-abcd1234567890ef-01"
+      ],
+      "frame": "{\"event\":\"wake\",\"agentId\":\"agent_90f747e6-af9b-4e61-b566-1b4bd4f423c0\",\"count\":2,\"cursor\":3,\"messageIds\":[\"msg_415932e9-4ec5-4a87-a3a5-5e996c028104\",\"msg_5717636a-e1b5-48a7-856f-34d87ef2d0f2\"]}"
+    },
+    "partial": {
+      "sent": [
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        null
+      ],
+      "frame": "{\"event\":\"wake\",\"agentId\":\"agent_3b08a84a-4325-449b-ac35-4e2eae9d339f\",\"count\":2,\"cursor\":5,\"messageIds\":[\"msg_ecb38048-90c9-4479-a02d-90680d99b08a\",\"msg_9ce3d510-c5b9-4550-91b8-98f433b5c1a5\"]}"
+    },
+    "invalid": {
+      "sent": [
+        "00-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01"
+      ],
+      "frame": "{\"event\":\"wake\",\"agentId\":\"agent_21621eab-11e7-479c-ad79-91f137b39a96\",\"count\":1,\"cursor\":7,\"messageIds\":[\"msg_c6f72c6b-0a0c-413d-a891-84f44b4d9201\"]}"
+    },
+    "catchUp": {
+      "sent": [
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      ],
+      "note": "sent before the daemon watch opened",
+      "frame": "{\"event\":\"wake\",\"agentId\":\"agent_a4ec3911-8ec4-4635-8465-c5cff56b5154\",\"count\":1,\"cursor\":1,\"messageIds\":[\"msg_242dc8fe-9791-4d48-8043-10e4feba8bbc\"]}"
+    }
+  }
+}

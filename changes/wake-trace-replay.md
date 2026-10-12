@@ -1,0 +1,1 @@
+- A wake trace test pins the `event:wake` frames the agent-comms 0.5.1 broker sends: a single valid sender `traceparent` reaches the daemon unchanged and its `wake` event continues that trace, while mixed, partial, invalid and catch-up batches carry none and start their own; no warm frame, wake report or receipt carries trace context (#1027, agent-comms#208).
