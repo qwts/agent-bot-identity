@@ -1,0 +1,1 @@
+- Add disabled owner-decision target resolution at prepare: a live local soul of this account resolves, and every missing, retired, foreign or unreadable target gets the same refusal after the same local reads (agent-comms#77).

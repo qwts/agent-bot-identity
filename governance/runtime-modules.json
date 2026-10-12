@@ -119,6 +119,7 @@
     "cold-wake.mjs": "soul",
     "comms-client.mjs": "comms",
     "owner-decision-watch.mjs": "comms",
+    "owner-decision-target.mjs": "soul",
     "comms-windows.mjs": "comms",
     "comms-membership.mjs": "comms",
     "comms-relay.mjs": "comms",
