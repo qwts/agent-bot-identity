@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "purpose": "Proposed broker namespace derivation vectors; public synthetic IDs only, not enrolled identities. Daemons pin digest and never derive from raw ID.",
+  "domainAscii": "agent-comms-owner-broker-namespace-v1\n",
+  "vectors": [
+    {
+      "id": "incrementing-bytes",
+      "namespaceIdBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "namespaceIdHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "namespaceDigest": "cae42435cda19e86d783f8825996490e04d69416eaf31acfe5e04fb5b2825f9c"
+    },
+    {
+      "id": "zero-bytes-synthetic",
+      "namespaceIdBase64url": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "namespaceIdHex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "namespaceDigest": "e43143b36840f9dcdf7adcbcdb9af5251451b223c99533ca711378bdfe537832"
+    },
+    {
+      "id": "ff-bytes-synthetic",
+      "namespaceIdBase64url": "__________________________________________8",
+      "namespaceIdHex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "namespaceDigest": "d98ab87e2b1d02ece3e725ee202311a73f0e8ca73387a694e7930b7fa083247c"
+    }
+  ]
+}
