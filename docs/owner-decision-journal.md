@@ -914,8 +914,11 @@ and a Proxy, a lookalike or another typed array isn't bytes.
 ## Revision completion with the linked event (disabled)
 
 A revision completes through the gate's bound `complete({at, journalSeq,
-working})`, built with the host's `revisionPort`
-(`owner-decision-revision-port.mjs`, read-only). The store's
+working})`. The gate builds its identity port and its revision-journal port
+(`owner-decision-revision-port.mjs`, read-only) itself, over the daemon's
+own state directory, resolved from its launch env and home as the trust root
+is. It takes no port from its caller, so neither the bytes nor the port that
+reads them can come from a caller. The store's
 `completeEffect(entry, result, {readLinkedEvent})` then does this:
 - **Reads the bytes itself.** It reads the exact revision-journal record at
   `journalSeq` through the port, for the action's soul. It never accepts

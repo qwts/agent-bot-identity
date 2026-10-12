@@ -11,8 +11,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { canonicalJson } from '../canonical-json.mjs';
 import { enterOwnerDecisionEffect } from '../owner-decision-effect-gate.mjs';
-import { createOwnerDecisionIdentityPort } from '../owner-decision-identity-port.mjs';
-import { createOwnerDecisionRevisionPort } from '../owner-decision-revision-port.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../identity/agent-identity.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
@@ -103,7 +102,8 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
     if (slot === upTo) break;
   }
 
-  const stateDir = path.join(base, 'identity'), censusFile = path.join(base, 'population.json');
+  // The daemon's own state directory, where its launch env and home resolve it.
+  const stateDir = stateDirectory({ env, home }), censusFile = path.join(base, 'population.json');
   if (!shared) {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     mintAgentIdentity({ useGithub: false, gate: () => false, appSlug: null, harness: 'codex', transcript: { provider: 'codex', id: 't' },
@@ -112,7 +112,7 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
       transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file: censusFile });
   }
   const options = { journalRoot, namespaceDigest, daemonAccount: account, censusFile,
-    identityPort: createOwnerDecisionIdentityPort({ stateDir }), revisionPort: createOwnerDecisionRevisionPort({ stateDir }), nowMilliseconds: NOW };
+    nowMilliseconds: NOW };
   // The approve's own revision-journal record at `seq`, as the effect step
   // would append it under the revision lock, linked to this request.
   const preparationDigest = sha256(Buffer.from(canonicalJson(preparation)));
@@ -502,5 +502,34 @@ test('a second trust store under the same namespace can never be selected', darw
     const { v, kind, trustVersion, ...fields } = { ...template, requestId: r.requestId }; void v; void kind; void trustVersion;
     assert.throws(() => asDaemon({ env: { XDG_STATE_HOME: path.join(r.base, 'xdg') }, home: r.base }, () => createDaemonJournalStore({ root: r.journalRoot, namespaceDigest })
       .recordPreparation(r.requestId, { preparation: fields, trust: { root: other } })), { reason: 'invalid-owner-journal-record' });
+  });
+});
+
+// The gate builds its identity and revision-journal ports itself, over the
+// daemon's own state directory; ports a caller passes are never used.
+test('caller-supplied ports are ignored: the probe with planted linked bytes refuses', darwin, async (t) => {
+  await t.test('a revision port answering with the right bytes for a deleted record', (tt) => {
+    const r = released(tt);
+    const file = r.appendRevision();
+    const bytes = fs.readFileSync(file);
+    fs.rmSync(file);
+    const entered = r.enter({ revisionPort: { read: () => bytes } });
+    assert.equal(entered.state, 'entered');
+    assert.throws(() => entered.complete(reported), { reason: 'owner-journal-linked-event-refused' });
+    assert.deepEqual(r.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+  });
+  await t.test('an identity port that would approve any target', (tt) => {
+    const r = released(tt);
+    // The real identity record is retired; a passed port claiming otherwise changes nothing.
+    fs.rmSync(path.join(r.stateDir, `${r.soul}.json`));
+    const permissive = { kind: 'owner-decision-identity-read-v1', read: () => ({ id: r.soul, status: 'active' }) };
+    const refusal = r.enter({ identityPort: permissive });
+    assert.deepEqual(refusal, { state: 'refused', reason: 'target-unavailable', code: 'storage-failed' });
+  });
+  await t.test('with the real record, the gate\'s own ports complete it', (tt) => {
+    const r = released(tt);
+    r.appendRevision();
+    const entered = r.enter({ revisionPort: { read: () => { throw new Error('never used'); } }, identityPort: { read: () => { throw new Error('never used'); } } });
+    assert.equal(entered.complete(reported).state, 'applied');
   });
 });

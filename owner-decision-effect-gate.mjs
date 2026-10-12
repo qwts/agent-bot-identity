@@ -31,6 +31,9 @@
 // else can complete it, so a crash or reopen leaves it effect-uncertain.
 import { createDaemonJournalStore, readOwnerDecisionTrust, verifyOwnerDecisionPresence } from './identity-host.mjs';
 import { resolveOwnerDecisionTargetLocked } from './owner-decision-target.mjs';
+import { createOwnerDecisionIdentityPort } from './owner-decision-identity-port.mjs';
+import { createOwnerDecisionRevisionPort } from './owner-decision-revision-port.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { createHash, createPublicKey } from 'node:crypto';
 
 const refuse = (reason) => { throw Object.assign(new Error('owner decision effect entry refused'), { reason }); };
@@ -51,18 +54,24 @@ function keyIdOf(pin) {
 // revision's journalSeq and working) and returns the settled request, for
 // this request only; it works once, and every journal refusal (used,
 // poisoned, invalid result, linked event refused) is thrown as the journal's
-// error. A revision completes only with `revisionPort` (the host's read-only
-// revision-journal port): the linked event's bytes come from it, never from
-// the caller.
+// error. A revision's linked event is read only through the revision-journal
+// port the gate builds itself over the daemon's own state directory; no
+// caller can supply the port, the bytes or the digest.
 // Refusal reasons are the final-refusal reasons (trust-unavailable,
 // validation-failed, target-unavailable); a consumed request or a storage
 // failure reports the journal's own code and reason. Nothing is written for
 // any refusal.
 export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
-  journalRoot, namespaceDigest, daemonAccount, censusFile, identityPort, revisionPort, nowMilliseconds,
+  journalRoot, namespaceDigest, daemonAccount, censusFile, nowMilliseconds,
 } = {}) {
   try {
     if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) refuse('validation-failed');
+    // The identity and revision-journal ports are always built here over this
+    // daemon's own state directory (from its launch env and home, as the trust
+    // root is), never taken from the caller: no caller can stand in a port
+    // that answers with bytes the daemon never wrote.
+    const stateDir = stateDirectory();
+    const identityPort = createOwnerDecisionIdentityPort({ stateDir }), revisionPort = createOwnerDecisionRevisionPort({ stateDir });
     const store = createDaemonJournalStore({ root: journalRoot, namespaceDigest });
     let soul;
     const entered = store.enterEffect(requestId, (view) => {
@@ -97,8 +106,7 @@ export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
       physicalFlushGuaranteed: false,
       // A revision's completion reads its linked event only through the
       // host's revision-journal port, for this request's soul.
-      complete: (result) => store.completeEffect(entry, result,
-        { readLinkedEvent: revisionPort ? (seq) => revisionPort.read(soul, seq) : undefined }) });
+      complete: (result) => store.completeEffect(entry, result, { readLinkedEvent: (seq) => revisionPort.read(soul, seq) }) });
   } catch (error) {
     return Object.freeze({ state: 'refused', reason: error?.refusal ?? error?.reason ?? 'storage-unavailable', code: error?.code ?? 'storage-failed' });
   }
