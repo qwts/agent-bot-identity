@@ -557,11 +557,12 @@ second, or one stamped earlier after a clock rollback, would pass it.
   refuses.
 - A rotation of either key, in any second and across a clock rollback, is
   caught by the receipt key binding.
-- A re-enrollment of the same pair is caught by the timestamp layer when it is
-  stamped in or after the preparation's second. One stamped before
-  `preparedAt` after a clock rollback is not detected. Strict binding needs
-  the trust version persisted at preparation, which is a new persisted field
-  and an owner decision; it is not done here.
+- A re-enrollment of the same pair is caught by the trust version binding
+  (owner decision Q3). The v2 preparation records the active enrollment's
+  chain version as `trustVersion`, and entry requires the current version to
+  equal it, in any second and across a clock rollback. The timestamp layer
+  remains as a second check. A v1 preparation has no version and never
+  enters.
 
 **Completion through the gate.** An `entered` result is frozen and carries
 `complete(result)`, bound to the store instance that entered and to that
@@ -711,6 +712,11 @@ route. None is built here.
   That fails closed: it never releases or enters. But the request keeps its
   charged directory until a reviewed cleanup path exists. That path is an
   open item.
+- **A preparation written around the writer.** The writer records only the
+  live trust version, so a caller can't preset a future one. A preparation
+  written straight into the journal, bypassing the writer, could still claim
+  any version. As with slot 6, only the daemon's custody of its own journal
+  protects against that.
 - **The check's expiry is not bounded by the receipt or preparation.**
   `check.exp` is checked only against the daemon clock at intake. The gate's
   re-verification of p1 freshness at entry is what bounds the window in
@@ -768,5 +774,42 @@ recovery. A refused write doesn't poison the instance.
   request refuses as corrupt.
 - Beside an applied effect, a mismatched pair leaves the request
   indeterminate.
-- A terminal pair anywhere else refuses as an unsupported phase.
+- A terminal pair before entry, with no refusal, refuses as an unsupported
+  phase.
+- Beside an entered-only request, a terminal pair leaves it indeterminate,
+  which fails closed.
 - An observation pair leaves the request indeterminate, as before.
+
+## Preparation writer and trust version (v2, disabled)
+
+`recordPreparation(requestId, {preparation, trust})` writes the v2
+preparation (owner decision Q3; agent-comms `effect-evidence-v2.json` at
+bf0b705, vendored), then the exact prepared challenge it implies.
+- **What the record holds.** The v1 fields plus `trustVersion`: the active
+  trust enrollment's chain version, an odd integer from 1 to 1023. The caller
+  never supplies it. The store reads live trust itself:
+  - it calls `readOwnerDecisionTrust` for this journal's namespace, with
+    `trust` as `{root, env, home}`;
+  - it takes the trust lock inside the journal lock, and refuses rather than
+    waits;
+  - it records that version.
+
+  No ready active pair, a busy or damaged trust store, or another namespace
+  refuses with `owner-journal-trust-unavailable` and writes nothing. A
+  `trustVersion` in the call or inside `preparation` refuses. The store adds
+  `v:2`, `kind` and `trustVersion`, and binds the record to the admission
+  and action.
+- **What stays the same.** The challenge never carries `trustVersion`.
+  Downstream effect and reconciliation records stay v1, bound to the v2
+  preparation's digest.
+- **Phases.** Legal from `admitted`, or from `preparing` with the same
+  preparation, which finishes its challenge after a crash. The same
+  preparation again is an idempotent duplicate. A different preparation, or
+  any later phase, is a conflict.
+- **Locking.** It runs under the journal lock: the request scan first, the
+  recovery flush before writing, and a busy lock refuses. A refused input
+  doesn't poison the instance.
+
+The decoder accepts v2 and keeps v1 for the vendored v1 vectors. The
+effect-entry gate requires the current chain version to equal the
+preparation's `trustVersion`, so a v1 preparation never enters.
