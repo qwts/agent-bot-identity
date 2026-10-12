@@ -139,3 +139,21 @@ or a torn audit line stays as evidence and refuses.
   (records, confirmations and audit lines). Either could bring back a revoked
   key, so the broker's online revocation check before application stays
   mandatory.
+
+**Namespace-only reader.** `readOwnerDecisionNamespace` exists so a host's
+first key enrollment doesn't depend on the key chain it is about to start.
+- **What it reads.** It runs under the same exclusive lock and applies the
+  same custody, flush and validation as the full reader does for the namespace
+  part. It requires `namespace.json`, its confirmation, and exactly one
+  matching namespace line in the dedicated audit file.
+- **What it never touches.** It never reads `keys/`. So it works before any
+  keys exist, between a revocation and the next enrollment, and even while the
+  chain is damaged.
+- **What it returns.** Only `{namespaceDigest}`: never readiness, pins or
+  authority.
+- **Failures.** A busy lock, a pending audit or a pending publication refuses
+  with `storage-failed` for an explicit retry. It never repairs, replays or
+  writes anything.
+
+The full `readOwnerDecisionTrust` stays mandatory for owner-decision
+capability and for every trust check.

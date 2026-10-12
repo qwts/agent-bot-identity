@@ -1,0 +1,1 @@
+- Add a disabled namespace-only reader for owner-decision trust, so a host's first key enrollment can read the pinned namespace without depending on the key chain; it returns no readiness or authority (agent-comms#77).

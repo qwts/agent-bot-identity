@@ -436,6 +436,48 @@ export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, legac
   finally { io.closeSync(lock); }
 }
 
+// The pinned namespace alone, for a host's first key enrollment: it must not
+// depend on the key chain it is about to start, so it works before any keys
+// exist and between a revocation and the next enrollment. Under the same
+// exclusive lock and with the same custody, flush and validation as the full
+// reader applies to the namespace part, it requires namespace.json, its
+// confirmation and exactly one matching line in the dedicated audit file.
+// It returns only {namespaceDigest}: never readiness, pins or authority. The
+// full readOwnerDecisionTrust stays mandatory for capability and for every
+// trust check. A busy lock, a pending audit or a pending publication refuses
+// with storage-failed for an explicit retry; nothing is repaired, replayed
+// or written.
+export function readOwnerDecisionNamespace({ root, io = fs } = {}) {
+  platformCheck();
+  if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
+  try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }
+  const lock = acquireLock(io, root);
+  try {
+    assertAncestors(io, root); ownedDirectory(io, root);
+    const top = listBounded(io, root, ROOT_NAMES.size + 1);
+    if (top.includes(PENDING)) fail('owner-trust-pending');
+    if (!top.every((name) => ROOT_NAMES.has(name))) fail();
+    if (!top.includes(NAMESPACE)) {
+      if (top.length !== 1) fail();
+      fail('owner-trust-missing');
+    }
+    const bytes = readFlushed(io, path.join(root, NAMESPACE), TRUST_LIMITS.record), namespace = decode(bytes);
+    if (!namespaceRecord(namespace)) fail();
+    if (!top.includes(NAMESPACE_CONFIRMATION)) fail('owner-trust-audit-pending');
+    const confirmation = decode(readFlushed(io, path.join(root, NAMESPACE_CONFIRMATION), TRUST_LIMITS.confirmation));
+    const lines = top.includes(AUDIT) ? readAudit(io, root).filter(({ value }) => value.subject === 'namespace') : [];
+    flushDirectory(io, root);
+    const digest = sha256(bytes);
+    if (lines.length !== 1 || lines[0].value.version !== 0 || lines[0].value.recordDigest !== digest
+      || lines[0].value.namespaceDigest !== namespace.namespaceDigest || lines[0].value.auditId !== namespace.auditId
+      || !confirmationRecord(confirmation) || confirmation.subject !== 'namespace' || confirmation.version !== 0
+      || confirmation.recordDigest !== digest || confirmation.namespaceDigest !== namespace.namespaceDigest
+      || confirmation.auditId !== namespace.auditId || confirmation.auditLineDigest !== sha256(lines[0].bytes)) fail();
+    return { namespaceDigest: namespace.namespaceDigest };
+  } catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
+  finally { io.closeSync(lock); }
+}
+
 // --- the ceremony-only writer (not wired to any command or route) ---
 
 // `maxVersions` may only lower the fixed capacity (tests use it to reach the
