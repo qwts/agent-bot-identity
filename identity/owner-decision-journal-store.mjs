@@ -30,6 +30,7 @@ const LOCK_NAME = '.journal-lock';
 const REQUESTS = 'requests';
 const O_EXLOCK = 0x20; // Apple xnu-8792.61.2 bsd/sys/fcntl.h (macOS 13 era), flock semantics.
 const { O_RDONLY, O_RDWR, O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+const O_DIRECTORY = fs.constants.O_DIRECTORY ?? 0;
 const O_CLOEXEC = fs.constants.O_CLOEXEC ?? 0; // libuv adds it anyway; ask explicitly where defined.
 
 // Every request file, its fixed EOF and (for a slot) its frame binding.
@@ -102,7 +103,8 @@ function ownedDirectory(io, dir) {
 }
 
 function flushDirectory(io, dir) {
-  const fd = io.openSync(dir, O_RDONLY | O_NOFOLLOW);
+  // O_DIRECTORY|O_NONBLOCK: anything but a directory refuses at once.
+  const fd = io.openSync(dir, O_RDONLY | O_NOFOLLOW | O_DIRECTORY | O_NONBLOCK);
   try { io.fsyncSync(fd); } catch { fail('owner-journal-flush'); } finally { io.closeSync(fd); }
 }
 
@@ -166,7 +168,8 @@ function writeExactly(io, fd, bytes, position) {
 // Opens one established request file, refusing anything but our own private
 // single-link regular file at its fixed EOF. Never creates.
 function openFixed(io, file, size, flags) {
-  const fd = io.openSync(file, flags | O_NOFOLLOW);
+  // O_NONBLOCK: a FIFO opens at once and fails the regular-file check.
+  const fd = io.openSync(file, flags | O_NOFOLLOW | O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(file);
     if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || held.nlink !== 1

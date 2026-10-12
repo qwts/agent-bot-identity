@@ -216,7 +216,7 @@ function assertAncestors(io, dir) {
 }
 
 function ownedDirectory(io, dir) {
-  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(dir);
     if (!held.isDirectory() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o700
@@ -225,7 +225,7 @@ function ownedDirectory(io, dir) {
 }
 
 function flushDirectory(io, dir) {
-  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
   try { io.fsyncSync(fd); } catch { fail('owner-trust-flush'); } finally { io.closeSync(fd); }
 }
 
@@ -246,7 +246,8 @@ function listBounded(io, dir, max) {
 // `max` bytes and flushes it (the explicit recovery flush), then requires the
 // bytes to be unchanged. Reads never create.
 function readFlushed(io, file, max) {
-  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW);
+  // O_NONBLOCK: a FIFO opens at once and fails the regular-file check.
+  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(file);
     if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || held.nlink !== 1
@@ -265,7 +266,7 @@ function readFlushed(io, file, max) {
 // name, and within `max` bytes. Used by reconcile, where a pending name may
 // legitimately have a second link.
 function readHeld(io, file, max, links) {
-  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW);
+  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(file);
     if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || !links.includes(held.nlink)
@@ -565,7 +566,7 @@ function vouchKeyIdentity({ env, home }) {
   const file = vouchKeyPath(vouchStateDir({ env, home }));
   let fd;
   try {
-    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW);
+    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.uid !== process.getuid()) throw new Error('untrusted');
     const bytes = fs.readFileSync(fd);

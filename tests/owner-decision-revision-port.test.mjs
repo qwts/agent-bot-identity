@@ -158,3 +158,94 @@ test('a record swapped under the name, before the open or during the read, refus
     assert.throws(() => r.port.read(soul, 0), refused);
   });
 });
+
+// Nothing at the path can block the read: a FIFO opens non-blocking and then
+// fails the regular-file check. A blocking open would hang the whole process
+// (no test timeout can interrupt a synchronous open), so each FIFO case runs
+// the read in a child process killed after a short timeout.
+import { spawnSync } from 'node:child_process';
+const mkfifo = (file) => assert.equal(spawnSync('mkfifo', [file]).status, 0);
+const PORT_URL = new URL('../owner-decision-revision-port.mjs', import.meta.url).href;
+// Runs `body` (module source using `port`, `fs`, `soul`, `file`) in a child;
+// the child prints the refusal code. Killed after 5 s: a hang fails the test.
+function inChild(r, body) {
+  const source = `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createOwnerDecisionRevisionPort } from ${JSON.stringify(PORT_URL)};
+const port = createOwnerDecisionRevisionPort({ stateDir: ${JSON.stringify(r.stateDir)} });
+const soul = ${JSON.stringify(soul)}, file = ${JSON.stringify(r.file(0))};
+try { ${body}; console.log('read'); } catch (error) { console.log(error.code ?? error.message); }`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', source], { timeout: 5000, encoding: 'utf8' });
+  return { hung: child.signal === 'SIGTERM' || child.error?.code === 'ETIMEDOUT', out: child.stdout.trim() };
+}
+// Owned cleanup: the FIFO is removed whatever happens, and nothing is left.
+function withFifoCleanup(r, run) {
+  try { run(); } finally {
+    fs.rmSync(r.file(0), { force: true });
+    assert.deepEqual(fs.readdirSync(r.agentDir).filter((name) => name.endsWith('.json')), []);
+  }
+}
+
+test('a FIFO at the record path refuses at once, never blocking', { timeout: 15000 }, (t) => {
+  const r = revisions(t);
+  mkfifo(r.file(0));
+  withFifoCleanup(r, () => {
+    const result = inChild(r, 'port.read(soul, 0)');
+    assert.equal(result.hung, false, 'the read hung on a FIFO');
+    assert.equal(result.out, 'owner-decision-revision-read');
+  });
+});
+
+test('a FIFO swapped in after the name check refuses at once, never blocking', { timeout: 15000 }, (t) => {
+  const r = revisions(t);
+  r.write(0);
+  // The child patches lstat: right after the port checks the name, the record
+  // is replaced by a FIFO, before the open.
+  withFifoCleanup(r, () => {
+    const result = inChild(r, `const lstat = fs.lstatSync; let once = false;
+fs.lstatSync = (path, ...rest) => { const stat = lstat(path, ...rest);
+  if (!once && path === file) { once = true; fs.rmSync(file); spawnSync('mkfifo', [file]); } return stat; };
+port.read(soul, 0)`);
+    assert.equal(result.hung, false, 'the read hung on a FIFO swapped in after lstat');
+    assert.equal(result.out, 'owner-decision-revision-read');
+  });
+});
+
+test('custody holds across the read: links, mode and ancestry', async (t) => {
+  const patched = (tt, name, wrap) => { const original = fs[name]; fs[name] = wrap(original); tt.after(() => { fs[name] = original; }); };
+  await t.test('a second link present before the read, gone after it', (tt) => {
+    const r = revisions(tt);
+    r.write(0);
+    const twin = path.join(r.stateDir, 'twin.json');
+    fs.linkSync(r.file(0), twin);
+    let once = false;
+    patched(tt, 'readSync', (original) => (...args) => { const n = original(...args); if (!once) { once = true; fs.rmSync(twin); } return n; });
+    assert.throws(() => r.port.read(soul, 0), refused);
+  });
+  await t.test('made group-writable during the read', (tt) => {
+    const r = revisions(tt);
+    r.write(0);
+    let once = false;
+    patched(tt, 'readSync', (original) => (...args) => { const n = original(...args); if (!once) { once = true; fs.chmodSync(r.file(0), 0o620); } return n; });
+    assert.throws(() => r.port.read(soul, 0), refused);
+  });
+  await t.test('an ancestor directory swapped during the read', (tt) => {
+    const r = revisions(tt);
+    r.write(0);
+    const revisionsDir = path.join(r.stateDir, 'soul-revisions');
+    let once = false;
+    patched(tt, 'readSync', (original) => (...args) => {
+      const n = original(...args);
+      if (!once) {
+        once = true;
+        // A new soul-revisions directory holding the same agent directory (and so the same file).
+        const moved = path.join(r.stateDir, 'old-revisions');
+        fs.renameSync(revisionsDir, moved);
+        fs.mkdirSync(revisionsDir, { mode: 0o700 });
+        fs.renameSync(path.join(moved, soul), path.join(revisionsDir, soul));
+      }
+      return n;
+    });
+    assert.throws(() => r.port.read(soul, 0), refused);
+  });
+});

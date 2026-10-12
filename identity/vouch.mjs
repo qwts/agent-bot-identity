@@ -83,7 +83,9 @@ function readVouchKey(file, { platform, custody, sid }) {
   let pem;
   let fd;
   try {
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // O_NONBLOCK: a FIFO at the path opens at once and then fails the
+    // regular-file check, instead of blocking the open.
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.uid !== process.getuid()) throw new Error('untrusted');
     pem = readFileSync(fd, 'utf8');

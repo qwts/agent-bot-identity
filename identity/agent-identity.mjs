@@ -268,7 +268,8 @@ function withRegistryLock(root, operation) {
 // descriptor. `io` is injectable only so tests can simulate stats.
 const IDENTITY_RECORD_MAX_BYTES = 64 * 1024;
 function readStrictRecord(file, io) {
-  const fd = io.openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  // O_NONBLOCK: a FIFO opens at once and fails the regular-file check below.
+  const fd = io.openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(file);
     if (!held.isFile() || held.nlink !== 1 || held.uid !== process.getuid() || (held.mode & 0o022) !== 0

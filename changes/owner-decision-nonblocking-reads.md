@@ -1,0 +1,1 @@
+- The disabled owner-decision custody readers (revision port, strict identity read, vouch key, trust store, journal slots) now open non-blocking and validate the opened file before reading, so a FIFO at a record path refuses at once instead of hanging; the revision port also re-checks its ancestry, owner and mode after the read (agent-comms#77).

@@ -981,8 +981,12 @@ is mechanism-only.
   can name another file.
 - The record must be the file the name points to, opened no-follow, with one
   link, owned by this uid, no group or world write, and 1 to 16384 bytes.
-- The read is exact. Its size, mtime, link count and named identity must be
-  unchanged after it.
+- The open is no-follow and non-blocking, so a FIFO at the path, even one
+  swapped in after the name check, opens at once. The opened file must then
+  be a regular file with one link before the read.
+- The read is exact. Afterwards its size, mtime, link count, owner and mode,
+  and named identity must be unchanged, and so must the device and inode of
+  every directory in the fixed ancestry.
 - macOS ACLs aren't checked (see Before wiring).
 
 ## What the effect-entry gate takes from its caller
@@ -1015,3 +1019,13 @@ on POSIX that is a plain read of the daemon's own state file.
   - `journalSeq` only selects which record the gate's own port reads, and
     those bytes are verified;
   - `working` is mechanism-only, not proof (see Before wiring).
+
+**Non-blocking custody reads.** Every owner-decision custody reader opens its
+file no-follow and non-blocking, then checks the opened descriptor before it
+reads. So a FIFO at the path refuses at once instead of hanging the daemon.
+That covers:
+- the revision port;
+- the strict identity read;
+- the vouch key read, including the trust writer's vouch identity;
+- the trust store reads;
+- the journal's slot files and directory flushes.
