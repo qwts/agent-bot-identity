@@ -543,6 +543,30 @@
       "sha256": "29cc03ea50e1f0939a68e975ceabf1c80988bd81b67df733ae206efa7dffc5f4",
       "utf8Bytes": 610,
       "cap": 2048
+    },
+    {
+      "id": "outcome-daemon-refused-storage-refused",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "refused",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "storage-refused",
+          "effectDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"storage-refused\",\"effectDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "sha256": "aff03cf649ea5a9c68de04eee4dbcf014e54d3049bd3b19d28da1892d3e20de2",
+      "utf8Bytes": 546,
+      "cap": 4096
     }
   ],
   "reconciliationPairs": [

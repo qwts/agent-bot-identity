@@ -1,7 +1,8 @@
 // Daemon owner-decision journal codec (#1007). The fixture is agent-comms
-// tests/fixtures/owner-decisions/journal-budget-v1.json at 0686f2c (merged PR #204;
-// its slot tables and paired vectors are unchanged from 6b90f82, PR #199),
-// copied byte for byte; the frame layout is rebuilt here independently from
+// tests/fixtures/owner-decisions/journal-budget-v1.json at d071a9b (its six
+// typed reconciliation pairs added by 543b576; slot tables and paired vectors
+// unchanged since 6b90f82, PR #199; one storage-refused outcome record added
+// by dd25aea), copied byte for byte; the frame layout is rebuilt here independently from
 // that contract's table rather than from the codec under test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import {
 } from '../identity/owner-decision-journal-frame.mjs';
 
 const FIXTURE_URL = new URL('./fixtures/owner-decisions/journal-budget-v1.json', import.meta.url);
-const FIXTURE_SHA256 = '0da89e94be8532f3ebae93085880f09ff21fc63363f60da164c34f862a02b9e1';
+const FIXTURE_SHA256 = 'ea2d8f4c52c49d89dd2d7f8919b978d74ebc518b951e428911125a643b1eb932';
 const fixture = JSON.parse(readFileSync(FIXTURE_URL, 'utf8'));
 const base = { namespaceDigest: 'a'.repeat(64), requestId: '11111111-1111-4111-8111-111111111111' };
 const hash = (bytes) => createHash('sha256').update(bytes).digest();

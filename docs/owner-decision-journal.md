@@ -721,3 +721,52 @@ route. None is built here.
   planted next to a genuine p1 and d1 that the broker never released would
   still enter. Authenticating the check's source at intake, the first item
   above, is the only defence before wiring.
+
+## Reconciliation pairs (disabled)
+
+Slots 11 and 12 hold the reconciliation pairs from agent-comms d071a9b:
+`observation-pair` is the indeterminate observation, and `terminal-pair` is the
+immutable applied or refused resolution. Each is exactly canonical
+`{preimage, record, v:1}`: the reconciliation record, at most 2048 bytes; its
+revision or cold observation preimage, at most 2048 bytes; at most 256 wrapper
+bytes; and at most 4352 bytes in all. `observedDigest` is the SHA-256 of the
+canonical preimage. The six typed pairs are in the vendored
+`journal-budget-v1.json`.
+
+**Binding** (`bindReconciliationPair`). A pair binds to:
+- the acceptance's payload and original daemon key and epoch; the pair codec
+  binds the request ID to the frame;
+- the saved preparation's `effectId`, or null when no preparation exists;
+- its proof: `basisDigest` is the SHA-256 of the exact completed record for
+  applied, of the exact pre-effect refused record for refused, and null for
+  an indeterminate observation;
+- the operation's preimage kind: cold state for `cold-wake.set`, otherwise a
+  revision observation whose working digests are present exactly for an
+  applying edit.
+
+The reporting daemon key and epoch, and the observed state, are the
+ceremony's own.
+
+**Writers.** Both are disabled with no route, and both are store methods
+reachable through the host contract. Each runs under the journal lock:
+- the request scan comes first;
+- then the whole-graph read and the recovery flush;
+- then one publication.
+
+The same bytes again are an idempotent duplicate. Anything else already in
+the slot is a conflict: replacing an observation is a separately reviewed
+recovery. A refused write doesn't poison the instance.
+- **`recordObservationPair`** is legal only when the request is indeterminate
+  after entry, with a readable or absent preparation. Applied, refused, or a
+  terminal pair already present is a conflict.
+- **`recordTerminalPair`** is legal only for an applied request, with its
+  completed basis, or a refused request, with its pre-effect refused basis.
+  Entered without completion never justifies refused.
+
+**Reader.**
+- A terminal pair beside a pre-effect refusal must bind to it; otherwise the
+  request refuses as corrupt.
+- Beside an applied effect, a mismatched pair leaves the request
+  indeterminate.
+- A terminal pair anywhere else refuses as an unsupported phase.
+- An observation pair leaves the request indeterminate, as before.
