@@ -14,8 +14,9 @@
 
 import process from 'node:process';
 import { spawnSync, execFile, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isatty } from 'node:tty';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
@@ -120,15 +121,55 @@ export function discoverHooks(dir, event) {
     });
 }
 
-function readStdin() {
+// The most stdin the runner will take from a harness (#1071). Real payloads
+// are kilobytes: even a Write of a large file or a long tool response is well
+// under a megabyte, and the model's own output limit keeps them there. Past
+// the cap nothing more is kept, so an oversized payload is never allocated or
+// parsed whole. Over the cap, a blocking event is denied and any other event
+// runs with an empty payload, the same as one we cannot parse.
+export const MAX_HOOK_INPUT_BYTES = 16 * 1024 * 1024;
+
+// `incomplete` means the deadline passed before the harness finished writing.
+// `deadline` is when the runner must stop waiting and answer.
+export function readStdin({
+  fd = 0, isTTY = isatty(fd), limit = MAX_HOOK_INPUT_BYTES, deadline = Infinity,
+} = {}) {
   // Some harnesses send no stdin for session events; reading fd 0 on a TTY
-  // would block forever.
-  if (process.stdin.isTTY) return '';
-  try {
-    return readFileSync(0, 'utf8');
-  } catch {
-    return '';
+  // would block forever. isatty, not process.stdin.isTTY: touching
+  // process.stdin opens a stream that switches fd 0 to non-blocking.
+  if (isTTY) return { text: '', oversize: false, incomplete: false };
+  const chunks = [];
+  let total = 0;
+  let oversize = false;
+  const chunk = Buffer.alloc(64 * 1024);
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    let n;
+    try {
+      n = readSync(fd, chunk, 0, chunk.length, null);
+    } catch (error) {
+      // Windows pipes report end-of-input as an EOF error rather than a 0 read.
+      if (error?.code === 'EOF') break;
+      // A non-blocking pipe with nothing in it yet: wait a moment and retry,
+      // but never past the deadline.
+      if (error?.code === 'EAGAIN' && now() < deadline) { Atomics.wait(pause, 0, 0, 2); continue; }
+      if (error?.code === 'EAGAIN') return { text: '', oversize, incomplete: !oversize };
+      return { text: '', oversize, incomplete: false };
+    }
+    if (n === 0) break;
+    total += n;
+    if (oversize) {
+      // Over the cap: keep draining, discarding, so the harness's write
+      // finishes rather than failing on a closed pipe, but only while the
+      // budget lasts. The answer must still beat the vendor's timer.
+      if (now() >= deadline) break;
+      continue;
+    }
+    if (total > limit) { oversize = true; chunks.length = 0; continue; }
+    chunks.push(Buffer.from(chunk.subarray(0, n)));
   }
+  if (oversize) return { text: '', oversize, incomplete: false };
+  return { text: Buffer.concat(chunks, total).toString('utf8'), oversize, incomplete: false };
 }
 
 export function parsePayload(text, { dialectKey, event } = {}) {
@@ -355,7 +396,7 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   }
 }
 
-export function runHooks({ dialectKey, event, payload, dir, env = process.env }) {
+export function runHooks({ dialectKey, event, payload, dir, env = process.env, startedAt = now() }) {
   const envelope = normalizeEnvelope({ dialectKey, event, payload });
   let binding;
   try { binding = readBinding({ env, cwd: envelope.cwd ?? process.cwd() }); }
@@ -371,8 +412,10 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env })
   // timeout could reach 20s and two under Copilot could sail past the 30s cap
   // into its fail-open path — defeating the very thing answering on our own
   // clock is meant to guarantee. Each hook gets what is left of the deadline.
+  // The clock starts when the runner did, not here (#1071): reading and
+  // parsing stdin spend the same vendor window the hooks do.
   const budget = budgetMs(dialectKey, event, requested);
-  const deadline = now() + budget;
+  const deadline = startedAt + budget;
   const checkCwd = envelope.cwd && existsSync(envelope.cwd) ? envelope.cwd : process.cwd();
   const results = [{ name: 'identity', ...unboundIdentityCheck(envelope, { env, cwd: checkCwd }) }];
   results.push({ name: 'confinement', ...confinementCheck(envelope, {
@@ -457,13 +500,25 @@ export function main(argv = process.argv.slice(2), env = process.env) {
     return 0;
   }
   const { dialect: dialectKey, event } = parsed;
-  const { decision, reason, contexts } = runHooks({
-    dialectKey,
-    event,
-    payload: parsePayload(readStdin(), { dialectKey, event }),
-    dir: hooksDir(env),
-    env,
+  const startedAt = now();
+  // Reading stdin spends the run's budget, so stop waiting with a margin left
+  // to answer in.
+  const input = readStdin({
+    deadline: startedAt + budgetMs(dialectKey, event, Number(env.AGENT_HOOK_TIMEOUT_MS) || 10000) - 250,
   });
+  const refusal = input.oversize
+    ? `hook input is larger than ${MAX_HOOK_INPUT_BYTES} bytes; refusing to evaluate it`
+    : input.incomplete ? 'hook input did not finish arriving within the time budget' : null;
+  const { decision, reason, contexts } = refusal && isBlocking(event)
+    ? { decision: 'deny', reason: refusal, contexts: [] }
+    : runHooks({
+      dialectKey,
+      event,
+      payload: parsePayload(input.text, { dialectKey, event }),
+      dir: hooksDir(env),
+      env,
+      startedAt,
+    });
   const encoded = encodeDecision({ dialectKey, event, decision, reason });
   // Context replaces the neutral allow response rather than joining it: a
   // dialect that can carry text answers with that text, and a dialect that
