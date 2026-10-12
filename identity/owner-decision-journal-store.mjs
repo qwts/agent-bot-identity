@@ -16,7 +16,8 @@ import {
   bindEffect, bindPreparation, bindReconciliationPair, challengeFor, completedRecordFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
   effectOutcome, enteredRecordFor, refusedRecordFor,
 } from './owner-decision-evidence.mjs';
-import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
+import { LINKED_EVENT_CAP, verifyLinkedEvent } from './owner-decision-linked-event.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 import { readOwnerDecisionTrust } from './owner-decision-trust.mjs';
 import { verifyOwnerDecisionReceipt } from './owner-decision-receipt.mjs';
 import { verifyOwnerDecisionPresence } from './owner-decision-action.mjs';
@@ -602,9 +603,9 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
           // The exact bytes come only from the revision-journal port. A read
           // or verification refusal keeps the handle for an explicit retry.
           try {
-            const read = readLinkedEvent(journalSeq);
-            if (!(read instanceof Uint8Array)) throw new Error();
-            linked = Buffer.from(read);
+            // A private copy of the read's intrinsic bytes, within slot 13's cap.
+            linked = exactBytes(readLinkedEvent(journalSeq), { max: LINKED_EVENT_CAP });
+            if (!linked) throw new Error();
             journalRecordDigest = effectDigest(linked);
             const event = verifyLinkedEvent(linked, { operation: action.operation, journalBytes: linked, journalRecordDigest, proposalId: action.parameters.proposalId,
               linkage: { requestId: graph.saved.record.requestId, payloadDigest: graph.saved.record.payloadDigest, receiptDigest, effectId: preparation.effectId,

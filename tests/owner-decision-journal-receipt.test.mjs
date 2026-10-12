@@ -113,3 +113,20 @@ test('a pin whose keyId is not its own key\'s refuses even when the receipt name
   // With the honest pin, the same shape verifies.
   assert.equal(verifyOwnerDecisionReceipt(issue({ ...c.payload, brokerKey: brokerPin.keyId }), { ...inputs, trust: { ...trust, receiptKey: brokerPin } }).payload.brokerKey, brokerPin.keyId);
 });
+
+// The saved challenge is read from its intrinsic bytes only: an own length,
+// buffer or slice can't change what is bound, a disguised oversized one
+// never parses, and a Proxy or lookalike isn't a challenge.
+test('the saved challenge is read from its intrinsic bytes only', () => {
+  const c = issuer.cases[0], inputs = caseInputs(c);
+  const lying = (bytes, props) => { const copy = Buffer.from(bytes); for (const [k, v] of Object.entries(props)) Object.defineProperty(copy, k, v); return copy; };
+  const throwing = Object.fromEntries(['length', 'byteLength', 'buffer', 'byteOffset', 'subarray', 'slice'].map((k) => [k, { get() { throw new Error(k); } }]));
+  assert.equal(verifyOwnerDecisionReceipt(c.receiptToken, { ...inputs, challengeBytes: lying(inputs.challengeBytes, throwing) }).receiptDigest, c.receiptDigest);
+  assert.equal(verifyOwnerDecisionReceipt(c.receiptToken, { ...inputs, challengeBytes: lying(inputs.challengeBytes,
+    { length: { value: 1 }, buffer: { value: new ArrayBuffer(1) }, subarray: { value: () => Buffer.from('{}') } }) }).receiptDigest, c.receiptDigest);
+  const big = Buffer.alloc(32768 + 1, 0x20);
+  Object.defineProperty(big, 'length', { value: 1 });
+  for (const challengeBytes of [big, new Proxy(inputs.challengeBytes, {}), { length: 2 }, undefined]) {
+    assert.throws(() => verifyOwnerDecisionReceipt(c.receiptToken, { ...inputs, challengeBytes }), refused('owner-receipt-binding'));
+  }
+});

@@ -443,3 +443,18 @@ test('a crash in or between the two publications is effect-uncertain, never retr
     });
   }
 });
+
+// The reader's answer is copied from its intrinsic bytes, within slot 13's cap.
+test('a revision reader\'s bytes are read intrinsically: a disguised oversized answer refuses', darwin, (t) => {
+  const j = journal(t);
+  const big = Buffer.alloc(16384 + 1, 0x20);
+  Object.defineProperty(big, 'length', { value: j.tx.linked.length });
+  unchanged(j, () => j.store.completeEffect(j.entry, j.tx.revision, { readLinkedEvent: () => big }), { reason: 'owner-journal-linked-event-refused' });
+  // A Proxy over the right bytes is not bytes.
+  unchanged(j, () => j.store.completeEffect(j.entry, j.tx.revision, { readLinkedEvent: () => new Proxy(Buffer.from(j.tx.linked), {}) }),
+    { reason: 'owner-journal-linked-event-refused' });
+  const lying = Buffer.from(j.tx.linked);
+  Object.defineProperty(lying, 'subarray', { value: () => Buffer.from('{}') });
+  Object.defineProperty(lying, 'buffer', { value: new ArrayBuffer(1) });
+  assert.equal(j.store.completeEffect(j.entry, j.tx.revision, { readLinkedEvent: () => lying }).state, 'applied');
+});
