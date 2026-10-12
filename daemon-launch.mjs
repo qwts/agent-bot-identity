@@ -10,6 +10,7 @@ import { assertSoulUnpaused, displayName, normalizeLaunchBrief } from './agent-p
 import { createTurnRegistry } from './turn-registry.mjs';
 import { sandboxLaunchProblem } from './sandbox.mjs';
 import { startSpan } from './traceparent.mjs';
+import { redactDiagnostic } from './diagnostic-redact.mjs';
 
 // A launch's comms setting: the soul's own soul.json (a spawned instance
 // carries its template's), else the launched package's, else on.
@@ -184,7 +185,8 @@ const DETAIL_MAX = 512;
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
   isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, signIn = null,
   souls = null, receipt = () => {}, verifyOwner = null, policy = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry(),
-  diagnostics = null, nowMs = () => Date.now() }) {
+  diagnostics = null, nowMs = () => Date.now(),
+  redactDetail = (detail) => redactDiagnostic(detail, { maxLength: DETAIL_MAX }) }) {
   let rows = [];
   try { rows = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('launch journal is unreadable'); }
@@ -203,7 +205,12 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
   }
   if (rows.length) save();
   const reportRow = async (row, report) => {
-    const { requestId, status, agentId, detail, code, sandbox } = row;
+    const { requestId, status, agentId, code, sandbox } = row;
+    // What leaves for the broker is redacted (#983): credentials, token
+    // shapes and paths under a home directory are replaced, and the detail
+    // is one line within the broker's budget. The code prefix and the
+    // fix-it command survive; the 0600 journal keeps the full detail.
+    const detail = row.detail ? redactDetail(row.detail) : row.detail;
     await report({ requestId, status, agentId, ...(detail ? { detail } : {}), ...(code ? { code } : {}), ...(sandbox ? { sandbox } : {}) });
     row.reported = true;
     save();
