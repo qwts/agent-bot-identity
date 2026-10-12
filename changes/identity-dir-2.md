@@ -1,0 +1,1 @@
+- Sixteen more identity files move into `identity/`, among them the format contract, the owner gate, statements and presence, the principals, the bot resolver, the secret stores and providers, and the App store; their old paths stay as re-export shims (#645, ADR-0645 step 6).

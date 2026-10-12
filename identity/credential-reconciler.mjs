@@ -9,11 +9,11 @@ import {
   STORE_UNAVAILABLE_CODES,
   validateIssuer,
   validatePrivateKey,
-} from './ensure-private-key.mjs';
-import { loadConfig } from './config.mjs';
-import { resolveAppCredential } from './soul-credentials.mjs';
+} from '../ensure-private-key.mjs';
+import { loadConfig } from '../config.mjs';
+import { resolveAppCredential } from '../soul-credentials.mjs';
 import { readAppMetadata, readManagedAppCredential } from './identity-app-store.mjs';
-import { mint } from './mint-token.mjs';
+import { mint } from '../mint-token.mjs';
 
 export class CredentialReconciliationError extends Error {
   constructor(phase, results) {

@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { withLock } from './file-lock.mjs';
+import { withLock } from '../file-lock.mjs';
 import { appendAuditReceipt, validateAgentId, validatePrincipalId, validateTransport } from './identity-format.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 

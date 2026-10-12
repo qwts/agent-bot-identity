@@ -21,7 +21,7 @@ const AGENT_COMMS_DIGEST = '2a3a19c38a3d56a2e211cb1c21e11f1e25d86f102843e9f6d8bd
 
 test('binding-proof.mjs is byte-identical to the agent-comms copy it was compared with', () => {
   // A Windows checkout may rewrite line endings; the bytes that ship are LF.
-  const source = readFileSync(path.join(ROOT, 'binding-proof.mjs'), 'utf8').replace(/\r\n/g, '\n');
+  const source = readFileSync(path.join(ROOT, 'identity', 'binding-proof.mjs'), 'utf8').replace(/\r\n/g, '\n');
   const digest = createHash('sha256').update(source, 'utf8').digest('hex');
   assert.equal(
     digest,

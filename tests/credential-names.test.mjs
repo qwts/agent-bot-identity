@@ -69,7 +69,7 @@ function runtimeSources(dir, rel = '') {
 test('no runtime file builds a credential item name outside identity-format.mjs', () => {
   const built = /agent-bot\.(?:soul|app)\.\$\{|['"`]Agent Identities['"`]/u;
   const offenders = runtimeSources(ROOT)
-    .filter(({ name }) => name !== 'identity-format.mjs')
+    .filter(({ name }) => name !== 'identity/identity-format.mjs')
     .filter(({ path }) => built.test(readFileSync(path, 'utf8')))
     .map(({ name }) => name);
   assert.deepEqual(offenders, [], 'build credential item names with identity-format.mjs');

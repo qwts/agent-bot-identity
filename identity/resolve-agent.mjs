@@ -22,12 +22,12 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readAgentIdentity } from './agent-identity.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { readAgentIdentity } from '../agent-identity.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { AGENT_ID_KEYS, PIN_KEYS } from './identity-format.mjs';
-import { accountHarness, accountName, detectHarness } from './detect-harness.mjs';
-import { PROFILE_HARNESSES } from './organization-profile.mjs';
-import { appLifecycleStatus, isGateEnabled, loadConfig, slugForHarness } from './config.mjs';
+import { accountHarness, accountName, detectHarness } from '../detect-harness.mjs';
+import { PROFILE_HARNESSES } from '../organization-profile.mjs';
+import { appLifecycleStatus, isGateEnabled, loadConfig, slugForHarness } from '../config.mjs';
 
 // The pin and Agent ID keys live in the identity-format contract (#645, F1).
 export const CHAINED_HOOKS_KEYS = ['agentBot.chainedHooksPath', 'qwts.chainedHooksPath'];

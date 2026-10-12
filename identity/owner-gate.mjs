@@ -33,8 +33,8 @@
 // gate makes the supported path require the owner, not the files.
 
 import process from 'node:process';
-import { readBinding } from './agent-binding.mjs';
-import { currentAgentId } from './agent-identity.mjs';
+import { readBinding } from '../agent-binding.mjs';
+import { currentAgentId } from '../agent-identity.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';
 import { keydPresence } from './owner-presence.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';

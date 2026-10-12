@@ -39,7 +39,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import process from 'node:process';
-import { withLock } from './file-lock.mjs';
+import { withLock } from '../file-lock.mjs';
 import { vouchStateDir } from './vouch.mjs';
 import { MAX_TEXT_BYTES, textProblem } from './owner-text.mjs';
 

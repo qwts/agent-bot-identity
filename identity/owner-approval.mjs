@@ -19,9 +19,9 @@
 
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
-import { accountHarness, accountName } from './detect-harness.mjs';
+import { accountHarness, accountName } from '../detect-harness.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { loadConfig } from './config.mjs';
+import { loadConfig } from '../config.mjs';
 
 // The App slug an unflagged invocation would resolve, or null — the "markers
 // present" test: GH_AGENT_APP, pin, agent account, or detected harness env.

@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import { interactionHome } from './state-paths.mjs';
+import { interactionHome } from '../state-paths.mjs';
 
 const ID_PATTERN = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PRINCIPAL_ID_PATTERN = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

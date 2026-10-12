@@ -1,6 +1,6 @@
 // Genesis v1: see docs/soul-genesis.md for the byte-level UUIDv8 contract.
 import { createHash, randomBytes } from 'node:crypto';
-import { validateAgentId } from '../identity-format.mjs';
+import { validateAgentId } from './identity-format.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
 
 export function validateGenesis(genesis) {
