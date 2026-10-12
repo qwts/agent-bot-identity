@@ -297,6 +297,62 @@
       "kind": "failure",
       "registered": "0.10.64",
       "summary": "A turn approval request failed."
+    },
+    {
+      "n": 38,
+      "code": "credential-no-binding",
+      "component": "credential",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A credential request came without a live agent binding."
+    },
+    {
+      "n": 39,
+      "code": "credential-soul-retired",
+      "component": "credential",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The bound soul is retired and gets no App token."
+    },
+    {
+      "n": 40,
+      "code": "credential-no-transcript",
+      "component": "credential",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The bound soul has no transcript locator yet."
+    },
+    {
+      "n": 41,
+      "code": "credential-github-off",
+      "component": "credential",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The github-identity add-on is off on this host."
+    },
+    {
+      "n": 42,
+      "code": "credential-no-app",
+      "component": "credential",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "The bound soul has no GitHub App."
+    },
+    {
+      "n": 43,
+      "code": "credential-identity-unreadable",
+      "component": "credential",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The bound soul's identity record could not be read."
+    },
+    {
+      "n": 44,
+      "code": "credential-mint-failed",
+      "component": "credential",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The App installation token could not be minted."
     }
   ]
 }

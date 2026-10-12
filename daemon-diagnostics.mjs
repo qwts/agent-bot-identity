@@ -100,3 +100,22 @@ export function recordDaemonShutdown(diagnostics, { signal = null, startedAt = n
     ...(startedAt === null ? {} : { durationMs: nowMs() - startedAt }),
   });
 }
+
+// Credential refusals the identity route codes (#983): expected outcomes of
+// the soul's state or this host's add-ons, not faults.
+const CREDENTIAL_REFUSALS = new Set(['credential-no-binding', 'credential-soul-retired', 'credential-no-transcript', 'credential-github-off', 'credential-no-app']);
+
+/**
+ * Records one credential refresh (`POST /v0/credential`): `ok` when a token
+ * was issued, `refused` for a coded refusal, else `failed` with
+ * `credential-identity-unreadable` or `credential-mint-failed`. Nothing
+ * else: no detail at all, since a mint error can quote what it was given,
+ * and never the token, the App or the binding.
+ */
+export function recordCredentialRefresh(diagnostics, { startedAt, nowMs = () => Date.now(), error = null } = {}) {
+  if (!error) { record(diagnostics, { event: 'credential-refresh', outcome: 'ok', durationMs: nowMs() - startedAt }); return; }
+  const code = CREDENTIAL_REFUSALS.has(error?.code) || error?.code === 'credential-identity-unreadable' ? error.code : 'credential-mint-failed';
+  record(diagnostics, {
+    event: 'credential-refresh', outcome: CREDENTIAL_REFUSALS.has(code) ? 'refused' : 'failed', code, durationMs: nowMs() - startedAt,
+  });
+}

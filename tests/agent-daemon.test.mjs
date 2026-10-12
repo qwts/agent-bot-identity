@@ -954,6 +954,47 @@ test('a refusal by the github-identity gate receipts its reason and mints nothin
   }
 });
 
+test('credential refreshes record their outcome and code, never the token or the App (#983)', async () => {
+  const run = async ({ features, mint }) => {
+    const { root, env } = scratchEnv();
+    const { gitDir, record } = mintWorktreeToken(env, root);
+    const events = [];
+    const server = createDaemonServer({
+      env, home: '/nonexistent', config: { features: { 'github-identity': features } }, mintImpl: mint,
+      diagnostics: { record: (fields) => { events.push(fields); return true; } },
+    });
+    await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+    const port = server.address().port;
+    const call = (pathname, { body = {}, headers = {} } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+      method: 'POST', headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+    });
+    try {
+      const statuses = [(await call('/v0/credential')).status];
+      const bound = await (await call('/v0/bind', { body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-diag' } } })).json();
+      const response = await call('/v0/credential', { headers: { 'x-agent-binding': bound.secret } });
+      statuses.push(response.status);
+      await response.text();
+      return { statuses, events };
+    } finally {
+      await new Promise((resolve) => { server.close(resolve); });
+    }
+  };
+  const granted = await run({ features: true, mint: async () => ({ token: 'ghs_diag-grant', expires_at: '2026-08-12T09:00:00.000Z' }) });
+  assert.deepEqual(granted.statuses, [401, 200], 'responses are unchanged');
+  assert.deepEqual(granted.events.map((e) => [e.event, e.outcome, e.code]), [
+    ['credential-refresh', 'refused', 'credential-no-binding'], ['credential-refresh', 'ok', undefined],
+  ]);
+  const gated = await run({ features: false, mint: async () => { throw new Error('unexpected mint'); } });
+  assert.deepEqual(gated.statuses, [401, 409]);
+  assert.deepEqual(gated.events.map((e) => [e.outcome, e.code]).at(-1), ['refused', 'credential-github-off']);
+  const failed = await run({ features: true, mint: async () => { throw new Error('GitHub said no: ghs_never-leaks'); } });
+  assert.deepEqual(failed.events.map((e) => [e.outcome, e.code]).at(-1), ['failed', 'credential-mint-failed']);
+  const text = JSON.stringify([granted.events, gated.events, failed.events].flat());
+  assert.ok([granted.events, gated.events, failed.events].flat().every((e) => e.detail === undefined), 'no detail on this path');
+  for (const leak of ['ghs_diag-grant', 'you-codex-agent', 'ghs_never-leaks']) assert.equal(text.includes(leak), false, leak);
+  for (const e of [granted.events, gated.events, failed.events].flat()) assert.ok(e.durationMs >= 0);
+});
+
 // --- App reconcile at bind (#107; owner decision 2026-10-09) ---
 
 function reconcileFixture({ recorded = 'you-grok-agent' } = {}) {
