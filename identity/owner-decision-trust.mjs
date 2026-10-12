@@ -19,7 +19,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { createHash, createPublicKey, randomUUID } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
-import { vouchDaemonKey, vouchDaemonKeyPin } from './vouch.mjs';
+import { vouchDaemonKey, vouchDaemonKeyPin, vouchKeyIdentity } from './vouch.mjs';
 import { presencePinPath } from './owner-presence.mjs';
 
 export const TRUST_LIMITS = Object.freeze({ versions: 1024, record: 1024, confirmation: 512, auditLine: 512 });
@@ -63,6 +63,8 @@ const PUBLIC = Object.freeze({
   'owner-trust-role': 'owner-decision-unsupported',
   'owner-trust-no-vouch-key': 'owner-decision-unsupported',
   'owner-trust-daemon-key-mismatch': 'bad-request',
+  'owner-trust-stale-observation': 'conflict',
+  'owner-trust-api-version': 'bad-request',
 });
 export function trustError(reason) {
   return Object.assign(new Error('owner decision trust refused'), { code: PUBLIC[reason] ?? 'storage-failed', reason });
@@ -646,7 +648,7 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
 
   // Audit then confirm one published record. The audit append is not atomic
   // with the record; the confirmation is what makes the record usable.
-  function confirm(graph, record, { reconciled, step }) {
+  function confirm(graph, record, { reconciled, step, beforeConfirmation = () => {} }) {
     const existing = graph.audit.filter(({ value }) => value.subject === record.subject && value.version === record.version);
     let line;
     if (existing.length === 1) line = existing[0].bytes;
@@ -657,6 +659,7 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
         recordDigest: record.digest, namespaceDigest: graph.namespaceDigest, auditId: record.value.auditId, at: now(), reconciled,
       }, step);
     }
+    beforeConfirmation();
     const { dir, name } = confirmationPlace(record);
     publish(dir, name, confirmationBytes(graph, record, line), `${step}:confirmation`);
   }
@@ -668,26 +671,60 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     return graph;
   }
 
-  function appendKeyRecord(build) {
+  // One versioned write, all inside one hold of the trust lock: capture the
+  // vouch key's identity and derive daemonKey; read the full graph and derive
+  // the current observation; require its digest to equal the expectation;
+  // check the transition (`build`); re-check the vouch identity immediately
+  // before the record's pending file is created; publish the record and its
+  // audit line; re-check the vouch identity before the confirmation; publish
+  // the confirmation. Nothing before the record's pending file writes
+  // anything. A changed vouch key refuses with owner-trust-vouch-changed.
+  // Returns the new observation.
+  function writeV1(expectedObservationDigest, build) {
     return locked(() => {
+      const identity = vouchIdentity();
+      const daemonKey = ownDaemonKeyPin({ env, home });
+      sameVouch(identity);
       const graph = settledGraph();
+      const observation = observationForGraph(graph, daemonKey);
+      if (sha256(Buffer.from(canonicalJson(observation))) !== expectedObservationDigest) fail('owner-trust-stale-observation');
       const version = graph.records.length;
-      // The last version is reserved for a terminal revocation, so an
-      // enrollment can always be revoked; at capacity growth just stops.
-      if (version >= capacity) fail('owner-trust-bounds');
-      const previous = graph.records.at(-1);
-      const value = build(graph, { version, previousDigest: previous.digest, namespaceDigest: graph.namespaceDigest });
+      const value = build(graph, observation, { version, previousDigest: graph.records.at(-1).digest, namespaceDigest: graph.namespaceDigest });
       const bytes = encode(value, TRUST_LIMITS.record);
+      const step = `key-${version}`;
+      fault(`${step}:pre-creation-check`); sameVouch(identity);
       const keys = path.join(root, KEYS);
       try { io.lstatSync(keys); } catch (error) {
         if (error?.code !== 'ENOENT') throw error;
         io.mkdirSync(keys, { mode: 0o700 }); flushDirectory(io, root); fault('keys:created');
       }
-      publish(keys, keyFile(version), bytes, `key-${version}`);
+      publish(keys, keyFile(version), bytes, step);
       const record = { subject: 'key', version, bytes, value, digest: sha256(bytes) };
-      confirm({ ...graph, records: [...graph.records, record] }, record, { reconciled: false, step: `key-${version}` });
-      return ready(readGraph(io, root));
+      confirm({ ...graph, records: [...graph.records, record] }, record, { reconciled: false, step,
+        beforeConfirmation: () => { fault(`${step}:pre-confirmation-check`); sameVouch(identity); } });
+      const after = observationForGraph(settledGraph(), daemonKey);
+      const observationBytes = Buffer.from(canonicalJson(after));
+      return Object.freeze({ observation: after, observationBytes, observationDigest: sha256(observationBytes) });
     });
+  }
+  // Reconcile re-derives the vouch identity first: it never confirms an
+  // enrollment whose pins alias this daemon's current key.
+  function notOwnKey(record) {
+    if (record.value.kind !== 'owner-decision-key-enrollment') return;
+    const { keyId } = ownDaemonKeyPin({ env, home });
+    if (record.value.receiptKey.keyId === keyId || record.value.presenceKey.keyId === keyId) fail('owner-trust-role');
+  }
+  function vouchIdentity() {
+    let identity;
+    try { identity = vouchKeyIdentity({ env, home }); } catch { fail('owner-trust-no-vouch-key'); }
+    if (identity === null) fail('owner-trust-no-vouch-key');
+    return identity;
+  }
+  function sameVouch(identity) {
+    let current;
+    try { current = vouchKeyIdentity({ env, home }); } catch { fail('owner-trust-vouch-changed'); }
+    if (!current || current.dev !== identity.dev || current.ino !== identity.ino || current.size !== identity.size
+      || current.digest !== identity.digest) fail('owner-trust-vouch-changed');
   }
 
   return {
@@ -729,40 +766,39 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
       });
     },
 
-    // A new enrollment is legal only with no active one: rotation is a
-    // confirmed revocation first. Keys come only from the owner ceremony.
-    // Neither pin may be this daemon's own vouch key (derived; a supplied
-    // `daemonKey` must equal it).
-    enrollKeys({ receiptKey, presenceKey, brokerUid, daemonKey, at = now(), auditId = randomUUID() } = {}) {
+    // The unversioned writers are retired fail-closed (owner decision Q2): an
+    // old caller can never skip the expected observation. Nothing is written.
+    enrollKeys() { fail('owner-trust-api-version'); },
+    revokeKeys() { fail('owner-trust-api-version'); },
+
+    // Enrolls a new receipt/presence pair, only against the exact current
+    // observation (`expectedObservationDigest`, from
+    // readOwnerDecisionTrustObservation) and only from `none` or `revoked`.
+    // Keys come only from the owner ceremony; neither pin may be the other,
+    // this daemon's vouch key or keyd's legacy presence key.
+    enrollKeysV1({ receiptKey, presenceKey, brokerUid, expectedObservationDigest, at = now(), auditId = randomUUID() } = {}) {
+      if (!matches(DIGEST, expectedObservationDigest)) fail('owner-trust-invalid-input');
       const receipt = ed25519KeyPin(receiptKey), presence = ed25519KeyPin(presenceKey);
-      const ownKey = ownDaemonKey(daemonKey, { env, home });
-      if (receipt.keyId === presence.keyId || receipt.keyId === ownKey || presence.keyId === ownKey
-        || isLegacyPresence(presence, legacyPresenceRaw(legacyPresenceKey, { env, home }))) fail('owner-trust-invalid-input');
-      if (!validBrokerUid(brokerUid) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
-      return appendKeyRecord((graph, chain) => {
-        if (graph.active) fail('owner-trust-conflict');
-        return { v: 1, kind: 'owner-decision-key-enrollment', ...chain, receiptKey: receipt, presenceKey: presence,
+      if (receipt.keyId === presence.keyId || !validBrokerUid(brokerUid) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
+      return writeV1(expectedObservationDigest, (graph, observation, { version, previousDigest, namespaceDigest }) => {
+        if (observation.state !== 'none' && observation.state !== 'revoked') fail('owner-trust-conflict');
+        if (version >= Math.min(capacity, TRUST_LIMITS.versions)) fail('owner-trust-bounds');
+        if (receipt.keyId === observation.daemonKey.keyId || presence.keyId === observation.daemonKey.keyId
+          || isLegacyPresence(presence, legacyPresenceRaw(legacyPresenceKey, { env, home }))) fail('owner-trust-invalid-input');
+        return { v: 1, kind: 'owner-decision-key-enrollment', namespaceDigest, version, previousDigest, receiptKey: receipt, presenceKey: presence,
           service: { platform: 'darwin', brokerUid }, at, auditId };
       });
     },
 
-    // Revokes exactly the active enrollment, named by its record digest.
-    revokeKeys({ revokes, reason, at = now(), auditId = randomUUID() } = {}) {
+    // Revokes exactly the active enrollment, named by its record digest, only
+    // against the exact current observation, which binds the exact pair.
+    revokeKeysV1({ revokes, reason, expectedObservationDigest, at = now(), auditId = randomUUID() } = {}) {
+      if (!matches(DIGEST, expectedObservationDigest)) fail('owner-trust-invalid-input');
       if (!matches(DIGEST, revokes) || !REASONS.has(reason) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
-      return locked(() => {
-        const graph = settledGraph();
-        if (!graph.active || graph.active.digest !== revokes) fail('owner-trust-conflict');
-        const version = graph.records.length;
+      return writeV1(expectedObservationDigest, (graph, observation, { version, previousDigest, namespaceDigest }) => {
+        if (observation.state !== 'active' || observation.active.enrollmentDigest !== revokes) fail('owner-trust-conflict');
         if (version > capacity) fail('owner-trust-bounds');
-        const value = { v: 1, kind: 'owner-decision-key-revocation', namespaceDigest: graph.namespaceDigest, version,
-          previousDigest: graph.records.at(-1).digest, revokes, reason, at, auditId };
-        const bytes = encode(value, TRUST_LIMITS.record);
-        publish(path.join(root, KEYS), keyFile(version), bytes, `key-${version}`);
-        const record = { subject: 'key', version, bytes, value, digest: sha256(bytes) };
-        confirm({ ...graph, records: [...graph.records, record] }, record, { reconciled: false, step: `key-${version}` });
-        const after = readGraph(io, root);
-        if (after.active || after.pending.length > 0) fail();
-        return { state: 'revoked', version };
+        return { v: 1, kind: 'owner-decision-key-revocation', namespaceDigest, version, previousDigest, revokes, reason, at, auditId };
       });
     },
 
@@ -808,12 +844,13 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
           const place = record && confirmationPlace(record);
           if (graph.pending.length !== 1 || lines.length !== 1 || place.dir !== dir
             || !confirmationBytes(graph, record, lines[0].bytes).equals(bytes)) fail('owner-trust-pending');
+          notOwnKey(record);
           io.linkSync(pending, path.join(dir, place.name)); flushDirectory(io, dir);
           io.unlinkSync(pending); flushDirectory(io, dir); fault('reconcile:confirmation-linked');
         }
         const graph = readGraph(io, root);
         if (graph.pending.length > 1) fail();
-        for (const record of graph.pending) confirm(graph, record, { reconciled: true, step: 'reconcile' });
+        for (const record of graph.pending) { notOwnKey(record); confirm(graph, record, { reconciled: true, step: 'reconcile' }); }
         const after = readGraph(io, root);
         if (after.pending.length > 0) fail();
         return { state: 'reconciled', confirmed: graph.pending.map(({ subject, version }) => ({ subject, version })) };

@@ -16,6 +16,7 @@ import {
 } from '../identity/owner-decision-trust.mjs';
 import { loadOrCreateVouchKey, vouchDaemonKey, vouchDaemonKeyPin, vouchKeyPath, vouchStateDir } from '../identity/vouch.mjs';
 import * as host from '../identity-host.mjs';
+import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 
 const VECTORS_URL = new URL('./fixtures/owner-decisions/daemon-trust-observation-v1.json', import.meta.url);
 const VECTORS_SHA256 = '08c78eca8779c0eda2ff5092093170f03fd641e6d4d82c6bb6b4fb27c4aad689';
@@ -77,7 +78,7 @@ function daemon(t) {
   const env = { XDG_STATE_HOME: path.join(base, 'state') }, home = base;
   loadOrCreateVouchKey(vouchStateDir({ env }));
   const root = ownerDecisionTrustRoot({ env, home });
-  const writer = (options = {}) => createOwnerDecisionTrustWriter({ root, env, home, legacyPresenceKey: null, ...options });
+  const writer = (options = {}) => withCurrentObservation(createOwnerDecisionTrustWriter({ root, env, home, legacyPresenceKey: null, ...options }), { root, env, home });
   const observe = (options = {}) => observeOwnerDecisionTrust({ root, env, home, ...options });
   const file = (...parts) => path.join(root, ...parts);
   return { base, env, home, root, writer, observe, file, daemonKey: vouchDaemonKeyPin({ env, home }) };

@@ -204,5 +204,57 @@ authority. There is no route.
   v1 validator. The 16 frozen vectors are vendored in
   `tests/fixtures/owner-decisions/daemon-trust-observation-v1.json`.
 
-The versioned writers that require an expected observation digest come in a
-separate change.
+## Versioned key writers (V1, disabled)
+
+`enrollKeysV1` and `revokeKeysV1` write key records only against the exact
+current observation (owner decision Q2). Each requires
+`expectedObservationDigest`, the `observationDigest` its caller observed. The
+unversioned `enrollKeys` and `revokeKeys` are retired fail-closed: they refuse
+with `owner-trust-api-version` (`bad-request`) and write nothing, so an old
+caller can't skip the expectation.
+
+**Order, inside one hold of the trust lock:**
+1. Capture the vouch key file's identity (device, inode, size and the SHA-256
+   of its bytes, compared in memory only) and derive `daemonKey`.
+2. Read the full graph and derive the current observation. Every record must
+   be confirmed.
+3. Compare its digest with the expectation. A missing or malformed digest is
+   `bad-request`; a mismatch is `conflict` (`owner-trust-stale-observation`).
+4. Check the transition, pins and capacity.
+   - Enroll needs `none` or `revoked`, at most version 1023, and pins that
+     are distinct from each other, from `daemonKey` and from keyd's legacy
+     presence key.
+   - Revoke needs `active`, and the named enrollment must be the active one.
+5. Re-check the vouch identity immediately before anything is created. A
+   change refuses with `owner-trust-vouch-changed` and writes nothing.
+6. Publish the record, then append and flush its audit line.
+7. Re-check the vouch identity before the confirmation. A change stops with
+   `owner-trust-vouch-changed`; the record and audit line stay, and only
+   reconcile goes forward.
+8. Publish the confirmation, then return the new observation.
+
+Two writers holding the same expectation are serialized by the lock. The
+second sees the first's new observation, gets `conflict`, and writes nothing.
+
+**Refusal classes, by how far the write got:**
+1. **Before any file:** input, version, expectation, transition, capacity,
+   alias and the pre-creation vouch check. Zero writes.
+2. **Pending record file:** preserved exactly. Readiness and observation refuse
+   with `owner-trust-pending`, and reconcile keeps it as evidence.
+3. **Record published, no confirmation:** the record and any audit line stay.
+   Readiness and observation refuse. Reconcile first re-derives the vouch
+   identity and refuses with `owner-trust-role` if the record's pins alias the
+   current `daemonKey`. Only then does it link a staged confirmation that is
+   exactly the deterministic one, or append the missing audit line and
+   confirm.
+4. **Confirmation visible, durability uncertain:** the writer refuses success.
+   Only a later locked read with its recovery flush, plus reconcile for a
+   leftover second link, settles it.
+
+Nothing rolls back or retries automatically.
+
+**Threat boundary.** The trust lock doesn't cover the vouch key file, and no
+re-read is atomic with the write that follows it. The re-checks catch earlier
+or accidental changes; they don't stop a same-account writer. That writer is
+outside this design's trust boundary (ADR-0003). The broker's online checks and
+the helper's independent installation proof remain the controls that matter.

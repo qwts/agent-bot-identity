@@ -14,6 +14,7 @@ import {
 } from '../identity/owner-decision-trust.mjs';
 import { loadOrCreateVouchKey, vouchDaemonKey, vouchStateDir } from '../identity/vouch.mjs';
 import { presencePinPath } from '../identity/owner-presence.mjs';
+import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);
@@ -38,7 +39,8 @@ function freshRoot(t) {
 }
 // home is the scratch directory too, so keyd's presence cache is never the real one.
 const read = (root, options = {}) => readOwnerDecisionTrust({ root, env, home: vouchState, ...options });
-const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, env, home: vouchState, ...options });
+const writer = (root, options = {}) => withCurrentObservation(createOwnerDecisionTrustWriter({ root, env, home: vouchState, ...options }),
+  { root, env, home: vouchState, legacyPresenceKey: options.legacyPresenceKey });
 // Every file under the root, for "kept as found" checks.
 function snapshot(root) {
   const out = {};
@@ -382,8 +384,6 @@ test('the broker service uid is never root or the owner, and no pin may be this 
     assert.throws(() => w.enrollKeys({ ...keys(), ...extra, receiptKey: ownKey }), invalidInput);
     assert.throws(() => w.enrollKeys({ ...keys(), ...extra, presenceKey: ownKey }), invalidInput);
   }
-  // A supplied daemonKey is only ever a check against the derived one.
-  assert.throws(() => w.enrollKeys({ ...keys(), daemonKey: 'f'.repeat(64) }), refused('owner-trust-daemon-key-mismatch', 'bad-request'));
   assert.equal(fs.existsSync(path.join(root, 'keys')), false);
 
   // Readiness derives our key, verifies a supplied one, and needs a vouch key at all.
