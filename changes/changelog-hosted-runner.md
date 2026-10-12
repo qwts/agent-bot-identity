@@ -1,0 +1,1 @@
+- The changelog fragment check now always runs on a GitHub-hosted runner. It runs pull request code without CI's Action Policy gate, and GitHub can report a deleted fork as a non-fork on rerun, so that rerun could have reached a self-hosted runner. A new workflow test requires every pull request job that can land on a variable-selected runner to wait for Action Policy (#1066).
