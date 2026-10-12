@@ -138,8 +138,6 @@ Retire, finalize and `initialize-app` take no callback and have no undo.
 - Identity never restores a record a caller hands it (owner decision on
   revert, option 1).
 
-`recordAgentPackageRevision` stays in-process (owner answer on callbacks).
-
 ## Daemon routes
 
 Each route's authorization class is in
