@@ -1,6 +1,6 @@
 # gh-app-hook: deploying the GitHub App mailbox
 
-`gh-app-hook.mjs` is a Cloudflare Worker with one Durable Object. GitHub
+`identity/gh-app-hook.mjs` is a Cloudflare Worker with one Durable Object. GitHub
 posts each App's webhook deliveries to it; it stores the records that
 mention the App, pushes them to subscribers, and lets a bound session take
 the oldest one for its App and repository through `take_inbox` (the
@@ -19,7 +19,7 @@ From a checkout of this repository, as the owner of the Cloudflare account:
 npx wrangler deploy
 ```
 
-`wrangler.toml` names the Worker `gh-app-hook`, its entry `gh-app-hook.mjs`,
+`wrangler.toml` names the Worker `gh-app-hook`, its entry `identity/gh-app-hook.mjs`,
 the Durable Object binding `INBOX` (class `InboxDurable`) and the `v1`
 migration that creates it. The first deploy applies the migration; later
 deploys keep the stored records.
@@ -30,7 +30,7 @@ deploys keep the stored records.
 | --- | --- | --- |
 | `INBOX_TOKEN` | one opaque string | The bearer `take_inbox` and `GET /deadletter` present as `Authorization: Bearer …`. Compared in constant time. |
 | `WEBHOOK_SECRETS` | JSON object, App slug → that App's webhook secret | Verifying `x-hub-signature-256` on `POST /github/<slug>`. A delivery whose signature does not match is refused with 401 and stored nowhere. |
-| `SUBSCRIBERS` | JSON object, App slug → list of push destinations (optional) | Pushing each stored record to receivers; see the header of `gh-app-hook.mjs` for the entry fields (`url`, `key`, optional `repos` and `auth`). Without it records wait to be pulled. |
+| `SUBSCRIBERS` | JSON object, App slug → list of push destinations (optional) | Pushing each stored record to receivers; see the header of `identity/gh-app-hook.mjs` for the entry fields (`url`, `key`, optional `repos` and `auth`). Without it records wait to be pulled. |
 
 ```bash
 npx wrangler secret put INBOX_TOKEN
