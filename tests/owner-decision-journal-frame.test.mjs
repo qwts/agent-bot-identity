@@ -202,3 +202,40 @@ test('pairs are digest-bound, request-bound, exact-key and strictly canonical', 
   const cold = vector('cold-indeterminate-pair'); cold.preimage.setting = { mode: 'resume', policy: 'everything' };
   invalid(() => encodePair(cold, { slot: 'observation-pair' }));
 });
+
+// agent-comms tests/fixtures/owner-decisions/fixed-frames-v1/vectors.json at
+// 9a2ea84 (merged PR #201), copied byte for byte: independent synthetic frames
+// for contract 6b90f82, one-byte and max-cap for every slot of both producers.
+const FRAMES_URL = new URL('./fixtures/owner-decisions/fixed-frames-v1/vectors.json', import.meta.url);
+const FRAMES_SHA256 = '9c9e9812291b876dd74fca43680393c2def510c0bc953a949dc1ca028f4d80ba';
+
+test('the shared fixed-frame vectors: all 28 daemon frames decode exactly and every broker frame refuses in every daemon slot', () => {
+  assert.equal(hash(readFileSync(FRAMES_URL)).toString('hex'), FRAMES_SHA256);
+  const frames = JSON.parse(readFileSync(FRAMES_URL, 'utf8'));
+  assert.equal(frames.contractCommit, '6b90f825b5651a50718046379e5adbea193cbabf');
+  const rebuild = ({ headerHex, trailerHex, payloadCap, payload: { repeatByte, count } }) => {
+    const payload = Buffer.alloc(count, repeatByte), body = Buffer.alloc(payloadCap);
+    payload.copy(body);
+    return { payload, frame: Buffer.concat([Buffer.from(headerHex, 'hex'), body, Buffer.from(trailerHex, 'hex')]) };
+  };
+  const daemon = frames.vectors.filter(({ role }) => role === 'daemon'), broker = frames.vectors.filter(({ role }) => role === 'broker');
+  assert.equal(daemon.length, 28); assert.equal(broker.length, 20); assert.equal(frames.vectors.length, 48);
+  assert.deepEqual(new Set(daemon.map(({ slot }) => slot)), new Set(slots.map(({ slot }) => slot)));
+  for (const vector of daemon) {
+    const { payload, frame } = rebuild(vector), options = { namespaceDigest: vector.namespaceDigest, requestId: vector.requestId, slot: vector.slot };
+    assert.equal(frame.length, vector.frameBytes); assert.equal(hash(frame).toString('hex'), vector.frameSha256, vector.id);
+    assert.equal(slots.find(({ slot }) => slot === vector.slot).id, vector.slotId);
+    assert.deepEqual(decode(frame, options), { kind: 'committed', slot: vector.slot, payload, sha256: vector.frameSha256 });
+    assert(encode(payload, options).equals(frame), vector.id);
+  }
+  let refusals = 0;
+  for (const vector of broker) {
+    const { frame } = rebuild(vector);
+    assert.equal(hash(frame).toString('hex'), vector.frameSha256, vector.id);
+    for (const { slot } of slots) {
+      invalid(() => decode(frame, { namespaceDigest: vector.namespaceDigest, requestId: vector.requestId, slot }));
+      refusals++;
+    }
+  }
+  assert.equal(refusals, 280);
+});

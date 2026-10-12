@@ -47,6 +47,9 @@ checksums have been recomputed.
 The tests check the codec against the six shared paired vectors in
 `tests/fixtures/owner-decisions/journal-budget-v1.json`, a byte-for-byte copy
 pinned by SHA-256, and against a frame layout rebuilt independently from the
-contract table. One golden daemon frame hash is ours; agent-comms has not yet
-published daemon frame vectors, so interoperability is not claimed until they
-are cross-checked.
+contract table, with one golden daemon frame hash of our own. They also check
+agent-comms' frozen fixed-frame vectors (`fixed-frames-v1/vectors.json` from
+agent-comms `9a2ea84`, likewise pinned):
+- all 28 daemon frames decode and re-encode byte for byte;
+- each of the 20 broker frames is refused in all 14 daemon slots, 280
+  refusals in all.
