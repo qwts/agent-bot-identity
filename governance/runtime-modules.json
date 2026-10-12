@@ -494,6 +494,7 @@
         "readGitConfig",
         "readKeydRecord",
         "readOwnerDecisionTrust",
+        "readOwnerDecisionTrustObservation",
         "resolveAgentSlug",
         "resolvePrincipal",
         "scanGitPublish",

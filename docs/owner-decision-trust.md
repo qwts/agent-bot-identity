@@ -157,3 +157,52 @@ first key enrollment doesn't depend on the key chain it is about to start.
 
 The full `readOwnerDecisionTrust` stays mandatory for owner-decision
 capability and for every trust check.
+
+## Daemon trust observation (v1, disabled)
+
+`readOwnerDecisionTrustObservation()`, published through `identity-host.mjs`,
+returns the daemon source for the native trust ceremony (agent-comms#77, owner
+decision Q1). It returns `{observation, observationBytes, observationDigest}`.
+The observation is consistency input at observation time. It is never
+authority, a live capability or a cross-account transaction, and equal digests
+never replace the helper's single-use evidence, owner presence or writer
+authority. There is no route.
+
+- **Bytes.** `observationBytes` is the strict canonical JSON, at most 1024
+  bytes; the largest valid observation is 999. `observationDigest` is the
+  SHA-256 of those bytes, so consumers recompute it. No wire codec is defined.
+- **Fields.** Exactly these, and no others:
+  - `v:1` and `kind:"owner-decision-daemon-trust-observation"`;
+  - `namespaceDigest`;
+  - `namespaceRecordDigest`, this daemon's own `namespace.json` digest, never
+    compared across stores;
+  - `chainVersion`, the number of confirmed key records, 0 to 1024;
+  - `headRecordDigest`;
+  - `state`, which is `none`, `active`, `revoked` or `revoked-terminal`;
+  - `active`, which is null or `{enrollmentDigest, receiptKey, presenceKey,
+    service}` with complete KeyPins and full public keys;
+  - `daemonKey`, this daemon's vouch key as a complete KeyPin.
+- **States.** The state follows the version:
+  - 0 is `none`, with the namespace record as head;
+  - an odd version is `active`, and the pair is the head enrollment;
+  - an even version is `revoked`;
+  - 1024 is `revoked-terminal`.
+
+  The producer checks this against the replayed one-active state machine and
+  never projects a state it can't prove. A role alias among the receipt,
+  presence and daemon keys refuses with `owner-trust-role`.
+- **Resolution.** The production export takes no arguments. The root and the
+  vouch key come only from the daemon's own `process.env` and home. Tests use
+  the internal `observeOwnerDecisionTrust`.
+- **Validation.** The producer runs under the exclusive trust lock, with the
+  full readiness graph read and its recovery flush. Every record needs its
+  confirmation and exactly one audit line. A pending publication, an
+  unconfirmed record, damage anywhere in the chain or an impossible state
+  refuses, with the same `{code, reason}` values the reader uses. It writes
+  and repairs nothing.
+- **Validator.** `validateOwnerDecisionTrustObservation(bytes)` is the frozen
+  v1 validator. The 16 frozen vectors are vendored in
+  `tests/fixtures/owner-decisions/daemon-trust-observation-v1.json`.
+
+The versioned writers that require an expected observation digest come in a
+separate change.

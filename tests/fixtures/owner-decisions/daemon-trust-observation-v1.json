@@ -1,0 +1,125 @@
+{
+  "v": 1,
+  "schema": "owner-decision-daemon-trust-observation-v1",
+  "maxBytes": 1024,
+  "maximalValidBytes": 999,
+  "seeds": {
+    "daemonKey": "1111111111111111111111111111111111111111111111111111111111111111",
+    "receiptKey": "2222222222222222222222222222222222222222222222222222222222222222",
+    "presenceKey": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "vectors": [
+    {
+      "id": "none",
+      "expected": "valid",
+      "canonicalJson": "{\"active\":null,\"chainVersion\":0,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"none\",\"v\":1}",
+      "utf8Bytes": 527,
+      "sha256": "35b6373887bce0f97b88f0b7c1fdedbdc1300cadca39b68346155387dc96f04b"
+    },
+    {
+      "id": "active",
+      "expected": "valid",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":1,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 989,
+      "sha256": "1e31e7796e5b7f79bc84aea14d5536374f3693941251d14e5db05c1f0265ec14"
+    },
+    {
+      "id": "revoked",
+      "expected": "valid",
+      "canonicalJson": "{\"active\":null,\"chainVersion\":2,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"05de2cd236372e7653d5060d5662b1ae1dfaa155d24374fa365f1978396a42dc\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"revoked\",\"v\":1}",
+      "utf8Bytes": 530,
+      "sha256": "576e1b2aa68e779573acbeba9c8fcde881ecd00fbd5f4871b82aa63352601652"
+    },
+    {
+      "id": "revoked-terminal",
+      "expected": "valid",
+      "canonicalJson": "{\"active\":null,\"chainVersion\":1024,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"40df33d14dc69faca63da2af3fc9a9038fb7779c2c19061f9c168b3958734fc8\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"revoked-terminal\",\"v\":1}",
+      "utf8Bytes": 542,
+      "sha256": "1751f83b0fc7585927d863332307fb3237ea2573ddd7aa45eb23d716b9d5d829"
+    },
+    {
+      "id": "active-at-1023",
+      "expected": "valid",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":1023,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 992,
+      "sha256": "e33fd9c280f95911b3c494f88a284dc88fba0761292cd8979deee59b31f160f5"
+    },
+    {
+      "id": "negative-active-at-1024",
+      "expected": "state-version",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":1024,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 992,
+      "sha256": "b29803ef245ce69b92cc9dddd0fd340b2976e7933cb1ac962869bebffc292a69"
+    },
+    {
+      "id": "negative-active-at-even-version",
+      "expected": "state-version",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":2,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 989,
+      "sha256": "0bfb1ed29682048082e921deaf8f283fe61890afcc0dfddec217ce33be044a6c"
+    },
+    {
+      "id": "negative-revoked-at-version-1",
+      "expected": "state-version",
+      "canonicalJson": "{\"active\":null,\"chainVersion\":1,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"05de2cd236372e7653d5060d5662b1ae1dfaa155d24374fa365f1978396a42dc\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"revoked\",\"v\":1}",
+      "utf8Bytes": 530,
+      "sha256": "458d1f3f864285fc99da545b576492529fb99c0f3b775b73a2fe93612517467d"
+    },
+    {
+      "id": "negative-none-at-version-1",
+      "expected": "state-version",
+      "canonicalJson": "{\"active\":null,\"chainVersion\":1,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"none\",\"v\":1}",
+      "utf8Bytes": 527,
+      "sha256": "743c3b96798fef0d1fae327cd1e87595215eae3da1444c56b2b1225c1c4068c0"
+    },
+    {
+      "id": "negative-terminal-with-active",
+      "expected": "revoked-active",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"40df33d14dc69faca63da2af3fc9a9038fb7779c2c19061f9c168b3958734fc8\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":1024,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"40df33d14dc69faca63da2af3fc9a9038fb7779c2c19061f9c168b3958734fc8\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"revoked-terminal\",\"v\":1}",
+      "utf8Bytes": 1002,
+      "sha256": "92ea913eefc03d1b72df9f53325680cf0dd7d3f83b7897b511908482dfa7ad5d"
+    },
+    {
+      "id": "negative-active-head-mismatch",
+      "expected": "active",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"05de2cd236372e7653d5060d5662b1ae1dfaa155d24374fa365f1978396a42dc\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":1,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 989,
+      "sha256": "e51f7e6bd8ddf247e4eba7c20aec017429b93a82d89a74c9139fad6642876049"
+    },
+    {
+      "id": "negative-receipt-aliases-presence",
+      "expected": "alias",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":1,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 989,
+      "sha256": "14ec88215006b3efc54c85a9102ee21f835370a9e3b2124bec0ec0c8fd1f95af"
+    },
+    {
+      "id": "negative-broker-uid-zero",
+      "expected": "active",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"3532fb2b134488a2a18f2a07cd6db85b4c1b808ddb10972f0ad5526856177bd4\",\"publicKey\":\"F8t5-ytBIPKx7GXkGY1uCLKOgT_rAeSkAIObheGAgM4\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":0,\"platform\":\"darwin\"}},\"chainVersion\":1,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 987,
+      "sha256": "aae951a5916aa0cb497cdb5280bc06721d531b336a7e6c6c13c76a40e4343417"
+    },
+    {
+      "id": "negative-presence-aliases-daemon",
+      "expected": "alias",
+      "canonicalJson": "{\"active\":{\"enrollmentDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"presenceKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"receiptKey\":{\"alg\":\"ed25519\",\"keyId\":\"744f36cca67eb1912cb282e08e86bd2fe0d09004a28cf6e7c6bd56cdd6bf65aa\",\"publicKey\":\"oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\"},\"service\":{\"brokerUid\":600,\"platform\":\"darwin\"}},\"chainVersion\":1,\"daemonKey\":{\"alg\":\"ed25519\",\"keyId\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"publicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\"},\"headRecordDigest\":\"8838d4c73329ec9af26514fe0503db2337c4378ee9018836fcd7784dd2a19047\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"active\",\"v\":1}",
+      "utf8Bytes": 989,
+      "sha256": "25810a4f3b1fc0995f9f3badb8908f8dc3c348610a048ca1483872da958010c8"
+    },
+    {
+      "id": "negative-bare-hex-daemonKey",
+      "expected": "daemonKey",
+      "canonicalJson": "{\"active\":null,\"chainVersion\":0,\"daemonKey\":\"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\",\"headRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"kind\":\"owner-decision-daemon-trust-observation\",\"namespaceDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"namespaceRecordDigest\":\"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\"state\":\"none\",\"v\":1}",
+      "utf8Bytes": 443,
+      "sha256": "8ff0c773882ab79c7b8ab086411486f7d8305120c83e7b37174639ef37eff3ce"
+    },
+    {
+      "id": "negative-non-canonical-none",
+      "expected": "non-canonical",
+      "canonicalJson": "{\n \"v\": 1,\n \"kind\": \"owner-decision-daemon-trust-observation\",\n \"namespaceDigest\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n \"namespaceRecordDigest\": \"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\n \"daemonKey\": {\n  \"alg\": \"ed25519\",\n  \"publicKey\": \"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\",\n  \"keyId\": \"503d8ee46d581c649966569ae095e27041de83322e8e0480e5539e00d2d5d874\"\n },\n \"chainVersion\": 0,\n \"headRecordDigest\": \"7f52f0b75c17b4ea2ea1fda89b20633d7afc57a53ecfd44a1dea89a3aef30371\",\n \"state\": \"none\",\n \"active\": null\n}",
+      "utf8Bytes": 569,
+      "sha256": "b4980b73a4092afa120f231f556a49ad9a6df27a78ca4f593ccbf321e091ae0c"
+    }
+  ]
+}
