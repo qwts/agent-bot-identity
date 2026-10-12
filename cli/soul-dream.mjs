@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { validateAgentId } from '../identity-format.mjs';
 import { daemonClient } from '../daemon-client.mjs';
-import { soulMarkers } from '../owner-gate.mjs';
+import { soulMarkers } from '../identity-cli.mjs';
 import { parseDreamSchedule } from '../skill-dream-scheduler.mjs';
 
 export const DREAM_USAGE = `usage: agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H [--json] [--principal-stdin]

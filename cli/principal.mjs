@@ -4,7 +4,7 @@
 // the broker and prompts name each soul (#645, #779).
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { principalCommand } from '../agent-principals.mjs';
+import { principalCommand } from '../identity-cli.mjs';
 import { assertOwnerAction } from '../owner-action.mjs';
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

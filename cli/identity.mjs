@@ -14,8 +14,7 @@ import { identityOp, spawnIdentity } from '../daemon-client.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { finalizeIdentityWithPopulation } from '../agent-population.mjs';
 import { harnessForSlug, isGateEnabled, loadConfig } from '../config.mjs';
-import { readAppMetadata } from '../identity-app-store.mjs';
-import { resolveAgentSlug } from '../resolve-agent.mjs';
+import { readAppMetadata, resolveAgentSlug } from '../identity-cli.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 
 // The same parsing as the git hooks' entry in agent-identity.mjs.
