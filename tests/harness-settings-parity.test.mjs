@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ACP_SPAWN_REGISTRY } from '../acp-registry.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
-import { ALLOW_RULES_NEED_OWNER, ALLOW_RULES_TOOL, daemonClaudeOptionsFor, daemonModeFor, daemonModelFor, daemonReasoningEffortFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
+import { ALLOW_RULES_NEED_OWNER, ALLOW_RULES_TOOL, daemonClaudeOptionsFor, daemonHarnessSetEnvFor, daemonModeFor, daemonModelFor, daemonReasoningEffortFor, LOOSENING_TOOL } from '../agent-daemon.mjs';
 import { listProposals } from '../agent-jobs.mjs';
 import { auditFile } from '../identity-format.mjs';
 import { populationFile, upsertSoul } from '../agent-population.mjs';
@@ -177,6 +177,44 @@ test('opencode: a repo opencode.json permission is not a mode layer; the package
   assert.equal(seen.mode, 'safe');
   assert.deepEqual(seen.approvals, ['Bash']);
   assert.deepEqual(seen.log, []);
+});
+
+// OpenCode's rule evaluation at v1.18.32 (permission/index.ts `fromConfig`,
+// `evaluate`; agent/agent.ts merges defaults, the config, then the agent's
+// own rules): every rule in order, the last match wins, `ask` when none does.
+const glob = (pattern) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*').replaceAll('?', '.')}$`, 's');
+const opencodeRules = (permission = {}) => Object.entries(permission).flatMap(([key, value]) => typeof value === 'string'
+  ? [{ permission: key, pattern: '*', action: value }] : Object.entries(value).map(([pattern, action]) => ({ permission: key, pattern, action })));
+const opencodeAction = (permission, pattern, ...rulesets) => rulesets.flat()
+  .findLast((rule) => glob(rule.permission).test(permission) && glob(rule.pattern).test(pattern))?.action ?? 'ask';
+
+test('opencode: a declared deny holds directly and under the daemon, which still asks for the rest', async (t) => {
+  const { env, home, soulDir } = fixture(t, 'autopilot', { permissions: { allow: ['Bash(git status)'], deny: ['Bash(rm *)', 'Edit'] } });
+  const direct = opencodeRules(JSON.parse(readFileSync(path.join(soulDir, 'opencode.json'), 'utf8')).permission);
+  // The daemon turn's config, as the OpenCode process receives it.
+  const executor = acpExecutorFor({
+    identities: () => ({}), baseEnv: { ...process.env, HOME: home }, policy: { version: 1, rules: [], fallback: 'approval' },
+    modeFor: () => 'safe', harnessSetEnvFor: daemonHarnessSetEnvFor({ env, home, config: {} }),
+    createExecutor: (options) => createAcpExecutor({ ...options, registry: REGISTRY }),
+  })({ agentId: ID, harness: 'opencode', cwd: soulDir, env: {} });
+  const chunks = [];
+  await executor({ invocation: { agentId: ID }, message: 'env-probe', attachments: [],
+    appendEvent: (_type, data) => { if (data?.content?.text) chunks.push(data.content.text); return {}; },
+    addArtifact: () => ({}), signal: new AbortController().signal, requestApproval: async () => ({ decision: 'deny' }) });
+  const content = JSON.parse(JSON.parse(chunks.at(-1)).OPENCODE_CONFIG_CONTENT);
+  const agent = opencodeRules(content.agent[ACP_SPAWN_REGISTRY.opencode.sessionMode].permission);
+  for (const [permission, pattern] of [['bash', 'rm -rf build'], ['edit', 'src/a.js']]) {
+    assert.equal(opencodeAction(permission, pattern, direct), 'deny', `direct ${permission}`);
+    assert.equal(opencodeAction(permission, pattern, direct, agent), 'deny', `daemon ${permission}`);
+  }
+  // Everything else still reaches the daemon, even what the package allows.
+  assert.equal(opencodeAction('bash', 'git status', direct), 'allow');
+  assert.equal(opencodeAction('bash', 'git status', direct, agent), 'ask');
+  assert.equal(opencodeAction('webfetch', 'https://example.invalid', direct, agent), 'ask');
+  // A package with no deny keeps the shipped config byte for byte.
+  writeFileSync(path.join(soulDir, 'soul.json'), JSON.stringify({ ...JSON.parse(readFileSync(path.join(soulDir, 'soul.json'), 'utf8')), harness: { permissions: { allow: ['Edit'] } } }));
+  assert.equal(daemonHarnessSetEnvFor({ env, home, config: {} })(ID, { harness: 'opencode', cwd: soulDir }), null);
+  assert.equal(daemonHarnessSetEnvFor({ env, home, config: {} })(ID, { harness: 'claude', cwd: soulDir }), null);
 });
 
 test('unrecognised or unreadable layers declare nothing; a soul with no census row has no package layer', (t) => {
