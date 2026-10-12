@@ -402,7 +402,8 @@ manifest }`.
   original's GitHub App), `template: false`, a new revision chain adopted
   as `Import as a fork of <id>`, the display seed re-initialized, the space
   marker rebound to the new ID, the census showing both souls. `--name`
-  sets the fork's display name; the handle derives from the new ID.
+  sets the fork's display name; the handle derives from the new ID
+  (re-derived if another soul already holds it, #1003).
 - An ID that is active here is `import-id-active` (action: `--replace` or
   `--fork`). `--replace` is refused `soul-running` while that soul runs
   (before and after the gate), keeps the local identity record and revision

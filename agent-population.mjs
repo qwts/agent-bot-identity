@@ -5,7 +5,7 @@
 // teaching every consumer to scan identity records and Agent Spaces
 // independently.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
@@ -77,6 +77,33 @@ export function displayName(id) {
   const adjective = NAME_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % NAME_ADJECTIVES.length];
   const noun = NAME_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % NAME_NOUNS.length];
   return `${adjective}-${noun}-${hex.slice(-2)}`;
+}
+
+// A fresh soul's generated name must not repeat one the census already holds
+// (#1003): two souls once both came out as solid-cairn-63 and a peer message
+// reached the wrong one. Attempt 0 is displayName(id), so a soul with no
+// neighbour keeps the name it always had; each retry re-derives from a hash
+// of the ID and the attempt number, so the result stays deterministic for a
+// given census. Bounded, and a clear error when it runs out.
+export const SOUL_NAME_ATTEMPTS = 16;
+
+export function generatedSoulName(id, attempt = 0) {
+  if (attempt === 0) return displayName(id);
+  const hex = createHash('sha256').update(`${agentId(id)}:${attempt}`).digest('hex');
+  const adjective = NAME_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % NAME_ADJECTIVES.length];
+  const noun = NAME_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % NAME_NOUNS.length];
+  return `${adjective}-${noun}-${hex.slice(4, 6)}`;
+}
+
+// Taken: every name in the census, retired souls included, so a new soul
+// never inherits a historical soul's handle either. Recorded names are never
+// changed here; only the new row's name is chosen.
+export function uniqueSoulName(id, taken, { attempts = SOUL_NAME_ATTEMPTS } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const name = generatedSoulName(id, attempt);
+    if (!taken.has(name)) return name;
+  }
+  throw new Error(`could not generate a soul name for ${agentId(id)} that no other soul uses after ${attempts} attempts`);
 }
 
 function printableText(name, value, { max = 512, required = true } = {}) {
@@ -367,6 +394,12 @@ export function upsertSoul(
       if (record.lastSightedAt === undefined) candidate.lastSightedAt = existing.lastSightedAt;
       candidate.worktrees = [...new Set([...existing.worktrees, ...candidate.worktrees])];
       if (record.worktree === undefined) candidate.worktree = existing.worktree;
+    }
+    // A new row with no chosen name gets a generated one no other row holds
+    // (#1003). A chosen name, or an existing row, is kept as it is.
+    if (!existing && (record.name === undefined || record.name === null || record.name === '')) {
+      const taken = new Set(Object.values(current.souls).map((soul) => soul.name));
+      candidate.name = uniqueSoulName(candidate.id, taken);
     }
     candidate = normalizeSoul(candidate);
     if (existing && JSON.stringify(existing) === JSON.stringify(candidate)) return existing;
@@ -1216,6 +1249,21 @@ export function locateSoulDir(directory, options = {}) {
   }
   return { ...found, status: 'duplicate',
     message: `${claims.length} folders claim soul ${id} (${claims.sort().join(', ')}); keep its own folder, remove the copies, then retry` };
+}
+
+// Generated names that more than one live soul (active or finalized) holds
+// (#1003), for doctor to report. Names are handles agents and agent-comms
+// address, so nothing renames a soul here; the IDs tell them apart.
+export function duplicateSoulNames({ file = populationFile() } = {}) {
+  const byName = new Map();
+  for (const soul of Object.values(readDocument(file).souls)) {
+    if (soul.status === 'retired') continue;
+    byName.set(soul.name, [...(byName.get(soul.name) ?? []), soul.id]);
+  }
+  return [...byName]
+    .filter(([, ids]) => ids.length > 1)
+    .map(([name, ids]) => ({ name, agentIds: ids.sort() }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 // Agents refer to each other by name, so `show` accepts one — but the census

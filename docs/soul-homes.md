@@ -203,6 +203,13 @@ retired or unknown here, such as one a failed launch left before this
 rollback existed. Finalized souls keep their folders and are not listed.
 `agent-bot soul remove <agentId>` archives them the same way (#420).
 
+A new soul's generated handle is never one another soul in the census
+already holds, retired souls included: generation retries up to 16 times and
+fails with a clear error if every attempt is taken (#1003). Doctor warns with
+code `soul-name-duplicate` (`souls.names`) when two active or finalized souls
+already share a handle. It only reports: handles are what peers address, so
+nothing renames a soul, and the Agent ID tells them apart.
+
 `soul remove` takes a scope (GeniusBar #283): `--scope soul` (the default)
 retires the one soul and clears the census `parentId` of the souls it led
 directly, so they stand on their own; `--scope team` retires every active

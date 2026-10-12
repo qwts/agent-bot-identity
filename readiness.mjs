@@ -17,7 +17,7 @@ import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { readSopPersonaRecord } from './sop.mjs';
 import { parsePersonaMapping } from './sandbox.mjs';
-import { duplicateSoulDirs, listSouls, orphanSoulDirs, populationFile, PRESENCE_WINDOW_MS, soulPresence } from './agent-population.mjs';
+import { duplicateSoulDirs, duplicateSoulNames, listSouls, orphanSoulDirs, populationFile, PRESENCE_WINDOW_MS, soulPresence } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
 import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthors } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
@@ -1513,6 +1513,28 @@ function duplicateSoulDirsCheck({ home, env, config }) {
   });
 }
 
+// Two live souls with one generated name (#1003): a peer addressing by name
+// cannot tell them apart. Doctor only reports; names are handles other tools
+// consume, so nothing is renamed. Reported only when there is something to
+// report.
+function duplicateSoulNamesCheck({ home, env }) {
+  let duplicates;
+  try { duplicates = duplicateSoulNames({ file: populationFile({ home, env }) }); }
+  catch { return null; } // spaces.home already reports an unreadable census
+  if (duplicates.length === 0) return null;
+  const shown = duplicates.slice(0, 5).map(({ name, agentIds }) => `${name} (${agentIds.join(', ')})`).join('; ')
+    + (duplicates.length > 5 ? `; and ${duplicates.length - 5} more` : '');
+  return readinessCheck({
+    id: 'souls.names',
+    // A warning: each soul still runs; only addressing by name is ambiguous.
+    status: 'warning',
+    code: 'soul-name-duplicate',
+    message: `${duplicates.length} name(s) are shared by more than one active soul: ${shown}`,
+    action: 'address these souls by Agent ID rather than by name; names are not changed automatically',
+    evidence: { duplicates },
+  });
+}
+
 // Each active soul's environment (#583 slice 6): the readiness problems
 // `soul env` reports, through the same descriptor, as one finding per soul
 // naming the problem codes. An error-severity problem fails the check, a
@@ -2850,6 +2872,8 @@ export async function collectReadiness({
     if (soulFolders) machineChecks.push(soulFolders);
     const orphanFolders = orphanSoulDirsCheck({ home, env, config });
     if (orphanFolders) machineChecks.push(orphanFolders);
+    const soulNames = duplicateSoulNamesCheck({ home, env });
+    if (soulNames) machineChecks.push(soulNames);
     machineChecks.push(...soulEnvironmentChecks({ home, env, config }));
     machineChecks.push(inspectSopPersona({ home, env }));
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
