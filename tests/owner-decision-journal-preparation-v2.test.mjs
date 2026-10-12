@@ -14,9 +14,10 @@ import { canonicalJson } from '../canonical-json.mjs';
 import { decodeDaemonJournalFrame, encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
 import { bindEffect, bindPreparation, challengeFor, decodeEffect, decodePreparation } from '../identity/owner-decision-evidence.mjs';
-import { createOwnerDecisionTrustWriter, readOwnerDecisionTrust } from '../identity/owner-decision-trust.mjs';
+import { createOwnerDecisionTrustWriter, ownerDecisionTrustRoot, readOwnerDecisionTrust } from '../identity/owner-decision-trust.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
+import { asDaemon } from './helpers/owner-decision-daemon-env.mjs';
 
 const V2_URL = new URL('./fixtures/owner-decisions/effect-evidence-v2.json', import.meta.url);
 const V2_SHA256 = 'ff7385f661bb0b0bbc2b36f94634ba1fd1ebcc359dce130149db8a21257e2410';
@@ -129,7 +130,8 @@ function admitted(t, { enrolled = true, trustNamespace = namespaceDigest } = {})
   open().admit(action, Buffer.from(canonicalJson(acceptance)));
   const env = { XDG_STATE_HOME: path.join(base, 'state') }, home = base;
   loadOrCreateVouchKey(vouchStateDir({ env }));
-  const trust = { root: path.join(base, 'trust'), env, home };
+  // The daemon's own trust store, where its launch env and home resolve it.
+  const trust = { root: ownerDecisionTrustRoot({ env, home }), env, home };
   const trustWriter = (now = 1_999_999_000) => withCurrentObservation(
     createOwnerDecisionTrustWriter({ root: trust.root, env, home, now: () => now, legacyPresenceKey: null }), trust);
   trustWriter().enrollNamespace({ namespaceDigest: trustNamespace });
@@ -142,7 +144,7 @@ function admitted(t, { enrolled = true, trustNamespace = namespaceDigest } = {})
   const dir = path.join(root, 'requests', requestDirectoryName({ namespaceDigest, requestId }));
   const read = (slot) => fs.readFileSync(path.join(dir, `${slot}.record`));
   const payload = (slot) => decodeDaemonJournalFrame(read(slot), { namespaceDigest, requestId, slot }).payload;
-  const prepare = (input = {}, store = open()) => store.recordPreparation(requestId, { preparation, trust, ...input });
+  const prepare = (input = {}, store = open()) => asDaemon(trust, () => store.recordPreparation(requestId, { preparation, ...input }));
   const recover = () => open().recover(requestId);
   return { root, requestId, action, preparation, trust, trustWriter, pair, liveVersion, open, read, payload, prepare, recover };
 }
@@ -204,7 +206,8 @@ test('no ready live trust refuses preparation and writes nothing', darwin, async
   });
   await t.test('no trust store', (tt) => {
     const j = admitted(tt);
-    unchanged(j, () => j.prepare({ trust: { ...j.trust, root: path.join(j.trust.root, 'missing') } }), untrusted('owner-trust-missing'));
+    fs.rmSync(j.trust.root, { recursive: true });
+    unchanged(j, () => j.prepare(), untrusted('owner-trust-missing'));
   });
   await t.test('trust enrolled for another namespace', (tt) => {
     const j = admitted(tt, { trustNamespace: 'b'.repeat(64) });
@@ -223,8 +226,8 @@ test('malformed input refuses before the lock; a refusal leaves the instance usa
     const j = admitted(tt), held = acquireDaemonJournalLock(j.root);
     try {
       assert.throws(() => j.prepare({ preparation: null }), badRequest);
-      assert.throws(() => j.prepare({ trust: null }), badRequest);
-      assert.throws(() => j.open().recordPreparation('nope', { preparation: j.preparation, trust: j.trust }), badRequest);
+      assert.throws(() => j.prepare({ trust: j.trust }), badRequest);
+      assert.throws(() => j.open().recordPreparation('nope', { preparation: j.preparation }), badRequest);
     } finally { fs.closeSync(held); }
   });
   await t.test('bad bindings', (tt) => {
@@ -235,7 +238,8 @@ test('malformed input refuses before the lock; a refusal leaves the instance usa
   await t.test('usable after refusals', (tt) => {
     const j = admitted(tt), store = j.open();
     assert.throws(() => j.prepare({ trustVersion: 3 }, store), badRequest);
-    assert.throws(() => j.prepare({ trust: { ...j.trust, root: path.join(j.trust.root, 'missing') } }, store), untrusted());
+    const lock = fs.openSync(path.join(j.trust.root, '.trust-lock'), fs.constants.O_RDWR | 0x20);
+    try { assert.throws(() => j.prepare({}, store), untrusted('owner-trust-busy')); } finally { fs.closeSync(lock); }
     assert.equal(j.prepare({}, store).state, 'prepared');
   });
 });
@@ -262,7 +266,7 @@ test('the writer scans first, flushes first, refuses busy, and conflicts in any 
   });
   await t.test('an unknown request', (tt) => {
     const j = admitted(tt);
-    assert.throws(() => j.open().recordPreparation('33333333-3333-4333-8333-333333333333', { preparation: j.preparation, trust: j.trust }),
+    assert.throws(() => j.open().recordPreparation('33333333-3333-4333-8333-333333333333', { preparation: j.preparation }),
       { reason: 'owner-journal-transition-refused' });
   });
   await t.test('flush before the first write', (tt) => {

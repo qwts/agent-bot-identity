@@ -444,8 +444,13 @@ function platformCheck() {
 // The daemonKey (SHA-256 of this daemon's vouch SPKI DER) is derived from the
 // vouch key under `env`/`home`; a supplied `daemonKey` must equal it. A pin
 // equal to it is always refused.
+// Without `root`, the store is this daemon's own, resolved from the same env
+// and home as its vouch key (ownerDecisionTrustRoot), so the owner-decision
+// paths that pass none (the preparation writer and the effect-entry gate)
+// read one store by construction.
 export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, legacyPresenceKey, env = process.env, home = homedir(), io = fs } = {}) {
   platformCheck();
+  if (root === undefined) root = ownerDecisionTrustRoot({ env, home });
   if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
   const ownKey = ownDaemonKey(daemonKey, { env, home });
   try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }

@@ -56,14 +56,16 @@ function keyIdOf(pin) {
 // failure reports the journal's own code and reason. Nothing is written for
 // any refusal.
 export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
-  journalRoot, namespaceDigest, trustRoot, env, home, daemonAccount, censusFile, identityPort, nowMilliseconds,
+  journalRoot, namespaceDigest, daemonAccount, censusFile, identityPort, nowMilliseconds,
 } = {}) {
   try {
     if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) refuse('validation-failed');
     const store = createDaemonJournalStore({ root: journalRoot, namespaceDigest });
     const entered = store.enterEffect(requestId, (view) => {
       let trust;
-      try { trust = readOwnerDecisionTrust({ root: trustRoot, namespaceDigest, env, home }); } catch { refuse('trust-unavailable'); }
+      // Always this daemon's own trust store, from its launch env and home:
+      // the same store the preparation writer read, never the caller's choice.
+      try { trust = readOwnerDecisionTrust({ namespaceDigest }); } catch { refuse('trust-unavailable'); }
       const brokerKey = keyIdOf(trust.receiptKey), presenceKey = keyIdOf(trust.presenceKey);
       if (!view.receiptKeys || !brokerKey || !presenceKey
         || view.receiptKeys.brokerKey !== brokerKey || view.receiptKeys.presenceKey !== presenceKey) refuse('trust-unavailable');
