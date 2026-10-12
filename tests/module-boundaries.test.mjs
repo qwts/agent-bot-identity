@@ -205,6 +205,23 @@ test("identity's git hooks reach soul only through soul's hook adapter", () => {
   assert.deepEqual(reached, [], 'run soul steps through hooks/soul-hook');
 });
 
+// ADR-0645 step 6 is done when identity's code lives in identity/: every
+// identity file outside it is a listed shim, or a published contract (such as
+// identity-presence.mjs, whose bytes agent-comms pins) that only re-exports
+// files inside identity/.
+test('identity code outside identity/ is only shims and re-exporting contracts', () => {
+  const stray = Object.entries(MAP.files)
+    .filter(([file, owner]) => owner === 'identity' && !file.startsWith('identity/') && !Object.hasOwn(MAP.shims ?? {}, file))
+    .filter(([file]) => {
+      if (!MAP.contracts?.[file]) return true;
+      const targets = importSpecifiers(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'))
+        .map((specifier) => resolveSpecifier(file, specifier));
+      return targets.length === 0 || targets.some((target) => !target.startsWith('identity/'));
+    })
+    .map(([file]) => file);
+  assert.deepEqual(stray, [], 'move these into identity/ and leave a shim');
+});
+
 // A contract is a narrow, reviewed exception to may_import: its surface is
 // exactly the exports the map lists, so widening it is a map change too.
 test('each contract exports exactly the names the map lists', () => {

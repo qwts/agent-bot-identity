@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // `agent-bot mint-token`: the command line over mint-token.mjs, with the
-// documented stdout format in cli/mint-output.mjs. The module map assigns both
-// files to identity; they sit in cli/ because dispatch runs this file as its
-// own process. mint-token.mjs keeps the library other modules import (#645).
+// documented stdout format in mint-output.mjs next to it. Both are identity's
+// and live in identity/cli/ (#645, ADR-0645 step 6); dispatch still runs the
+// command through its shim at cli/mint-token.mjs, as its own process.
+// mint-token.mjs keeps the library other modules import.
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { readBinding } from '../agent-binding.mjs';

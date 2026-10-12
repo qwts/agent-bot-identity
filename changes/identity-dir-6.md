@@ -1,0 +1,1 @@
+- The cli and soul identity entries (`identity-cli.mjs`, `identity-soul.mjs`) move into `identity/` with shims at their old paths, finishing ADR-0645 step 6 in the code; a module-boundaries test now keeps identity's code inside `identity/` (#645).

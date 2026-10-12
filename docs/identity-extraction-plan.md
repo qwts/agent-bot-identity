@@ -28,6 +28,12 @@ All of these must hold before step 9 starts:
    - the installed git hooks run identity files by path;
    - GeniusBar's compatibility check loads modules by path;
    - so does the gh-app-hook worker.
+
+   *Done in the code:* #969, #971, #972, #974, #1006 and the PR that moved
+   `identity-cli.mjs` and `identity-soul.mjs`. The module map lists each old
+   path under `shims`. A module-boundaries test holds every identity file
+   outside `identity/` to a shim or a re-exporting contract. Shipping this
+   in its own agent-bot release is still to do.
 3. **ENG-0128 amended.** agent-identity owns identity, and this repository
    owns soul, harness and the `agent-bot` facade (answer 1). The amendment
    is recorded before step 9.
