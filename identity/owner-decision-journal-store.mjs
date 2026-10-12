@@ -388,9 +388,10 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       if (slots['terminal-pair']) typed(() => terminalPair(slots['terminal-pair'], terminal));
       return { ...effectOutcome(slots['pre-effect-refused']), refusalReason: refused.detail.code, terminal };
     }
-    // What a final pre-effect refusal binds: the checked receipt, or none
-    // before the successful check.
-    const refusable = Object.freeze({ preparation, preparationDigest, receiptDigest: slots['successful-check'] ? receiptDigest : null });
+    // What a final pre-effect refusal binds: the saved receipt's digest
+    // whenever a receipt is saved (authorizing included, before the check),
+    // otherwise none.
+    const refusable = Object.freeze({ preparation, preparationDigest, receiptDigest: slots.receipt ? receiptDigest : null });
     if (slots['successful-check']) {
       return { state: 'released', refusable, view: Object.freeze({ action, actionBytes: saved.action, acceptance, preparation, preparationDigest,
         receiptDigest, receiptKeys: receiptKeyIds(slots.receipt), presenceToken: slots.presence.toString('latin1'),
@@ -596,7 +597,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     // lock. Legal only for a prepared request that has not entered: preparing,
     // prepared, authorizing or released. `refusal` is { code, at }, code one
     // of the final-refusal reasons; the store builds the record (binding the
-    // checked receipt, or none before the check) and publishes slot 8. The
+    // saved receipt whenever one is saved, or none) and publishes slot 8. The
     // request is then refused with the mapped outcome. Entered, applied or
     // already refused is a conflict; an admitted request refuses.
     refusePreEffect(requestId, refusal) {

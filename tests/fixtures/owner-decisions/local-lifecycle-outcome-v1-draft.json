@@ -33,48 +33,10 @@
       "frameSha256": "d4c87d3e61c2b54a149d64209fb35a7089020500a4fa6bf09b17a26bf051bb64"
     },
     {
-      "id": "admitted-cancelled-cancelled",
+      "id": "admitted-refused-authority-refused",
       "expected": "valid",
       "context": {
         "phase": "admitted",
-        "acceptance": {
-          "requestId": "00000000-0000-4000-8000-000000000101",
-          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
-          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-          "daemonEpoch": 1
-        },
-        "receiptDigest": null,
-        "effectDigest": null
-      },
-      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
-      "utf8Bytes": 397,
-      "sha256": "606299fcad8ee609e8f6f1bc7b26ee9268705094c689c7791080c7d677da6639",
-      "frameSha256": "440d2f1a92d81776ba77276d541aca3a46c3d5d12b9e022a425720de9ea9becf"
-    },
-    {
-      "id": "preparing-expired-deadline-expired",
-      "expected": "valid",
-      "context": {
-        "phase": "preparing",
-        "acceptance": {
-          "requestId": "00000000-0000-4000-8000-000000000101",
-          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
-          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-          "daemonEpoch": 1
-        },
-        "receiptDigest": null,
-        "effectDigest": null
-      },
-      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"expired\",\"v\":1}",
-      "utf8Bytes": 402,
-      "sha256": "1169ac277a2592b37a0d1a9e530ea4ecc1ceb3ad281461d18b57a7a64f2bd6b9",
-      "frameSha256": "29dadacc9b7c7c91abb882f17737b98f96db4904a6d0385a100fe581771be31f"
-    },
-    {
-      "id": "prepared-refused-authority-refused",
-      "expected": "valid",
-      "context": {
-        "phase": "prepared",
         "acceptance": {
           "requestId": "00000000-0000-4000-8000-000000000101",
           "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
@@ -90,10 +52,10 @@
       "frameSha256": "1994a090c9ecef73143afa021f002ddc6872260a43e81388b8b2687c1fd44076"
     },
     {
-      "id": "prepared-cancelled-cancelled",
+      "id": "admitted-refused-deadline-expired",
       "expected": "valid",
       "context": {
-        "phase": "prepared",
+        "phase": "admitted",
         "acceptance": {
           "requestId": "00000000-0000-4000-8000-000000000101",
           "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
@@ -103,16 +65,16 @@
         "receiptDigest": null,
         "effectDigest": null
       },
-      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
-      "utf8Bytes": 397,
-      "sha256": "606299fcad8ee609e8f6f1bc7b26ee9268705094c689c7791080c7d677da6639",
-      "frameSha256": "440d2f1a92d81776ba77276d541aca3a46c3d5d12b9e022a425720de9ea9becf"
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 402,
+      "sha256": "24fee2cd92dd8b73bcf2fc184c1ba4b31307966363a2ae8c8b11c241d4289948",
+      "frameSha256": "aab28ac8734cf4fcb0599c694bc7495d1097d7be5a2b69795040b2952b73363b"
     },
     {
-      "id": "authorizing-refused-deadline-expired",
+      "id": "released-indeterminate-effect-uncertain",
       "expected": "valid",
       "context": {
-        "phase": "authorizing",
+        "phase": "released",
         "acceptance": {
           "requestId": "00000000-0000-4000-8000-000000000101",
           "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
@@ -122,29 +84,10 @@
         "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
         "effectDigest": null
       },
-      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
-      "utf8Bytes": 464,
-      "sha256": "a6522387d189ccaff81422e9212584c8b52effaeccacf5dbfa78a810fcb1bbee",
-      "frameSha256": "343dc216e15a83cb019b7a41267013d22b96e1ed7c4f695b9320e50ab49f3da0"
-    },
-    {
-      "id": "authorizing-expired-deadline-expired",
-      "expected": "valid",
-      "context": {
-        "phase": "authorizing",
-        "acceptance": {
-          "requestId": "00000000-0000-4000-8000-000000000101",
-          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
-          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-          "daemonEpoch": 1
-        },
-        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
-        "effectDigest": null
-      },
-      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"expired\",\"v\":1}",
-      "utf8Bytes": 464,
-      "sha256": "0663c41390ae48081443dbe7a8f34357c37a6bf5daad7d5df468f9913a23ce4d",
-      "frameSha256": "99811918537fc8f7c172b2c83529dc993510034595b2ca1501151c5804e343bc"
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"effect-uncertain\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"indeterminate\",\"v\":1}",
+      "utf8Bytes": 470,
+      "sha256": "3dda18f5619f2025e0b90b438edb0025de1b920bf4fa9195d3ec68ec350239eb",
+      "frameSha256": "7d00f01fb4f18c01f81872d54d597cd8e9dc0fffec0a8bc452e4dd119471a5de"
     },
     {
       "id": "refused-validation-refused",
@@ -454,6 +397,139 @@
       "frameSha256": "99811918537fc8f7c172b2c83529dc993510034595b2ca1501151c5804e343bc"
     },
     {
+      "id": "negative-released-uncertain-with-digest",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "released",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"effect-uncertain\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"indeterminate\",\"v\":1}",
+      "utf8Bytes": 532,
+      "sha256": "603c2228458ae06b1f2f071d90e275a8fb6c5138d3492d669c69567e60a9494b",
+      "frameSha256": "f06ffc74bb41474c6ac1cd512d9f194a5b4faf8f148789c6b489eaedb9207de5"
+    },
+    {
+      "id": "negative-daemon-cancelled",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "admitted",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
+      "utf8Bytes": 397,
+      "sha256": "606299fcad8ee609e8f6f1bc7b26ee9268705094c689c7791080c7d677da6639",
+      "frameSha256": "440d2f1a92d81776ba77276d541aca3a46c3d5d12b9e022a425720de9ea9becf"
+    },
+    {
+      "id": "negative-daemon-cancelled-prepared",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "prepared",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
+      "utf8Bytes": 397,
+      "sha256": "606299fcad8ee609e8f6f1bc7b26ee9268705094c689c7791080c7d677da6639",
+      "frameSha256": "440d2f1a92d81776ba77276d541aca3a46c3d5d12b9e022a425720de9ea9becf"
+    },
+    {
+      "id": "negative-daemon-expired",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "admitted",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"expired\",\"v\":1}",
+      "utf8Bytes": 402,
+      "sha256": "1169ac277a2592b37a0d1a9e530ea4ecc1ceb3ad281461d18b57a7a64f2bd6b9",
+      "frameSha256": "29dadacc9b7c7c91abb882f17737b98f96db4904a6d0385a100fe581771be31f"
+    },
+    {
+      "id": "negative-preparing-refusal-without-record",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "preparing",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 404,
+      "sha256": "4cb6b0057fea1df2e1e562eb7a8cf1e0ded58912c07aa16d7937d48a2663a441",
+      "frameSha256": "d4c87d3e61c2b54a149d64209fb35a7089020500a4fa6bf09b17a26bf051bb64"
+    },
+    {
+      "id": "negative-prepared-refusal-without-record",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "prepared",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 402,
+      "sha256": "24fee2cd92dd8b73bcf2fc184c1ba4b31307966363a2ae8c8b11c241d4289948",
+      "frameSha256": "aab28ac8734cf4fcb0599c694bc7495d1097d7be5a2b69795040b2952b73363b"
+    },
+    {
+      "id": "negative-authorizing-refusal-without-record",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "authorizing",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"authority-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 465,
+      "sha256": "6e929a8e05a7c469b98433e3c29ba9dc7b3247b13d4fd2ee69abbfcbd55f50fd",
+      "frameSha256": "f6f3e7eeaf0c999936db65ead8f2bc9548b497ed87a9fd9c2964ad1d2828d393"
+    },
+    {
       "id": "negative-authorizing-cancelled",
       "expected": "owner-outcome-finding",
       "context": {
@@ -476,7 +552,7 @@
       "id": "negative-early-storage-refused",
       "expected": "owner-outcome-finding",
       "context": {
-        "phase": "prepared",
+        "phase": "admitted",
         "acceptance": {
           "requestId": "00000000-0000-4000-8000-000000000101",
           "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
@@ -495,7 +571,7 @@
       "id": "negative-early-refusal-with-digest",
       "expected": "owner-outcome-finding",
       "context": {
-        "phase": "prepared",
+        "phase": "admitted",
         "acceptance": {
           "requestId": "00000000-0000-4000-8000-000000000101",
           "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",

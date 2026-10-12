@@ -12,7 +12,7 @@ import { encodeDaemonJournalFrame } from '../identity/owner-decision-journal-fra
 import { LOCAL_OUTCOME_CAP, validateLocalLifecycleOutcome } from '../identity/owner-decision-local-outcome.mjs';
 
 const URL_ = new URL('./fixtures/owner-decisions/local-lifecycle-outcome-v1-draft.json', import.meta.url);
-const SHA256 = 'dd0dda10ae13d341f378209306ef7e2a4ece864a39ac76fee8f826b559216e85';
+const SHA256 = 'cfd850af8b7b38005104d4ad69a84c1182db9b084f93782e3f1e2d6613aedeb3';
 const fixture = JSON.parse(readFileSync(URL_, 'utf8'));
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const outcome = (bytes, context) => { try { validateLocalLifecycleOutcome(bytes, context); return 'valid'; } catch (error) { return error.reason; } };
@@ -20,8 +20,8 @@ const outcome = (bytes, context) => { try { validateLocalLifecycleOutcome(bytes,
 test('the draft vectors are pinned and every one gives its expected result', () => {
   assert.equal(sha256(readFileSync(URL_)), SHA256);
   assert.equal(fixture.slot, 'local-lifecycle-outcome'); assert.equal(fixture.cap, LOCAL_OUTCOME_CAP);
-  assert.equal(fixture.vectors.length, 40);
-  assert.equal(fixture.vectors.filter(({ expected }) => expected === 'valid').length, 13);
+  assert.equal(fixture.vectors.length, 44);
+  assert.equal(fixture.vectors.filter(({ expected }) => expected === 'valid').length, 10);
   for (const vector of fixture.vectors) {
     const bytes = Buffer.from(vector.canonicalJson);
     assert.equal(bytes.length, vector.utf8Bytes, vector.id); assert.equal(sha256(bytes), vector.sha256, vector.id);
@@ -49,12 +49,13 @@ test('each phase admits exactly its own findings', () => {
   const findings = [['applied', 'applied', digest], ['refused', 'validation-refused', null], ['refused', 'authority-refused', null],
     ['refused', 'deadline-expired', null], ['refused', 'storage-refused', null], ['cancelled', 'cancelled', null], ['expired', 'deadline-expired', null],
     ['indeterminate', 'effect-uncertain', null]];
+  // Daemon slot 14 never reports cancelled or expired (the broker owns them);
+  // a null-digest refusal exists only before a valid preparation; from
+  // preparing on a refusal needs its durable record (phase refused).
   const allowed = {
-    admitted: ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'cancelled:cancelled', 'expired:deadline-expired'],
-    prepared: ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'cancelled:cancelled', 'expired:deadline-expired'],
-    authorizing: ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'expired:deadline-expired'],
-    'authorizing, presence only': ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'expired:deadline-expired'],
-    released: [], indeterminate: ['indeterminate:effect-uncertain'], applied: ['applied:applied'],
+    admitted: ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired'],
+    prepared: [], authorizing: [], 'authorizing, presence only': [],
+    released: ['indeterminate:effect-uncertain'], indeterminate: ['indeterminate:effect-uncertain'], applied: ['applied:applied'],
   };
   for (const [phase, context] of Object.entries(contexts)) {
     const accepted = findings.filter(([state, code, effectDigest]) => outcome(Buffer.from(canonicalJson({ ...record, state, receiptDigest: context.receiptDigest,

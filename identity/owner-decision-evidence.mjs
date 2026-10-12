@@ -256,7 +256,7 @@ export function completedRecordFor({ entered, action, at, journalSeq, journalRec
 }
 
 // The final pre-effect refusal record for one prepared request. The receipt
-// digest is the checked receipt's, or null before a successful check.
+// digest is the saved receipt's whenever one is saved, or null when none is.
 export function refusedRecordFor({ preparation, preparationDigest, receiptDigest, code, at }) {
   return { v: 1, kind: 'effect', requestId: preparation.requestId, payloadDigest: preparation.payloadDigest, preparationDigest,
     receiptDigest, effectId: preparation.effectId, phase: 'refused', at, detail: { code } };
@@ -269,8 +269,10 @@ export function refusedRecordFor({ preparation, preparationDigest, receiptDigest
 export function bindEffect(r, { phase, preparation, preparationDigest, receiptDigest, action, entered = null }) {
   if (r.phase !== phase || r.requestId !== preparation.requestId || r.payloadDigest !== preparation.payloadDigest
     || r.preparationDigest !== preparationDigest || r.effectId !== preparation.effectId) fail('owner-evidence-binding');
+  // A refusal binds the saved receipt's digest whenever a receipt is saved
+  // (before or after the successful check), and null only when none is.
   if (phase === 'refused') {
-    if (r.receiptDigest !== null && r.receiptDigest !== receiptDigest) fail('owner-evidence-binding');
+    if (r.receiptDigest !== (receiptDigest ?? null)) fail('owner-evidence-binding');
     return r;
   }
   if (r.receiptDigest !== receiptDigest) fail('owner-evidence-binding');

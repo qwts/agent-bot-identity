@@ -43,18 +43,18 @@ const fail = (reason) => { throw localOutcomeError(reason); };
 // The outcomes the graph allows, as [state, code, effectDigest] triples.
 function allowed({ phase, effectDigest, refusalCode }) {
   switch (phase) {
-    // Before the decision arrives (the broker's preparing or prepared): an
-    // early refusal, a cancellation or an expiry, none proven by an effect
-    // record.
-    case 'admitted':
+    // Before a valid preparation: an early refusal, with no effect record
+    // (a deadline passing is refused / deadline-expired). The daemon never
+    // reports cancelled or expired: the broker owns those.
+    case 'admitted': return EARLY_REFUSALS.map((code) => ['refused', code, null]);
+    // From preparing on, a refusal must be proven by the durable
+    // effect.refused record (phase refused); a missing completion proves
+    // nothing, so these phases report nothing on their own.
     case 'preparing':
-    case 'prepared': return EARLY_REFUSALS.map((code) => ['refused', code, null])
-      .concat([['cancelled', 'cancelled', null], ['expired', 'deadline-expired', null]]);
-    // Presence and receipt arrived, not yet released: no cancellation.
-    case 'authorizing': return EARLY_REFUSALS.map((code) => ['refused', code, null]).concat([['expired', 'deadline-expired', null]]);
-    // Released: any refusal or expiry must first be the durable pre-effect
-    // refused record, so no local outcome stands on its own.
-    case 'released': return [];
+    case 'prepared':
+    case 'authorizing': return [];
+    // Released without effect proof: uncertain, never refused.
+    case 'released': return [['indeterminate', 'effect-uncertain', null]];
     case 'refused': return [['refused', REFUSAL_OUTCOMES[refusalCode], effectDigest]];
     // Entered alone proves neither application nor refusal.
     case 'indeterminate': return [['indeterminate', 'effect-uncertain', null]];
