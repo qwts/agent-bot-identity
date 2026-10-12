@@ -1,0 +1,1 @@
+- `POST /v0/register` moves into soul's route handler, `soul-routes.mjs`, which the daemon calls after its bearer check. The route's request, response and authorization are unchanged (#645, F9 step 3).

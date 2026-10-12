@@ -5,8 +5,8 @@
 // binding registry and bind tokens, Agent ID records, principals, keyd, vouch,
 // the inbox, identity Apps, the bot checks agent-hook runs and the publish
 // scan. It also exports identity's daemon route handler, createIdentityRoutes
-// (F9 step 2; host keeps its bearer and proof checks). Later F9 steps make
-// /v0/register a soul route and split /v0/spawn.
+// (F9 step 2; host keeps its bearer and proof checks). /v0/register is soul's
+// route since F9 step 3; a later F9 step splits /v0/spawn.
 //
 // Host may also import the shared contracts identity-format.mjs and
 // daemon-client.mjs directly.

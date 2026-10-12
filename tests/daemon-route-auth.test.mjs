@@ -29,9 +29,10 @@ function routeTable() {
 // Every route the daemon handles, as the table names it: the switch's literal
 // cases, plus the handlers matched before it, read from their conditions. A
 // regex segment becomes {id} or, for a list of actions, {action}. Identity's
-// routes are cases of identity-routes.mjs, which the daemon calls (#645).
+// and soul's routes are cases of identity-routes.mjs and soul-routes.mjs,
+// which the daemon calls (#645).
 function daemonRoutes() {
-  const source = ['agent-daemon.mjs', 'identity-routes.mjs']
+  const source = ['agent-daemon.mjs', 'identity-routes.mjs', 'soul-routes.mjs']
     .map((file) => readFileSync(path.join(root, file), 'utf8')).join('\n');
   const cases = new Set([...source.matchAll(/case '((?:GET|POST|DELETE) \/v[01]\/[^']+)'/g)].map((match) => match[1]));
   const routes = new Set(cases);
