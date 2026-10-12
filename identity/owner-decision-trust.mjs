@@ -426,7 +426,7 @@ function ready(graph, expectedNamespaceDigest, daemonKey, legacyPresence = null)
   // The presence pin is the native p1 signer, never keyd's legacy seed.
   if (isLegacyPresence(value.presenceKey, legacyPresence)) fail('owner-trust-role');
   return {
-    state: 'ready', namespaceDigest: graph.namespaceDigest, version: value.version,
+    state: 'ready', namespaceDigest: graph.namespaceDigest, version: value.version, enrolledAt: value.at,
     receiptKey: value.receiptKey, presenceKey: value.presenceKey, service: value.service,
     authorizationSupported: false, physicalFlushGuaranteed: false,
   };

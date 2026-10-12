@@ -201,6 +201,28 @@ export function coldStateDigest({ setting, webhookDigest, resume }) {
   return sha256(canonicalJson({ v: 1, setting, webhookDigest, resume }));
 }
 
+// The one entered record a released request can have: the transition from
+// the prepared expectation to exactly what the signed action asks for, at
+// `at` seconds. Derived only from the saved preparation and action, so a
+// caller never supplies record content; bindEffect re-checks it.
+export function enteredRecordFor({ preparation, preparationDigest, receiptDigest, action, at }) {
+  const e = preparation.expected, parameters = action.parameters;
+  let detail;
+  if (preparation.operation === 'cold-wake.set') {
+    const desired = desiredSetting(parameters);
+    detail = { kind: 'cold-wake', beforeDigest: coldStateDigest(e),
+      afterDigest: coldStateDigest({ setting: desired, webhookDigest: desired.mode === 'webhook' ? parameters.configurationDigest : null, resume: e.resume }) };
+  } else {
+    const before = e.head?.revision ?? null;
+    const after = preparation.operation === 'revision.approve' ? e.proposal.revision
+      : preparation.operation === 'revision.reject' ? before : `sha256:${parameters.packageDigest}`;
+    detail = { kind: 'revision', beforeRevision: before, afterRevision: after, proposalId: e.proposal?.proposalId ?? null,
+      apply: preparation.operation === 'revision.edit' && parameters.apply === true };
+  }
+  return { v: 1, kind: 'effect', requestId: preparation.requestId, payloadDigest: preparation.payloadDigest, preparationDigest,
+    receiptDigest, effectId: preparation.effectId, phase: 'entered', at, detail };
+}
+
 // One effect record belongs to exactly this preparation and receipt, in the
 // phase expected. Entered must describe the transition from the prepared
 // expectation to exactly what the signed action asks for, and completed must
