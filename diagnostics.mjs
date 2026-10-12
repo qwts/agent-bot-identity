@@ -23,6 +23,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { redactDiagnostic } from './diagnostic-redact.mjs';
 import { stateDirectory } from './state-paths.mjs';
 
@@ -39,6 +40,16 @@ const HEX = (length) => new RegExp(`^[0-9a-f]{${length}}$`);
 const TRACE_ID = HEX(32);
 const SPAN_ID = HEX(16);
 const DETAIL_MAX = 500;
+
+/** This install's agent-bot version, from its package.json, or null. */
+export function runtimeVersion() {
+  try {
+    const { version } = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'));
+    return typeof version === 'string' && VERSION.test(version) ? version : null;
+  } catch {
+    return null;
+  }
+}
 
 export function diagnosticsDirectory({ env = process.env, home = homedir() } = {}) {
   return join(dirname(stateDirectory({ env, home })), 'diagnostics');

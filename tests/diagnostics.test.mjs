@@ -142,3 +142,9 @@ test('traceparent parses only valid W3C values and links child spans', () => {
   assert.equal(root.parentSpanId, null);
   assert.match(root.traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
 });
+
+test('runtimeVersion reads this install\'s package version', async () => {
+  const { runtimeVersion } = await import('../diagnostics.mjs');
+  const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(runtimeVersion(), version);
+});
