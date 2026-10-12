@@ -1,0 +1,1 @@
+- Add disabled daemon owner-decision journal admission: fixed 15-file request layout, a journal-only Darwin `O_EXLOCK` lock, charged orphans and the 4096-request limit; no route or activation (#1007).

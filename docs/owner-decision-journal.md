@@ -53,3 +53,63 @@ agent-comms `9a2ea84`, likewise pinned):
 - all 28 daemon frames decode and re-encode byte for byte;
 - each of the 20 broker frames is refused in all 14 daemon slots, 280
   refusals in all.
+
+## Storage layout and admission
+
+`identity/owner-decision-journal-store.mjs` is Darwin-only. It refuses on other
+platforms with `owner-decision-unsupported`. A store is created once, by
+`initializeDaemonJournal(root)`:
+
+```text
+<root>/                 0700
+  .journal-lock         0600, empty, fixed inode
+  requests/             0700
+    <64-hex request>/   0700, SHA-256 of {namespaceDigest,requestId,v:1}
+      <slot>.record ×14 and scratch.record, 0600, each at its fixed EOF
+```
+
+- **Lock.** The lock is the journal's own `O_EXLOCK|O_NONBLOCK` open of that
+  fixed inode, checked for identity and ownership. It is never reclaimed,
+  unlinked or recreated. Contention refuses, and process death releases it.
+  The general `file-lock.mjs` (mkdir, with stale reclaim) is never used here.
+- **Namespace.** Each store instance is bound to one enrolled
+  `namespaceDigest`, given at construction and never read back from storage.
+- **Admission.** Admission checks the daemon acceptance record against the
+  exact original action bytes. `payloadDigest` is SHA-256 of those bytes,
+  `reservationBytes` is 524288, and requestId, principal, account, soul and
+  operation must agree.
+  Under the lock it then:
+  1. charges and flushes the request directory;
+  2. creates every fixed file exclusively, zero-fills it and flushes it;
+  3. revalidates them;
+  4. publishes `original-action`, then `acceptance-context`.
+
+  Each publication writes header and body, flushes, writes the trailer,
+  flushes again, and then reads the frame back through a separate descriptor.
+- **Charging.** Every entry under `requests/` counts toward the 4096-request
+  limit, across all namespaces. An interrupted admission leaves an orphan that
+  stays charged and is never admitted fresh. An unknown entry refuses every
+  write and is left for inspection.
+- **After a failure.** After any storage failure the store instance refuses
+  until it is reopened.
+
+Every flush here is node's `fsync`. On Darwin that tries `F_FULLFSYNC` but can
+silently fall back, so it is a logical flush only. Results carry
+`physicalAllocationSupported:false` and `physicalFlushGuaranteed:false`. Zero
+filling is not a physical reservation.
+
+### Error codes
+
+Internal reasons stay in `error.reason`. Callers see only a public code:
+
+| Internal reason | Public code |
+| --- | --- |
+| `owner-journal-capacity` | `journal-capacity` |
+| invalid action or acceptance | `bad-request` |
+| non-Darwin platform | `owner-decision-unsupported` |
+| busy, corrupt, I/O, flush, unknown graph, recovery or reopen required | `storage-failed` |
+
+`storage-failed` is a non-authorizing refusal, never proof that an earlier
+effect did not enter. Retained state is kept as found. An effect that entered
+without whole-effect completion stays `indeterminate` (`effect-uncertain`),
+never a terminal refusal.
