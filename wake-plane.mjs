@@ -280,13 +280,13 @@ export function laneExecutor({ acpTurn = null, resumeTurn = null }) {
 // onWake for createCommsSupervisor. `coldWake` is null when the daemon has
 // no ACP executor, no resume executor, and no webhook waker, which leaves
 // every soul without a warm socket `waiting`.
-export function createWakePlane({ isPaused = () => false, pool, settings, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null, ownerReply = null, turns = createTurnRegistry() }) {
+export function createWakePlane({ isPaused = () => false, pool, settings, snapshot = null, lookupSoul, identities, executorFor = null, resumeExecutor = null, webhookWaker = null, relay = null, taskReporter = null, authStatus = null, receipt, turnTimeoutMs, approvals = null, ownerReply = null, turns = createTurnRegistry() }) {
   const coldWake = executorFor || resumeExecutor || webhookWaker
     ? createColdWaker({
       isPaused,
       executor: laneExecutor({ acpTurn: executorFor ? coldTurnExecutor({ executorFor, turnTimeoutMs, approvals, turns }) : null,
         resumeTurn: resumeExecutor ? (input) => turns.run({ ...input, kind: 'wake' }, resumeExecutor, { turnTimeoutMs }) : null }),
-      settings,
+      settings, snapshot,
       lookupBinding: async (agentId) => lookupSoul(agentId),
       identities: async (agentId) => identities(agentId),
       relay,

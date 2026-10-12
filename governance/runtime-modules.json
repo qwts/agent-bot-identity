@@ -293,7 +293,9 @@
     "wake-webhook.mjs": "comms",
     "worktree-token.mjs": "identity",
     "identity-presence.mjs": "identity",
-    "identity/presence-verifier.mjs": "identity"
+    "identity/presence-verifier.mjs": "identity",
+    "cold-wake-lock.mjs": "shared",
+    "wake-webhook-store.mjs": "comms"
   },
   "assets": {
     "hooks/": "identity",
@@ -360,7 +362,9 @@
     "soul-routes.mjs": "Soul's daemon routes (#645, F9 step 3; owner decision D6): POST /v0/register, which records a soul's space and worktree in the census. agent-daemon.mjs keeps the server and the bearer check and calls the handler before its own switch.",
     "soul-tool-homes.mjs": "Tool-home routes are generated per soul (ADR-0583). Routability facts are harness knowledge.",
     "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms.",
-    "windows-account-custody.mjs": "Shared (owner decision on #645, F11, 2026-10-11): Windows SID and ACL checks used by identity (vouch.mjs) and comms (comms-windows.mjs). It reads ownership and attributes, never a file's contents, so it holds no credential."
+    "windows-account-custody.mjs": "Shared (owner decision on #645, F11, 2026-10-11): Windows SID and ACL checks used by identity (vouch.mjs) and comms (comms-windows.mjs). It reads ownership and attributes, never a file's contents, so it holds no credential.",
+    "cold-wake-lock.mjs": "Shared synchronous settings lock/path mechanism, with ephemeral lock-held tokens; reads no settings or credentials.",
+    "wake-webhook-store.mjs": "Internal comms-owned webhook storage. Helpers require the active shared cold-wake lock before the per-soul webhook lock; existing public access stays in wake-webhook.mjs."
   },
   "computed_imports": {},
   "contracts": {

@@ -12,60 +12,20 @@
 // state directory, are read only to make the request, and never reach argv,
 // a log, a receipt, or an error message.
 
-import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import path from 'node:path';
-import { validateAgentId } from './identity-format.mjs';
-import { withLock } from './file-lock.mjs';
-
-export function webhookDir({ env = process.env, home = homedir() } = {}) {
-  const base = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
-  return path.join(base, 'agent-bot', 'webhooks');
-}
-
-export function webhookFile(agentId, options = {}) {
-  return path.join(webhookDir(options), `${validateAgentId(agentId)}.json`);
-}
-
-// Checks a webhook before it is stored. Errors name what is wrong, never the
-// value: the URL may embed a token.
-export function checkWebhook({ url, key }) {
-  let parsed;
-  try { parsed = new URL(String(url).trim()); } catch { throw new Error('webhook URL is not a valid URL'); }
-  if (parsed.protocol !== 'https:') throw new Error('webhook URL must use https');
-  if (parsed.username || parsed.password) throw new Error('webhook URL must not carry credentials');
-  const secret = String(key ?? '').trim();
-  if (!secret) throw new Error('webhook key is empty');
-  if (/[\r\n]/.test(secret)) throw new Error('webhook key must be one line');
-  return { url: parsed.href, key: secret };
-}
+import { withColdWakeLock } from './cold-wake-lock.mjs';
+import { checkWebhook, readWebhookLocked, removeWebhookLocked, saveWebhookLocked } from './wake-webhook-store.mjs';
+export { checkWebhook, webhookDir, webhookFile } from './wake-webhook-store.mjs';
 
 export function saveWebhook(agentId, webhook, options = {}) {
+  // Validate before acquiring any lock, preserving existing public errors.
   const checked = checkWebhook(webhook);
-  const file = webhookFile(agentId, options);
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  chmodSync(path.dirname(file), 0o700);
-  withLock(`${file}.lock`, 'webhook', () => {
-    const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-    try { writeFileSync(temp, `${JSON.stringify({ schemaVersion: 1, ...checked })}\n`, { flag: 'wx', mode: 0o600 }); renameSync(temp, file); chmodSync(file, 0o600); }
-    finally { rmSync(temp, { force: true }); }
-  });
-  return { host: new URL(checked.url).host };
+  return withColdWakeLock(options, (context) => saveWebhookLocked(agentId, checked, context));
 }
-
 export function readWebhook(agentId, options = {}) {
-  try {
-    const parsed = JSON.parse(readFileSync(webhookFile(agentId, options), 'utf8'));
-    return checkWebhook(parsed);
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new Error('webhook settings could not be read');
-  }
+  return withColdWakeLock(options, (context) => readWebhookLocked(agentId, context));
 }
-
 export function removeWebhook(agentId, options = {}) {
-  rmSync(webhookFile(agentId, options), { force: true });
+  return withColdWakeLock(options, (context) => removeWebhookLocked(agentId, context));
 }
 
 // The standing instruction each wake carries. It names the worktree, because
@@ -84,8 +44,10 @@ export function webhookAsk(worktree) {
  * never the URL's path or the key.
  */
 export function createWebhookWaker({ read = (agentId) => readWebhook(agentId), fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = {}) {
-  return async ({ agentId, worktree }) => {
-    const webhook = read(agentId);
+  return async ({ agentId, worktree, configuration }) => {
+    // A trusted composite reader can supply the exact configuration selected
+    // with the lane. Undefined retains the standalone reader API; null fails.
+    const webhook = configuration === undefined ? read(agentId) : configuration;
     if (!webhook) throw new Error('no webhook is stored for this soul');
     const host = new URL(webhook.url).host;
     const authorization = /^bearer\s/i.test(webhook.key) ? webhook.key : `Bearer ${webhook.key}`;
