@@ -389,6 +389,14 @@ prepare time. It is disabled, with no route or transport.
 - **Same work every time.** Every case does exactly one census read and one
   identity read. A malformed Agent ID reads a fixed placeholder, never its
   input.
+- **Fixed reads only.** `resolveOwnerDecisionTarget` is the only export
+  that resolves. It performs only its fixed census and identity-entry reads,
+  and no read function or read result can be injected: classification is
+  internal.
+- **Caller attaches the binding.** The refusal carries no request binding. C2's
+  `owner-decision-result` caller attaches the saved acceptance binding
+  `{requestId, payloadDigest, daemonKey, daemonEpoch, watchId}` itself when it
+  reports the refusal.
 - **What it doesn't promise.** The timing is equal in kind (local reads, no
   network), not constant-time. A resolved target only means "local and live
   at prepare time". Final entry rechecks under its locks, through the
