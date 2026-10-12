@@ -42,5 +42,5 @@ test('harnesses.qwen validates like any override and is reported, not rendered',
 
 test('harnesses.qwen refuses invalid values with the declaration path', (t) => {
   assert.throws(read(t, manifest({ harnesses: { qwen: { reasoningEffort: 'max' } } })), /soul\.json harnesses\.qwen\.reasoningEffort must be low, medium or high/);
-  assert.throws(read(t, manifest({ harnesses: { qwen: { sandbox: true } } })), /soul\.json harnesses\.qwen\.sandbox is an unknown harness setting/);
+  assert.throws(read(t, manifest({ harnesses: { qwen: { theme: 'dark' } } })), /soul\.json harnesses\.qwen\.theme is an unknown harness setting/);
 });
