@@ -214,7 +214,11 @@ function onlyReexportsIdentity(file, source) {
   const statements = masked.code.split(';').map((statement) => statement.trim()).filter(Boolean);
   return statements.length > 0 && statements.every((statement) => {
     const match = /^export\s*\{[^}]*\}\s*from\s*"\u0000(\d+)"$/u.exec(statement);
-    return Boolean(match) && resolveSpecifier(file, masked.strings[Number(match[1])]).startsWith('identity/');
+    if (!match) return false;
+    // Only a relative specifier is a file here: a bare one is a package and
+    // a leading / is the filesystem root, whatever the joined path looks like.
+    const specifier = masked.strings[Number(match[1])];
+    return /^\.\.?\//u.test(specifier) && resolveSpecifier(file, specifier).startsWith('identity/');
   });
 }
 
@@ -245,6 +249,11 @@ test('a re-exporting contract holds only named re-exports from identity/', () =>
     "export * from './identity/x.mjs';",
     "export { a } from './identity/x.mjs';\nawait import('./identity/' + name);",
     "import './identity/x.mjs';",
+    "export { a } from 'identity/x.mjs';",
+    "export { a } from '/identity/x.mjs';",
+    "// x\rawait import('node:child_process');",
+    "export { a } from './identity/x.mjs';\n// x\u2028const b = 1;",
+    "export { a } from './identity/x.mjs';\n// x\u2029const b = 1;",
   ]) {
     assert.equal(onlyReexportsIdentity('entry.mjs', source), false, source);
   }
@@ -314,6 +323,13 @@ test('importSpecifiers finds static, re-export, side-effect and literal dynamic 
     "const url = 'https://example.com/x';",
   ].join('\n');
   assert.deepEqual(importSpecifiers(source), ['../b.mjs', './a.mjs', './c.mjs', './d.mjs', './e.mjs']);
+});
+
+test('a line comment ends at every JavaScript line terminator', () => {
+  for (const terminator of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    const source = `// note${terminator}await import('./hidden.mjs');`;
+    assert.deepEqual(importSpecifiers(source), ['./hidden.mjs'], JSON.stringify(terminator));
+  }
 });
 
 test('importSpecifiers ignores imports quoted in comments, strings and regexes', () => {
