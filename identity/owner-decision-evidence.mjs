@@ -17,7 +17,21 @@ const PRINCIPAL = /^principal_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a
 const SOUL = /^agent_[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const ACCOUNT = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const REVISION_OPERATIONS = ['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit'];
-const REFUSAL_CODES = ['expired', 'expected-state-changed', 'proposal-not-pending', 'stage-invalid', 'target-unavailable', 'validation-failed', 'storage-unavailable'];
+// Final pre-effect refusal reasons and their public outcome codes, per
+// agent-comms 77bb19c (#212). storage-refused is only ever emitted for a
+// durably recorded refusal; failing to record one stays storage-failed or
+// uncertain.
+export const REFUSAL_OUTCOMES = Object.freeze({
+  expired: 'deadline-expired',
+  'expected-state-changed': 'validation-refused',
+  'proposal-not-pending': 'validation-refused',
+  'stage-invalid': 'validation-refused',
+  'target-unavailable': 'validation-refused',
+  'validation-failed': 'validation-refused',
+  'storage-unavailable': 'storage-refused',
+  'trust-unavailable': 'authority-refused',
+});
+const REFUSAL_CODES = Object.keys(REFUSAL_OUTCOMES);
 const HARNESSES = ['codex', 'opencode', 'devin', 'grok'];
 const WINDOW = 180;
 
@@ -236,3 +250,14 @@ export function reconciliationFinding({ operation, apply = false, entered, compl
 }
 
 export const effectDigest = (bytes) => sha256(bytes);
+
+// The producer's public outcome for one durable effect record (canonical
+// bytes): completed is applied with its digest; a final refusal maps its
+// reason, with its digest; entered alone is indeterminate with no digest.
+// Early refusals and absent proof have no record and report a null digest.
+export function effectOutcome(bytes) {
+  const record = decodeEffect(bytes);
+  if (record.phase === 'completed') return { state: 'applied', outcome: { code: 'applied', effectDigest: sha256(bytes) } };
+  if (record.phase === 'refused') return { state: 'refused', outcome: { code: REFUSAL_OUTCOMES[record.detail.code], effectDigest: sha256(bytes) } };
+  return { state: 'indeterminate', outcome: { code: 'effect-uncertain', effectDigest: null } };
+}
