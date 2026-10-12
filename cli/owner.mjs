@@ -7,8 +7,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt } from '../identity-format.mjs';
 import { soulMarkers } from '../owner-action.mjs';
-import { attestedOwnerKeys, keydAttestPins, keydStatementStore } from '../owner-presence.mjs';
-import { ownerCommand } from '../owner-statement.mjs';
+import { attestedOwnerKeys, keydAttestPins, keydStatementStore, ownerCommand } from '../identity-cli.mjs';
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   ownerCommand(process.argv.slice(2), {

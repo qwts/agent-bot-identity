@@ -5,7 +5,7 @@
 // (identity-app-souls.mjs) so Apps are checked against each soul (#645).
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { identityAppFailure, identityAppsCommand } from '../identity-apps.mjs';
+import { identityAppFailure, identityAppsCommand } from '../identity-cli.mjs';
 import { identityAppSouls } from '../identity-app-souls.mjs';
 import { assertOwnerAction } from '../owner-action.mjs';
 

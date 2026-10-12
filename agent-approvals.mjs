@@ -18,8 +18,7 @@ import { pathToFileURL } from 'node:url';
 
 import { daemonClient } from './daemon-client.mjs';
 import { shown } from './approval-action.mjs';
-import { soulMarkers } from './owner-gate.mjs';
-import { extractToken } from './owner-statement.mjs';
+import { extractToken, soulMarkers } from './identity-cli.mjs';
 
 const USAGE = 'usage: agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--statement TOKEN] [--json] [--principal-stdin] | approvals deny <proposalId> [--statement TOKEN] [--json] [--principal-stdin]';
 

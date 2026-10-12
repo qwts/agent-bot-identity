@@ -1,0 +1,1 @@
+- The rest of cli (`agent-approvals`, `soul dream`, `owner`, `principal`, `identity app` and `identity`) reaches identity through `identity-cli.mjs`, in-process, so presence prompts keep the terminal; a module-boundaries test holds every cli file to identity's listed contracts. Commands are unchanged (#645, F8 and F13 step 4).

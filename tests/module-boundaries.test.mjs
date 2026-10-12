@@ -150,13 +150,13 @@ test('each old identity path is only a re-export shim of its moved file', () => 
   }
 });
 
-// cli's readiness, doctor, bootstrap and hook-sync code reaches identity only
-// through listed contracts (identity-cli.mjs, identity-format.mjs and
-// daemon-client.mjs), never through another identity file (#645, F13 step 3).
-test('readiness, doctor, bootstrap and sync-hooks import identity only through listed contracts', () => {
-  const callers = new Set(['readiness.mjs', 'doctor.mjs', 'bootstrap.mjs', 'sync-hooks.mjs']);
+// cli reaches identity only through listed contracts (identity-cli.mjs,
+// identity-format.mjs and daemon-client.mjs), never through another identity
+// file (#645, F13 steps 3 and 4). Files the map assigns to identity, such as
+// cli/mint-token.mjs, are identity's own and not checked here.
+test('cli imports identity only through its listed contracts', () => {
   const reached = moduleEdges(ROOT, runtimeFiles())
-    .filter(({ from, to }) => callers.has(from) && MAP.files[to] === 'identity')
+    .filter(({ from, to }) => MAP.files[from] === 'cli' && MAP.files[to] === 'identity')
     .filter(({ to }) => !MAP.contracts?.[to]?.importable_by?.includes('cli'))
     .map(({ from, to }) => `${from} -> ${to}`);
   assert.deepEqual(reached, [], 'import these through identity-cli.mjs');
