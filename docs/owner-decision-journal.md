@@ -731,6 +731,10 @@ route. None is built here.
   `sealRecordOnlyReconciliation` first. Wiring must import
   `owner-decision-reconcile.mjs` at daemon start, before any other host
   code runs, and treat a failed seal (the import throwing) as fatal.
+  `tests/module-boundaries.test.mjs` fails if any runtime file other than
+  the reconciler names `sealRecordOnlyReconciliation` (the store defines it
+  and the identity-host facades only re-export it). That's a source check,
+  not a runtime guarantee: the seal stays first-come in process.
 - **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.

@@ -1,0 +1,1 @@
+- A module-boundaries test now fails if any runtime file other than the disabled record-only owner-decision reconciler names `sealRecordOnlyReconciliation` (agent-comms#77).
