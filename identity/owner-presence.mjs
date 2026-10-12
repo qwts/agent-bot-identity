@@ -32,7 +32,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { ANY_DEVELOPER_ID, DEFAULT_KEYD_IDENTIFIER, keydSigner, loadConfig, ownerKeysSetting } from '../config.mjs';
-import { keydPaths, keydRequest, readKeydRecord } from '../keyd-client.mjs';
+import { keydPaths, keydRequest, readKeydRecord } from './keyd-client.mjs';
 import { requireOwnerApproval } from './owner-approval.mjs';
 import { ed25519KeyLine, parseSshPublicKey, sshFingerprint } from './owner-statement.mjs';
 

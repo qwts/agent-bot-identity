@@ -1,0 +1,730 @@
+#!/usr/bin/env node
+
+// Transcript-bound execution identities (ENG-0081).
+//
+// This module mints one private, structured identity per agent conversation
+// so a commit can be resolved back to the provider transcript that produced
+// it. GitHub App metadata is optional (#280, ADR-0274): with github-identity
+// enabled, a record names the worktree-token provider and contains no
+// credential. Without the add-on, the record has no `github` field.
+
+import { randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { withLock } from '../file-lock.mjs';
+import { stateDirectory } from '../state-paths.mjs';
+import process from 'node:process';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } from '../config.mjs';
+import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
+import { AGENT_ID_KEYS, isAgentId, validateAgentId } from './identity-format.mjs';
+
+const SCHEMA_VERSION = 1;
+const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+
+function optionalText(name, value, { max = 512 } = {}) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error(`${name} must be printable text no longer than ${max} characters`);
+  }
+  return value;
+}
+
+function requiredText(name, value, options) {
+  const text = optionalText(name, value, options);
+  if (text === null) throw new Error(`${name} is required`);
+  return text;
+}
+
+// ADR-0815: a soul is credited as a Git co-author whose email is its Agent
+// ID in a reserved, never-resolving domain (RFC 6761), so no GitHub account
+// can verify the address and claim the soul's commits. An organization may
+// name its own domain (`settings.soulCoauthorDomain`, validated by config).
+export const SOUL_COAUTHOR_DOMAIN = 'souls.agent-bot.invalid';
+
+// The domains a soul credit may use: the one new trailers are written in
+// first, then the reserved default, which stays a soul domain after an
+// organization names its own so a credit in it can still be refused.
+export function soulCoAuthorDomains(config = loadConfig()) {
+  return [...new Set([soulCoauthorDomainSetting(config) ?? SOUL_COAUTHOR_DOMAIN, SOUL_COAUTHOR_DOMAIN])];
+}
+
+function soulCredit(domains) {
+  const hosts = domains.map((domain) => domain.replaceAll('.', '\\.')).join('|');
+  return new RegExp(`^co-authored-by:[ \\t]*[^\\n<]*<([^@>\\s]*)@(?:${hosts})>`, 'gim');
+}
+
+// The `Co-authored-by:` line for a soul. The name is the census name at
+// commit time; characters that would end or split the trailer are dropped.
+export function soulCoAuthorTrailer(id, name, domain = SOUL_COAUTHOR_DOMAIN) {
+  validateAgentId(id);
+  const shown = String(name ?? '').replace(/[<>\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim();
+  if (!shown) throw new Error('a soul co-author needs a display name');
+  return `Co-authored-by: ${shown} <${id}@${domain}>`;
+}
+
+// The Agent IDs (as written, valid or not) that a message credits as soul
+// co-authors, anywhere in the message. Other co-authors are not reported.
+export function soulCoAuthorCredits(message, domains = [SOUL_COAUTHOR_DOMAIN]) {
+  return [...String(message).matchAll(soulCredit(domains))].map((match) => match[1]);
+}
+
+// A message may credit only the soul it is committed as: one soul cannot be
+// credited with another soul's work (ADR-0815 §2, matrix row 7). With no
+// bound soul, no soul may be credited.
+export function assertSoulCoAuthor(message, id, domains = [SOUL_COAUTHOR_DOMAIN]) {
+  const foreign = soulCoAuthorCredits(message, domains).filter((credited) => credited !== id)
+    .map((credited) => credited.replace(/[^\x21-\x7e]/g, '?').slice(0, 64));
+  if (foreign.length === 0) return;
+  throw new Error(id
+    ? `the message credits another soul as co-author (${foreign[0]}); only ${id} may be credited here`
+    : `the message credits a soul as co-author (${foreign[0]}), but no soul is bound here`);
+}
+
+export function discoverTranscript(env = process.env) {
+  const transcriptId = env.AGENT_BOT_TRANSCRIPT_ID ?? env.QWTS_AGENT_TRANSCRIPT_ID;
+  if (transcriptId) {
+    return {
+      provider:
+        optionalText(
+          'AGENT_BOT_TRANSCRIPT_PROVIDER',
+          env.AGENT_BOT_TRANSCRIPT_PROVIDER ?? env.QWTS_AGENT_TRANSCRIPT_PROVIDER,
+        ) ?? 'custom',
+      id: requiredText('AGENT_BOT_TRANSCRIPT_ID', transcriptId),
+    };
+  }
+  if (env.CODEX_THREAD_ID) {
+    return { provider: 'codex', id: requiredText('CODEX_THREAD_ID', env.CODEX_THREAD_ID) };
+  }
+  if (env.CLAUDE_SESSION_ID) {
+    return { provider: 'claude', id: requiredText('CLAUDE_SESSION_ID', env.CLAUDE_SESSION_ID) };
+  }
+  if (env.CURSOR_CONVERSATION_ID) {
+    return {
+      provider: 'cursor',
+      id: requiredText('CURSOR_CONVERSATION_ID', env.CURSOR_CONVERSATION_ID),
+    };
+  }
+  return null;
+}
+
+export function identityFieldsFromEnv(env = process.env) {
+  const team = env.AGENT_BOT_TEAM ?? env.QWTS_AGENT_TEAM;
+  const squad = env.AGENT_BOT_SQUAD ?? env.QWTS_AGENT_SQUAD;
+  const type = env.AGENT_BOT_TYPE ?? env.QWTS_AGENT_TYPE;
+  const level = env.AGENT_BOT_LEVEL ?? env.QWTS_AGENT_LEVEL;
+  const parentId = env.AGENT_BOT_PARENT_ID ?? env.QWTS_AGENT_PARENT_ID;
+  return {
+    team: optionalText('AGENT_BOT_TEAM', team),
+    squad: optionalText('AGENT_BOT_SQUAD', squad),
+    type: optionalText('AGENT_BOT_TYPE', type) ?? 'agent',
+    level: optionalText('AGENT_BOT_LEVEL', level),
+    parentId: parentId ? validateAgentId(parentId) : null,
+  };
+}
+
+// Standalone: derive the harness from config / slug shape. Optional rosterPath
+// keeps the playbook call signature for callers that still pass one.
+export function harnessForApp(appSlug, _rosterPath) {
+  return harnessForSlug(appSlug, loadConfig());
+}
+
+function normalizeTranscript(transcript) {
+  if (!transcript) return null;
+  return {
+    provider: requiredText('transcript.provider', transcript.provider, { max: 80 }),
+    id: requiredText('transcript.id', transcript.id),
+    sha256: optionalText('transcript.sha256', transcript.sha256, { max: 64 }),
+  };
+}
+
+function normalizeValues(name, values) {
+  return [...new Set((values ?? []).map((value) => requiredText(name, value, { max: 1024 })))];
+}
+
+export function validateIdentity(record) {
+  const errors = [];
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return ['identity must be an object'];
+  if (record.schemaVersion !== SCHEMA_VERSION) errors.push(`schemaVersion must be ${SCHEMA_VERSION}`);
+  try {
+    validateAgentId(record.id);
+  } catch (error) {
+    errors.push(error.message);
+  }
+  if (record.genesis !== undefined && record.genesis !== null) {
+    try {
+      validateGenesis(record.genesis);
+      if (record.id?.[20] !== '8') errors.push('genesis requires a UUIDv8 Agent ID');
+    } catch (error) { errors.push(error.message); }
+  }
+  // `github` is optional metadata set by the github-identity add-on. Absence
+  // is a soul with no App. A present value is still the credential-free
+  // worktree-token descriptor, never a token.
+  if (!Object.hasOwn(record, 'github') || record.github === undefined) {
+    /* no GitHub metadata */
+  } else if (!record.github || typeof record.github !== 'object' || Array.isArray(record.github)) {
+    errors.push('github must be an object when present');
+  } else {
+    if (!APP_PATTERN.test(record.github.appSlug ?? '')) errors.push('github.appSlug must be a GitHub App slug');
+    if (record.github.credentialProvider !== 'worktree-token') {
+      errors.push('github.credentialProvider must be worktree-token');
+    }
+    if ('token' in record.github || 'privateKey' in record.github || 'secret' in record.github) {
+      errors.push('identity records must not contain credentials');
+    }
+  }
+  if (!['active', 'finalized', 'retired'].includes(record.status)) {
+    errors.push('status must be active, finalized, or retired');
+  }
+  if (record.parentId !== null) {
+    try {
+      validateAgentId(record.parentId);
+    } catch (error) {
+      errors.push(`parentId: ${error.message}`);
+    }
+  }
+  if (record.transcript !== null) {
+    try {
+      normalizeTranscript(record.transcript);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+  if (!Array.isArray(record.subjects) || !Array.isArray(record.artifacts)) {
+    errors.push('subjects and artifacts must be arrays');
+  }
+  return errors;
+}
+
+function ensureStateDirectory(root) {
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(root, 0o700);
+  } catch {
+    /* another platform may not expose POSIX modes */
+  }
+}
+
+function identityPath(root, id) {
+  return path.join(root, `${validateAgentId(id)}.json`);
+}
+
+function writeNewIdentity(root, record) {
+  ensureStateDirectory(root);
+  const target = identityPath(root, record.id);
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  });
+  try {
+    // A hard link publishes the fully-written record atomically while keeping
+    // allocation exclusive: linkSync fails with EEXIST if another allocator
+    // already claimed this Agent ID.
+    linkSync(temporary, target);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function replaceIdentity(root, record) {
+  const target = identityPath(root, record.id);
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  });
+  renameSync(temporary, target);
+}
+
+function withIdentityLock(root, id, operation) {
+  return withLock(`${identityPath(root, id)}.lock`, `Agent ID ${id}`, operation);
+}
+
+function withRegistryLock(root, operation) {
+  ensureStateDirectory(root);
+  return withLock(path.join(root, '.allocation.lock'), 'identity allocation', operation);
+}
+
+export function readAgentIdentity(id, { stateDir = stateDirectory() } = {}) {
+  let record;
+  try {
+    record = JSON.parse(readFileSync(identityPath(stateDir, id), 'utf8'));
+  } catch (error) {
+    throw new Error(`could not read Agent ID ${id}: ${error.message}`);
+  }
+  const errors = validateIdentity(record);
+  if (errors.length > 0) throw new Error(`Agent ID ${id} is invalid: ${errors.join('; ')}`);
+  return { ...record, genesis: record.genesis ?? null };
+}
+
+export function mintAgentIdentity({
+  appSlug,
+  botUid = null,
+  harness = null,
+  transcript = null,
+  team = null,
+  squad = null,
+  type = 'agent',
+  level = null,
+  parentId = null,
+  subjects = [],
+  artifacts = [],
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+  idFactory = () => `agent_${randomUUID()}`,
+  // false omits `github` even when the gate is on: a soul that does not use
+  // the add-on stays without it (ADR-0274). Undefined follows `gate`.
+  useGithub = undefined,
+  gate: isEnabled = isGateEnabled,
+  home = homedir(),
+  env = process.env,
+  // The package revision a genesis-derived ID hashes; the caller (soul)
+  // computes it, so identity never reads a package (#645).
+  packageRevision = null,
+  nonceFactory = spawnNonce,
+  ...unexpected
+} = {}) {
+  if (unexpected.packagePath != null) {
+    throw new Error('mintAgentIdentity takes packageRevision, not packagePath: compute it with computePackageRevision');
+  }
+  const githubOn = useGithub ?? isEnabled('github-identity', { env, home });
+  let slug = null;
+  let github = null;
+  if (githubOn) {
+    slug = requiredText('appSlug', appSlug, { max: 100 });
+    if (!APP_PATTERN.test(slug)) throw new Error(`invalid GitHub App slug: ${JSON.stringify(slug)}`);
+    github = {
+      appSlug: slug,
+      botUid: optionalText('botUid', botUid, { max: 40 }),
+      actor: `${slug}[bot]`,
+      credentialProvider: 'worktree-token',
+    };
+  }
+  const normalizedParent = parentId ? validateAgentId(parentId) : null;
+  const createdAt = now().toISOString();
+  const genesis = packageRevision === null ? null : validateGenesis({
+    revision: packageRevision, parentSoul: normalizedParent,
+  });
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const record = {
+      schemaVersion: SCHEMA_VERSION,
+      id: validateAgentId(genesis ? deriveSoulId({ ...genesis, nonce: nonceFactory() }) : idFactory()),
+      genesis,
+      team: optionalText('team', team) ?? slug,
+      squad: optionalText('squad', squad),
+      type: requiredText('type', type, { max: 80 }),
+      level: optionalText('level', level, { max: 80 }),
+      parentId: normalizedParent,
+      harness: optionalText('harness', harness, { max: 80 }),
+      ...(github ? { github } : {}),
+      transcript: normalizeTranscript(transcript),
+      status: 'active',
+      subjects: normalizeValues('subject', subjects),
+      artifacts: normalizeValues('artifact', artifacts),
+      createdAt,
+      updatedAt: createdAt,
+      finalizedAt: null,
+    };
+    const errors = validateIdentity(record);
+    if (errors.length > 0) throw new Error(`invalid identity: ${errors.join('; ')}`);
+    try {
+      writeNewIdentity(stateDir, record);
+      return record;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
+  throw new Error('could not allocate a unique Agent ID');
+}
+
+// Integration port for the revision-chain owner. It must durably append before
+// resolving; no default silently drops history. Also supports legacy adoption.
+export async function recordAgentPackageRevision(id, revision, {
+  appendRevision,
+  stateDir = stateDirectory(),
+} = {}) {
+  if (typeof appendRevision !== 'function') throw new Error('appendRevision chain writer is required');
+  const identity = readAgentIdentity(id, { stateDir });
+  if (identity.status === 'retired') throw retiredReuseError(id);
+  validateGenesis({ revision, parentSoul: null });
+  await appendRevision({ agentId: identity.id, revision, genesis: identity.genesis });
+  return identity;
+}
+
+function sameTranscript(left, right) {
+  return left?.provider === right?.provider && left?.id === right?.id;
+}
+
+function findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub = true } = {}) {
+  if (!transcript) return null;
+  let names;
+  try {
+    names = readdirSync(stateDir);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -5);
+    if (!isAgentId(id)) continue;
+    let record;
+    try {
+      record = readAgentIdentity(id, { stateDir });
+    } catch (error) {
+      // Records are audit data, not an availability gate. A crash artifact,
+      // manual corruption, or older schema must not brick every future setup.
+      console.warn(`agent-identity: ignoring invalid registry record ${id}: ${error.message}`);
+      continue;
+    }
+    // Without the add-on only github-less souls are in scope, so a bind can
+    // never inherit another conversation's App identity.
+    const sameApp = useGithub ? record.github?.appSlug === appSlug : record.github == null;
+    if (sameApp && sameTranscript(record.transcript, transcript)) {
+      return record;
+    }
+  }
+  return null;
+}
+
+function mutateIdentity(id, stateDir, now, mutator, { afterWrite = null } = {}) {
+  return withIdentityLock(stateDir, id, () => {
+    const current = readAgentIdentity(id, { stateDir });
+    const next = mutator(structuredClone(current));
+    next.updatedAt = now().toISOString();
+    const errors = validateIdentity(next);
+    if (errors.length > 0) throw new Error(`invalid identity update: ${errors.join('; ')}`);
+    replaceIdentity(stateDir, next);
+    try {
+      afterWrite?.(next);
+    } catch (error) {
+      try {
+        replaceIdentity(stateDir, current);
+      } catch {
+        throw new Error('identity rollback failed after lifecycle synchronization failure');
+      }
+      throw error;
+    }
+    return next;
+  });
+}
+
+// Owner-authorized callers use this atomic identity/census mutation for App assignment.
+export function assignAgentApp(id, appSlug, { stateDir = stateDirectory(), now = () => new Date(), afterWrite } = {}) {
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.status === 'retired') throw new Error('cannot assign a retired soul');
+    record.github = { appSlug, credentialProvider: 'worktree-token' };
+    return record;
+  }, { afterWrite });
+}
+
+// Deliberate onboarding may complete a previously hub-only identity using
+// configured resolution. Unlike owner assignment, it can never switch Apps.
+export function initializeAgentApp(id, appSlug, { stateDir = stateDirectory(), now = () => new Date(), afterWrite } = {}) {
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.status === 'retired') throw new Error('cannot initialize a retired soul');
+    if (record.github && record.github.appSlug !== appSlug) throw new Error('soul already has a different GitHub App');
+    record.github ??= { appSlug, credentialProvider: 'worktree-token' };
+    return record;
+  }, { afterWrite });
+}
+
+export function bindAgentTranscript(id, transcript, {
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+} = {}) {
+  const normalized = normalizeTranscript(transcript);
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.transcript && !sameTranscript(record.transcript, normalized)) {
+      throw new Error(`Agent ID ${id} is already bound to another transcript`);
+    }
+    record.transcript = { ...normalized };
+    return record;
+  });
+}
+
+// Lineage is written once. Bind time is the first moment a parent is reliably
+// observable (#91): the spawning conversation names it as a tool argument, so
+// a null parentId can be repaired there — but an already-recorded parent is
+// provenance and must never be rewritten.
+export function bindAgentLineage(id, parentId, {
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+} = {}) {
+  const normalized = validateAgentId(parentId);
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.parentId && record.parentId !== normalized) {
+      throw new Error(`Agent ID ${id} already records a different parent`);
+    }
+    record.parentId = normalized;
+    return record;
+  });
+}
+
+export function recordAgentEvidence(id, {
+  subjects = [],
+  artifacts = [],
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+} = {}) {
+  const nextSubjects = normalizeValues('subject', subjects);
+  const nextArtifacts = normalizeValues('artifact', artifacts);
+  return mutateIdentity(id, stateDir, now, (record) => {
+    record.subjects = [...new Set([...record.subjects, ...nextSubjects])];
+    record.artifacts = [...new Set([...record.artifacts, ...nextArtifacts])];
+    return record;
+  });
+}
+
+export function finalizeAgentIdentity(id, {
+  transcriptSha256 = null,
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+  onFinalized = null,
+} = {}) {
+  if (onFinalized !== null && typeof onFinalized !== 'function') {
+    throw new Error('onFinalized must be a function or null');
+  }
+  return mutateIdentity(id, stateDir, now, (record) => {
+    if (record.status === 'retired') throw new Error(`Agent ID ${id} is retired and cannot be finalized`);
+    if (!record.transcript) throw new Error(`Agent ID ${id} has no transcript to finalize`);
+    const digest = optionalText('transcriptSha256', transcriptSha256, { max: 64 });
+    if (digest && !/^[0-9a-f]{64}$/i.test(digest)) throw new Error('transcriptSha256 must be 64 hexadecimal characters');
+    if (digest) record.transcript.sha256 = digest.toLowerCase();
+    record.status = 'finalized';
+    record.finalizedAt = now().toISOString();
+    return record;
+  }, { afterWrite: onFinalized });
+}
+
+// Retirement is the explicit end of a soul's lifecycle (issue #46): it is
+// recorded in the authoritative identity record so reuse paths can refuse it,
+// not only in the census. Like finalize, an optional afterWrite hook lets the
+// caller synchronize a second store with rollback on failure.
+export function retireAgentIdentity(id, {
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+  onRetired = null,
+} = {}) {
+  if (onRetired !== null && typeof onRetired !== 'function') {
+    throw new Error('onRetired must be a function or null');
+  }
+  return mutateIdentity(id, stateDir, now, (record) => {
+    record.status = 'retired';
+    record.retiredAt = now().toISOString();
+    return record;
+  }, { afterWrite: onRetired });
+}
+
+function retiredReuseError(id) {
+  return new Error(
+    `agent identity ${id} is retired; remove the worktree pin ` +
+      '(git config --unset agentBot.id) or start a new session to mint a fresh identity',
+  );
+}
+
+export function ensureAgentIdentity({
+  currentId = null,
+  appSlug,
+  botUid = null,
+  harness = null,
+  transcript = discoverTranscript(),
+  fields = identityFieldsFromEnv(),
+  subjects = [],
+  stateDir = stateDirectory(),
+  now = () => new Date(),
+  idFactory,
+  useGithub = undefined,
+  gate: isEnabled = isGateEnabled,
+  env = process.env,
+  home = homedir(),
+} = {}) {
+  // With the add-on on, App equality is a match key. With it off, only
+  // github-less souls are in scope: a pin or transcript match that reaches a
+  // GitHub-backed soul is ignored and a fresh mint omits `github`.
+  const githubOn = useGithub ?? isEnabled('github-identity', { env, home });
+  const inScope = (record) => Boolean(record) && (githubOn ? record.github?.appSlug === appSlug : record.github == null);
+  return withRegistryLock(stateDir, () => {
+    let identity = null;
+    if (currentId) {
+      let current = null;
+      try {
+        current = readAgentIdentity(currentId, { stateDir });
+      } catch (error) {
+        console.warn(`agent-identity: ignoring invalid current identity ${currentId}: ${error.message}`);
+      }
+      // A corrupt pin is repairable metadata. The registry scan below can
+      // reuse a healthy transcript match or mint a replacement. A retired pin
+      // is different: fail closed before any reuse path can touch the record.
+      if (inScope(current) && current.status === 'retired') {
+        throw retiredReuseError(current.id);
+      }
+      if (inScope(current)) {
+        if (transcript && sameTranscript(current.transcript, transcript)) identity = current;
+        else if (transcript && !current.transcript) {
+          identity = findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub: githubOn })
+            ?? bindAgentTranscript(current.id, transcript, { stateDir, now });
+        } else if (!transcript) {
+          // Nothing in view says a different conversation has taken over
+          // this checkout, so the pin stands — bound or still pending. The
+          // harness startup hook runs setup every session and git runs it on
+          // every checkout; minting here each time orphaned the previous
+          // soul with its record still active and nothing to reap it (#192).
+          // Rotation needs evidence: a transcript that differs from the
+          // bound one, an App change, or an operator's repin.
+          identity = current;
+        }
+        // A different provider conversation reused the worktree: preserve the
+        // old immutable record and resolve or mint its execution identity.
+      }
+    }
+    identity ??= findTranscriptIdentity(appSlug, transcript, stateDir, { useGithub: githubOn });
+    if (identity?.status === 'retired') {
+      // Deliberately fail closed instead of minting a replacement: a stale
+      // worktree pin or transcript match reaching a retired soul means an
+      // operator explicitly ended this lifecycle (issue #46). Silently
+      // minting would hide that and re-register a look-alike soul; the
+      // operator should remove the pin or start a fresh session on purpose.
+      throw retiredReuseError(identity.id);
+    }
+    identity ??= mintAgentIdentity({
+      appSlug: githubOn ? appSlug : null,
+      botUid: githubOn ? botUid : null,
+      harness,
+      transcript,
+      ...fields,
+      subjects,
+      stateDir,
+      now,
+      idFactory,
+      useGithub: githubOn,
+      gate: isEnabled,
+      env,
+    });
+    const combinedSubjects = new Set([...identity.subjects, ...subjects]);
+    if (combinedSubjects.size !== identity.subjects.length) {
+      identity = recordAgentEvidence(identity.id, { subjects, stateDir, now });
+    }
+    return identity;
+  });
+}
+
+function gitConfig(args, { cwd = process.cwd(), allowMissing = false } = {}) {
+  try {
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    if (allowMissing && error.status === 1) return null;
+    throw error;
+  }
+}
+
+export function currentAgentId({ env = process.env, cwd = process.cwd() } = {}) {
+  const fromEnv = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID;
+  if (fromEnv) return validateAgentId(fromEnv);
+  for (const key of AGENT_ID_KEYS) {
+    const id = gitConfig(['config', '--get', key], { cwd, allowMissing: true });
+    if (id) return validateAgentId(id);
+  }
+  return null;
+}
+
+export function parseIdentityArgs(argv) {
+  const [command = 'current', ...tokens] = argv.slice(2);
+  const positional = [];
+  let childCommand = null;
+  const flags = new Map();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token === '--') { childCommand = tokens.slice(index + 1); break; }
+    if (!token.startsWith('--')) {
+      positional.push(token);
+      continue;
+    }
+    // --reuse-pending is accepted for older launchers; reusing a pinned soul
+    // when no transcript is in view is the default since #192.
+    if (token === '--json' || token === '--reuse-pending') {
+      flags.set(token.slice(2), ['true']);
+      continue;
+    }
+    const value = tokens[++index];
+    if (!value) throw new Error(`${token} requires a value`);
+    const key = token.slice(2);
+    flags.set(key, [...(flags.get(key) ?? []), value]);
+  }
+  const one = (name) => flags.get(name)?.at(-1) ?? null;
+  return { command, childCommand, positional, flags, one, json: flags.has('json') };
+}
+
+export function printIdentityRecord(record, json) {
+  if (json) {
+    process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`${record.id}\n`);
+}
+
+// The git hooks' entry (hooks/*): `current`, `show` and `record`, with the
+// output they have always had. Every other command is `agent-bot identity`
+// (cli/identity.mjs), which composes soul and the population census (#645).
+async function main() {
+  const args = parseIdentityArgs(process.argv);
+  const stateDir = stateDirectory();
+  const targetId = () => args.positional[0] ?? currentAgentId();
+
+  switch (args.command) {
+    case 'record': {
+      const id = targetId();
+      if (!id) throw new Error('record requires an Agent ID');
+      printIdentityRecord(recordAgentEvidence(id, {
+        subjects: args.flags.get('subject') ?? [],
+        artifacts: args.flags.get('artifact') ?? [],
+        stateDir,
+      }), args.json);
+      break;
+    }
+    case 'show': {
+      const id = targetId();
+      if (!id) throw new Error('show requires an Agent ID');
+      printIdentityRecord(readAgentIdentity(id, { stateDir }), true);
+      break;
+    }
+    case 'current': {
+      const id = currentAgentId();
+      if (!id) return;
+      if (args.json) printIdentityRecord(readAgentIdentity(id, { stateDir }), true);
+      else process.stdout.write(`${id}\n`);
+      break;
+    }
+    default:
+      throw new Error(`usage: agent-identity.mjs <current|show|record> is the git hooks' entry; run agent-bot identity ${args.command}`);
+  }
+}
+
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../agent-identity.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
+  main().catch((error) => {
+    console.error(`agent-identity: ${error.message}`);
+    process.exit(1);
+  });
+}
