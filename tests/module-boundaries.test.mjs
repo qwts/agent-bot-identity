@@ -17,6 +17,7 @@ import {
   edgeKey,
   exportedNames,
   importSpecifiers,
+  maskSource,
   moduleEdges,
   resolveSpecifier,
   validateModuleMap,
@@ -205,6 +206,59 @@ test("identity's git hooks reach soul only through soul's hook adapter", () => {
   assert.deepEqual(reached, [], 'run soul steps through hooks/soul-hook');
 });
 
+// A root-level contract that stands in for identity code may hold nothing but
+// named re-exports of files inside identity/: no logic, no bare or node:
+// specifiers, no dynamic imports. Comments are ignored.
+function onlyReexportsIdentity(file, source) {
+  const masked = maskSource(source);
+  const statements = masked.code.split(';').map((statement) => statement.trim()).filter(Boolean);
+  return statements.length > 0 && statements.every((statement) => {
+    const match = /^export\s*\{[^}]*\}\s*from\s*"\u0000(\d+)"$/u.exec(statement);
+    if (!match) return false;
+    // Only a relative specifier is a file here: a bare one is a package and
+    // a leading / is the filesystem root, whatever the joined path looks like.
+    const specifier = masked.strings[Number(match[1])];
+    return /^\.\.?\//u.test(specifier) && resolveSpecifier(file, specifier).startsWith('identity/');
+  });
+}
+
+// ADR-0645 step 6 is done when identity's code lives in identity/: every
+// identity file outside it is a listed shim, or a published contract (such as
+// identity-presence.mjs, whose bytes agent-comms pins) that only re-exports
+// files inside identity/.
+test('identity code outside identity/ is only shims and re-exporting contracts', () => {
+  const stray = Object.entries(MAP.files)
+    .filter(([file, owner]) => owner === 'identity' && !file.startsWith('identity/') && !Object.hasOwn(MAP.shims ?? {}, file))
+    .filter(([file]) => !MAP.contracts?.[file]
+      || !onlyReexportsIdentity(file, readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')))
+    .map(([file]) => file);
+  assert.deepEqual(stray, [], 'move these into identity/ and leave a shim');
+});
+
+test('a re-exporting contract holds only named re-exports from identity/', () => {
+  assert.equal(onlyReexportsIdentity('entry.mjs', "// a comment\nexport { a, b } from './identity/x.mjs';\n"), true);
+  assert.equal(onlyReexportsIdentity('entry.mjs', "export { a } from './identity/x.mjs';\nexport { b as c } from './identity/y.mjs';"), true);
+  for (const source of [
+    '',
+    "export { a } from './identity/x.mjs';\nexport function b() { return 1; }",
+    "export { a } from './identity/x.mjs';\nconst secret = 1;",
+    "export { readFileSync } from 'node:fs';",
+    "export { a } from 'some-package';",
+    "export { a } from './outside.mjs';",
+    "export { a } from '../identity/x.mjs';",
+    "export * from './identity/x.mjs';",
+    "export { a } from './identity/x.mjs';\nawait import('./identity/' + name);",
+    "import './identity/x.mjs';",
+    "export { a } from 'identity/x.mjs';",
+    "export { a } from '/identity/x.mjs';",
+    "// x\rawait import('node:child_process');",
+    "export { a } from './identity/x.mjs';\n// x\u2028const b = 1;",
+    "export { a } from './identity/x.mjs';\n// x\u2029const b = 1;",
+  ]) {
+    assert.equal(onlyReexportsIdentity('entry.mjs', source), false, source);
+  }
+});
+
 // A contract is a narrow, reviewed exception to may_import: its surface is
 // exactly the exports the map lists, so widening it is a map change too.
 test('each contract exports exactly the names the map lists', () => {
@@ -269,6 +323,13 @@ test('importSpecifiers finds static, re-export, side-effect and literal dynamic 
     "const url = 'https://example.com/x';",
   ].join('\n');
   assert.deepEqual(importSpecifiers(source), ['../b.mjs', './a.mjs', './c.mjs', './d.mjs', './e.mjs']);
+});
+
+test('a line comment ends at every JavaScript line terminator', () => {
+  for (const terminator of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    const source = `// note${terminator}await import('./hidden.mjs');`;
+    assert.deepEqual(importSpecifiers(source), ['./hidden.mjs'], JSON.stringify(terminator));
+  }
 });
 
 test('importSpecifiers ignores imports quoted in comments, strings and regexes', () => {

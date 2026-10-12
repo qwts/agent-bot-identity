@@ -38,6 +38,8 @@ export function decodeEscapes(raw) {
 // every literal string (and template without substitutions) replaced by a
 // placeholder `"\0<n>"` whose decoded value is strings[n], and regex bodies blanked,
 // so the import patterns below only ever match real code.
+const LINE_TERMINATORS = new Set(['\n', '\r', '\u2028', '\u2029']);
+
 export function maskSource(source) {
   const strings = [];
   let out = '';
@@ -77,7 +79,9 @@ export function maskSource(source) {
     const c = source[i];
     const next = source[i + 1];
     if (c === '/' && next === '/') {
-      while (i < source.length && source[i] !== '\n') i += 1;
+      // A line comment ends at any JavaScript line terminator: LF, CR,
+      // U+2028 or U+2029. The terminator itself is kept as code.
+      while (i < source.length && !LINE_TERMINATORS.has(source[i])) i += 1;
     } else if (c === '/' && next === '*') {
       const close = source.indexOf('*/', i + 2);
       i = close === -1 ? source.length : close + 2;

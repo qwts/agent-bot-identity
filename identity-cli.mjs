@@ -1,27 +1,3 @@
-// Identity's published entry for cli's readiness, doctor, bootstrap and
-// hook-sync code (#645, F13 step 3; the owner's revised Q-F13-3 answer).
-// cli imports identity only through this file and the other listed
-// contracts, in-process, so readiness keeps its injectable probes. The module map lists it as a contract importable by cli only, with
-// its exact exports: the readiness and doctor probes, the bootstrap actions
-// and the hook fallback; the owner gate, statements and presence for the
-// owner commands (F8, in-process so presence prompts keep the terminal); and
-// what `agent-bot identity`, `principal` and `identity app` run in-process.
-
-export { sinceTime } from './agent-audit.mjs';
-export { readBindToken, readBinding } from './agent-binding.mjs';
-export { principalCommand } from './agent-principals.mjs';
-export { inspectAppCredentials, reconcileAppCredentials } from './credential-reconciler.mjs';
-export { isSoulBound } from './git-credential-bot.mjs';
-export { cacheAppDoctorRows, legacyAppFolderStatus, readAppMetadata } from './identity-app-store.mjs';
-export { identityAppFailure, identityAppsCommand } from './identity-apps.mjs';
-export { probeInboxReachability } from './inbox-probe.mjs';
-export { inspectConfiguredCodexDesktopGh, inspectShellGhShim, installGhShim } from './install-gh-shim.mjs';
-export { keydStatus, keydVersionAction } from './keyd-client.mjs';
-export { soulMarkers } from './owner-gate.mjs';
-export { attestedOwnerKeys, keydAttestPins, keydStatementStore } from './owner-presence.mjs';
-export { extractToken, ownerCommand } from './owner-statement.mjs';
-export { pinnedSlug, readGitConfig, resolveAgentSlug, territoryHarness } from './resolve-agent.mjs';
-export { createSecretProviderRegistry, probeSecretStore } from './secret-store.mjs';
-export { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
-export { appKeyStores } from './soul-credentials.mjs';
-export { adapterFallback } from './uninstalled-identity-hook.mjs';
+// Moved to identity/identity-cli.mjs (#645, ADR-0645 step 6). This path keeps working
+// for callers that import it here; it re-exports the moved file.
+export { BUILTIN_SECRET_PROVIDERS, adapterFallback, appKeyStores, attestedOwnerKeys, cacheAppDoctorRows, createSecretProviderRegistry, extractToken, identityAppFailure, identityAppsCommand, inspectAppCredentials, inspectConfiguredCodexDesktopGh, inspectShellGhShim, installGhShim, isSoulBound, keydAttestPins, keydStatementStore, keydStatus, keydVersionAction, legacyAppFolderStatus, ownerCommand, pinnedSlug, principalCommand, probeInboxReachability, probeSecretStore, readAppMetadata, readBindToken, readBinding, readGitConfig, reconcileAppCredentials, resolveAgentSlug, sinceTime, soulMarkers, territoryHarness } from './identity/identity-cli.mjs';
