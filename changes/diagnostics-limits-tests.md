@@ -1,0 +1,1 @@
+- Diagnostics now have load tests for their limits: the store stays within two rotated files under sustained writes, an offline or unresponsive OTLP collector keeps the export queue bounded and counted without failing a single local record, and a hung collector is cut off by the request timeout (#983).
