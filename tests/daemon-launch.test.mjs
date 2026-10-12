@@ -1271,3 +1271,28 @@ test('a launch records stage and outcome diagnostics under one trace, never chan
 test('every launch refusal is a launch code', () => {
   assert.deepEqual([...LAUNCH_REFUSALS].filter((code) => !LAUNCH_CODES.has(code)), []);
 });
+
+test('the broker gets a redacted failure detail with its code and fix-it command; the journal keeps it whole (#983)', async (t) => {
+  const canary = 'ghs_CANARYcanary0123456789abcdefABCDEF';
+  const failure = Object.assign(new Error(`could not read /Users/someone/Souls/Helper.soul/soul.json with ${canary}; run \`agent-bot soul secret ${agentId} set anthropic-key\``),
+    { code: 'provider-secret-unreadable' });
+  const f = fixture(t, { joinSoul: async () => 'addr', providers: { pending: async () => ['claude:anthropic'], check: async () => { throw failure; } } });
+  await f.handler(event, f.ports);
+  const { detail, code } = f.reports[0];
+  assert.equal(code, 'provider-secret-unreadable');
+  assert.equal(detail, `provider-secret-unreadable: could not read [home-path] with [redacted]; run \`agent-bot soul secret ${agentId} set anthropic-key\``);
+  const journal = JSON.parse(readFileSync(f.options.file, 'utf8'))[0];
+  assert.equal(journal.detail, `provider-secret-unreadable: ${failure.message}`, 'the local journal keeps the full detail');
+
+  // Recovery re-reports the journal row through the same redaction.
+  writeFileSync(f.options.file, JSON.stringify([{ ...journal, reported: false }]));
+  const reports = [];
+  await createLaunchHandler(f.options).recover({ report: async (r) => { reports.push(r); } });
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].detail, detail);
+
+  // A long detail stays within the broker's budget.
+  const long = fixture(t, { joinSoul: async () => 'addr', providers: { pending: async () => ['claude:anthropic'], check: async () => { throw new Error('x'.repeat(2000)); } } });
+  await long.handler(event, long.ports);
+  assert.ok(long.reports[0].detail.length <= 512);
+});
