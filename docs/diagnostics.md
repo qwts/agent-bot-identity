@@ -20,8 +20,9 @@ as `harness-signed-out`), and `failed` a fault. Codes are listed in
 Events of one operation share a W3C trace ID, so a launch can be followed
 across processes. Trace and span IDs are untrusted correlation IDs: they only
 link events and never identify, authenticate or authorize anyone. A launch
-continues a principal's trace when its `event:launch` carries a valid
-`traceparent` (principal launches only, inbound only; the broker forwards it
+continues a principal's trace when its `event:launch` carries an exact
+version-00 `traceparent` (55 characters, lowercase hex, nonzero IDs, the same
+grammar the broker forwards) (principal launches only, inbound only; the broker forwards it
 unchanged once agent-comms supports it), and starts its own otherwise. They
 are never put in a prompt or a security receipt.
 
