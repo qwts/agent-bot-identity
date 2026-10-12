@@ -709,6 +709,22 @@ route. None is built here.
   digests are the completion caller's assertion. Nothing derives them yet
   from validated actual state, independent of the linked head, so they are
   not proof.
+- **One state tree.** The effect-entry gate derives every location from the
+  daemon's environment, but the resolvers don't all honour the same
+  overrides:
+  - `stateDirectory()`, which holds identities and revisions, honours
+    `AGENT_BOT_STATE_HOME` and `QWTS_AGENT_STATE_HOME`;
+  - `populationFile()` honours `AGENT_BOT_POPULATION_PATH`;
+  - the comms credential honours `AGENT_BOT_COMMS_DAEMON_PATH`;
+  - the trust store and the journal honour only `XDG_STATE_HOME` and `HOME`.
+
+  Wiring must pin these at daemon start, or make the overrides consistent,
+  so that identities, revisions and the census can't sit in a different
+  tree from trust and the journal.
+- **Custody of the comms pairing credential.** The gate takes the daemon's
+  account from the comms pairing credential, which `loadCommsCredential`
+  reads on POSIX with a plain file read. Before wiring, that read needs
+  custody: no-follow, owned by this uid, mode 0600.
 - **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.
