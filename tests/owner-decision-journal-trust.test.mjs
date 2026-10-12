@@ -97,7 +97,7 @@ test('one active enrollment: enroll, revoke exactly it, enroll again; never two,
   assert.throws(() => read(root, { namespaceDigest: 'b'.repeat(64) }), refused('owner-trust-corrupt', 'storage-failed'));
   assert.throws(() => w.enrollKeys(keys()), refused('owner-trust-conflict'));
   const same = rawKey();
-  assert.throws(() => w.enrollKeys({ receiptKey: same, presenceKey: same, brokerUid, daemonKey }), refused('owner-trust-invalid-input'));
+  assert.throws(() => w.enrollKeys({ receiptKey: same, presenceKey: same, brokerUid, daemonKey }), refused('owner-trust-role', 'owner-decision-unsupported'));
 
   const v1 = sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json')));
   assert.throws(() => w.revokeKeys({ revokes: 'f'.repeat(64), reason: 'rotated' }), refused('owner-trust-conflict'));
@@ -381,8 +381,8 @@ test('the broker service uid is never root or the owner, and no pin may be this 
   const ownKey = vouch.publicKey.export({ format: 'jwk' }).x;
   assert.equal(ed25519KeyPin(ownKey).keyId, daemonKey);
   for (const extra of [{}, { daemonKey }]) {
-    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, receiptKey: ownKey }), invalidInput);
-    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, presenceKey: ownKey }), invalidInput);
+    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, receiptKey: ownKey }), refused('owner-trust-role', 'owner-decision-unsupported'));
+    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, presenceKey: ownKey }), refused('owner-trust-role', 'owner-decision-unsupported'));
   }
   assert.equal(fs.existsSync(path.join(root, 'keys')), false);
 

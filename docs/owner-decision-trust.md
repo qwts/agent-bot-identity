@@ -214,16 +214,19 @@ with `owner-trust-api-version` (`bad-request`) and write nothing, so an old
 caller can't skip the expectation.
 
 **Order, inside one hold of the trust lock:**
-1. Capture the vouch key file's identity (device, inode, size and the SHA-256
-   of its bytes, compared in memory only) and derive `daemonKey`.
+1. Capture the vouch key file's identity: device, inode, size and the
+   SHA-256 of its bytes, compared in memory only. `daemonKey` is derived from
+   those same bytes, so the pin and the identity can never come from
+   different reads.
 2. Read the full graph and derive the current observation. Every record must
    be confirmed.
 3. Compare its digest with the expectation. A missing or malformed digest is
    `bad-request`; a mismatch is `conflict` (`owner-trust-stale-observation`).
 4. Check the transition, pins and capacity.
-   - Enroll needs `none` or `revoked`, at most version 1023, and pins that
-     are distinct from each other, from `daemonKey` and from keyd's legacy
-     presence key.
+   - Enroll needs `none` or `revoked` and at most version 1023. Its pins
+     must not alias each other or `daemonKey` (`owner-trust-role`), and the
+     presence pin must not be keyd's legacy presence key
+     (`owner-trust-invalid-input`).
    - Revoke needs `active`, and the named enrollment must be the active one.
 5. Re-check the vouch identity immediately before anything is created. A
    change refuses with `owner-trust-vouch-changed` and writes nothing.

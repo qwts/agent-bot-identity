@@ -17,9 +17,9 @@ import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { createHash, createPublicKey, randomUUID } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
-import { vouchDaemonKey, vouchDaemonKeyPin, vouchKeyIdentity } from './vouch.mjs';
+import { vouchDaemonKey, vouchDaemonKeyPin, vouchKeyPath, vouchStateDir } from './vouch.mjs';
 import { presencePinPath } from './owner-presence.mjs';
 
 export const TRUST_LIMITS = Object.freeze({ versions: 1024, record: 1024, confirmation: 512, auditLine: 512 });
@@ -547,6 +547,33 @@ export function observationForGraph(graph, daemonKey) {
     chainVersion, headRecordDigest: head.digest, state, active, daemonKey };
 }
 
+// The vouch key file's identity, for detecting a change while a trust writer
+// holds its lock: device, inode, size and the SHA-256 of its bytes (compared
+// in memory only, never output), with the daemon KeyPin derived from those
+// same bytes, so the pin and the identity can never come from different
+// reads. The same no-follow, owned, regular-file custody as vouch.mjs; null
+// when there is no key. Module-internal.
+function vouchKeyIdentity({ env, home }) {
+  const file = vouchKeyPath(vouchStateDir({ env, home }));
+  let fd;
+  try {
+    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid()) throw new Error('untrusted');
+    const bytes = fs.readFileSync(fd);
+    const privateKey = createPrivateKey(bytes.toString('utf8'));
+    if (privateKey.asymmetricKeyType !== 'ed25519') throw new Error('not ed25519');
+    const der = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+    return { dev: stat.dev, ino: stat.ino, size: stat.size, digest: sha256(bytes),
+      daemonKey: { alg: 'ed25519', publicKey: der.subarray(12).toString('base64url'), keyId: sha256(der) } };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw new Error('vouch key file is not a valid Ed25519 key owned by this account');
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 function ownDaemonKeyPin({ env, home }) {
   let pin;
   try { pin = vouchDaemonKeyPin({ env, home }); } catch { fail('owner-trust-no-vouch-key'); }
@@ -682,9 +709,8 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
   // Returns the new observation.
   function writeV1(expectedObservationDigest, build) {
     return locked(() => {
-      const identity = vouchIdentity();
-      const daemonKey = ownDaemonKeyPin({ env, home });
-      sameVouch(identity);
+      // The pin comes from the same read as the identity it is checked by.
+      const identity = vouchIdentity(), { daemonKey } = identity;
       const graph = settledGraph();
       const observation = observationForGraph(graph, daemonKey);
       if (sha256(Buffer.from(canonicalJson(observation))) !== expectedObservationDigest) fail('owner-trust-stale-observation');
@@ -779,12 +805,14 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     enrollKeysV1({ receiptKey, presenceKey, brokerUid, expectedObservationDigest, at = now(), auditId = randomUUID() } = {}) {
       if (!matches(DIGEST, expectedObservationDigest)) fail('owner-trust-invalid-input');
       const receipt = ed25519KeyPin(receiptKey), presence = ed25519KeyPin(presenceKey);
-      if (receipt.keyId === presence.keyId || !validBrokerUid(brokerUid) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
+      if (!validBrokerUid(brokerUid) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
+      // A role alias among the receipt, presence and daemon keys (spec §5).
+      if (receipt.keyId === presence.keyId) fail('owner-trust-role');
       return writeV1(expectedObservationDigest, (graph, observation, { version, previousDigest, namespaceDigest }) => {
         if (observation.state !== 'none' && observation.state !== 'revoked') fail('owner-trust-conflict');
         if (version >= Math.min(capacity, TRUST_LIMITS.versions)) fail('owner-trust-bounds');
-        if (receipt.keyId === observation.daemonKey.keyId || presence.keyId === observation.daemonKey.keyId
-          || isLegacyPresence(presence, legacyPresenceRaw(legacyPresenceKey, { env, home }))) fail('owner-trust-invalid-input');
+        if (receipt.keyId === observation.daemonKey.keyId || presence.keyId === observation.daemonKey.keyId) fail('owner-trust-role');
+        if (isLegacyPresence(presence, legacyPresenceRaw(legacyPresenceKey, { env, home }))) fail('owner-trust-invalid-input');
         return { v: 1, kind: 'owner-decision-key-enrollment', namespaceDigest, version, previousDigest, receiptKey: receipt, presenceKey: presence,
           service: { platform: 'darwin', brokerUid }, at, auditId };
       });

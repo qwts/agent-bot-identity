@@ -112,10 +112,12 @@ test('only legal transitions, pins and capacity, all before any write', darwin, 
   zeroWrites(d, () => d.writer().revokeKeysV1({ revokes: 'f'.repeat(64), reason: 'rotated', expectedObservationDigest: d.digest() }), conflict);
   d.writer().revokeKeysV1({ revokes: enrollmentDigest(d), reason: 'rotated', expectedObservationDigest: d.digest() });
   // Pins: distinct, never the vouch key, never keyd's legacy presence key.
+  // A role alias among the receipt, presence and daemon keys is owner-trust-role (spec §5).
   const same = rawKey(), own = vouchDaemonKeyPin({ env: d.env, home: d.home }).publicKey, legacy = rawKey();
-  zeroWrites(d, () => d.writer().enrollKeysV1({ receiptKey: same, presenceKey: same, brokerUid, expectedObservationDigest: d.digest() }), invalid);
-  zeroWrites(d, () => d.writer().enrollKeysV1({ ...pair(), receiptKey: own, expectedObservationDigest: d.digest() }), invalid);
-  zeroWrites(d, () => d.writer().enrollKeysV1({ ...pair(), presenceKey: own, expectedObservationDigest: d.digest() }), invalid);
+  const role = refused('owner-trust-role', 'owner-decision-unsupported');
+  zeroWrites(d, () => d.writer().enrollKeysV1({ receiptKey: same, presenceKey: same, brokerUid, expectedObservationDigest: d.digest() }), role);
+  zeroWrites(d, () => d.writer().enrollKeysV1({ ...pair(), receiptKey: own, expectedObservationDigest: d.digest() }), role);
+  zeroWrites(d, () => d.writer().enrollKeysV1({ ...pair(), presenceKey: own, expectedObservationDigest: d.digest() }), role);
   zeroWrites(d, () => d.writer({ legacyPresenceKey: legacy }).enrollKeysV1({ ...pair(), presenceKey: legacy, expectedObservationDigest: d.digest() }), invalid);
   for (const input of [{ brokerUid: 0 }, { brokerUid: process.getuid() }, { at: -1 }, { auditId: 'x' }, { receiptKey: 'x' }]) {
     zeroWrites(d, () => d.writer().enrollKeysV1({ ...pair(), ...input, expectedObservationDigest: d.digest() }), invalid);
@@ -150,6 +152,18 @@ test('class 1: a vouch key swapped at the pre-creation check writes nothing', da
     const d = daemon(tt);
     const copy = () => { const bytes = fs.readFileSync(d.vouchFile); fs.rmSync(d.vouchFile); fs.writeFileSync(d.vouchFile, bytes, { mode: 0o600 }); };
     zeroWrites(d, () => d.writer({ fault: (at) => { if (at === 'key-1:pre-creation-check') copy(); } })
+      .enrollKeysV1({ ...pair(), expectedObservationDigest: d.digest() }), refused('owner-trust-vouch-changed'));
+  });
+  await t.test('a different key written in place: same inode and size', (tt) => {
+    const d = daemon(tt), before = fs.statSync(d.vouchFile);
+    let other;
+    do { other = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }); } while (Buffer.byteLength(other) !== before.size);
+    const overwrite = () => {
+      fs.writeFileSync(d.vouchFile, other, { flag: 'r+' });
+      const after = fs.statSync(d.vouchFile);
+      assert.equal(after.ino, before.ino); assert.equal(after.size, before.size);
+    };
+    zeroWrites(d, () => d.writer({ fault: (at) => { if (at === 'key-1:pre-creation-check') overwrite(); } })
       .enrollKeysV1({ ...pair(), expectedObservationDigest: d.digest() }), refused('owner-trust-vouch-changed'));
   });
   await t.test('a vouch key already gone', (tt) => {

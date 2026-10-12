@@ -208,27 +208,6 @@ export function vouchDaemonKeyPin({ env = process.env, home = homedir() } = {}) 
   return { alg: 'ed25519', publicKey: der.subarray(12).toString('base64url'), keyId: createHash('sha256').update(der).digest('hex') };
 }
 
-// The vouch key file's identity, for detecting a change while a trust
-// writer holds its lock: device, inode, size and the SHA-256 of its bytes
-// (compared in memory only, never output). Same no-follow, owned, regular
-// file custody as the reader; null when there is no key.
-export function vouchKeyIdentity({ env = process.env, home = homedir() } = {}) {
-  const file = vouchKeyPath(vouchStateDir({ env, home }));
-  let fd;
-  try {
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.uid !== process.getuid()) throw new Error('untrusted');
-    const bytes = readFileSync(fd);
-    return { dev: stat.dev, ino: stat.ino, size: stat.size, digest: createHash('sha256').update(bytes).digest('hex') };
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new Error('vouch key file is not a regular file owned by this account');
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
 function unixSeconds(now) {
   const instant = typeof now === 'function' ? now() : now;
   if (!(instant instanceof Date) || !Number.isFinite(instant.getTime())) {
