@@ -429,3 +429,38 @@ A receipt verifies only if all of these hold:
 
 The p1 signature and action-text verification belongs to the native presence
 verifier, a separate slice that needs shared action vectors.
+
+## Action decoding and native p1 verification (disabled)
+
+`identity/owner-decision-action.mjs` is the daemon's own implementation of the
+owner-decision action grammar: agent-comms `docs/owner-decisions.md` and
+`docs/owner-decision-wire.md` at `9edd21b`. It imports no agent-comms code.
+
+- **Decoding.** `decodeOwnerDecisionAction(bytes)` takes the exact action
+  bytes. It enforces the strict canonical encoding:
+  - at most 32 KiB, with nesting at most 8 deep;
+  - sorted ASCII keys and no whitespace;
+  - safe integers only, with no `-0`;
+  - strings of Unicode scalar values only (no unpaired surrogates);
+  - every alternate spelling refuses.
+
+  It then validates the typed operation, rebuilds the exact one-line text the
+  owner's native presence signs, and returns `payloadDigest` and
+  `actionDigest`. The text refuses, and is never truncated, past 400 Unicode
+  scalars, past 500 UTF-8 bytes, or with any control character.
+- **Verifying.** `verifyOwnerDecisionPresence(p1, { actionBytes, nonce, trust,
+  nowMilliseconds })` verifies the p1 against the active presence pin from
+  `readOwnerDecisionTrust`. That pin is the future native signer, which trust
+  readiness already refuses to be keyd's legacy seed. Its key ID is recomputed
+  from its key. The check uses agent-bot's existing keyd p1 semantics,
+  unchanged: audience `agent-bot-owner`, kind `presence`, at most a 120-second
+  lifetime, 30-second skew. The p1 must sign this action's text and the
+  challenge nonce, which must be exactly 32 bytes in canonical base64url.
+- **Replay protection keys on the nonce.** Any future replay protection must
+  key on the nonce, never on `presenceDigest`. Flipping the unused trailing
+  bits of the signature's base64url gives a different token, and so a
+  different `presenceDigest`, that still verifies.
+
+The tests reproduce every category in the shared `v1.json` vectors: positive,
+display boundaries, serialization, negative encodings, primitives and native
+clock cases.

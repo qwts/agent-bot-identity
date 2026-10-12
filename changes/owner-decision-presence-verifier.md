@@ -1,0 +1,1 @@
+- Add disabled daemon-side owner-decision action decoding and native p1 presence verification against the pinned presence key, checked against every shared agent-comms action vector (agent-comms#77).
