@@ -821,3 +821,41 @@ effect-entry gate both take no trust root, env or home. Each reads the
 daemon's own store, resolved from its launch environment and home, so they
 read the same store as the trust observation. A second, custody-valid store
 under the same namespace can't be selected through either.
+
+## Local lifecycle outcome, slot 14 (draft, disabled)
+
+`identity/owner-decision-local-outcome.mjs` drafts the producer-owned
+validation of daemon slot 14, `local-lifecycle-outcome`. It's pure: no
+writer, route or reader integration yet.
+
+**Shape.** The record is agent-comms' exact outcome object (d071a9b, "Exact
+administrative records"): `{v:1, kind:"outcome", requestId, payloadDigest,
+state, receiptDigest, outcome:{code, effectDigest}, source,
+reportingDaemonKey, reportingDaemonEpoch, at}`. It's strict canonical JSON, at
+most 4096 bytes. This isn't the broker's lifecycle validator. In this daemon
+slot:
+- `source` is always `daemon`, with a reporting key and epoch;
+- the reporting key must be this daemon's key from the acceptance, and the
+  epoch never goes back;
+- `requestId` and `payloadDigest` are the acceptance's;
+- `receiptDigest` is the saved receipt's, or null exactly before one exists.
+
+**Context.** The finding comes from the request's validated journal graph,
+using the effect-outcomes-v1 mapping, never from the record:
+
+| Phase | Allowed (`state`, `code`, `effectDigest`) |
+| --- | --- |
+| admitted, preparing, prepared | refused with validation-refused, authority-refused or deadline-expired (null); cancelled (null); expired, deadline-expired (null) |
+| authorizing | the same refusals and expiry, but no cancellation |
+| released | none: a refusal or expiry must first be the durable pre-effect refused record |
+| refused | refused, with the mapped code of the refused record's reason and that record's digest |
+| indeterminate | indeterminate, effect-uncertain (null) |
+| applied | applied, with the completed record's digest |
+
+Storage-refused exists only with its durable refusal digest.
+
+**Vectors.** The draft semantic vectors are
+`tests/fixtures/owner-decisions/local-lifecycle-outcome-v1-draft.json`: 13
+positive and 24 negative. Each carries its context, the exact record bytes,
+their SHA-256 and the SHA-256 of the slot-14 frame for a fixed namespace and
+request.
