@@ -623,3 +623,50 @@ transition doesn't poison the store instance; a storage failure does.
 - A refusal body without its trailer refuses as found, and the request can no
   longer enter.
 - A committed refusal is `refused`, with its mapped outcome.
+
+## Check intake writers (disabled)
+
+Two more journal store writers carry a prepared request to `released`. Like
+the effect writers, they are reachable only through the store `identity-host.mjs`
+exports, with no route. Each one:
+- scans `requests/` first inside the journal lock;
+- reads and validates the whole graph;
+- flushes what it read;
+- refuses a busy lock without waiting.
+
+No persisted format changes.
+
+- **`recordDecision(requestId, {presenceToken, receiptToken, trust, nowMilliseconds})`**
+  publishes slot 4 `presence`, then slot 5 `receipt`.
+  - It is legal only from `prepared`.
+  - It verifies the p1 with `verifyOwnerDecisionPresence`, against the saved
+    action, the preparation's own nonce and the presence pin in `trust`.
+  - It verifies the d1 with `verifyOwnerDecisionReceipt`, against the receipt
+    pin, this daemon's key from the acceptance, the exact saved challenge and
+    that p1.
+  - A verification failure refuses (`owner-journal-intake-refused`) with the
+    verifier's reason as `refusal`, and writes nothing. The request is
+    otherwise `authorizing`.
+  - It refuses (`conflict`) if presence or receipt already holds anything, or
+    the request is released, refused, entered or applied.
+  - It refuses (`storage-failed`) for an admitted or preparing request.
+- **`recordSuccessfulCheck(requestId, {check, nowMilliseconds})`** publishes
+  slot 6, the one successful check, canonically.
+  - It is legal only from `authorizing` with both presence and receipt.
+  - The check must decode as a released `mayApply:true` check naming exactly
+    the acceptance binding and the saved receipt's digest. Otherwise it
+    refuses as `bad-request`.
+  - It must be unexpired now (`now < exp`, in seconds). Otherwise it refuses
+    with `refusal:"check-expired"`.
+  - The request is then `released`. A saved check is a conflict, never
+    replaced or replayed.
+
+Malformed input refuses before the lock. A refused intake doesn't poison the
+instance; a storage failure (an unknown `requests/` entry included) does.
+
+**After a crash between writes:**
+- With presence committed but no receipt, the request is `authorizing` with
+  no successful check possible. Intake again is a conflict, and a final
+  pre-effect refusal ends it.
+- A receipt or check body without its trailer refuses as found.
+- A committed check is `released`.
