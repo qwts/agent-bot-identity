@@ -20,7 +20,7 @@ const settingsSection = doc.slice(doc.indexOf('\n## Settings (#379)'), doc.index
 const LABELS = { 'Claude Code': 'claude', Codex: 'codex', Gemini: 'gemini', OpenCode: 'opencode', Cursor: 'cursor',
   Copilot: 'copilot', Devin: 'devin', Kiro: 'kiro', 'Qwen Code': 'qwen', Muse: 'muse' };
 const COLUMNS = { Model: 'model', 'Reasoning effort': 'reasoningEffort', 'Permission mode: safe / autopilot': 'permissionMode',
-  Env: 'env', 'Allow / deny rules': 'permissions', Provider: 'provider' };
+  Env: 'env', 'Allow / deny rules': 'permissions', Provider: 'provider', Sandbox: 'sandbox' };
 
 // `[{ harnesses, file, cells: { key: text } }]` from the first table in the section.
 function matrix() {
@@ -60,7 +60,7 @@ test('a matrix cell says Unsupported exactly where the build report lists the se
   // Every shared setting declared, with a rule OpenCode can spell so its
   // `permissions` renders; the provider is per harness and checked below.
   const soul = manifest({ harness: { model: 'm', reasoningEffort: 'medium', permissionMode: 'safe',
-    env: { LOG_LEVEL: 'debug' }, permissions: { allow: ['Bash(git status)'], deny: ['Edit'] } } });
+    env: { LOG_LEVEL: 'debug' }, permissions: { allow: ['Bash(git status)'], deny: ['Edit'] }, sandbox: { networkAccess: false } } });
   const report = harnessReport(new Map(buildHarnessFiles(entries(soul))), { manifest: soul });
   for (const row of matrix()) {
     for (const harness of row.harnesses) {

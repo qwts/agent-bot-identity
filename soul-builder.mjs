@@ -96,7 +96,7 @@ export function harnessSkillsDirectory(harness) {
 // settings `env`, OpenCode's `provider` block. The secret is launch-time only.
 export const SETTINGS_TARGETS = Object.freeze([
   Object.freeze({ harness: 'claude', path: '.claude/settings.json', keys: Object.freeze(['env', 'model', 'permissionMode', 'permissions', 'provider', 'reasoningEffort']) }),
-  Object.freeze({ harness: 'codex', path: '.codex/config.toml', keys: Object.freeze(['env', 'model', 'permissionMode', 'provider', 'reasoningEffort']) }),
+  Object.freeze({ harness: 'codex', path: '.codex/config.toml', keys: Object.freeze(['env', 'model', 'permissionMode', 'provider', 'reasoningEffort', 'sandbox']) }),
   Object.freeze({ harness: 'gemini', path: '.gemini/settings.json', keys: Object.freeze(['model']) }),
   Object.freeze({ harness: 'opencode', path: 'opencode.json', keys: Object.freeze(['model', 'permissionMode', 'permissions', 'provider']) }),
 ]);
@@ -147,6 +147,28 @@ export function envProblem(name, value) {
   if (typeof value !== 'string') return 'must be a string';
   if (value.includes('\0')) return 'must not contain NUL';
   if (credentialLike(value)) return 'looks like a credential; a soul never carries credentials (reference them by name and resolve them at launch)';
+  return null;
+}
+
+// `sandbox` (#379, owner decision 2026-10-11): Codex's workspace-write
+// sandbox controls, `[sandbox_workspace_write]` in `.codex/config.toml`,
+// checked against openai/codex rust-v0.157.0 (`SandboxWorkspaceWrite`, which
+// denies unknown fields). Codex applies them only in `workspace-write` mode.
+export const SANDBOX_KEYS = Object.freeze({ networkAccess: 'network_access', writableRoots: 'writable_roots',
+  excludeTmpdirEnvVar: 'exclude_tmpdir_env_var', excludeSlashTmp: 'exclude_slash_tmp' });
+const absolutePath = (value) => typeof value === 'string' && !/[\x00-\x1f\x7f]/.test(value)
+  && (/^\/./.test(value) || /^[A-Za-z]:[\\/]./.test(value));
+
+// Why a `sandbox` declaration cannot be accepted, as `[key, problem]`, or null.
+export function sandboxProblem(sandbox) {
+  if (!plainObject(sandbox)) return [null, 'must be an object of Codex workspace-write sandbox settings'];
+  for (const [key, value] of Object.entries(sandbox)) {
+    if (!Object.hasOwn(SANDBOX_KEYS, key)) return [key, `is an unknown sandbox setting (use ${Object.keys(SANDBOX_KEYS).join(', ')})`];
+    if (key === 'writableRoots') {
+      if (!Array.isArray(value) || value.some((root) => !absolutePath(root))) return [key, 'must be an array of absolute paths'];
+      if (new Set(value).size !== value.length) return [key, 'must not repeat a path'];
+    } else if (typeof value !== 'boolean') return [key, 'must be true or false'];
+  }
   return null;
 }
 
@@ -249,6 +271,14 @@ function renderCodexSettings(path, bytes, settings) {
   // to the commands it runs. That table is rebuilt at the end of the file:
   // undeclared authored variables are kept verbatim, declared ones replaced.
   const env = settings.env === undefined ? null : declaredEnv(settings);
+  // The sandbox goes to `[sandbox_workspace_write]`, rebuilt at the end of
+  // the file the same way: declared keys replaced, other authored keys kept.
+  const problem = settings.sandbox === undefined ? null : sandboxProblem(settings.sandbox);
+  if (problem) throw new Error(`harness sandbox${problem[0] === null ? '' : `.${problem[0]}`} ${problem[1]}`);
+  const sandbox = settings.sandbox === undefined ? null
+    : Object.fromEntries(Object.entries(settings.sandbox).map(([key, value]) => [SANDBOX_KEYS[key], value]));
+  const SANDBOX = 'sandbox_workspace_write';
+  const sandboxKept = [];
   // The provider (#583 slice 4): `model_provider` at the root and its own
   // `[model_providers.<id>]` table, rebuilt whole; the secret is never here.
   const provider = declaredProvider('codex', settings);
@@ -275,6 +305,14 @@ function renderCodexSettings(path, bytes, settings) {
         return false;
       }
     }
+    if (sandbox) {
+      const conflict = (table === null && key === SANDBOX) || table?.startsWith(`${SANDBOX}.`);
+      if (conflict) throw new Error(`${path}: ${SANDBOX} must be a [${SANDBOX}] table to merge the soul's sandbox`);
+      if (table === SANDBOX) {
+        if (!header && statement.trim() && !(key && Object.hasOwn(sandbox, key))) sandboxKept.push(statement.replace(/\n?$/, '\n'));
+        return false;
+      }
+    }
     if (PROVIDER) {
       const conflict = (table === null && key === PROVIDERS_TABLE) || (table === PROVIDERS_TABLE && key === provider.id);
       if (conflict) throw new Error(`${path}: ${PROVIDER} must be a [${PROVIDER}] table to merge the soul's provider`);
@@ -290,7 +328,9 @@ function renderCodexSettings(path, bytes, settings) {
   const head = `# ${MARKER}\n${lines.length ? `${lines.join('\n')}\n` : ''}`;
   let out = `${head}${kept ? `${lines.length ? '\n' : ''}${kept}\n` : ''}`;
   let filled = lines.length > 0 || Boolean(kept);
-  for (const section of [providerTable, envTable]) {
+  const sandboxTable = sandbox && (Object.keys(sandbox).length || sandboxKept.length)
+    ? `\n[${SANDBOX}]\n${Object.keys(sandbox).sort(compare).map((key) => `${key} = ${quotedString(sandbox[key])}\n`).join('')}${sandboxKept.join('')}` : '';
+  for (const section of [providerTable, sandboxTable, envTable]) {
     if (!section) continue;
     out += filled ? section : section.slice(1);
     filled = true;
