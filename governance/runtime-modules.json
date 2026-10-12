@@ -130,6 +130,7 @@
     "daemon-status.mjs": "comms",
     "daemon-supervisor.mjs": "host",
     "delegation-grants.mjs": "host",
+    "diagnostic-redact.mjs": "shared",
     "detect-harness.mjs": "harness",
     "doctor.mjs": "cli",
     "ensure-private-key.mjs": "identity",

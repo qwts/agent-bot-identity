@@ -140,7 +140,15 @@ test('one unreadable source is reported and the rest still collect', () => {
   writeFileSync(join(f.projects, '-work-b', `${OTHER}.jsonl`), `${call('msg_1')}\n`, { mode: 0o000 });
   const result = collectMetrics({ home: f.home, env: f.env });
   assert.ok(result.souls[good.id]);
-  if (process.getuid?.() !== 0) assert.equal(result.errors[0]?.agentId, bad.id);
+  if (process.getuid?.() !== 0) {
+    assert.equal(result.errors[0]?.agentId, bad.id);
+    assert.equal(result.errors[0]?.code, 'EACCES');
+    // The fs error names the log's path; nothing under the home is kept (#983).
+    assert.match(result.errors[0]?.message, /\[home-path\]/);
+    const stored = readFileSync(join(metricsDirectory({ home: f.home, env: f.env }), 'latest.json'), 'utf8');
+    for (const leak of [f.home, '-work-b', '.jsonl']) assert.equal(stored.includes(leak), false, leak);
+    assert.equal(JSON.stringify(result.errors).includes(f.home), false);
+  }
 });
 
 test('the CLI collects and shows, and refuses unknown arguments', () => {

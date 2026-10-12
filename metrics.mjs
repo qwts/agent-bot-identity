@@ -21,7 +21,8 @@
 //
 // Only allowlisted fields are kept: the reported model and the per-call token
 // counts, with the call's timestamp. No message content, tool input, path, or
-// raw line is stored. Messaging never depends on any of this: nothing here
+// raw line is stored, and a collector error's message is redacted
+// (diagnostic-redact.mjs). Messaging never depends on any of this: nothing here
 // joins, registers, or authorizes anything, and collector errors are reported
 // beside the observations instead of failing the caller.
 
@@ -36,6 +37,7 @@ import { execFileSync } from 'node:child_process';
 import { readAgentIdentity, readBinding } from './identity-host.mjs';
 import { validateAgentId } from './identity-format.mjs';
 import { stateDirectory } from './state-paths.mjs';
+import { redactError } from './diagnostic-redact.mjs';
 
 export const SOURCE_CLAUDE = 'claude-session-log';
 const DEFAULT_MAX_BYTES = 8 << 20;
@@ -317,7 +319,9 @@ export function collectMetrics({ env = process.env, home = homedir(), now = () =
         calls: tally.calls + calls.length, behindBytes: tally.behindBytes + behind, skippedBytes: tally.skippedBytes + skippedBytes,
       };
     } catch (error) {
-      result.errors.push({ agentId, source: SOURCE_CLAUDE, code: error?.code ?? 'collect-failed', message: String(error?.message ?? error) });
+      // The message is kept for diagnosis, redacted: an fs error names the
+      // session log's path, which is under the home directory.
+      result.errors.push({ agentId, source: SOURCE_CLAUDE, ...redactError(error, { fallbackCode: 'collect-failed', env, home }) });
     }
   }
   for (const agentId of new Set(sessions.map((entry) => entry.agentId))) {
@@ -353,7 +357,7 @@ export function main(argv = process.argv.slice(2), { env = process.env, home = h
     try {
       recordSession({ provider: env.AGENT_HOOK_HARNESS, sessionId: env.AGENT_HOOK_SESSION_ID, cwd: env.AGENT_HOOK_CWD ?? process.cwd(), env, home });
     } catch (error) {
-      writeErr(`agent-bot metrics: could not record the session: ${error instanceof Error ? error.message : String(error)}\n`);
+      writeErr(`agent-bot metrics: could not record the session: ${redactError(error, { env, home }).message}\n`);
     }
     return 0;
   }
@@ -378,7 +382,7 @@ export function main(argv = process.argv.slice(2), { env = process.env, home = h
     }
     return 0;
   } catch (error) {
-    writeErr(`agent-bot metrics: ${error instanceof Error ? error.message : String(error)}\n`);
+    writeErr(`agent-bot metrics: ${redactError(error, { env, home }).message}\n`);
     return 1;
   }
 }
