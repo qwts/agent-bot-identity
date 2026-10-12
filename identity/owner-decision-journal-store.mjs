@@ -12,6 +12,10 @@ import {
   DAEMON_JOURNAL_SLOTS, FRAME_OVERHEAD, SCRATCH_BYTES, decodeCanonicalPayload, decodeDaemonJournalFrame,
   encodeDaemonJournalFrame, peekAcceptanceContextFrame, requestDirectoryName,
 } from './owner-decision-journal-frame.mjs';
+import {
+  bindEffect, bindPreparation, challengeFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
+} from './owner-decision-evidence.mjs';
+import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
 
 export const DAEMON_JOURNAL_LIMIT = 4096;
 export const DAEMON_RESERVATION_BYTES = 524288;
@@ -217,16 +221,17 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   const zeros = (bytes) => bytes.every((byte) => byte === 0);
 
   // Reads one request directory as a complete graph, without creating,
-  // repairing or clearing anything. Two outcomes are accepted:
-  // - the exact committed admission prefix with every later slot and scratch
-  //   still zero (`admitted`);
-  // - that prefix plus a nonzero `entered` slot that is not a cleanly partial
-  //   write (`indeterminate`). Durable entered is consumption: an effect may
-  //   have started, and without validated whole-effect completion it stays
-  //   effect-uncertain, never refused and never retried. The later slots of
-  //   such a graph are retained unvalidated; their typed validators are a
-  //   later slice, so this never reports applied.
-  // Anything else refuses.
+  // repairing or clearing anything. Before any effect entered, every slot must
+  // be empty or a committed, typed record bound to this request, in a legal
+  // prefix: admitted, preparing (preparation without its challenge), prepared,
+  // authorizing (presence/receipt), released (the one successful check) or
+  // refused (a proven pre-effect refusal). Anything else refuses.
+  //
+  // Once `entered` holds anything but a clean partial write, an effect may
+  // have started: the request is `applied` only when the whole graph
+  // validates through a completed record (and, for a revision, its linked
+  // authoritative event); every other case, including damage, is
+  // `indeterminate`, never refused and never retried.
   function readGraph(name, expectedRequestId) {
     const dir = path.join(requests, name);
     ownedDirectory(io, dir);
@@ -258,6 +263,9 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     let saved;
     try { saved = validateDaemonAdmission(decode('original-action').payload, decode('acceptance-context').payload, namespaceDigest); }
     catch { fail(); }
+    const flush = [...ADMISSION_SLOTS, ...DAEMON_JOURNAL_SLOTS.map(({ slot }) => slot)
+      .filter((slot) => !ADMISSION_SLOTS.includes(slot) && !zeros(bytes.get(`${slot}.record`)))];
+    const graph = { dir, name, binding, saved, bytes, flush };
     // A body without its trailer is a partial entered write: the effect starts
     // only after entered is durable, so that alone is not uncertainty. Any
     // other nonzero entered bytes, committed or damaged, may be consumption.
@@ -267,13 +275,83 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       try { uncertain = decode('entered').kind !== 'uncommitted'; } catch { uncertain = true; }
     }
     if (uncertain) {
-      const flush = [...ADMISSION_SLOTS, ...DAEMON_JOURNAL_SLOTS.map(({ slot }) => slot)
-        .filter((slot) => !ADMISSION_SLOTS.includes(slot) && !zeros(bytes.get(`${slot}.record`)))];
-      return { dir, name, binding, saved, bytes, flush, uncertain };
+      try { return { ...graph, ...effectGraph(decode, saved) }; }
+      catch { return { ...graph, state: 'indeterminate', outcome: { code: 'effect-uncertain', effectDigest: null } }; }
     }
-    for (const { slot } of DAEMON_JOURNAL_SLOTS) if (!ADMISSION_SLOTS.includes(slot) && decode(slot).kind !== 'empty') fail('owner-journal-unsupported-phase');
     if (!zeros(bytes.get('scratch.record'))) fail('owner-journal-scratch-pending');
-    return { dir, name, binding, saved, bytes, flush: ADMISSION_SLOTS, uncertain };
+    return { ...graph, ...preEffectGraph(decode, saved) };
+  }
+
+  // The typed records of one request, read in dependency order. `committed`
+  // returns a slot's payload or null when empty, and refuses a partial or
+  // damaged slot.
+  function evidence(decode, saved) {
+    const committed = (slot) => {
+      const frame = decode(slot);
+      if (frame.kind === 'empty') return null;
+      if (frame.kind !== 'committed') fail('owner-journal-unsupported-phase');
+      return frame.payload;
+    };
+    const acceptance = saved.record, action = JSON.parse(saved.action.toString('utf8'));
+    const slots = Object.fromEntries(DAEMON_JOURNAL_SLOTS.map(({ slot }) => [slot, committed(slot)]));
+    const typed = (read) => { try { return read(); } catch (error) { if (error?.reason?.startsWith?.('owner-journal')) throw error; return fail(); } };
+    const preparation = slots.preparation && typed(() => bindPreparation(decodePreparation(slots.preparation), { acceptance, action }));
+    const preparationDigest = slots.preparation && effectDigest(slots.preparation);
+    const receiptDigest = slots.receipt && effectDigest(slots.receipt);
+    return { slots, acceptance, action, preparation, preparationDigest, receiptDigest, typed };
+  }
+
+  function preEffectGraph(decode, saved) {
+    const { slots, acceptance, action, preparation, preparationDigest, receiptDigest, typed } = evidence(decode, saved);
+    // Nothing after entry can exist without it; pairs and the local outcome
+    // belong to later phases.
+    for (const slot of ['completed', 'observation-pair', 'terminal-pair', 'linked-authoritative-event', 'local-lifecycle-outcome']) {
+      if (slots[slot]) fail(slot === 'completed' || slot === 'linked-authoritative-event' ? 'owner-journal-corrupt' : 'owner-journal-unsupported-phase');
+    }
+    if (!preparation) {
+      if (['prepared-challenge', 'presence', 'receipt', 'successful-check', 'pre-effect-refused'].some((slot) => slots[slot])) fail();
+      return { state: 'admitted' };
+    }
+    if (slots['prepared-challenge'] && !slots['prepared-challenge'].equals(challengeFor(preparation, saved.action))) fail();
+    if (!slots['prepared-challenge'] && (slots.presence || slots.receipt || slots['successful-check'])) fail();
+    if (slots['successful-check']) {
+      if (!slots.presence || !slots.receipt) fail();
+      typed(() => decodeSuccessfulCheck(slots['successful-check'], { acceptance, receiptDigest }));
+    }
+    if (slots['pre-effect-refused']) {
+      const refused = typed(() => bindEffect(decodeEffect(slots['pre-effect-refused']),
+        { phase: 'refused', preparation, preparationDigest, receiptDigest, action }));
+      return { state: 'refused', refusal: { code: refused.detail.code, effectDigest: effectDigest(slots['pre-effect-refused']) } };
+    }
+    if (slots['successful-check']) return { state: 'released' };
+    if (slots.presence || slots.receipt) return { state: 'authorizing' };
+    return { state: slots['prepared-challenge'] ? 'prepared' : 'preparing' };
+  }
+
+  // Throws on anything short of a fully validated completion; the caller maps
+  // every throw to indeterminate.
+  function effectGraph(decode, saved) {
+    const { slots, action, preparation, preparationDigest, receiptDigest, acceptance } = evidence(decode, saved);
+    if (!preparation || !slots['prepared-challenge'] || !slots['prepared-challenge'].equals(challengeFor(preparation, saved.action))
+      || !slots.presence || !slots.receipt || !slots['successful-check'] || slots['pre-effect-refused'] || !slots.entered || !slots.completed
+      || slots['observation-pair'] || slots['terminal-pair'] || slots['local-lifecycle-outcome']) fail();
+    decodeSuccessfulCheck(slots['successful-check'], { acceptance, receiptDigest });
+    const entered = bindEffect(decodeEffect(slots.entered), { phase: 'entered', preparation, preparationDigest, receiptDigest, action });
+    const completed = bindEffect(decodeEffect(slots.completed), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
+    if (preparation.operation === 'cold-wake.set') {
+      if (slots['linked-authoritative-event']) fail();
+    } else {
+      if (!slots['linked-authoritative-event']) fail();
+      // Identifiers come from the signed action and acceptance, never from
+      // the preparation, and a revision event must record the completed revision.
+      const event = verifyLinkedEvent(slots['linked-authoritative-event'], {
+        operation: action.operation, journalBytes: slots['linked-authoritative-event'],
+        journalRecordDigest: completed.detail.journalRecordDigest, proposalId: action.parameters.proposalId,
+        linkage: { requestId: acceptance.requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest },
+      });
+      if (event.kind === 'revision' && event.revision !== completed.detail.afterRevision) fail();
+    }
+    return { state: 'applied', outcome: { code: 'applied', effectDigest: effectDigest(slots.completed) } };
   }
 
   // Visible committed frames prove nothing about their final flush. Before
@@ -294,8 +372,8 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   }
 
   const settled = (graph, extra) => ({
-    state: graph.uncertain ? 'indeterminate' : 'admitted', requestId: graph.binding.requestId, directory: graph.name,
-    ...(graph.uncertain ? { outcome: { code: 'effect-uncertain', effectDigest: null } } : {}), ...extra,
+    state: graph.state ?? 'admitted', requestId: graph.binding.requestId, directory: graph.name,
+    ...(graph.outcome ? { outcome: graph.outcome } : {}), ...(graph.refusal ? { refusal: graph.refusal } : {}), ...extra,
     authorizationSupported: false, physicalAllocationSupported: false, physicalFlushGuaranteed: false,
   });
 
@@ -304,7 +382,9 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     count: () => locked(() => scan().length),
 
     // Explicit recovery of one request after reopen. Absent is only "no such
-    // directory"; an orphan, partial, corrupt or unsupported graph refuses.
+    // directory"; otherwise the typed phase from readGraph, after the
+    // recovery flush. An orphan, partial, corrupt or unsupported pre-entry
+    // graph refuses.
     // It schedules nothing: no forward, delivery, check release or effect.
     recover(requestId) {
       if (!matches(UUID4, requestId)) fail('invalid-owner-journal-record');
