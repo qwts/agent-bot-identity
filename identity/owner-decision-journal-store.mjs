@@ -17,6 +17,8 @@ import {
   effectOutcome, enteredRecordFor, refusedRecordFor,
 } from './owner-decision-evidence.mjs';
 import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
+import { verifyOwnerDecisionReceipt } from './owner-decision-receipt.mjs';
+import { verifyOwnerDecisionPresence } from './owner-decision-action.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
 
 export const DAEMON_JOURNAL_LIMIT = 4096;
@@ -193,7 +195,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       return operation();
     } catch (error) {
       if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict', 'owner-journal-consumed', 'owner-journal-entry-refused',
-        'owner-journal-transition-refused'].includes(error?.reason)) poisoned = true;
+        'owner-journal-transition-refused', 'owner-journal-intake-refused'].includes(error?.reason)) poisoned = true;
       if (error?.reason) throw error;
       throw journalError(error?.code === 'invalid-owner-journal-frame' ? 'owner-journal-corrupt' : 'owner-journal-io');
     } finally {
@@ -353,8 +355,15 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       return { state: 'released', refusable, view: Object.freeze({ action, actionBytes: saved.action, acceptance, preparation, preparationDigest,
         receiptDigest, receiptKeys: receiptKeyIds(slots.receipt), presenceToken: slots.presence.toString('latin1') }) };
     }
-    if (slots.presence || slots.receipt) return { state: 'authorizing', refusable };
-    return { state: slots['prepared-challenge'] ? 'prepared' : 'preparing', refusable };
+    // The saved authorization a successful check must name, once both
+    // presence and receipt are present.
+    const checkable = slots.presence && slots.receipt ? Object.freeze({ acceptance, receiptDigest }) : null;
+    if (slots.presence || slots.receipt) return { state: 'authorizing', refusable, checkable };
+    if (!slots['prepared-challenge']) return { state: 'preparing', refusable };
+    // What decision intake verifies against: the saved action, acceptance,
+    // preparation and exact prepared challenge.
+    return { state: 'prepared', refusable, intake: Object.freeze({ actionBytes: saved.action, acceptance, preparation,
+      challengeBytes: slots['prepared-challenge'] }) };
   }
 
   // The whole released prefix through a bound entered record, with no
@@ -534,6 +543,71 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
         } catch { fail('invalid-owner-journal-record'); }
         publish(graph.dir, 'pre-effect-refused', bytes, graph.binding);
         return settled(readGraph(name, requestId), { effectId: preparation.effectId });
+      });
+    },
+
+    // Decision intake (C2; disabled, no route): the owner's p1 and the
+    // broker's d1 for one prepared request, under the journal lock. Legal only
+    // from `prepared`. Both tokens are verified with the existing verifiers
+    // against `trust` (the active pins), the saved action, the preparation's
+    // own nonce, the exact saved challenge and this daemon's key from the
+    // acceptance; then presence (slot 4) and receipt (slot 5) are published
+    // in that order. The request is then `authorizing`. Already holding
+    // presence or receipt, or any later phase, is a conflict; admitted or
+    // preparing refuses. A verification failure writes nothing and carries
+    // the verifier's reason as `refusal`.
+    recordDecision(requestId, decision) {
+      if (!matches(UUID4, requestId) || !plain(decision)) fail('invalid-owner-journal-record');
+      const { presenceToken, receiptToken, trust, nowMilliseconds } = decision;
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        if (['authorizing', 'released', 'refused', 'indeterminate', 'applied'].includes(graph.state)) fail('owner-journal-conflict');
+        if (!graph.intake) fail('owner-journal-transition-refused');
+        recoveryFlush(graph);
+        const { actionBytes, acceptance, preparation, challengeBytes } = graph.intake;
+        try {
+          verifyOwnerDecisionPresence(presenceToken, { actionBytes, nonce: preparation.nonce, trust, nowMilliseconds });
+          verifyOwnerDecisionReceipt(receiptToken, { trust, daemonKey: acceptance.daemonKey, challengeBytes, presenceToken, nowMilliseconds });
+        } catch (error) {
+          throw Object.assign(journalError('owner-journal-intake-refused'), { refusal: typeof error?.reason === 'string' ? error.reason : null });
+        }
+        publish(graph.dir, 'presence', Buffer.from(presenceToken, 'ascii'), graph.binding);
+        publish(graph.dir, 'receipt', Buffer.from(receiptToken, 'ascii'), graph.binding);
+        return settled(readGraph(name, requestId), {});
+      });
+    },
+
+    // The one successful check (C2; disabled, no route), under the journal
+    // lock: the broker's released `mayApply:true` answer for this request's
+    // saved receipt. Legal only from `authorizing` with both presence and
+    // receipt. It must name exactly the acceptance binding and the saved
+    // receipt's digest, and be unexpired now (now < exp, seconds); it is
+    // published canonically to slot 6, and the request is then `released`.
+    // A check already saved, or any later phase, is a conflict; any other
+    // phase refuses. A saved check is never replayed or replaced.
+    recordSuccessfulCheck(requestId, { check, nowMilliseconds } = {}) {
+      if (!matches(UUID4, requestId) || !plain(check) || !Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) {
+        fail('invalid-owner-journal-record');
+      }
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        if (['released', 'refused', 'indeterminate', 'applied'].includes(graph.state)) fail('owner-journal-conflict');
+        if (!graph.checkable) fail('owner-journal-transition-refused');
+        recoveryFlush(graph);
+        let bytes, saved;
+        try {
+          bytes = Buffer.from(canonicalJson(check));
+          saved = decodeSuccessfulCheck(bytes, graph.checkable);
+        } catch { fail('invalid-owner-journal-record'); }
+        if (Math.floor(nowMilliseconds / 1000) >= saved.exp) {
+          throw Object.assign(journalError('owner-journal-intake-refused'), { refusal: 'check-expired' });
+        }
+        publish(graph.dir, 'successful-check', bytes, graph.binding);
+        return settled(readGraph(name, requestId), {});
       });
     },
 

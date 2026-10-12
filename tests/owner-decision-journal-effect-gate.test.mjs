@@ -108,6 +108,7 @@ test('the gate returns a bound completer that completes this request once', darw
   const entered = r.enter();
   assert(Object.isFrozen(entered));
   assert.deepEqual(Object.keys(entered).sort(), ['complete', 'effectId', 'enteredDigest', 'physicalFlushGuaranteed', 'requestId', 'state']);
+  assert.strictEqual(entered.physicalFlushGuaranteed, false);
   const done = entered.complete(reported);
   // A revision is complete but stays indeterminate until its linked event.
   assert.equal(done.state, 'indeterminate'); assert.equal(done.requestId, r.requestId); assert.match(done.completedDigest, /^[a-f0-9]{64}$/);
