@@ -95,7 +95,8 @@ export const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbo
   'policy-denied', 'policy-unavailable', 'policy-denied-audit-failed', 'policy-unavailable-audit-failed']);
 // The launch codes that are expected refusals (the owner's choice, policy or
 // this host's setup), not faults; the rest of LAUNCH_CODES are failures. The
-// same split is the `kind` of each code in governance/error-codes.json.
+// same split is the `kind` of each code in governance/error-codes.json,
+// which tests/error-codes.test.mjs holds them to.
 export const LAUNCH_REFUSALS = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
   'persona-policy-stale', 'persona-policy-requires-addon', 'runtime-unsupported-platform', 'runtime-override-invalid',
   'runtime-override-unsupported-platform', 'provider-secret-missing', 'provider-declaration-invalid',
