@@ -826,6 +826,8 @@ export function createCommsSupervisor({
           state.lastError = null;
           if (identityDecided) {
             // A repeat ready never replaces or clears this socket's binding.
+            // (A bare {ok:true} never reaches this handler on a stream: the
+            // connection layer consumes it.)
             noteError(Object.assign(new Error('owner-decision watch identity not rebound: repeated ready on the same watch'), { code: 'owner-watch-identity' }));
           } else {
             identityDecided = true;
@@ -846,14 +848,11 @@ export function createCommsSupervisor({
               detail: 'daemon launch handler is unavailable' })).catch(noteError);
           return;
         }
-        // Owner-decision relay intake is disabled: every such event is dropped
-        // here and none reaches the wake path. One that is not bound to this
-        // socket's identity is also surfaced, never silently ignored.
-        if (OWNER_DECISION_EVENTS.includes(event?.event)) {
-          if (!ownerDecisionIntakeBound(event, watchIdentity)) {
-            noteError(Object.assign(new Error(`owner-decision event not bound to this watch: ${event.event}`), { code: 'owner-watch-identity' }));
-          }
-          return;
+        // Owner-decision relay intake is disabled. One that is not bound to
+        // this socket's identity is surfaced, never silently ignored; bound or
+        // not, it is dropped below with every other non-wake event.
+        if (OWNER_DECISION_EVENTS.includes(event?.event) && !ownerDecisionIntakeBound(event, watchIdentity)) {
+          noteError(Object.assign(new Error(`owner-decision event not bound to this watch: ${event.event}`), { code: 'owner-watch-identity' }));
         }
         if (event?.event !== 'wake') return;
         let wake;

@@ -421,9 +421,17 @@ test('the watch binds its owner-decision identity once per socket and surfaces e
     one.send({ event: 'ready', ...third });
     await waitFor(() => /repeated ready/.test(lastError() ?? ''));
     assert.deepEqual(supervisor.watchIdentity(), first);
+    // A stray {ok:true} on the stream carries no event: the connection layer
+    // consumes it, so it can neither clear nor rebind the identity. Move
+    // lastError to a fresh signal first, then prove the ack changes nothing
+    // by following it with a wake that is still delivered.
+    one.send(owner('owner-decision-cancel', third));
+    await waitFor(() => /not bound/.test(lastError() ?? ''));
     one.send({ ok: true });
-    await waitFor(() => /repeated ready/.test(lastError() ?? ''));
+    one.send({ event: 'wake', agentId: 'agent_11111111-1111-4111-8111-111111111111', messageIds: ['m2'] });
+    await waitFor(() => wakes.length === 2);
     assert.deepEqual(supervisor.watchIdentity(), first);
+    assert.match(lastError(), /not bound/);
 
     // The binding ends with its socket.
     one.socket.destroy();
