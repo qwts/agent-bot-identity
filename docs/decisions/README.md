@@ -36,4 +36,4 @@ supersede them instead.
 | [ADR-0645](ADR-0645-one-runtime-repository-four-owned-modules.md) | Owned modules and contracts first, then identity becomes its own repository | Accepted |
 | [ADR-0753](ADR-0753-owner-signed-statements.md) | Owner-signed statements | Accepted |
 | [ADR-0815](ADR-0815-the-soul-is-a-git-co-author.md) | The soul is a Git co-author; commits stay Verified | Accepted |
-| [ADR-0983](ADR-0983-local-first-diagnostics-and-optional-otlp-export.md) | Local-first diagnostics, stable error codes and optional OTLP export | Proposed |
+| [ADR-0983](ADR-0983-local-first-diagnostics-and-optional-otlp-export.md) | Local-first diagnostics, stable error codes and optional OTLP export | Accepted |

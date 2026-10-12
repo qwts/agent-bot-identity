@@ -95,3 +95,13 @@ test('an empty or missing store exports an empty bundle', () => {
   assert.equal(JSON.parse(out).summary.events, 0);
   assert.equal(existsSync(join(f.home, 'bundle.json')), false);
 });
+
+test('the reported window never reaches past retention, and tallies have no prototype', () => {
+  const f = fixture();
+  f.diagnostics.record({ event: 'launch', outcome: 'failed', code: 'tool-home-unwritable' });
+  const bundle = JSON.parse(f.run(['export', '--preview', '--since', '2026-01-01T00:00:00Z']).out);
+  assert.equal(bundle.window.since, '2026-10-04T12:00:00.000Z', 'the 7-day floor, not the requested start');
+  assert.equal(bundle.summary.events, 1);
+  const codes = buildExport({ sinceMs: 0, env: f.env, home: f.home, now: () => NOW }).summary.codes;
+  assert.equal(Object.getPrototypeOf(codes), null);
+});
