@@ -1,0 +1,1 @@
+- Add disabled composition of the daemon's owner-decision prepared response with its retained stage and exact three-way expiry, checked against the shared agent-comms wrapper vectors; no route or transport (#1007).

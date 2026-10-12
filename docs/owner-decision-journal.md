@@ -190,3 +190,36 @@ field, so nothing validates until a reviewed adapter adds it.
   store, which still publishes with a hard link (#1010). An effect must refuse
   before entering, or stay indeterminate once entered, if that store hits
   ENOSPC.
+
+## Prepared response (disabled composition)
+
+`identity/owner-decision-prepared.mjs` composes the daemon's
+`owner-decision-prepared` response against agent-comms
+[`0686f2c`](https://github.com/qwts/agent-comms/tree/0686f2c135f39aa71ca51da23ff6e39d1af5d415/docs)
+(#204). It is pure: no transport, route, signing or journal write.
+
+- **Inputs.** The caller supplies the custody-verified saved admission and the
+  nonce it generated once. For a staged action, it also supplies the public
+  `{stagingId,kind,contentDigest,expiresAt}` of the daemon's own immutable
+  stage descriptor, never request input. The stage must match the action
+  exactly: same staging ID, `package` or `webhook` by operation, and the
+  action's package or configuration digest. An unstaged action requires
+  `stage:null`.
+- **Deadline.** `exp` is exactly
+  min(acceptedAt+180, preparedAt+180, stage.expiresAt), using the broker's
+  original `acceptedAt`, which is never refreshed. These refuse as
+  `preparation-stale` rather than extending anything: clock-window violations
+  (more than 30 s of skew), an expired window or stage, and unsafe arithmetic.
+- **Outputs**, deterministic so a duplicate never regenerates anything:
+  - the exact public challenge, whose canonical bytes are daemon slot 3,
+    unchanged by #204;
+  - the stage retained in slot 6;
+  - the request fields
+    `{requestId,payloadDigest,daemonKey,daemonEpoch,watchId,nonce,preparedAt,exp,stage}`.
+
+  Both the challenge cap and the broker's 32768-byte `{challenge,stage,v:1}`
+  wrapper cap are checked before anything could be published.
+
+The tests compose all eight shared `preparedWrapperBounds` vectors from the
+vendored budget fixture (agent-comms `0686f2c`) to their exact challenge, stage
+and wrapper bytes and hashes.
