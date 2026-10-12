@@ -7,6 +7,7 @@
 import * as fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import {
   DAEMON_JOURNAL_SLOTS, FRAME_OVERHEAD, SCRATCH_BYTES, decodeCanonicalPayload, decodeDaemonJournalFrame, decodeReconciliationPair,
@@ -16,7 +17,8 @@ import {
   bindEffect, bindPreparation, bindReconciliationPair, challengeFor, completedRecordFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
   effectOutcome, enteredRecordFor, refusedRecordFor,
 } from './owner-decision-evidence.mjs';
-import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
+import { LINKED_EVENT_CAP, verifyLinkedEvent } from './owner-decision-linked-event.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
 import { readOwnerDecisionTrust } from './owner-decision-trust.mjs';
 import { verifyOwnerDecisionReceipt } from './owner-decision-receipt.mjs';
 import { verifyOwnerDecisionPresence } from './owner-decision-action.mjs';
@@ -173,7 +175,16 @@ function openFixed(io, file, size, flags) {
   } catch (error) { io.closeSync(fd); throw error; }
 }
 
-export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault = () => {} } = {}) {
+// This daemon's own journal root, from its launch env and home (beside the
+// trust store and vouch key).
+export function ownerDecisionJournalRoot({ env = process.env, home = homedir() } = {}) {
+  const stateHome = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
+  return path.join(stateHome, 'agent-bot', 'owner-decision-journal');
+}
+
+// Without `root`, the store is this daemon's own journal (the effect-entry
+// gate always opens it that way).
+export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), namespaceDigest, io = fs, fault = () => {} } = {}) {
   if (process.platform !== 'darwin') fail('owner-journal-platform-unsupported');
   if (typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0') || !matches(DIGEST, namespaceDigest)) {
     fail('invalid-owner-journal-record');
@@ -196,7 +207,8 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       return operation();
     } catch (error) {
       if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict', 'owner-journal-consumed', 'owner-journal-entry-refused',
-        'owner-journal-transition-refused', 'owner-journal-intake-refused', 'owner-journal-trust-unavailable'].includes(error?.reason)) poisoned = true;
+        'owner-journal-transition-refused', 'owner-journal-intake-refused', 'owner-journal-trust-unavailable',
+        'owner-journal-linked-event-refused'].includes(error?.reason)) poisoned = true;
       if (error?.reason) throw error;
       throw journalError(error?.code === 'invalid-owner-journal-frame' ? 'owner-journal-corrupt' : 'owner-journal-io');
     } finally {
@@ -421,13 +433,13 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   }
 
   // An indeterminate request that may be completed: a valid entered record
-  // and (for cold-wake, which has none) no linked event. A revision's linked
-  // event may already be present. Null otherwise. The completion writer
-  // refuses a nonzero completed slot before consulting this.
+  // and no linked event yet (completion publishes it, for a revision). Null
+  // otherwise. The completion writer refuses a nonzero completed slot before
+  // consulting this.
   function awaitingCompletion(decode, saved) {
     try {
       const { slots, action, preparation, preparationDigest, receiptDigest, entered } = enteredPrefix(decode, saved);
-      if (preparation.operation === 'cold-wake.set' && slots['linked-authoritative-event']) return null;
+      if (slots['linked-authoritative-event']) return null;
       return Object.freeze({ action, preparation, preparationDigest, receiptDigest, entered, enteredDigest: effectDigest(slots.entered) });
     } catch { return null; }
   }
@@ -559,15 +571,25 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     // reopen, or already used) it refuses, so nothing can complete an effect
     // it did not just enter. The handle is consumed once the write starts, and
     // the entered record must still be the one it entered. `result` is
-    // { at } seconds, no earlier than entry,
-    // plus for a revision what the effect reports: { journalSeq,
-    // journalRecordDigest, working } (working null unless entered applies).
-    // The store derives the record from the saved entered record and action
-    // and binds it before publishing slot 10. A cold-wake request is then
-    // applied; a revision stays indeterminate until its linked authoritative
-    // event is present. Already completed, applied or refused is a conflict;
-    // any other phase, or a damaged entered record, refuses.
-    completeEffect(entry, result) {
+    // { at } seconds, no earlier than entry, plus for a revision
+    // { journalSeq, working }: the sequence of the revision-journal record the
+    // effect appended, and `working`, null unless entered applies. `working`
+    // is the caller's assertion (mechanism only, not proof): nothing here
+    // derives it from validated actual state yet.
+    //
+    // A revision also takes `readLinkedEvent(journalSeq)`, the host's
+    // read-only revision-journal port: the store reads the record's exact
+    // bytes itself and never accepts them from the caller. It verifies them
+    // as this request's linked authoritative event (operation, proposal and
+    // the exact five-field linkage), requires the event's revision to be the
+    // entered transition's, and takes journalRecordDigest from those bytes.
+    // Then, with the handle consumed before either write, it publishes slot
+    // 13 (the linked event) and then slot 10 (completed). A failure between
+    // or during them is never retried: the request stays effect-uncertain.
+    // A cold-wake request has no linked event and is applied by slot 10.
+    // Already completed, applied or refused is a conflict; any other phase,
+    // a damaged entered record, or a linked event already present refuses.
+    completeEffect(entry, result, { readLinkedEvent } = {}) {
       const live = liveEntries.get(entry);
       if (!live) fail('owner-journal-entry-required');
       if (!plain(result)) fail('invalid-owner-journal-record');
@@ -580,14 +602,37 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
         if (!graph.awaiting || graph.awaiting.enteredDigest !== live.enteredDigest) fail('owner-journal-transition-refused');
         recoveryFlush(graph);
         const { entered, action, preparation, preparationDigest, receiptDigest } = graph.awaiting;
-        const { at, journalSeq, journalRecordDigest, working } = result;
+        const revision = preparation.operation !== 'cold-wake.set';
+        const { at, journalSeq, working } = result;
+        if (Object.hasOwn(result, 'journalRecordDigest')) fail('invalid-owner-journal-record');
+        let linked = null, journalRecordDigest;
+        if (revision) {
+          if (typeof readLinkedEvent !== 'function' || !Number.isSafeInteger(journalSeq) || journalSeq < 0 || journalSeq > 9_999_999_999) {
+            fail('invalid-owner-journal-record');
+          }
+          // The exact bytes come only from the revision-journal port. A read
+          // or verification refusal keeps the handle for an explicit retry.
+          try {
+            // A private copy of the read's intrinsic bytes, within slot 13's cap.
+            linked = exactBytes(readLinkedEvent(journalSeq), { max: LINKED_EVENT_CAP });
+            if (!linked) throw new Error();
+            journalRecordDigest = effectDigest(linked);
+            const event = verifyLinkedEvent(linked, { operation: action.operation, journalBytes: linked, journalRecordDigest, proposalId: action.parameters.proposalId,
+              linkage: { requestId: graph.saved.record.requestId, payloadDigest: graph.saved.record.payloadDigest, receiptDigest, effectId: preparation.effectId,
+                preparationDigest } });
+            if (event.kind === 'revision' && event.revision !== entered.detail.afterRevision) throw new Error();
+          } catch { fail('owner-journal-linked-event-refused'); }
+        }
         let bytes;
         try {
           if (!Number.isSafeInteger(at) || at < entered.at) throw new Error();
           bytes = Buffer.from(canonicalJson(completedRecordFor({ entered, action, at, journalSeq, journalRecordDigest, working })));
           bindEffect(decodeEffect(bytes), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
         } catch { fail('invalid-owner-journal-record'); }
+        // Consumed before the first write: a failure in either publication is
+        // never retried, and the request stays effect-uncertain.
         liveEntries.delete(entry);
+        if (linked) publish(graph.dir, 'linked-authoritative-event', linked, graph.binding);
         publish(graph.dir, 'completed', bytes, graph.binding);
         return settled(readGraph(name, requestId), { effectId: preparation.effectId, completedDigest: effectDigest(bytes) });
       });

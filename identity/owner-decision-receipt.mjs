@@ -11,6 +11,10 @@
 // expiry, read structurally.
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
+import { exactBytes } from './owner-decision-bytes.mjs';
+import { DAEMON_JOURNAL_SLOTS } from './owner-decision-journal-frame.mjs';
+
+const CHALLENGE_CAP = DAEMON_JOURNAL_SLOTS.find(({ slot }) => slot === 'prepared-challenge').cap;
 
 export const RECEIPT_AUDIENCE = 'agent-comms-owner-decision';
 const MAX_TOKEN = 4096;
@@ -101,7 +105,8 @@ export function verifyOwnerDecisionReceipt(receiptToken, { trust, daemonKey, cha
   if (!verify(null, Buffer.from(parts[1], 'ascii'), receiptKey, base64url(parts[2], 64))) fail('owner-receipt-signature');
 
   // Bound to the exact saved challenge, and never outliving it.
-  const challenge = canonicalObject(Buffer.from(challengeBytes ?? []));
+  // A private copy of the challenge's intrinsic bytes, within slot 3's cap.
+  const challenge = canonicalObject(exactBytes(challengeBytes, { max: CHALLENGE_CAP }) ?? fail('owner-receipt-binding'));
   if (!CHALLENGE_BINDINGS.every((key) => payload[key] === challenge[key]) || !seconds(challenge.exp) || payload.exp > challenge.exp
     || challenge.daemonKey !== daemonKey) fail('owner-receipt-binding');
   // Bound to the exact p1 bytes, and never outliving its stated expiry.

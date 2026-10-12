@@ -106,3 +106,22 @@ test('the helper answers only for genuine Uint8Arrays, from intrinsic state', ()
   assert.equal(exactBytes(Buffer.alloc(0), { max: 3 }), null);
   assert.deepEqual(exactBytes(Buffer.alloc(0), { max: 3, min: 0 }), Buffer.alloc(0));
 });
+
+// The exported helpers that take bytes besides the decoders: the challenge a
+// preparation implies (its action bytes) and the receipt verifier's saved
+// challenge. Neither reads an own length.
+test('challengeFor and the receipt verifier read only intrinsic bytes', async (t) => {
+  const { challengeFor } = await import('../identity/owner-decision-evidence.mjs');
+  const preparation = evidence.records.find(({ id }) => id === 'approve-preparation').record;
+  const action = Buffer.from(actions.positive[0].actionJson);
+  await t.test('challengeFor', () => {
+    const expected = challengeFor(preparation, action);
+    assert(challengeFor(preparation, throwing(action)).equals(expected));
+    assert(challengeFor(preparation, misleading(action)).equals(expected));
+    assert.throws(() => challengeFor(preparation, oversized(32768)), { code: 'invalid-owner-decision-evidence' });
+    for (const fake of [new Proxy(Buffer.from(action), {}), { length: 2, 0: 1 }, undefined]) {
+      assert.throws(() => challengeFor(preparation, fake), { code: 'invalid-owner-decision-evidence' });
+    }
+  });
+
+});

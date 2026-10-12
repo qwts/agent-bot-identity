@@ -149,3 +149,31 @@ test('records without a linkage are byte-for-byte what they were', (t) => {
     'approvedBy', 'approvalReason', 'authorization', 'at']);
   assert.deepEqual(record.authorization, { method: 'consent' });
 });
+
+test('an owner-decision append returns its journal sequence, never written into the record', async (t) => {
+  const f = fixture(t), proposal = propose(f);
+  const approved = decideSoulProposal(f.id, proposal.proposalId, 'approve', { ...f.options, reason: 'Yes', ownerDecision: linkage(7) });
+  assert.equal(approved.journalSeq, files(f).length - 1);
+  assert.equal(files(f).at(-1), `${String(approved.journalSeq).padStart(10, '0')}.json`);
+  assert.equal('journalSeq' in JSON.parse(lastBytes(f)), false);
+  change(f, 'Edited\n');
+  const edited = await editSoulRevision(f.id, f.packagePath, { ...f.options, reason: 'Owner edit', ownerDecision: linkage(8) });
+  assert.equal(edited.journalSeq, files(f).length - 1);
+  // Records without a linkage don't carry it.
+  change(f, 'Plain\n');
+  assert.equal('journalSeq' in await editSoulRevision(f.id, f.packagePath, { ...f.options, reason: 'Plain edit' }), false);
+});
+
+test('a refused linkage writes nothing at all, objects/ included', async (t) => {
+  const f = fixture(t);
+  const objects = () => readdirSync(join(journal(f), 'objects')).sort();
+  const before = objects(), journalBefore = files(f);
+  change(f, `Never stored ${Math.random()}\n`);
+  await assert.rejects(async () => editSoulRevision(f.id, f.packagePath, { ...f.options, reason: 'x', ownerDecision: { ...linkage(), requestId: 'nope' } }));
+  assert.deepEqual(objects(), before); assert.deepEqual(files(f), journalBefore);
+  const g = fixture(t, { adopt: false });
+  assert.throws(() => adoptSoulPackage(g.id, g.packagePath, { ...g.options, ownerDecision: { ...linkage(), effectId: 'nope' } }));
+  let present = true;
+  try { readdirSync(join(journal(g), 'objects')); } catch { present = false; }
+  assert(!present || readdirSync(join(journal(g), 'objects')).length === 0);
+});

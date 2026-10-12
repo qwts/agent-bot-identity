@@ -4,10 +4,19 @@
 // and restore them after.
 import process from 'node:process';
 
-export function asDaemon({ env, home }, run) {
-  const saved = { XDG_STATE_HOME: process.env.XDG_STATE_HOME, HOME: process.env.HOME };
+// The path overrides are cleared for the call, so the daemon's state
+// directory, census and comms pairing also resolve under this
+// XDG_STATE_HOME. With `now` (milliseconds), Date.now answers it for the call.
+const OVERRIDES = ['AGENT_BOT_STATE_HOME', 'QWTS_AGENT_STATE_HOME', 'AGENT_BOT_POPULATION_PATH', 'AGENT_BOT_COMMS_DAEMON_PATH'];
+export function asDaemon({ env, home, now }, run) {
+  const keys = ['XDG_STATE_HOME', 'HOME', ...OVERRIDES];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of OVERRIDES) delete process.env[key];
   process.env.XDG_STATE_HOME = env.XDG_STATE_HOME; process.env.HOME = home;
+  const realNow = Date.now;
+  if (now !== undefined) Date.now = () => now;
   try { return run(); } finally {
+    Date.now = realNow;
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
 }

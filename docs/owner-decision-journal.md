@@ -170,10 +170,9 @@ never a terminal refusal.
 `linked-authoritative-event` (16384 bytes). It holds pure checks only. The
 local revision writer (`soul-revisions.mjs`) now emits the optional
 `ownerDecision` linkage, with `authorization:{method:"owner-decision"}`, when
-an owner-decision operation passes it. Records stay `schemaVersion 1`, per
-the owner's decision. Nothing passes it yet: the effect composition that
-reads the record under the revision lock and fills this slot is a later
-slice.
+an owner-decision operation passes it, and returns that record's journal
+sequence. Records stay `schemaVersion 1`, per the owner's decision. The
+revision completion (below) publishes this slot.
 
 - **Revisions only.** Approve, reject, adopt and edit link one authoritative
   revision-journal event. A cold-wake change has none, so its slot stays
@@ -697,6 +696,19 @@ instance; a storage failure (an unknown `requests/` entry included) does.
 These are open items for whoever wires the disabled owner-decision pieces to a
 route. None is built here.
 
+- **Revision-journal custody and the domain lock.** The revision port checks
+  custody of the record and its fixed ancestry, but not macOS ACLs, which
+  Node can't read without exec or native code. It doesn't hold the revision
+  lock: the effect step must append the record and the completion must read
+  it back under one domain lock, against the expected state the preparation
+  recorded. That atomicity, and integrating the expected-state check, are a
+  separate acceptance item. Anyone who can write the revision journal or the
+  daemon journal directly can still plant a record or slot 13; only custody
+  protects against that, as with slots 2 and 7.
+- **Working digests are mechanism only.** An applying edit's `working`
+  digests are the completion caller's assertion. Nothing derives them yet
+  from validated actual state, independent of the linked head, so they are
+  not proof.
 - **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.
@@ -898,3 +910,92 @@ bounded copy. An input's own `length`, `byteLength`, `buffer`, `byteOffset`,
 `subarray` or `slice` is never read. So an oversized view that claims to be
 small can't pass a cap, a misleading property can't change what's decoded,
 and a Proxy, a lookalike or another typed array isn't bytes.
+
+## Revision completion with the linked event (disabled)
+
+A revision completes through the gate's bound `complete({at, journalSeq,
+working})`. The gate builds its identity port and its revision-journal port
+(`owner-decision-revision-port.mjs`, read-only) itself, over the daemon's
+own state directory, resolved from its launch env and home as the trust root
+is. It takes no port from its caller, so neither the bytes nor the port that
+reads them can come from a caller. The store's
+`completeEffect(entry, result, {readLinkedEvent})` then does this:
+- **Reads the bytes itself.** It reads the exact revision-journal record at
+  `journalSeq` through the port, for the action's soul. It never accepts
+  linked-event bytes, or a `journalRecordDigest`, from the caller.
+- **Verifies them.** They must be this request's linked authoritative event
+  (`verifyLinkedEvent`): the operation, the proposal and the exact
+  five-field linkage. The event's revision must be the entered transition's.
+  `journalRecordDigest` is the SHA-256 of those bytes.
+- **Writes in order.** It consumes the one-shot handle, publishes slot 13
+  (the linked event), then publishes slot 10 (completed). The request is
+  then `applied`.
+
+A read or verification refusal writes nothing and keeps the handle for an
+explicit retry. Once writing starts, the handle is gone: a failure in or
+between the two publications is never retried, and the request stays
+`effect-uncertain`. A linked event already present refuses. Cold-wake is
+unchanged, with no linked event.
+
+**After a crash between slot 13 and slot 10.** The request stays
+indeterminate. Following agent-comms' owner-decision-locking contract, the
+only way forward is explicit owner-local reconciliation:
+- **Record-only operations** (approve, reject, adopt, and edit with apply
+  false). Only an authenticated owner-local ceremony may produce the missing
+  typed completed record. It builds it from the retained entered record, the
+  validated linked event and the immutable package, after a resync and
+  verified matching actual state, and reserves slot 10 to write it.
+- **What that record carries.** The exact `journalSeq` and
+  `journalRecordDigest`. The public `effectDigest` and the terminal pair's
+  `basisDigest` stay the SHA-256 of those completed bytes.
+- **Never automatic.** It is never run automatically and never replays the
+  consumed completer.
+- **Applying edits and cold-wake** need whole-effect proof and otherwise stay
+  uncertain.
+
+That reconciliation writer is a later, separately owned capability. Until
+actual state is verified by the daemon, matching from a ceremony's preimage
+is mechanism-only.
+
+**Port custody.** For `<stateDir>/soul-revisions/<agentId>/<seq>.json`:
+- The fixed ancestry (the state directory, `soul-revisions/` and the agent
+  directory) must be real directories, owned by this uid, with no group or
+  world write.
+- The agent ID must be a soul ID and the sequence a safe integer, so neither
+  can name another file.
+- The record must be the file the name points to, opened no-follow, with one
+  link, owned by this uid, no group or world write, and 1 to 16384 bytes.
+- The read is exact. Its size, mtime, link count and named identity must be
+  unchanged after it.
+- macOS ACLs aren't checked (see Before wiring).
+
+## What the effect-entry gate takes from its caller
+
+`enterOwnerDecisionEffect({requestId, presenceToken})` takes only the request
+it is presented. Everything that names a location of state or proof, an
+identity or the clock is derived from the daemon's own launch environment
+and home, and any other argument is ignored.
+
+| Input | Source |
+| --- | --- |
+| The journal | `ownerDecisionJournalRoot()`, the daemon's own root |
+| The broker namespace | the daemon's own trust store (`readOwnerDecisionTrust()`) |
+| The trust records | the daemon's own trust store |
+| The identity and revision-journal ports | built over `stateDirectory()` |
+| The census | `populationFile()` |
+| The daemon's account | its own comms pairing credential (`loadCommsCredential().account`) |
+| The time | `Date.now()` |
+
+The pairing credential is read with the comms client's file-level custody;
+on POSIX that is a plain read of the daemon's own state file.
+
+**Still caller-supplied, and why:**
+- `requestId` names which request is presented. It only selects a journal
+  entry, which must be exactly `released`.
+- `presenceToken` is the p1 being presented. It must equal the stored p1 byte
+  for byte, and it is re-verified against live trust and the clock.
+- The completer's `{at, journalSeq, working}` is what the effect step reports:
+  - `at` is a timestamp, bounded to no earlier than entry;
+  - `journalSeq` only selects which record the gate's own port reads, and
+    those bytes are verified;
+  - `working` is mechanism-only, not proof (see Before wiring).

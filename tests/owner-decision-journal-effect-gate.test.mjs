@@ -11,14 +11,15 @@ import path from 'node:path';
 import process from 'node:process';
 import { canonicalJson } from '../canonical-json.mjs';
 import { enterOwnerDecisionEffect } from '../owner-decision-effect-gate.mjs';
-import { createOwnerDecisionIdentityPort } from '../owner-decision-identity-port.mjs';
-import { upsertSoul } from '../agent-population.mjs';
+import { stateDirectory } from '../state-paths.mjs';
+import { populationFile, upsertSoul } from '../agent-population.mjs';
+import { commsCredentialFile } from '../comms-client.mjs';
 import { mintAgentIdentity } from '../identity/agent-identity.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
 import { createOwnerDecisionTrustWriter, ownerDecisionTrustRoot } from '../identity/owner-decision-trust.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 import { asDaemon } from './helpers/owner-decision-daemon-env.mjs';
-import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
+import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal, ownerDecisionJournalRoot } from '../identity/owner-decision-journal-store.mjs';
 import { encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { challengeFor } from '../identity/owner-decision-evidence.mjs';
 import { decodeOwnerDecisionAction } from '../identity/owner-decision-action.mjs';
@@ -72,7 +73,8 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
     parameters: { proposalId: template.expected.proposal.proposalId, expectedRevision: template.expected.head.revision, reason: 'Ship it' } }));
   const acceptance = { v: 1, kind: 'acceptance', requestId, principal, account, soul, operation: 'revision.approve', payloadDigest: sha256(action),
     namespaceDigest, acceptedAt: 2_000_000_000, daemonKey: template.daemonKey, daemonEpoch: 1, watchId: template.watchId, reservationBytes: 524288 };
-  const journalRoot = path.join(base, 'journal');
+  // The daemon's own journal, where its launch env and home resolve it.
+  const journalRoot = ownerDecisionJournalRoot({ env, home });
   if (!shared) initializeDaemonJournal(journalRoot);
   createDaemonJournalStore({ root: journalRoot, namespaceDigest }).admit(action, Buffer.from(canonicalJson(acceptance)));
   // A v2 preparation recording the trust chain version it was prepared under
@@ -102,7 +104,8 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
     if (slot === upTo) break;
   }
 
-  const stateDir = path.join(base, 'identity'), censusFile = path.join(base, 'population.json');
+  // The daemon's own state directory, where its launch env and home resolve it.
+  const stateDir = stateDirectory({ env, home }), censusFile = populationFile({ env, home });
   if (!shared) {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     mintAgentIdentity({ useGithub: false, gate: () => false, appSlug: null, harness: 'codex', transcript: { provider: 'codex', id: 't' },
@@ -110,18 +113,43 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
     upsertSoul({ id: soul, appSlug: null, parentId: null, status: 'active', spacePath: `/spaces/${soul}`, worktree: null, worktrees: [],
       transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file: censusFile });
   }
-  const options = { journalRoot, namespaceDigest, daemonAccount: account, censusFile,
-    identityPort: createOwnerDecisionIdentityPort({ stateDir }), nowMilliseconds: NOW };
+  // The daemon's own comms pairing, naming its account.
+  if (!shared) {
+    const pairing = commsCredentialFile({ env, home });
+    fs.mkdirSync(path.dirname(pairing), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(pairing, `${JSON.stringify({ account, secret: 'scratch-secret', brokerUid: process.getuid() + 1, mode: 'single-account',
+      pairedAt: '2026-10-12T00:00:00.000Z' })}\n`, { mode: 0o600 });
+  }
+  // The approve's own revision-journal record at `seq`, as the effect step
+  // would append it under the revision lock, linked to this request.
+  const preparationDigest = sha256(Buffer.from(canonicalJson(preparation)));
+  const appendRevision = (seq = 0, change = {}) => {
+    const agentDir = path.join(stateDir, 'soul-revisions', soul);
+    fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+    const record = { schemaVersion: 1, kind: 'revision', revision: template.expected.proposal.revision, parentRevision: template.expected.head.revision,
+      author: 'soul', reason: 'Ship it', proposalId: template.expected.proposal.proposalId, approval: 'user', approvedBy: 'user', approvalReason: 'ok',
+      authorization: { method: 'owner-decision' },
+      ownerDecision: { requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest },
+      at: '2026-10-12T00:00:00.000Z', ...change };
+    const file = path.join(agentDir, `${String(seq).padStart(10, '0')}.json`);
+    fs.writeFileSync(file, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    return file;
+  };
   const recover = () => createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recover(requestId);
   // The gate runs as this daemon: its trust store comes from the launch env and home.
-  const enter = (overrides = {}, token = presence) => asDaemon({ env, home }, () => enterOwnerDecisionEffect({ requestId, presenceToken: token }, { ...options, ...overrides }));
-  return { base, requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText,
-    receiptToken: receipt.toString('ascii'), check };
+  // The gate runs as this daemon at NOW (or `nowMilliseconds`); anything else
+  // a test passes is handed to the gate as options, which it ignores.
+  const enter = ({ nowMilliseconds = NOW, ...ignored } = {}, token = presence) => asDaemon({ env, home, now: nowMilliseconds },
+    () => enterOwnerDecisionEffect({ requestId, presenceToken: token }, ignored));
+  const runAsDaemon = (run) => asDaemon({ env, home, now: NOW }, run);
+  return { base, requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText, asDaemon: runAsDaemon,
+    receiptToken: receipt.toString('ascii'), check, appendRevision, soul };
 }
 
-// What the effect reports for this approve: its revision-journal sequence and
-// record digest, and no working tree (record-only).
-const reported = { at: 2_000_000_011, journalSeq: 7, journalRecordDigest: 'b'.repeat(64), working: null };
+// What the effect reports for this approve: the sequence of the revision
+// record it appended (the bytes come from the revision port) and no working
+// tree (record-only).
+const reported = { at: 2_000_000_011, journalSeq: 0, working: null };
 
 test('the gate returns a bound completer that completes this request once', darwin, (t) => {
   const r = released(t);
@@ -129,22 +157,26 @@ test('the gate returns a bound completer that completes this request once', darw
   assert(Object.isFrozen(entered));
   assert.deepEqual(Object.keys(entered).sort(), ['complete', 'effectId', 'enteredDigest', 'physicalFlushGuaranteed', 'requestId', 'state']);
   assert.strictEqual(entered.physicalFlushGuaranteed, false);
+  r.appendRevision();
   const done = entered.complete(reported);
-  // A revision is complete but stays indeterminate until its linked event.
-  assert.equal(done.state, 'indeterminate'); assert.equal(done.requestId, r.requestId); assert.match(done.completedDigest, /^[a-f0-9]{64}$/);
+  // The linked event (slot 13) then completed (slot 10): applied.
+  assert.equal(done.state, 'applied'); assert.equal(done.requestId, r.requestId); assert.match(done.completedDigest, /^[a-f0-9]{64}$/);
   assert.throws(() => entered.complete(reported), { reason: 'owner-journal-entry-required' });
-  assert.equal(r.recover().state, 'indeterminate');
+  assert.equal(r.recover().state, 'applied');
 });
 
 test('the completer is for its own request only', darwin, (t) => {
   const a = released(t), b = released(t, { shared: a, requestId: '22222222-2222-4222-8222-222222222222', nonce: nonceOf(2) });
   const enteredA = a.enter(), enteredB = b.enter();
+  a.appendRevision(0); b.appendRevision(1);
   // A request ID in the result is not an input: A's completer completes A.
   assert.equal(enteredA.complete({ ...reported, requestId: b.requestId }).requestId, a.requestId);
   assert.throws(() => enteredA.complete(reported), { reason: 'owner-journal-entry-required' });
   const read = (r) => fs.readFileSync(path.join(r.journalRoot, 'requests', requestDirectoryName({ namespaceDigest, requestId: r.requestId }), 'completed.record'));
   assert(read(b).every((byte) => byte === 0));
-  assert.equal(enteredB.complete(reported).requestId, b.requestId);
+  // B's completer can't use A's record either: the linkage is B's.
+  assert.throws(() => enteredB.complete(reported), { reason: 'owner-journal-linked-event-refused' });
+  assert.equal(enteredB.complete({ ...reported, journalSeq: 1 }).requestId, b.requestId);
 });
 
 test('after a crash or reopen nothing completes the entered request', darwin, async (t) => {
@@ -289,10 +321,9 @@ test('a held journal lock refuses instead of waiting', darwin, (t) => {
 
 test('a request that is not released, or a missing clock, refuses', darwin, (t) => {
   const r = released(t);
-  refusedWithoutWrite(r, r.enter({ nowMilliseconds: undefined }), 'validation-failed');
   assert.equal(r.enter({}, null).reason, 'validation-failed');
-  assert.equal(enterOwnerDecisionEffect({ requestId: '22222222-2222-4222-8222-222222222222', presenceToken: r.presence },
-    { journalRoot: r.journalRoot, namespaceDigest, nowMilliseconds: NOW }).reason, 'owner-journal-entry-refused');
+  assert.equal(r.asDaemon(() => enterOwnerDecisionEffect({ requestId: '22222222-2222-4222-8222-222222222222', presenceToken: r.presence })).reason,
+    'owner-journal-entry-refused');
 });
 
 test('the journal never consults the gate for a request that is not exactly released', darwin, async (t) => {
@@ -481,5 +512,84 @@ test('a second trust store under the same namespace can never be selected', darw
     const { v, kind, trustVersion, ...fields } = { ...template, requestId: r.requestId }; void v; void kind; void trustVersion;
     assert.throws(() => asDaemon({ env: { XDG_STATE_HOME: path.join(r.base, 'xdg') }, home: r.base }, () => createDaemonJournalStore({ root: r.journalRoot, namespaceDigest })
       .recordPreparation(r.requestId, { preparation: fields, trust: { root: other } })), { reason: 'invalid-owner-journal-record' });
+  });
+});
+
+// The gate builds its identity and revision-journal ports itself, over the
+// daemon's own state directory; ports a caller passes are never used.
+test('caller-supplied ports are ignored: the probe with planted linked bytes refuses', darwin, async (t) => {
+  await t.test('a revision port answering with the right bytes for a deleted record', (tt) => {
+    const r = released(tt);
+    const file = r.appendRevision();
+    const bytes = fs.readFileSync(file);
+    fs.rmSync(file);
+    const entered = r.enter({ revisionPort: { read: () => bytes } });
+    assert.equal(entered.state, 'entered');
+    assert.throws(() => entered.complete(reported), { reason: 'owner-journal-linked-event-refused' });
+    assert.deepEqual(r.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+  });
+  await t.test('an identity port that would approve any target', (tt) => {
+    const r = released(tt);
+    // The real identity record is retired; a passed port claiming otherwise changes nothing.
+    fs.rmSync(path.join(r.stateDir, `${r.soul}.json`));
+    const permissive = { kind: 'owner-decision-identity-read-v1', read: () => ({ id: r.soul, status: 'active' }) };
+    const refusal = r.enter({ identityPort: permissive });
+    assert.deepEqual(refusal, { state: 'refused', reason: 'target-unavailable', code: 'storage-failed' });
+  });
+  await t.test('with the real record, the gate\'s own ports complete it', (tt) => {
+    const r = released(tt);
+    r.appendRevision();
+    const entered = r.enter({ revisionPort: { read: () => { throw new Error('never used'); } }, identityPort: { read: () => { throw new Error('never used'); } } });
+    assert.equal(entered.complete(reported).state, 'applied');
+  });
+});
+
+// The gate takes only the request it is presented; every location of state or
+// proof, identity and the clock are the daemon's own. Passed values are ignored.
+test('the gate derives its journal, namespace, census, account and clock; passed values are ignored', darwin, async (t) => {
+  const snapshotDir = (dir) => {
+    const out = {};
+    const walk = (d) => { for (const n of fs.readdirSync(d)) { const f = path.join(d, n); if (fs.lstatSync(f).isDirectory()) walk(f); else out[path.relative(dir, f)] = sha256(fs.readFileSync(f)); } };
+    walk(dir);
+    return out;
+  };
+  await t.test('the double-entry probe: a copied journal is never opened', (tt) => {
+    const r = released(tt);
+    const copy = path.join(r.base, 'journal-copy');
+    fs.cpSync(r.journalRoot, copy, { recursive: true });
+    const own = (dir) => { fs.chmodSync(dir, 0o700); for (const n of fs.readdirSync(dir)) { const f = path.join(dir, n); if (fs.lstatSync(f).isDirectory()) own(f); else fs.chmodSync(f, 0o600); } };
+    own(copy);
+    const before = snapshotDir(copy);
+    assert.equal(r.enter().state, 'entered');
+    // The same approval again, naming the copy: the gate opens its own journal, where it is consumed.
+    assert.deepEqual(r.enter({ journalRoot: copy }), { state: 'refused', reason: 'owner-journal-consumed', code: 'conflict' });
+    assert.deepEqual(snapshotDir(copy), before);
+  });
+  await t.test('a passed namespace is ignored', (tt) => {
+    assert.equal(released(tt).enter({ namespaceDigest: 'b'.repeat(64) }).state, 'entered');
+  });
+  await t.test('a passed census is ignored', (tt) => {
+    const r = released(tt);
+    const good = path.join(r.base, 'good-population.json');
+    fs.copyFileSync(r.censusFile, good);
+    fs.writeFileSync(r.censusFile, '{not json');
+    refusedWithoutWrite(r, r.enter({ censusFile: good }), 'target-unavailable');
+  });
+  await t.test('a passed account is ignored; only the own pairing names it', (tt) => {
+    const r = released(tt);
+    assert.equal(r.enter({ daemonAccount: 'someone-else' }).state, 'entered');
+    const s = released(tt);
+    const pairing = commsCredentialFile({ env: { XDG_STATE_HOME: path.join(s.base, 'xdg') }, home: s.base });
+    fs.writeFileSync(pairing, fs.readFileSync(pairing, 'utf8').replace('"account":"qwts"', '"account":"other"'));
+    refusedWithoutWrite(s, s.enter({ daemonAccount: 'qwts' }), 'target-unavailable');
+    fs.rmSync(pairing);
+    refusedWithoutWrite(s, s.enter({ daemonAccount: 'qwts' }), 'target-unavailable');
+  });
+  await t.test('a passed clock is ignored', (tt) => {
+    const r = released(tt);
+    const expired = (2_000_000_060 + 31) * 1000;
+    const result = asDaemon({ env: { XDG_STATE_HOME: path.join(r.base, 'xdg') }, home: r.base, now: expired },
+      () => enterOwnerDecisionEffect({ requestId: r.requestId, presenceToken: r.presence }, { nowMilliseconds: NOW }));
+    refusedWithoutWrite(r, result, 'validation-failed');
   });
 });

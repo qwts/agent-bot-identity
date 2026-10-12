@@ -152,7 +152,8 @@ function append(root, event, options) {
     throw Object.assign(new Error('owner-decision revision record is too large for its journal slot'), { code: 'owner-decision-linked-event-too-large' });
   }
   const temp = join(root, `.${randomUUID()}.tmp`);
-  const final = join(root, `${String(events(root).length).padStart(10, '0')}.json`);
+  const seq = events(root).length;
+  const final = join(root, `${String(seq).padStart(10, '0')}.json`);
   try {
     try {
       const fd = openSync(temp, 'wx', 0o600);
@@ -172,7 +173,9 @@ function append(root, event, options) {
     try { rmSync(temp, { force: true }); } catch { /* ignored by events() */ }
   }
   if (record.kind === 'revision') mirrorRevision(basename(root), record, options);
-  return record;
+  // An owner-decision record's journal sequence (its file's index), for the
+  // effect completion that reads it back; never written into the record.
+  return record.ownerDecision ? { ...record, journalSeq: seq } : record;
 }
 // The soul's own copy of a revision entry under `.soul-state/runs/`
 // (#583 decision 9), after the journal has it. Best effort: a folder the
@@ -252,13 +255,15 @@ export function revisionPackagePath(id, revision, options = {}) {
 }
 export function adoptSoulPackage(id, packagePath, { reason = 'Adopt starting package', ...options } = {}) {
   text(reason, 'reason');
+  // An owner-decision linkage is validated before anything, objects/ included, is written.
+  const proof = decided(options);
   return mutateRevision(id, options, (root) => {
     if (head(root)) throw new Error('soul already has a revision chain');
     const identity = active(id, options);
     const stored = snapshot(root, packagePath, null, { preserve: true });
     if (identity.genesis && stored.revision !== identity.genesis.revision) throw new Error('starting package must match genesis');
     return append(root, { kind: 'revision', revision: stored.revision, parentRevision: stored.parentRevision,
-      author: 'user', reason, ...decided(options) }, options);
+      author: 'user', reason, ...proof }, options);
   });
 }
 
@@ -278,6 +283,7 @@ export function createRevisionAppender(packagePath, { reason, author = 'user', .
 }
 export async function editSoulRevision(id, packagePath, { reason, expectedParent, apply = false, ...options } = {}) {
   text(reason, 'reason');
+  const proof = decided(options);
   return mutateRevision(id, options, (root) => {
     let directory;
     if (apply) {
@@ -290,7 +296,7 @@ export async function editSoulRevision(id, packagePath, { reason, expectedParent
     const publish = apply ? prepareApply(directory, stored, resolve(packagePath) === directory) : null;
     assertParent(root, stored.parentRevision);
     const record = append(root, { kind: 'revision', revision: stored.revision,
-      parentRevision: stored.parentRevision, author: 'user', reason, ...decided(options) }, options);
+      parentRevision: stored.parentRevision, author: 'user', reason, ...proof }, options);
     // Both record-only and applying edits stay within this same lock; neither
     // invokes an async append port or reacquires the revision lock.
     if (requireHead(root).revision !== stored.revision) throw new Error('stale apply: recorded head moved');
@@ -456,17 +462,18 @@ export function proposeSoulRevision(id, packagePath, { reason, expectedParent, .
 export function decideSoulProposal(id, proposalId, decision, { reason, expectedParent, ...options } = {}) {
   if (!['approve', 'reject'].includes(decision)) throw new Error('decision must be approve or reject');
   text(reason, 'reason');
+  const proof = decided(options);
   return mutateRevision(id, options, (root) => {
     const proposal = listSoulProposals(id, options).find((item) => item.proposalId === proposalId);
     if (!proposal || proposal.status !== 'pending') throw new Error('proposal is not pending');
     if (expectedParent !== undefined && proposal.parentRevision !== expectedParent) throw new Error('stale proposal: expectedParent does not match its base');
-    if (decision === 'reject') return append(root, { kind: 'decision', proposalId, author: 'user', reason, ...decided(options) }, options);
+    if (decision === 'reject') return append(root, { kind: 'decision', proposalId, author: 'user', reason, ...proof }, options);
     assertParent(root, proposal.parentRevision);
     syncPackageTree(storedPackage(root, proposal.revision));
     syncDirectory(join(root, 'objects'));
     return append(root, { kind: 'revision', revision: proposal.revision, parentRevision: proposal.parentRevision,
       author: 'soul', reason: proposal.reason, proposalId, approval: 'user', approvedBy: 'user', approvalReason: reason,
-      ...decided(options) }, options);
+      ...proof }, options);
   }, expectedParent);
 }
 function safeRelative(value) {

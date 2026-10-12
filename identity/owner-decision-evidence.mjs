@@ -11,6 +11,8 @@ import { canonicalJson } from '../canonical-json.mjs';
 import { exactBytes } from './owner-decision-bytes.mjs';
 
 export const EVIDENCE_CAP = 4096;
+// The original action's cap (daemon slot 2).
+const ACTION_CAP = 32768;
 const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const REVISION = /^sha256:[a-f0-9]{64}$/;
@@ -157,9 +159,11 @@ export function bindPreparation(p, { acceptance, action }) {
 // The exact challenge (slot 3) a preparation implies, given the original
 // action bytes: the daemon never stores a challenge that differs from it.
 export function challengeFor(p, actionBytes) {
+  // A private copy of the action's intrinsic bytes, within the action cap.
+  const action = exactBytes(actionBytes, { max: ACTION_CAP }) ?? fail();
   return Buffer.from(canonicalJson({
     requestId: p.requestId, principal: p.principal, account: p.account, soul: p.soul, operation: p.operation,
-    payloadDigest: p.payloadDigest, action: Buffer.from(actionBytes).toString('base64url'), nonce: p.nonce,
+    payloadDigest: p.payloadDigest, action: action.toString('base64url'), nonce: p.nonce,
     acceptedAt: p.acceptedAt, preparedAt: p.preparedAt, exp: p.exp, daemonKey: p.daemonKey, daemonEpoch: p.daemonEpoch, watchId: p.watchId,
   }));
 }
