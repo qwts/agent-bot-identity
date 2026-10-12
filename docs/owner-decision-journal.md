@@ -264,7 +264,7 @@ typed record bound to this request, and the graph is one of these phases:
 | `prepared` | The challenge, byte-for-byte the one the preparation implies. |
 | `authorizing` | Presence and/or receipt. |
 | `released` | The one successful check. |
-| `refused` | A proven pre-effect refusal, reported with `refusal:{code, effectDigest}`. |
+| `refused` | A proven pre-effect refusal, reported with its `refusalReason` and public `outcome:{code, effectDigest}`. |
 
 Anything else refuses as `storage-failed`.
 
@@ -287,8 +287,20 @@ included, is `indeterminate` with `effectDigest:null`.
   value, and we don't narrow it.
 
 `preparationDigest` is SHA-256 of the exact canonical slot-6 bytes. Neither
-`d1` nor the check carries it; the daemon links it. The public refusal outcome
-codes and exact mapping vectors will be written jointly before C2.
+`d1` nor the check carries it; the daemon links it.
+
+**Final-refusal reasons**, per agent-comms `77bb19c` (#212). All 34 shared
+`effect-outcomes-v1.json` mappings are vendored and tested.
+
+| Reason | Public code |
+| --- | --- |
+| `expired` | `deadline-expired` |
+| `expected-state-changed`, `proposal-not-pending`, `stage-invalid`, `target-unavailable`, `validation-failed` | `validation-refused` |
+| `trust-unavailable` | `authority-refused` |
+| `storage-unavailable` | `storage-refused` |
+
+`storage-refused` is emitted only for a durably recorded refusal. Failing to
+record one stays `storage-failed` or uncertain.
 
 Not yet validated here: the presence and receipt token signatures (the
 receipt verifier is C2), the live revision journal behind the linked event,

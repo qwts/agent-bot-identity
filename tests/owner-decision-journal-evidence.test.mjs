@@ -12,7 +12,7 @@ import { canonicalJson } from '../canonical-json.mjs';
 import { encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
 import {
-  bindEffect, bindPreparation, challengeFor, coldStateDigest, decodeEffect, decodePreparation, reconciliationFinding,
+  REFUSAL_OUTCOMES, bindEffect, bindPreparation, challengeFor, coldStateDigest, decodeEffect, decodePreparation, effectOutcome, reconciliationFinding,
 } from '../identity/owner-decision-evidence.mjs';
 
 const FIXTURE_URL = new URL('./fixtures/owner-decisions/effect-evidence-v1.json', import.meta.url);
@@ -72,6 +72,33 @@ test('every fixture transaction binds: entered and completed to their preparatio
     if (refused) bindEffect(decodeEffect(bytesOf(refused)), { phase: 'refused', preparation, preparationDigest: vector.sha256, receiptDigest, action });
     if (preparation.operation === 'cold-wake.set') assert.equal(entered.detail.beforeDigest, coldStateDigest(preparation.expected));
   }
+});
+
+// agent-comms tests/fixtures/owner-decisions/effect-outcomes-v1.json at
+// 77bb19c (merged #212), copied byte for byte: the agreed public outcome for
+// every evidence record, all eight final-refusal reasons included.
+const OUTCOMES_URL = new URL('./fixtures/owner-decisions/effect-outcomes-v1.json', import.meta.url);
+test('every agreed outcome mapping is exactly what this producer reports', () => {
+  assert.equal(sha256(fs.readFileSync(OUTCOMES_URL)), '3c88bd10694cbe27347da6062e71773efc62575b80b85f738287bc945a60898e');
+  const outcomes = JSON.parse(fs.readFileSync(OUTCOMES_URL, 'utf8'));
+  assert.equal(outcomes.sourceSha256, FIXTURE_SHA256);
+  assert.equal(outcomes.results.length, 34); assert.equal(outcomes.refusalRecords.length, 7);
+  const records = new Map([...fixture.records, ...outcomes.refusalRecords].map((vector) => [vector.id, vector]));
+  for (const vector of outcomes.refusalRecords) {
+    assert.deepEqual(decodeEffect(bytesOf(vector)), vector.record, vector.id);
+    assert.equal(sha256(bytesOf(vector)), vector.sha256, vector.id);
+  }
+  for (const result of outcomes.results) {
+    if (result.evidenceRecord === null) {
+      // Early refusal and absent proof: no record, so never a digest.
+      assert.equal(result.outcome.effectDigest, null, result.id);
+      continue;
+    }
+    assert.deepEqual(effectOutcome(bytesOf(records.get(result.evidenceRecord))), { state: result.state, outcome: result.outcome }, result.id);
+  }
+  const reasons = [...records.values()].filter(({ record }) => record.phase === 'refused').map(({ record }) => record.detail.code);
+  assert.deepEqual(new Set(reasons), new Set(Object.keys(REFUSAL_OUTCOMES)));
+  assert.equal(Object.keys(REFUSAL_OUTCOMES).length, 8);
 });
 
 test('the recovery classification reproduces all nine agent-comms cases', () => {
@@ -228,8 +255,9 @@ test('a cold-wake request is applied from its completed record alone, never with
 test('a proven pre-effect refusal is refused with its effect digest', darwin, (t) => {
   const tx = transaction(), j = journal(t, tx);
   for (const slot of ['preparation', 'prepared-challenge', 'presence', 'receipt', 'successful-check', 'pre-effect-refused']) j.write(slot);
-  assert.deepEqual(j.recover().refusal, { code: 'expected-state-changed', effectDigest: sha256(tx.slots['pre-effect-refused']) });
-  assert.equal(j.recover().state, 'refused');
+  const refused = j.recover();
+  assert.equal(refused.state, 'refused'); assert.equal(refused.refusalReason, 'expected-state-changed');
+  assert.deepEqual(refused.outcome, { code: 'validation-refused', effectDigest: sha256(tx.slots['pre-effect-refused']) });
 });
 
 test('before entry an inconsistent graph refuses; after entry it is only ever indeterminate', darwin, async (t) => {

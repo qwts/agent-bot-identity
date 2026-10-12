@@ -1,0 +1,462 @@
+{
+  "version": 1,
+  "status": "disabled-producer-contract",
+  "sourceSha256": "4363adad57e232231d2893c4e20b37b4b28048d307893d6ebf97fb01042de4b4",
+  "results": [
+    {
+      "id": "approve-entered-result",
+      "evidenceRecord": "approve-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "approve-completed-result",
+      "evidenceRecord": "approve-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "f8c281718bf11faee9162165f3b8993e6276a4b3ba1b459649b85fbc07a75aa6"
+      }
+    },
+    {
+      "id": "final-refusal-result",
+      "evidenceRecord": "final-refusal",
+      "state": "refused",
+      "outcome": {
+        "code": "validation-refused",
+        "effectDigest": "5b814cb01ca147228b55f6945c560ae03181380e7d3be144e59003cd5a8f4a72"
+      }
+    },
+    {
+      "id": "reject-entered-result",
+      "evidenceRecord": "reject-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "reject-completed-result",
+      "evidenceRecord": "reject-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "d3f45276a84fe57ea7061c2711342ca42c8b57f43e431697d85fd1768d149935"
+      }
+    },
+    {
+      "id": "adopt-entered-result",
+      "evidenceRecord": "adopt-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "adopt-completed-result",
+      "evidenceRecord": "adopt-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "2e4ad1658176c4207dce23563f194041b7ea0cc78889010313b7bd01844f5b80"
+      }
+    },
+    {
+      "id": "edit-apply-entered-result",
+      "evidenceRecord": "edit-apply-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "edit-apply-completed-result",
+      "evidenceRecord": "edit-apply-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "89c2d36ebebda43ab369b2dafc77fd80a7019d5dc1f6373266388cb4c71c23d5"
+      }
+    },
+    {
+      "id": "edit-record-entered-result",
+      "evidenceRecord": "edit-record-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "edit-record-completed-result",
+      "evidenceRecord": "edit-record-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "98b3bbaa688a7726bac324f7086a1de506ff7243b193260dec1552afbb46ebd4"
+      }
+    },
+    {
+      "id": "wake-on-entered-result",
+      "evidenceRecord": "wake-on-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "wake-on-completed-result",
+      "evidenceRecord": "wake-on-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "9e1fc999fe944f23b6321516984811ca9f8158266d3a384821cf3b0245923211"
+      }
+    },
+    {
+      "id": "wake-off-entered-result",
+      "evidenceRecord": "wake-off-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "wake-off-completed-result",
+      "evidenceRecord": "wake-off-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "dfb188efef31322a4ec31462be4a6e0745e56ccb25e1e9c035ee91131e73a563"
+      }
+    },
+    {
+      "id": "wake-resume-read-only-entered-result",
+      "evidenceRecord": "wake-resume-read-only-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "wake-resume-read-only-completed-result",
+      "evidenceRecord": "wake-resume-read-only-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "54e789e205a9c7d19bb018281dcf2aa8bc7168dab97e7d3c52bf1ebec77b502a"
+      }
+    },
+    {
+      "id": "wake-resume-workspace-entered-result",
+      "evidenceRecord": "wake-resume-workspace-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "wake-resume-workspace-completed-result",
+      "evidenceRecord": "wake-resume-workspace-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "93a993dc59a6367fb15f5e44ee2298d688fe94fbff70f997168229eb5fc07213"
+      }
+    },
+    {
+      "id": "wake-webhook-entered-result",
+      "evidenceRecord": "wake-webhook-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "wake-webhook-completed-result",
+      "evidenceRecord": "wake-webhook-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "9fef1368ec57df6150bff59b189a9acad9379aa80fba843957212b39a4b3c09b"
+      }
+    },
+    {
+      "id": "quoted-unicode-entered-result",
+      "evidenceRecord": "quoted-unicode-entered",
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "quoted-unicode-completed-result",
+      "evidenceRecord": "quoted-unicode-completed",
+      "state": "applied",
+      "outcome": {
+        "code": "applied",
+        "effectDigest": "b93ad61337fb58c80512e3020045fda13545687c00859190ef8644e24fb33383"
+      }
+    },
+    {
+      "id": "early-validation-refused",
+      "evidenceRecord": null,
+      "state": "refused",
+      "outcome": {
+        "code": "validation-refused",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "early-authority-refused",
+      "evidenceRecord": null,
+      "state": "refused",
+      "outcome": {
+        "code": "authority-refused",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "early-deadline-expired",
+      "evidenceRecord": null,
+      "state": "refused",
+      "outcome": {
+        "code": "deadline-expired",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "uncertain-no-proof",
+      "evidenceRecord": null,
+      "state": "indeterminate",
+      "outcome": {
+        "code": "effect-uncertain",
+        "effectDigest": null
+      }
+    },
+    {
+      "id": "final-refusal-expired-result",
+      "evidenceRecord": "final-refusal-expired",
+      "state": "refused",
+      "outcome": {
+        "code": "deadline-expired",
+        "effectDigest": "a8710f28a860c4c2d7a3d04732d6dfb80308dc49df3703a9977c68cbdac9e2a4"
+      }
+    },
+    {
+      "id": "final-refusal-proposal-not-pending-result",
+      "evidenceRecord": "final-refusal-proposal-not-pending",
+      "state": "refused",
+      "outcome": {
+        "code": "validation-refused",
+        "effectDigest": "23fb474158fdf88a7d43e6d90d5076a237d7a366028e9fbd5c9d89dd592e8519"
+      }
+    },
+    {
+      "id": "final-refusal-stage-invalid-result",
+      "evidenceRecord": "final-refusal-stage-invalid",
+      "state": "refused",
+      "outcome": {
+        "code": "validation-refused",
+        "effectDigest": "4a9fbdcc17bbecb5436d99656de8b88cf0c5aa0b16ef232e41329a4a467472e2"
+      }
+    },
+    {
+      "id": "final-refusal-target-unavailable-result",
+      "evidenceRecord": "final-refusal-target-unavailable",
+      "state": "refused",
+      "outcome": {
+        "code": "validation-refused",
+        "effectDigest": "21f0cd65bcebfc906de9645092c5241afb293035b0307abca95ae35ac5b7bdf4"
+      }
+    },
+    {
+      "id": "final-refusal-validation-failed-result",
+      "evidenceRecord": "final-refusal-validation-failed",
+      "state": "refused",
+      "outcome": {
+        "code": "validation-refused",
+        "effectDigest": "9fc29143092604bbff108d614548c256208d566622cd72e712cf324dd6b34a31"
+      }
+    },
+    {
+      "id": "final-refusal-storage-unavailable-result",
+      "evidenceRecord": "final-refusal-storage-unavailable",
+      "state": "refused",
+      "outcome": {
+        "code": "storage-refused",
+        "effectDigest": "dcf7d90373594ad6be9755f1d1e3d37ba38bbbf568ef482dfcc16be8db314983"
+      }
+    },
+    {
+      "id": "final-refusal-trust-unavailable-result",
+      "evidenceRecord": "final-refusal-trust-unavailable",
+      "state": "refused",
+      "outcome": {
+        "code": "authority-refused",
+        "effectDigest": "7cd01d74921b4606ffb9abae8c538e63b2fd7aae30c389d05691253815a3188e"
+      }
+    }
+  ],
+  "refusalRecords": [
+    {
+      "id": "final-refusal-expired",
+      "record": {
+        "v": 1,
+        "kind": "effect",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "preparationDigest": "28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba",
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectId": "22222222-2222-4222-8222-000000000001",
+        "at": 2000000010,
+        "phase": "refused",
+        "detail": {
+          "code": "expired"
+        }
+      },
+      "canonicalJson": "{\"at\":2000000010,\"detail\":{\"code\":\"expired\"},\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"kind\":\"effect\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"phase\":\"refused\",\"preparationDigest\":\"28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1}",
+      "sha256": "a8710f28a860c4c2d7a3d04732d6dfb80308dc49df3703a9977c68cbdac9e2a4",
+      "utf8Bytes": 439,
+      "cap": 4096
+    },
+    {
+      "id": "final-refusal-proposal-not-pending",
+      "record": {
+        "v": 1,
+        "kind": "effect",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "preparationDigest": "28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba",
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectId": "22222222-2222-4222-8222-000000000001",
+        "at": 2000000010,
+        "phase": "refused",
+        "detail": {
+          "code": "proposal-not-pending"
+        }
+      },
+      "canonicalJson": "{\"at\":2000000010,\"detail\":{\"code\":\"proposal-not-pending\"},\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"kind\":\"effect\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"phase\":\"refused\",\"preparationDigest\":\"28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1}",
+      "sha256": "23fb474158fdf88a7d43e6d90d5076a237d7a366028e9fbd5c9d89dd592e8519",
+      "utf8Bytes": 452,
+      "cap": 4096
+    },
+    {
+      "id": "final-refusal-stage-invalid",
+      "record": {
+        "v": 1,
+        "kind": "effect",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "preparationDigest": "28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba",
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectId": "22222222-2222-4222-8222-000000000001",
+        "at": 2000000010,
+        "phase": "refused",
+        "detail": {
+          "code": "stage-invalid"
+        }
+      },
+      "canonicalJson": "{\"at\":2000000010,\"detail\":{\"code\":\"stage-invalid\"},\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"kind\":\"effect\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"phase\":\"refused\",\"preparationDigest\":\"28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1}",
+      "sha256": "4a9fbdcc17bbecb5436d99656de8b88cf0c5aa0b16ef232e41329a4a467472e2",
+      "utf8Bytes": 445,
+      "cap": 4096
+    },
+    {
+      "id": "final-refusal-target-unavailable",
+      "record": {
+        "v": 1,
+        "kind": "effect",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "preparationDigest": "28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba",
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectId": "22222222-2222-4222-8222-000000000001",
+        "at": 2000000010,
+        "phase": "refused",
+        "detail": {
+          "code": "target-unavailable"
+        }
+      },
+      "canonicalJson": "{\"at\":2000000010,\"detail\":{\"code\":\"target-unavailable\"},\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"kind\":\"effect\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"phase\":\"refused\",\"preparationDigest\":\"28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1}",
+      "sha256": "21f0cd65bcebfc906de9645092c5241afb293035b0307abca95ae35ac5b7bdf4",
+      "utf8Bytes": 450,
+      "cap": 4096
+    },
+    {
+      "id": "final-refusal-validation-failed",
+      "record": {
+        "v": 1,
+        "kind": "effect",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "preparationDigest": "28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba",
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectId": "22222222-2222-4222-8222-000000000001",
+        "at": 2000000010,
+        "phase": "refused",
+        "detail": {
+          "code": "validation-failed"
+        }
+      },
+      "canonicalJson": "{\"at\":2000000010,\"detail\":{\"code\":\"validation-failed\"},\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"kind\":\"effect\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"phase\":\"refused\",\"preparationDigest\":\"28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1}",
+      "sha256": "9fc29143092604bbff108d614548c256208d566622cd72e712cf324dd6b34a31",
+      "utf8Bytes": 449,
+      "cap": 4096
+    },
+    {
+      "id": "final-refusal-storage-unavailable",
+      "record": {
+        "v": 1,
+        "kind": "effect",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "preparationDigest": "28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba",
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectId": "22222222-2222-4222-8222-000000000001",
+        "at": 2000000010,
+        "phase": "refused",
+        "detail": {
+          "code": "storage-unavailable"
+        }
+      },
+      "canonicalJson": "{\"at\":2000000010,\"detail\":{\"code\":\"storage-unavailable\"},\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"kind\":\"effect\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"phase\":\"refused\",\"preparationDigest\":\"28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1}",
+      "sha256": "dcf7d90373594ad6be9755f1d1e3d37ba38bbbf568ef482dfcc16be8db314983",
+      "utf8Bytes": 451,
+      "cap": 4096
+    },
+    {
+      "id": "final-refusal-trust-unavailable",
+      "record": {
+        "v": 1,
+        "kind": "effect",
+        "requestId": "00000000-0000-4000-8000-000000000101",
+        "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+        "preparationDigest": "28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba",
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectId": "22222222-2222-4222-8222-000000000001",
+        "at": 2000000010,
+        "phase": "refused",
+        "detail": {
+          "code": "trust-unavailable"
+        }
+      },
+      "canonicalJson": "{\"at\":2000000010,\"detail\":{\"code\":\"trust-unavailable\"},\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"kind\":\"effect\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"phase\":\"refused\",\"preparationDigest\":\"28a22d9801634e97eb047e16a9bb71dbe8c031a94a1da88a8f33220db9c80eba\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1}",
+      "sha256": "7cd01d74921b4606ffb9abae8c538e63b2fd7aae30c389d05691253815a3188e",
+      "utf8Bytes": 449,
+      "cap": 4096
+    }
+  ]
+}

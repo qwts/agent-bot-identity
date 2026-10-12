@@ -13,7 +13,7 @@ import {
   encodeDaemonJournalFrame, peekAcceptanceContextFrame, requestDirectoryName,
 } from './owner-decision-journal-frame.mjs';
 import {
-  bindEffect, bindPreparation, challengeFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
+  bindEffect, bindPreparation, challengeFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest, effectOutcome,
 } from './owner-decision-evidence.mjs';
 import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
 
@@ -321,7 +321,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     if (slots['pre-effect-refused']) {
       const refused = typed(() => bindEffect(decodeEffect(slots['pre-effect-refused']),
         { phase: 'refused', preparation, preparationDigest, receiptDigest, action }));
-      return { state: 'refused', refusal: { code: refused.detail.code, effectDigest: effectDigest(slots['pre-effect-refused']) } };
+      return { ...effectOutcome(slots['pre-effect-refused']), refusalReason: refused.detail.code };
     }
     if (slots['successful-check']) return { state: 'released' };
     if (slots.presence || slots.receipt) return { state: 'authorizing' };
@@ -373,7 +373,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
 
   const settled = (graph, extra) => ({
     state: graph.state ?? 'admitted', requestId: graph.binding.requestId, directory: graph.name,
-    ...(graph.outcome ? { outcome: graph.outcome } : {}), ...(graph.refusal ? { refusal: graph.refusal } : {}), ...extra,
+    ...(graph.outcome ? { outcome: graph.outcome } : {}), ...(graph.refusalReason ? { refusalReason: graph.refusalReason } : {}), ...extra,
     authorizationSupported: false, physicalAllocationSupported: false, physicalFlushGuaranteed: false,
   });
 
