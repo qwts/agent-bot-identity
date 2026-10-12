@@ -160,6 +160,7 @@ export function createWebLayer({
   config,
   interaction,
   daemonToken,
+  confirmDecision = null,
   now = () => new Date(),
   webRoot = webRootDirectory(),
 } = {}) {
@@ -437,11 +438,25 @@ export function createWebLayer({
       return;
     }
     if (req.method === 'POST' && (match = pathname.match(/^\/ui\/api\/approvals\/([^/]+)\/decision$/))) {
+      // A decision lets a soul's tool run, so the owner is asked for this one
+      // (#1060), exactly as on /v1: a web session was paired with the daemon
+      // bearer, which any process in this account can read, so it proves a
+      // principal, never the owner. No owner gate wired means no decision.
+      if (typeof confirmDecision !== 'function') {
+        throw failure(403, 'the owner did not confirm this decision');
+      }
+      const authorization = await confirmDecision({
+        proposalId: match[1],
+        decision: body.decision,
+        principal,
+        transport: WEB_TRANSPORT,
+      });
       sendJson(res, 200, interaction.decideProposal({
         ...caller,
         proposalId: match[1],
         decision: body.decision,
         digest: body.digest,
+        authorization,
       }));
       return;
     }

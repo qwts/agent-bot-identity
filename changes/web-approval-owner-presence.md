@@ -1,0 +1,1 @@
+- Approving or denying a tool request from the web client now asks the owner (Touch ID, or the dialog where keyd cannot ask) for that decision, as `/v1` does; a browser session paired with the daemon bearer proves only a principal, not the owner (#1060).
