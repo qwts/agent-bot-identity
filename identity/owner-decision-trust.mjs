@@ -19,7 +19,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { createHash, createPublicKey, randomUUID } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
-import { vouchDaemonKey } from './vouch.mjs';
+import { vouchDaemonKey, vouchDaemonKeyPin } from './vouch.mjs';
 import { presencePinPath } from './owner-presence.mjs';
 
 export const TRUST_LIMITS = Object.freeze({ versions: 1024, record: 1024, confirmation: 512, auditLine: 512 });
@@ -478,6 +478,110 @@ export function readOwnerDecisionNamespace({ root, io = fs } = {}) {
     return { namespaceDigest: record.value.namespaceDigest };
   } catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
   finally { io.closeSync(lock); }
+}
+
+// --- the daemon trust observation (v1; agent-comms#77, owner decision Q1) ---
+
+// The frozen v1 schema (docs/owner-decision-trust.md, vendored vectors
+// tests/fixtures/owner-decisions/daemon-trust-observation-v1.json). An
+// observation is consistency input at observation time: never authority, a
+// live capability or a cross-account transaction.
+export const TRUST_OBSERVATION_MAX_BYTES = 1024;
+const OBSERVATION_KIND = 'owner-decision-daemon-trust-observation';
+const OBSERVATION_KEYS = ['v', 'kind', 'namespaceDigest', 'namespaceRecordDigest', 'chainVersion', 'headRecordDigest', 'state', 'active', 'daemonKey'];
+const OBSERVATION_STATES = ['none', 'active', 'revoked', 'revoked-terminal'];
+const pinShape = (pin) => exact(pin, ['alg', 'publicKey', 'keyId']) && pin.alg === 'ed25519' && matches(KEY, pin.publicKey)
+  && Buffer.from(pin.publicKey, 'base64url').length === 32 && Buffer.from(pin.publicKey, 'base64url').toString('base64url') === pin.publicKey
+  && pin.keyId === sha256(Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(pin.publicKey, 'base64url')]));
+
+// The frozen validator over exact bytes: 'valid', or the first rule broken
+// (oversize, not-json, non-canonical, keys, kind, digest, range, daemonKey,
+// state-version, none, head, revoked-active, active, alias), exactly as the
+// vectors name them.
+export function validateOwnerDecisionTrustObservation(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 1 || bytes.length > TRUST_OBSERVATION_MAX_BYTES) return 'oversize';
+  let o;
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    o = JSON.parse(text);
+    if (canonicalJson(o) !== text) return 'non-canonical';
+  } catch { return 'not-json'; }
+  if (!exact(o, OBSERVATION_KEYS)) return 'keys';
+  if (o.v !== 1 || o.kind !== OBSERVATION_KIND) return 'kind';
+  if (!matches(DIGEST, o.namespaceDigest) || !matches(DIGEST, o.namespaceRecordDigest) || !matches(DIGEST, o.headRecordDigest)) return 'digest';
+  if (!Number.isInteger(o.chainVersion) || o.chainVersion < 0 || o.chainVersion > TRUST_LIMITS.versions || !OBSERVATION_STATES.includes(o.state)) return 'range';
+  if (!pinShape(o.daemonKey)) return 'daemonKey';
+  // The chain alternates enrollment (odd) and revocation (even); the last
+  // version is reserved for the terminal revocation.
+  const v = o.chainVersion;
+  if (o.state !== (v === 0 ? 'none' : v === TRUST_LIMITS.versions ? 'revoked-terminal' : v % 2 === 1 ? 'active' : 'revoked')) return 'state-version';
+  if (o.state === 'none' && !(o.active === null && o.headRecordDigest === o.namespaceRecordDigest)) return 'none';
+  if (o.state !== 'none' && o.headRecordDigest === o.namespaceRecordDigest) return 'head';
+  if ((o.state === 'revoked' || o.state === 'revoked-terminal') && o.active !== null) return 'revoked-active';
+  if (o.state === 'active') {
+    const a = o.active;
+    if (!exact(a, ['enrollmentDigest', 'receiptKey', 'presenceKey', 'service']) || a.enrollmentDigest !== o.headRecordDigest
+      || !pinShape(a.receiptKey) || !pinShape(a.presenceKey) || !exact(a.service, ['platform', 'brokerUid']) || a.service.platform !== 'darwin'
+      || !Number.isInteger(a.service.brokerUid) || a.service.brokerUid < 1 || a.service.brokerUid > 0xffffffff) return 'active';
+    if (new Set([a.receiptKey.keyId, a.presenceKey.keyId, o.daemonKey.keyId]).size !== 3) return 'alias';
+  }
+  return 'valid';
+}
+
+// The observation a validated graph proves, with this daemon's vouch KeyPin.
+// It never projects a state it cannot prove: the version's parity must agree
+// with the replayed one-active state machine, and a role alias refuses.
+export function observationForGraph(graph, daemonKey) {
+  const chainVersion = graph.records.length - 1, head = graph.records.at(-1);
+  const state = chainVersion === 0 ? 'none' : chainVersion === TRUST_LIMITS.versions ? 'revoked-terminal'
+    : chainVersion % 2 === 1 ? 'active' : 'revoked';
+  if ((state === 'active') !== (graph.active !== null) || (graph.active && graph.active.digest !== head.digest)) fail();
+  const active = graph.active && {
+    enrollmentDigest: graph.active.digest, receiptKey: graph.active.value.receiptKey, presenceKey: graph.active.value.presenceKey,
+    service: graph.active.value.service,
+  };
+  if (active && new Set([active.receiptKey.keyId, active.presenceKey.keyId, daemonKey.keyId]).size !== 3) fail('owner-trust-role');
+  return { v: 1, kind: OBSERVATION_KIND, namespaceDigest: graph.namespaceDigest, namespaceRecordDigest: graph.records[0].digest,
+    chainVersion, headRecordDigest: head.digest, state, active, daemonKey };
+}
+
+function ownDaemonKeyPin({ env, home }) {
+  let pin;
+  try { pin = vouchDaemonKeyPin({ env, home }); } catch { fail('owner-trust-no-vouch-key'); }
+  if (pin === null) fail('owner-trust-no-vouch-key');
+  return pin;
+}
+
+// The observation under the trust lock, after the full readiness graph read
+// with its explicit recovery flush (custody, bounds, the namespace record and
+// confirmation, every key record replayed through the hash chain and the
+// one-active state machine, every confirmation and exactly one audit line
+// each). Every record must be confirmed. It writes and repairs nothing.
+// Returns frozen { observation, observationBytes, observationDigest };
+// consumers recompute the digest from the bytes.
+// For tests; production uses readOwnerDecisionTrustObservation, which takes
+// no arguments.
+export function observeOwnerDecisionTrust({ root, env = process.env, home = homedir(), io = fs } = {}) {
+  platformCheck();
+  if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
+  const daemonKey = ownDaemonKeyPin({ env, home });
+  try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }
+  const lock = acquireLock(io, root);
+  try {
+    const graph = readGraph(io, root);
+    if (graph.pending.length > 0) fail('owner-trust-audit-pending');
+    const observation = observationForGraph(graph, daemonKey);
+    const observationBytes = Buffer.from(canonicalJson(observation));
+    return Object.freeze({ observation, observationBytes, observationDigest: sha256(observationBytes) });
+  } catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
+  finally { io.closeSync(lock); }
+}
+
+// The published producer: the root and vouch key come only from this
+// daemon's own launch environment and home, never from the caller.
+export function readOwnerDecisionTrustObservation() {
+  const env = process.env, home = homedir();
+  return observeOwnerDecisionTrust({ root: ownerDecisionTrustRoot({ env, home }), env, home });
 }
 
 // --- the ceremony-only writer (not wired to any command or route) ---

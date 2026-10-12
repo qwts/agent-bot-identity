@@ -27,7 +27,7 @@ export { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydMcpServerEntry, keydPaths, keydPol
 export { mint } from './mint-token.mjs';
 export { verifyOwnerDecisionPresence } from './owner-decision-action.mjs';
 export { createDaemonJournalStore } from './owner-decision-journal-store.mjs';
-export { readOwnerDecisionTrust } from './owner-decision-trust.mjs';
+export { readOwnerDecisionTrust, readOwnerDecisionTrustObservation } from './owner-decision-trust.mjs';
 export { keydPresence } from './owner-presence.mjs';
 export { extractToken } from './owner-statement.mjs';
 export { hookBypassReason, readGitConfig, resolveAgentSlug, statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason } from './resolve-agent.mjs';

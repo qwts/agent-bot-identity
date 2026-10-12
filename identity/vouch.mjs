@@ -197,6 +197,17 @@ export function vouchDaemonKey({ env = process.env, home = homedir() } = {}) {
   return createHash('sha256').update(der).digest('hex');
 }
 
+// The same key as a full Ed25519 KeyPin { alg, publicKey, keyId }: the raw
+// 32-byte public key as canonical unpadded base64url and its SPKI DER digest.
+// Read-only like vouchDaemonKey: null when there is no key, never minting one.
+export function vouchDaemonKeyPin({ env = process.env, home = homedir() } = {}) {
+  const privateKey = readVouchKey(vouchKeyPath(vouchStateDir({ env, home })), { platform: 'posix' });
+  if (!privateKey) return null;
+  const der = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+  if (der.length !== 44) throw new Error('vouch key is not an Ed25519 key');
+  return { alg: 'ed25519', publicKey: der.subarray(12).toString('base64url'), keyId: createHash('sha256').update(der).digest('hex') };
+}
+
 function unixSeconds(now) {
   const instant = typeof now === 'function' ? now() : now;
   if (!(instant instanceof Date) || !Number.isFinite(instant.getTime())) {
