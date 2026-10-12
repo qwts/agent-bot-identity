@@ -494,3 +494,51 @@ test('moduleEdges ignores self-imports and files outside the map', () => {
   };
   assert.deepEqual(moduleEdges('/unused', ['a.mjs', 'b.mjs'], (file) => sources[file]), [{ from: 'a.mjs', to: 'b.mjs' }]);
 });
+
+// agent-comms#77: the store's record-only reconciliation capability check is
+// sealed once, by whichever module calls sealRecordOnlyReconciliation first,
+// so the record-only reconciler must be its only caller (the daemon imports
+// it at start; see docs/owner-decision-journal.md, Before wiring). Besides
+// that caller, only the store that defines it and the identity-host facades
+// that re-export it may name it, in code or in a string, and the facades
+// never call it. A name built at run time is beyond a source scan.
+const SEAL = 'sealRecordOnlyReconciliation';
+const SEAL_CALLER = 'owner-decision-reconcile.mjs';
+const SEAL_DEFINITION = 'identity/owner-decision-journal-store.mjs';
+const SEAL_FACADES = ['identity-host.mjs', 'identity/identity-host.mjs'];
+
+function sealReferences(files, read) {
+  const problems = [];
+  for (const file of files) {
+    const { code, strings } = maskSource(read(file));
+    const named = new RegExp(`\\b${SEAL}\\b`, 'u').test(code) || strings.some((value) => value.includes(SEAL));
+    if (!named || file === SEAL_CALLER || file === SEAL_DEFINITION) continue;
+    if (!SEAL_FACADES.includes(file)) problems.push(`${file}: names ${SEAL}; only ${SEAL_CALLER} may import it`);
+    else if (new RegExp(`\\b${SEAL}\\s*\\(`, 'u').test(code)) problems.push(`${file}: a facade calls ${SEAL}`);
+  }
+  return problems;
+}
+
+test('only the record-only reconciler names the reconciliation seal', () => {
+  const files = runtimeFiles();
+  assert.deepEqual(sealReferences(files, (file) => readFileSync(path.join(ROOT, file), 'utf8')), []);
+  // The one caller does import and call it.
+  assert.match(maskSource(readFileSync(path.join(ROOT, SEAL_CALLER), 'utf8')).code, new RegExp(`\\b${SEAL}\\s*\\(`, 'u'));
+});
+
+test('the seal guard flags any other importer, a string reference, and a facade call', () => {
+  const sources = {
+    [SEAL_CALLER]: `import { ${SEAL} } from './identity-host.mjs';\n${SEAL}(() => null);\n`,
+    [SEAL_DEFINITION]: `export function ${SEAL}() {}\n`,
+    'identity-host.mjs': `export { ${SEAL} } from './identity/identity-host.mjs';\n`,
+    'identity/identity-host.mjs': `export { ${SEAL} } from './owner-decision-journal-store.mjs';\n${SEAL}(() => true);\n`,
+    'other.mjs': `import { ${SEAL} } from './identity-host.mjs';\n`,
+    'named.mjs': `import * as host from './identity-host.mjs';\nhost['${SEAL}'](() => true);\n`,
+    'commented.mjs': `// ${SEAL} is mentioned only here.\nexport const x = 1;\n`,
+  };
+  assert.deepEqual(sealReferences(Object.keys(sources), (file) => sources[file]), [
+    `identity/identity-host.mjs: a facade calls ${SEAL}`,
+    `other.mjs: names ${SEAL}; only ${SEAL_CALLER} may import it`,
+    `named.mjs: names ${SEAL}; only ${SEAL_CALLER} may import it`,
+  ]);
+});
