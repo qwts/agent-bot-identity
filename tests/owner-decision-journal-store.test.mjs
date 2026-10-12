@@ -64,8 +64,10 @@ test('admission validates the daemon acceptance record against the exact origina
 
 test('internal journal reasons map only to the public non-authorizing codes', () => {
   assert.equal(journalError('owner-journal-capacity').code, 'journal-capacity');
+  assert.equal(journalError('owner-journal-conflict').code, 'conflict');
   for (const reason of ['owner-journal-busy', 'owner-journal-corrupt', 'owner-journal-io', 'owner-journal-flush',
-    'owner-journal-recovery-required', 'owner-journal-reopen-required', 'anything-else']) {
+    'owner-journal-orphan', 'owner-journal-unsupported-phase', 'owner-journal-scratch-pending',
+    'owner-journal-reopen-required', 'anything-else']) {
     assert.equal(journalError(reason).code, 'storage-failed');
   }
   assert.equal(journalError('owner-journal-platform-unsupported').code, 'owner-decision-unsupported');
@@ -77,7 +79,7 @@ test('admission creates exactly the 15 fixed files at their EOFs and publishes a
   const result = store.admit(input.action, input.acceptance);
   const name = requestDirectoryName({ namespaceDigest, requestId: input.requestId });
   assert.deepEqual(result, { state: 'admitted', requestId: input.requestId, directory: name,
-    physicalAllocationSupported: false, physicalFlushGuaranteed: false });
+    authorizationSupported: false, physicalAllocationSupported: false, physicalFlushGuaranteed: false });
   const dir = path.join(requestsOf(root), name);
   assert.equal(fs.statSync(dir).mode & 0o7777, 0o700);
   assert.deepEqual(fs.readdirSync(dir).sort(), [...DAEMON_JOURNAL_FILES].sort());
@@ -96,8 +98,9 @@ test('admission creates exactly the 15 fixed files at their EOFs and publishes a
 test('a repeated namespace/request never starts a fresh admission', darwin, (t) => {
   const root = freshRoot(t), store = createDaemonJournalStore({ root, namespaceDigest }), input = request();
   store.admit(input.action, input.acceptance);
-  const again = createDaemonJournalStore({ root, namespaceDigest });
-  assert.throws(() => again.admit(input.action, input.acceptance), refused('owner-journal-recovery-required'));
+  const changed = request(input.requestId, { acceptedAt: 1_800_000_001 });
+  assert.throws(() => createDaemonJournalStore({ root, namespaceDigest }).admit(changed.action, changed.acceptance),
+    refused('owner-journal-conflict', 'conflict'));
   assert.equal(createDaemonJournalStore({ root, namespaceDigest }).count(), 1);
   // The same request ID under another enrolled namespace is a different directory.
   const other = createDaemonJournalStore({ root, namespaceDigest: 'b'.repeat(64) });
@@ -108,9 +111,10 @@ test('a repeated namespace/request never starts a fresh admission', darwin, (t) 
 
 test('an interruption at any admission step leaves a charged orphan that is never fresh again', darwin, (t) => {
   const root = freshRoot(t);
+  // Every point before acceptance-context's trailer is visible is an orphan.
   const points = ['request:directory-created', 'request:directory-flushed', 'initialize:presence.record:created',
     'initialize:scratch.record:zeroed', 'request:files-flushed', 'original-action:body-written',
-    'original-action:trailer-written', 'acceptance-context:body-flushed', 'acceptance-context:trailer-written'];
+    'original-action:trailer-written', 'acceptance-context:body-written', 'acceptance-context:body-flushed'];
   points.forEach((point, index) => {
     const requestId = `${String(index + 1).padStart(8, '0')}-0000-4000-8000-000000000000`, input = request(requestId);
     const crashing = createDaemonJournalStore({ root, namespaceDigest, fault: (at) => { if (at === point) throw new Error('crash'); } });
@@ -119,7 +123,8 @@ test('an interruption at any admission step leaves a charged orphan that is neve
     assert.throws(() => crashing.count(), refused('owner-journal-reopen-required'));
     const reopened = createDaemonJournalStore({ root, namespaceDigest });
     assert.equal(reopened.count(), index + 1, point);
-    assert.throws(() => reopened.admit(input.action, input.acceptance), refused('owner-journal-recovery-required'));
+    assert.throws(() => reopened.admit(input.action, input.acceptance), refused('owner-journal-orphan'));
+    assert.throws(() => createDaemonJournalStore({ root, namespaceDigest }).recover(requestId), refused('owner-journal-orphan'));
   });
 });
 
