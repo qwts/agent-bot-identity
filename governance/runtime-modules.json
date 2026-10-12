@@ -122,6 +122,7 @@
     "owner-decision-target.mjs": "soul",
     "owner-decision-identity-port.mjs": "host",
     "owner-decision-effect-gate.mjs": "host",
+    "owner-decision-revision-port.mjs": "host",
     "comms-windows.mjs": "comms",
     "comms-membership.mjs": "comms",
     "comms-relay.mjs": "comms",

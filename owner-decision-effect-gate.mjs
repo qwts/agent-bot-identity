@@ -48,20 +48,25 @@ function keyIdOf(pin) {
 // physicalFlushGuaranteed: false, complete } or a frozen
 // { state: 'refused', reason, code } with no completer.
 // `complete(result)` takes the store's completion result ({ at }, plus a
-// revision's journalSeq, journalRecordDigest and working) and returns the
-// settled request, for this request only; it works once, and every journal
-// refusal (used, poisoned, invalid result) is thrown as the journal's error.
+// revision's journalSeq and working) and returns the settled request, for
+// this request only; it works once, and every journal refusal (used,
+// poisoned, invalid result, linked event refused) is thrown as the journal's
+// error. A revision completes only with `revisionPort` (the host's read-only
+// revision-journal port): the linked event's bytes come from it, never from
+// the caller.
 // Refusal reasons are the final-refusal reasons (trust-unavailable,
 // validation-failed, target-unavailable); a consumed request or a storage
 // failure reports the journal's own code and reason. Nothing is written for
 // any refusal.
 export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
-  journalRoot, namespaceDigest, daemonAccount, censusFile, identityPort, nowMilliseconds,
+  journalRoot, namespaceDigest, daemonAccount, censusFile, identityPort, revisionPort, nowMilliseconds,
 } = {}) {
   try {
     if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) refuse('validation-failed');
     const store = createDaemonJournalStore({ root: journalRoot, namespaceDigest });
+    let soul;
     const entered = store.enterEffect(requestId, (view) => {
+      soul = view.action.soul;
       let trust;
       // Always this daemon's own trust store, from its launch env and home:
       // the same store the preparation writer read, never the caller's choice.
@@ -89,7 +94,11 @@ export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
     });
     const { entry } = entered;
     return Object.freeze({ state: 'entered', requestId: entered.requestId, effectId: entered.effectId, enteredDigest: entered.enteredDigest,
-      physicalFlushGuaranteed: false, complete: (result) => store.completeEffect(entry, result) });
+      physicalFlushGuaranteed: false,
+      // A revision's completion reads its linked event only through the
+      // host's revision-journal port, for this request's soul.
+      complete: (result) => store.completeEffect(entry, result,
+        { readLinkedEvent: revisionPort ? (seq) => revisionPort.read(soul, seq) : undefined }) });
   } catch (error) {
     return Object.freeze({ state: 'refused', reason: error?.refusal ?? error?.reason ?? 'storage-unavailable', code: error?.code ?? 'storage-failed' });
   }

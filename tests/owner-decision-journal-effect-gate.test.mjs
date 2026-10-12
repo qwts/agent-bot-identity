@@ -12,6 +12,7 @@ import process from 'node:process';
 import { canonicalJson } from '../canonical-json.mjs';
 import { enterOwnerDecisionEffect } from '../owner-decision-effect-gate.mjs';
 import { createOwnerDecisionIdentityPort } from '../owner-decision-identity-port.mjs';
+import { createOwnerDecisionRevisionPort } from '../owner-decision-revision-port.mjs';
 import { upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../identity/agent-identity.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
@@ -111,17 +112,33 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
       transcriptLocator: null, lastSeen: '2026-10-12T00:00:00.000Z' }, { file: censusFile });
   }
   const options = { journalRoot, namespaceDigest, daemonAccount: account, censusFile,
-    identityPort: createOwnerDecisionIdentityPort({ stateDir }), nowMilliseconds: NOW };
+    identityPort: createOwnerDecisionIdentityPort({ stateDir }), revisionPort: createOwnerDecisionRevisionPort({ stateDir }), nowMilliseconds: NOW };
+  // The approve's own revision-journal record at `seq`, as the effect step
+  // would append it under the revision lock, linked to this request.
+  const preparationDigest = sha256(Buffer.from(canonicalJson(preparation)));
+  const appendRevision = (seq = 0, change = {}) => {
+    const agentDir = path.join(stateDir, 'soul-revisions', soul);
+    fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+    const record = { schemaVersion: 1, kind: 'revision', revision: template.expected.proposal.revision, parentRevision: template.expected.head.revision,
+      author: 'soul', reason: 'Ship it', proposalId: template.expected.proposal.proposalId, approval: 'user', approvedBy: 'user', approvalReason: 'ok',
+      authorization: { method: 'owner-decision' },
+      ownerDecision: { requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest },
+      at: '2026-10-12T00:00:00.000Z', ...change };
+    const file = path.join(agentDir, `${String(seq).padStart(10, '0')}.json`);
+    fs.writeFileSync(file, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    return file;
+  };
   const recover = () => createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recover(requestId);
   // The gate runs as this daemon: its trust store comes from the launch env and home.
   const enter = (overrides = {}, token = presence) => asDaemon({ env, home }, () => enterOwnerDecisionEffect({ requestId, presenceToken: token }, { ...options, ...overrides }));
   return { base, requestId, presence, signer, broker, trustWriter, trustRoot, censusFile, journalRoot, stateDir, enter, recover, actionText,
-    receiptToken: receipt.toString('ascii'), check };
+    receiptToken: receipt.toString('ascii'), check, appendRevision, soul };
 }
 
-// What the effect reports for this approve: its revision-journal sequence and
-// record digest, and no working tree (record-only).
-const reported = { at: 2_000_000_011, journalSeq: 7, journalRecordDigest: 'b'.repeat(64), working: null };
+// What the effect reports for this approve: the sequence of the revision
+// record it appended (the bytes come from the revision port) and no working
+// tree (record-only).
+const reported = { at: 2_000_000_011, journalSeq: 0, working: null };
 
 test('the gate returns a bound completer that completes this request once', darwin, (t) => {
   const r = released(t);
@@ -129,22 +146,26 @@ test('the gate returns a bound completer that completes this request once', darw
   assert(Object.isFrozen(entered));
   assert.deepEqual(Object.keys(entered).sort(), ['complete', 'effectId', 'enteredDigest', 'physicalFlushGuaranteed', 'requestId', 'state']);
   assert.strictEqual(entered.physicalFlushGuaranteed, false);
+  r.appendRevision();
   const done = entered.complete(reported);
-  // A revision is complete but stays indeterminate until its linked event.
-  assert.equal(done.state, 'indeterminate'); assert.equal(done.requestId, r.requestId); assert.match(done.completedDigest, /^[a-f0-9]{64}$/);
+  // The linked event (slot 13) then completed (slot 10): applied.
+  assert.equal(done.state, 'applied'); assert.equal(done.requestId, r.requestId); assert.match(done.completedDigest, /^[a-f0-9]{64}$/);
   assert.throws(() => entered.complete(reported), { reason: 'owner-journal-entry-required' });
-  assert.equal(r.recover().state, 'indeterminate');
+  assert.equal(r.recover().state, 'applied');
 });
 
 test('the completer is for its own request only', darwin, (t) => {
   const a = released(t), b = released(t, { shared: a, requestId: '22222222-2222-4222-8222-222222222222', nonce: nonceOf(2) });
   const enteredA = a.enter(), enteredB = b.enter();
+  a.appendRevision(0); b.appendRevision(1);
   // A request ID in the result is not an input: A's completer completes A.
   assert.equal(enteredA.complete({ ...reported, requestId: b.requestId }).requestId, a.requestId);
   assert.throws(() => enteredA.complete(reported), { reason: 'owner-journal-entry-required' });
   const read = (r) => fs.readFileSync(path.join(r.journalRoot, 'requests', requestDirectoryName({ namespaceDigest, requestId: r.requestId }), 'completed.record'));
   assert(read(b).every((byte) => byte === 0));
-  assert.equal(enteredB.complete(reported).requestId, b.requestId);
+  // B's completer can't use A's record either: the linkage is B's.
+  assert.throws(() => enteredB.complete(reported), { reason: 'owner-journal-linked-event-refused' });
+  assert.equal(enteredB.complete({ ...reported, journalSeq: 1 }).requestId, b.requestId);
 });
 
 test('after a crash or reopen nothing completes the entered request', darwin, async (t) => {

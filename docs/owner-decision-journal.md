@@ -170,10 +170,9 @@ never a terminal refusal.
 `linked-authoritative-event` (16384 bytes). It holds pure checks only. The
 local revision writer (`soul-revisions.mjs`) now emits the optional
 `ownerDecision` linkage, with `authorization:{method:"owner-decision"}`, when
-an owner-decision operation passes it. Records stay `schemaVersion 1`, per
-the owner's decision. Nothing passes it yet: the effect composition that
-reads the record under the revision lock and fills this slot is a later
-slice.
+an owner-decision operation passes it, and returns that record's journal
+sequence. Records stay `schemaVersion 1`, per the owner's decision. The
+revision completion (below) publishes this slot.
 
 - **Revisions only.** Approve, reject, adopt and edit link one authoritative
   revision-journal event. A cold-wake change has none, so its slot stays
@@ -697,6 +696,19 @@ instance; a storage failure (an unknown `requests/` entry included) does.
 These are open items for whoever wires the disabled owner-decision pieces to a
 route. None is built here.
 
+- **Revision-journal custody and the domain lock.** The revision port checks
+  custody of the record and its fixed ancestry, but not macOS ACLs, which
+  Node can't read without exec or native code. It doesn't hold the revision
+  lock: the effect step must append the record and the completion must read
+  it back under one domain lock, against the expected state the preparation
+  recorded. That atomicity, and integrating the expected-state check, are a
+  separate acceptance item. Anyone who can write the revision journal or the
+  daemon journal directly can still plant a record or slot 13; only custody
+  protects against that, as with slots 2 and 7.
+- **Working digests are mechanism only.** An applying edit's `working`
+  digests are the completion caller's assertion. Nothing derives them yet
+  from validated actual state, independent of the linked head, so they are
+  not proof.
 - **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.
@@ -898,3 +910,38 @@ bounded copy. An input's own `length`, `byteLength`, `buffer`, `byteOffset`,
 `subarray` or `slice` is never read. So an oversized view that claims to be
 small can't pass a cap, a misleading property can't change what's decoded,
 and a Proxy, a lookalike or another typed array isn't bytes.
+
+## Revision completion with the linked event (disabled)
+
+A revision completes through the gate's bound `complete({at, journalSeq,
+working})`, built with the host's `revisionPort`
+(`owner-decision-revision-port.mjs`, read-only). The store's
+`completeEffect(entry, result, {readLinkedEvent})` then does this:
+- **Reads the bytes itself.** It reads the exact revision-journal record at
+  `journalSeq` through the port, for the action's soul. It never accepts
+  linked-event bytes, or a `journalRecordDigest`, from the caller.
+- **Verifies them.** They must be this request's linked authoritative event
+  (`verifyLinkedEvent`): the operation, the proposal and the exact
+  five-field linkage. The event's revision must be the entered transition's.
+  `journalRecordDigest` is the SHA-256 of those bytes.
+- **Writes in order.** It consumes the one-shot handle, publishes slot 13
+  (the linked event), then publishes slot 10 (completed). The request is
+  then `applied`.
+
+A read or verification refusal writes nothing and keeps the handle for an
+explicit retry. Once writing starts, the handle is gone: a failure in or
+between the two publications is never retried, and the request stays
+`effect-uncertain`. A linked event already present refuses. Cold-wake is
+unchanged, with no linked event.
+
+**Port custody.** For `<stateDir>/soul-revisions/<agentId>/<seq>.json`:
+- The fixed ancestry (the state directory, `soul-revisions/` and the agent
+  directory) must be real directories, owned by this uid, with no group or
+  world write.
+- The agent ID must be a soul ID and the sequence a safe integer, so neither
+  can name another file.
+- The record must be the file the name points to, opened no-follow, with one
+  link, owned by this uid, no group or world write, and 1 to 16384 bytes.
+- The read is exact. Its size, mtime, link count and named identity must be
+  unchanged after it.
+- macOS ACLs aren't checked (see Before wiring).

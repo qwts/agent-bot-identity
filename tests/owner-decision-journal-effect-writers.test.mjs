@@ -56,7 +56,8 @@ function transaction(operation, coldId = 'wake-on-preparation') {
     author: 'soul', reason: 'Ship it', proposalId: parameters.proposalId, approval: 'user', approvedBy: 'user', approvalReason: 'ok',
     ownerDecision: { requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest },
     at: new Date(AT * 1000).toISOString() })}\n`);
-  const revision = { at: AT, journalSeq: byId('approve-completed').record.detail.journalSeq, journalRecordDigest: sha256(linked), working: null };
+  // What a revision completion reports; the linked event's bytes come from the reader.
+  const revision = { at: AT, journalSeq: byId('approve-completed').record.detail.journalSeq, working: null };
   return {
     requestId, action, acceptance: Buffer.from(canonicalJson(acceptance)), preparation, preparationDigest, receiptDigest, linked, revision,
     slots: { preparation: preparationBytes, 'prepared-challenge': challengeFor(preparation, action), presence: Buffer.from('p1.payload.signature'), receipt,
@@ -81,9 +82,11 @@ function journal(t, operation = 'revision.approve', { upTo = 'successful-check',
   const entry = upTo === 'successful-check' && enter ? store.enterEffect(tx.requestId, () => ({ at: AT })).entry : null;
   const recover = () => open().recover(tx.requestId);
   const defaults = operation === 'cold-wake.set' ? { at: AT } : tx.revision;
-  const complete = (result = defaults, handle = entry) => store.completeEffect(handle, result);
+  // The revision-journal reader stands in for the host port: the exact linked-event bytes.
+  const reader = { readLinkedEvent: () => tx.linked };
+  const complete = (result = defaults, handle = entry) => store.completeEffect(handle, result, reader);
   const refuse = (refusal = { code: 'expected-state-changed', at: AT }, options) => open(options).refusePreEffect(tx.requestId, refusal);
-  return { tx, root, write, read, recover, complete, refuse, store, entry, open, defaults };
+  return { tx, root, write, read, recover, complete, refuse, store, entry, open, defaults, reader };
 }
 
 // Nothing is written: the request's files are byte-identical.
@@ -116,22 +119,25 @@ test('a cold-wake completion derives its record from entered and the action, and
   }
 });
 
-test('a revision completion is indeterminate until its linked authoritative event, then applied', darwin, async (t) => {
-  await t.test('completed first', (tt) => {
+// A revision completion reads its linked event through the reader, publishes
+// it to slot 13, then slot 10: the request is applied.
+test('a revision completion publishes its linked event, then completed, and is applied', darwin, async (t) => {
+  await t.test('applied, with the exact bytes and digests', (tt) => {
     const j = journal(tt);
     const done = j.complete();
-    assert.equal(done.state, 'indeterminate');
+    assert.equal(done.state, 'applied');
     const expected = { v: 1, kind: 'effect', requestId: j.tx.requestId, payloadDigest: j.tx.preparation.payloadDigest, preparationDigest: j.tx.preparationDigest,
       receiptDigest: j.tx.receiptDigest, effectId: j.tx.preparation.effectId, phase: 'completed', at: AT,
-      detail: { ...byId('approve-completed').record.detail, journalRecordDigest: j.tx.revision.journalRecordDigest } };
+      detail: { ...byId('approve-completed').record.detail, journalRecordDigest: sha256(j.tx.linked) } };
     assert.equal(done.completedDigest, sha256(canonicalJson(expected)));
-    j.write('linked-authoritative-event', j.tx.linked);
+    assert.deepEqual(j.read('linked-authoritative-event'),
+      encodeDaemonJournalFrame(j.tx.linked, { namespaceDigest, requestId: j.tx.requestId, slot: 'linked-authoritative-event' }));
     assert.deepEqual(j.recover().outcome, { code: 'applied', effectDigest: done.completedDigest });
   });
-  await t.test('linked event first', (tt) => {
+  await t.test('a linked event already present refuses', (tt) => {
     const j = journal(tt);
     j.write('linked-authoritative-event', j.tx.linked);
-    assert.equal(j.complete().state, 'applied');
+    unchanged(j, () => j.complete(), { reason: 'owner-journal-transition-refused' });
   });
 });
 
@@ -168,7 +174,7 @@ test('completion requires the live one-shot entry handle from the instance that 
   });
   await t.test('a handle is used once', (tt) => {
     const j = journal(tt);
-    assert.equal(j.complete().state, 'indeterminate');
+    assert.equal(j.complete().state, 'applied');
     unchanged(j, () => j.complete(), required);
   });
   await t.test('a handle for one request never completes another', (tt) => {
@@ -221,16 +227,17 @@ test('completion is legal only while the entered record is the one the handle en
 
 test('a completion that does not repeat the entered transition refuses and writes nothing', darwin, async (t) => {
   const bad = {
-    'missing journal sequence': { at: AT, journalRecordDigest: 'b'.repeat(64), working: null },
-    'working tree on a record-only entry': { at: AT, journalSeq: 1, journalRecordDigest: 'b'.repeat(64), working: { rootDigest: 'c'.repeat(64), inventoryDigest: 'd'.repeat(64) } },
-    'negative time': { at: -1, journalSeq: 1, journalRecordDigest: 'b'.repeat(64), working: null },
-    'a time before entry': { at: AT - 1, journalSeq: 1, journalRecordDigest: 'b'.repeat(64), working: null },
+    'missing journal sequence': { at: AT, working: null },
+    'a caller-supplied record digest': { at: AT, journalSeq: 1, journalRecordDigest: 'b'.repeat(64), working: null },
+    'working tree on a record-only entry': { at: AT, journalSeq: 1, working: { rootDigest: 'c'.repeat(64), inventoryDigest: 'd'.repeat(64) } },
+    'negative time': { at: -1, journalSeq: 1, working: null },
+    'a time before entry': { at: AT - 1, journalSeq: 1, working: null },
   };
   for (const [name, result] of Object.entries(bad)) {
     await t.test(name, (tt) => {
       const j = journal(tt);
       unchanged(j, () => j.complete(result), { reason: 'invalid-owner-journal-record', code: 'bad-request' });
-      assert.equal(j.complete().state, 'indeterminate');
+      assert.equal(j.complete().state, 'applied');
     });
   }
   await t.test('not an object', (tt) => {
@@ -351,8 +358,8 @@ test('malformed input refuses before the lock, and a refused transition leaves t
   const { entry } = store.enterEffect(j.tx.requestId, () => ({ at: AT }));
   assert.throws(() => store.refusePreEffect(j.tx.requestId, { code: 'expired', at: AT }), { reason: 'owner-journal-conflict' });
   // A refused completion does not consume the handle: it completes once fixed.
-  assert.throws(() => store.completeEffect(entry, { ...j.tx.revision, at: AT - 1 }), { reason: 'invalid-owner-journal-record' });
-  assert.equal(store.completeEffect(entry, j.tx.revision).state, 'indeterminate');
+  assert.throws(() => store.completeEffect(entry, { ...j.tx.revision, at: AT - 1 }, j.reader), { reason: 'invalid-owner-journal-record' });
+  assert.equal(store.completeEffect(entry, j.tx.revision, j.reader).state, 'applied');
 });
 
 test('each writer flushes the request it read before writing, and refuses an unknown request', darwin, async (t) => {
@@ -393,4 +400,46 @@ test('a refused record must bind the saved receipt whenever one is saved', darwi
   assert.throws(() => j.recover(), { reason: 'owner-journal-corrupt' });
   j.write('pre-effect-refused', Buffer.from(canonicalJson({ ...record, receiptDigest: j.tx.receiptDigest })));
   assert.equal(j.recover().state, 'refused');
+});
+
+// The composed revision completion (slot 13, then slot 10): the linked event
+// comes only from the reader, verified as this request's; a refusal before
+// the first write keeps the handle; a failure in either publication consumes
+// it and leaves the request effect-uncertain.
+test('a revision completion verifies the linked event it reads, and refuses anything else', darwin, async (t) => {
+  const refusedLinked = { reason: 'owner-journal-linked-event-refused' };
+  const event = (j, change) => Buffer.from(`${JSON.stringify({ ...JSON.parse(j.tx.linked), ...change })}\n`);
+  const cases = {
+    'no reader': () => undefined,
+    'a reader that throws': () => ({ readLinkedEvent: () => { throw new Error('unavailable'); } }),
+    'not bytes': () => ({ readLinkedEvent: () => '{}' }),
+    'the right event as a string, not bytes': (j) => ({ readLinkedEvent: () => j.tx.linked.toString() }),
+    'another request\'s linkage': (j) => ({ readLinkedEvent: () => event(j, { ownerDecision: { ...JSON.parse(j.tx.linked).ownerDecision, requestId: '33333333-3333-4333-8333-333333333333' } }) }),
+    'another proposal': (j) => ({ readLinkedEvent: () => event(j, { proposalId: '33333333-3333-4333-8333-333333333333' }) }),
+    'another revision': (j) => ({ readLinkedEvent: () => event(j, { revision: `sha256:${'e'.repeat(64)}` }) }),
+    'a decision for an approve': (j) => ({ readLinkedEvent: () => event(j, { kind: 'decision' }) }),
+    'not the writer\'s own serialization': (j) => ({ readLinkedEvent: () => Buffer.from(`${JSON.stringify(JSON.parse(j.tx.linked), null, 1)}\n`) }),
+  };
+  for (const [name, reader] of Object.entries(cases)) {
+    await t.test(name, (tt) => {
+      const j = journal(tt);
+      const expected = name === 'no reader' ? { reason: 'invalid-owner-journal-record' } : refusedLinked;
+      unchanged(j, () => j.store.completeEffect(j.entry, j.tx.revision, reader(j)), expected);
+      // Nothing was written and the handle is kept for an explicit retry.
+      assert.equal(j.complete().state, 'applied');
+    });
+  }
+});
+
+test('a crash in or between the two publications is effect-uncertain, never retried', darwin, async (t) => {
+  const crashAt = (point) => (at) => { if (at === point) throw new Error('crash'); };
+  for (const point of ['linked-authoritative-event:body-written', 'linked-authoritative-event:trailer-flushed', 'completed:body-written']) {
+    await t.test(point, (tt) => {
+      const j = journal(tt, 'revision.approve', { fault: crashAt(point) });
+      assert.throws(() => j.complete());
+      assert.deepEqual(j.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+      // The handle was consumed before the first write: no retry, from any instance.
+      assert.throws(() => j.open().completeEffect(j.entry, j.tx.revision, j.reader), { reason: 'owner-journal-entry-required' });
+    });
+  }
 });
