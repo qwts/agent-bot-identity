@@ -1,0 +1,1 @@
+- Check the pinned owner-decision broker namespace against agent-comms' published derivation vectors: lowercase 64-hex digests only (#1007).

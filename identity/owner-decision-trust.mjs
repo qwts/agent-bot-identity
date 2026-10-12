@@ -87,9 +87,15 @@ function validPin(pin) {
 
 // --- exact records ---
 
+// The pinned namespace is the broker's digest exactly as published: lowercase
+// 64-hex. We never hold or derive from the raw installation ID.
+export function isNamespaceDigest(value) {
+  return matches(DIGEST, value);
+}
+
 function namespaceRecord(value) {
   return exact(value, ['v', 'kind', 'namespaceDigest', 'enrolledAt', 'auditId']) && value.v === 1
-    && value.kind === 'owner-decision-broker-namespace' && matches(DIGEST, value.namespaceDigest)
+    && value.kind === 'owner-decision-broker-namespace' && isNamespaceDigest(value.namespaceDigest)
     && seconds(value.enrolledAt) && matches(UUID4, value.auditId);
 }
 

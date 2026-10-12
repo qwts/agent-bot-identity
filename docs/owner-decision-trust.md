@@ -28,7 +28,12 @@ for an audit line.
 `{v:1,kind:"owner-decision-broker-namespace",namespaceDigest,enrolledAt,auditId}`.
 `namespaceDigest` is the broker's SHA-256 of
 `"agent-comms-owner-broker-namespace-v1\n"` followed by its random 32-byte
-installation ID. We only ever store the digest. The record is created once and
+installation ID. We only ever store the digest. The pinned form is lowercase
+64-hex, checked against agent-comms' published derivation vectors
+(`broker-namespace-v1.json` from agent-comms `11767ad`, vendored and pinned by
+SHA-256). Uppercase and base64 spellings are refused. A raw ID written as hex
+also looks like 64-hex, so only the owner ceremony's published digest is ever
+enrolled. The record is created once and
 never minted, reset or replaced. Re-enrolling the same digest changes nothing,
 and a different digest is a `conflict`.
 
