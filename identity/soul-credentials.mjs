@@ -528,11 +528,13 @@ export function appKeyStores(slug, { env = process.env, home = homedir(), config
 // It proves GitHub accepts the key without minting an installation token.
 export async function verifyAppCredential({ appId, privateKeyPem }, { env = process.env, fetchImpl = fetch } = {}) {
   const { buildAppJwt } = await import('./mint-token.mjs');
-  const { apiBase, loadConfig } = await import('../config.mjs');
+  const { appJwtApiBase, loadConfig } = await import('../config.mjs');
   createPrivateKey(privateKeyPem);
+  const base = appJwtApiBase(loadConfig({ env }));
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));
-  const response = await fetchImpl(`${apiBase(loadConfig({ env }))}/app`, {
+  const response = await fetchImpl(`${base}/app`, {
     headers: { authorization: `Bearer ${jwt}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-bot-identity' },
+    redirect: 'error',
   });
   if (!response.ok) throw new Error(`GitHub refused the stored key (GET /app -> ${response.status})`);
   return true;

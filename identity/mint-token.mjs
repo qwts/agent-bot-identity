@@ -28,7 +28,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { resolveAppCredential } from './soul-credentials.mjs';
-import { loadConfig, apiBase } from '../config.mjs';
+import { loadConfig, appJwtApiBase } from '../config.mjs';
 
 function b64url(input) {
   return Buffer.from(input).toString('base64url');
@@ -192,6 +192,8 @@ async function gh(base, method, path, jwt, payload = null) {
       ...(payload ? { 'content-type': 'application/json' } : {}),
     },
     ...(payload ? { body: JSON.stringify(payload) } : {}),
+    // A redirect would carry the App JWT to whatever origin it names (#1062).
+    redirect: 'error',
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -263,7 +265,7 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
     return mintThroughDaemon({ slug: resolved.slug, env });
   }
   const { appId, privateKeyPem } = resolved;
-  const base = apiBase(config);
+  const base = appJwtApiBase(config);
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));
 
   let installationId = env.GH_APP_INSTALLATION_ID;
