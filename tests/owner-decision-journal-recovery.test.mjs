@@ -95,8 +95,11 @@ function forgedFrame(payload, { requestId, slot, cap, role }) {
 
 test('strict graph refusal: every damaged, foreign or unsupported graph refuses and nothing is recreated', darwin, async (t) => {
   const cases = [
-    ['a committed later phase', ({ file, input }) => fs.writeFileSync(file('preparation'),
-      encodeDaemonJournalFrame(Buffer.from('{}'), { namespaceDigest, requestId: input.requestId, slot: 'preparation' })), 'owner-journal-unsupported-phase'],
+    // A committed preparation that is not a typed, bound record is damage.
+    ['an untyped committed preparation', ({ file, input }) => fs.writeFileSync(file('preparation'),
+      encodeDaemonJournalFrame(Buffer.from('{}'), { namespaceDigest, requestId: input.requestId, slot: 'preparation' })), 'owner-journal-corrupt'],
+    ['a committed reconciliation pair', ({ file, input }) => fs.writeFileSync(file('observation-pair'),
+      encodeDaemonJournalFrame(Buffer.from('{}'), { namespaceDigest, requestId: input.requestId, slot: 'observation-pair' })), 'owner-journal-unsupported-phase'],
     ['a partial later phase', ({ file, input }) => {
       const frame = encodeDaemonJournalFrame(Buffer.from('{}'), { namespaceDigest, requestId: input.requestId, slot: 'entered' });
       frame.fill(0, 4096 + 128); fs.writeFileSync(file('entered'), frame);

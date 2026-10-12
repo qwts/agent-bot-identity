@@ -223,3 +223,90 @@ field, so nothing validates until a reviewed adapter adds it.
 The tests compose all eight shared `preparedWrapperBounds` vectors from the
 vendored budget fixture (agent-comms `0686f2c`) to their exact challenge, stage
 and wrapper bytes and hashes.
+
+## Typed effect evidence and request phases
+
+`identity/owner-decision-evidence.mjs` validates the typed records in the
+later slots, against agent-comms
+`docs/owner-decision-effect-evidence.md` and
+`tests/fixtures/owner-decisions/effect-evidence-v1.json` at `f42c05b` (vendored
+and pinned by SHA-256). It holds strict codecs and bindings for:
+
+- the preparation (slot 6), bound to the acceptance and action, including the
+  stage and the exact `exp`;
+- the one successful check (slot 7);
+- the effect records: `refused` (slot 8), `entered` (slot 9) and
+  `completed` (slot 10).
+
+It also has the agent-comms owner-local reconciliation classification.
+Nothing here writes, applies, verifies a signature or grants authority.
+
+The store reads each request as one graph.
+
+**Before any effect has entered**, every slot is either empty or a committed
+typed record bound to this request, and the graph is one of these phases:
+
+| State | What the graph holds |
+| --- | --- |
+| `admitted` | The admission records only. |
+| `preparing` | A preparation without its challenge. |
+| `prepared` | The challenge, byte-for-byte the one the preparation implies. |
+| `authorizing` | Presence and/or receipt. |
+| `released` | The one successful check. |
+| `refused` | A proven pre-effect refusal, reported with `refusal:{code, effectDigest}`. |
+
+Anything else refuses as `storage-failed`.
+
+**Once `entered` holds anything but a clean partial write**, the request is
+`applied` only if the whole graph validates:
+- preparation, challenge, presence, receipt and check are present;
+- `entered` and `completed` are bound to them;
+- a revision also has its linked authoritative event, matching
+  `completed.journalRecordDigest`, while cold-wake has none.
+
+Then `outcome` is `{code:"applied", effectDigest}`. Everything else, damage
+included, is `indeterminate` with `effectDigest:null`.
+
+**`effectDigest` mapping**, agreed with the agent-comms coordinator:
+- normal applied: SHA-256 of the canonical `completed` record;
+- final pre-effect refusal: SHA-256 of the canonical `refused` record;
+- early preparation refusal: null;
+- indeterminate, from this producer: null. Entered evidence is never reported
+  as an `effectDigest`. The broker's codec may accept a non-null indeterminate
+  value, and we don't narrow it.
+
+`preparationDigest` is SHA-256 of the exact canonical slot-6 bytes. Neither
+`d1` nor the check carries it; the daemon links it. The public refusal outcome
+codes and exact mapping vectors will be written jointly before C2.
+
+Not yet validated here: the presence and receipt token signatures (the
+receipt verifier is C2), the live revision journal behind the linked event,
+and the reconciliation pairs and local outcome slot.
+
+### C2 contract (from the agent-comms coordinator, recorded for the writer)
+
+- **Relay events.** Each one is a single bounded line on the existing NDJSON
+  account watch. There is no transport acknowledgement. The prepared, check
+  and result requests are the protocol responses. A lost socket never replays
+  to another watch.
+- **The check.** `mayApply:true` belongs to one live awaiting check, and the
+  broker persists the release before replying, so a lost reply counts as
+  released or uncertain. The final synchronous entry rechecks
+  `now < receipt.exp`, trust readiness and the expected state after acquiring
+  the locks. There is no extra grace interval, and a saved check is never
+  replayed.
+- **Presence.** `presenceKey` pins the separately owner-enrolled native p1
+  key. The existing p1 protocol and audience stay as they are. The action
+  text and `actionDigest` come from shared action vectors.
+- **Results.** A result is authenticated against the current pairing and the
+  saved binding:
+  - an identical retained result returns `recorded:false` with the current
+    state;
+  - a different one is a conflict;
+  - when the broker is unavailable, the exact report is kept for explicit
+    retry without any effect;
+  - receipt expiry doesn't block reporting an executed result.
+- **Early refusal.** It sends `receiptDigest:null` and `effectDigest:null`,
+  with the fixed outcome and the saved binding. No prepared event is sent.
+- **Cancel.** Cancel wins only before the broker's durable authorization.
+  After that, the daemon's cancel event is a hint and never effect authority.
