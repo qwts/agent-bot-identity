@@ -5,8 +5,8 @@
 // binding registry and bind tokens, Agent ID records, principals, keyd, vouch,
 // the inbox, identity Apps, the bot checks agent-hook runs and the publish
 // scan. It also exports identity's daemon route handler, createIdentityRoutes
-// (F9 step 2; host keeps its bearer and proof checks). /v0/register is soul's
-// route since F9 step 3; a later F9 step splits /v0/spawn.
+// (F9 step 2; host keeps its bearer and proof checks), and identity's half of
+// /v0/spawn, spawnChildIdentity (F9 step 4). /v0/register is soul's route.
 //
 // Host may also import the shared contracts identity-format.mjs and
 // daemon-client.mjs directly.
@@ -17,7 +17,7 @@ export { assertAuthorized, getPrincipal, listPrincipals, principalsFile, resolve
 export { parseBindingProof, PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
 export { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
 export { createIdentityAppJobs, identityAppFailure, identityAppOperation, listIdentityApps } from './identity-apps.mjs';
-export { createIdentityRoutes } from './identity-routes.mjs';
+export { createIdentityRoutes, spawnChildIdentity } from './identity-routes.mjs';
 export { createInboxTaker, inboxError } from './inbox-take.mjs';
 export { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydMcpServerEntry, keydPaths, keydPolicyRules, keydRequest, keydStatus, keydVersionAction, readKeydRecord } from './keyd-client.mjs';
 export { mint } from './mint-token.mjs';

@@ -224,8 +224,11 @@ Two routes straddle identity and soul (F9):
   in `agent-population.mjs`, soul) on behalf of `setup-worktree` and join.
   Since F9 step 3 it is a soul route, in `soul-routes.mjs` (D6). It stays
   bearer-only, and its identity read goes through `identityOp`.
-- **`POST /v0/spawn`** (`identity-routes.mjs:49`) mints a child identity,
-  binds it and runs the spawn hook. It is called from `agent-identity.mjs:832`.
+- **`POST /v0/spawn`** (`agent-daemon.mjs:771`) mints a child identity, binds
+  it and runs the spawn hook. It is called from `agent-identity.mjs:832`.
+  Since F9 step 4 it is split (D6). `spawnChildIdentity`
+  (`identity-routes.mjs:321`) mints and binds the child. The daemon keeps the
+  route and the binding check, and it runs the spawn hook.
 
 The wire contracts agent-comms depends on are already written down: the binding
 proof (`binding-proof.mjs`; [daemon-api.md](daemon-api.md)) and the soul token

@@ -1,0 +1,1 @@
+- `POST /v0/spawn` is split: identity's `spawnChildIdentity` mints and binds the child, and the daemon checks the parent's binding and runs the spawn hook. Requests and responses are unchanged (#645, F9 step 4).
