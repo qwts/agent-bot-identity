@@ -147,7 +147,9 @@ export async function main(argv = process.argv.slice(2)) {
   process.stdout.write(broadenPullRequestInboxSearchArgument(argv[0], repositories));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../gh-inbox-query.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   main().catch((error) => {
     process.stderr.write(`gh-inbox-query: ${error.message}\n`);
     process.exit(1);

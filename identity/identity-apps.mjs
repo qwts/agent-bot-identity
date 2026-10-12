@@ -8,15 +8,15 @@ import { existsSync, mkdtempSync, readFileSync, rmdirSync, rmSync } from 'node:f
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { apiBase, isGateEnabled, loadConfig, slugForHarness, appLifecycleStatus } from './config.mjs';
-import { PROFILE_HARNESSES, profileAppSlugs } from './organization-profile.mjs';
+import { apiBase, isGateEnabled, loadConfig, slugForHarness, appLifecycleStatus } from '../config.mjs';
+import { PROFILE_HARNESSES, profileAppSlugs } from '../organization-profile.mjs';
 import { assertOwnerAction } from './owner-gate.mjs';
 import { assignAgentApp, readAgentIdentity } from './agent-identity.mjs';
 import { credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem, validateAgentId } from './identity-format.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
-import { buildAppJwt, pickInstallation } from './mint-token.mjs';
+import { buildAppJwt, pickInstallation } from '../mint-token.mjs';
 import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd, removeAppFromKeyd } from './keyd-client.mjs';
 import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, readManagedAppCredential, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
 
@@ -853,7 +853,9 @@ export async function identityAppsCommand(argv, { write = (value) => process.std
 // The command line is cli/identity-apps.mjs, which wires the owner gate's
 // principal check (owner-action.mjs) and the census (identity-app-souls.mjs,
 // #645). Run directly, this file only points there.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../identity-apps.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   process.stderr.write('identity-apps: run agent-bot identity apps\n');
   process.exitCode = 1;
 }

@@ -17,8 +17,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { unmanagedAuthors } from './config.mjs';
-import { encodeDecision } from './hook-dialects.mjs';
+import { unmanagedAuthors } from '../config.mjs';
+import { encodeDecision } from '../hook-dialects.mjs';
 
 export const UNINSTALLED_REASON = 'uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot';
 
@@ -757,7 +757,9 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   return encoded.exitCode;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../uninstalled-identity-hook.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   try {
     process.exitCode = main();
   } catch (error) {

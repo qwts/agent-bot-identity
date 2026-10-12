@@ -2,7 +2,7 @@
 
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { loadConfig } from './config.mjs';
+import { loadConfig } from '../config.mjs';
 import { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 import { protonPassAdapter } from './secret-providers/proton-pass.mjs';
 
@@ -68,7 +68,9 @@ export function main(argv = process.argv.slice(2), {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../secret.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   try {
     process.exitCode = main();
   } catch (error) {

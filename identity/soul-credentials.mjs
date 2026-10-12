@@ -49,11 +49,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { currentAgentId } from './agent-identity.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { soulMarkers } from './owner-gate.mjs';
-import { appDeclarations, appUsers } from './soul-app-declarations.mjs';
+import { appDeclarations, appUsers } from '../soul-app-declarations.mjs';
 import { readManagedAppCredential, readAppMetadata } from './identity-app-store.mjs';
-import { loadConfig } from './config.mjs';
+import { loadConfig } from '../config.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
 import { CREDENTIAL_STORES, credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem, secretNameOrThrow, slugOrThrow, soulAppItem, soulSecretItem } from './identity-format.mjs';
 
@@ -527,8 +527,8 @@ export function appKeyStores(slug, { env = process.env, home = homedir(), config
 // The live check: an App JWT signed with the stored key, sent to GET /app.
 // It proves GitHub accepts the key without minting an installation token.
 export async function verifyAppCredential({ appId, privateKeyPem }, { env = process.env, fetchImpl = fetch } = {}) {
-  const { buildAppJwt } = await import('./mint-token.mjs');
-  const { apiBase, loadConfig } = await import('./config.mjs');
+  const { buildAppJwt } = await import('../mint-token.mjs');
+  const { apiBase, loadConfig } = await import('../config.mjs');
   createPrivateKey(privateKeyPem);
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));
   const response = await fetchImpl(`${apiBase(loadConfig({ env }))}/app`, {
@@ -542,7 +542,9 @@ export async function verifyAppCredential({ appId, privateKeyPem }, { env = proc
 // revisions, so its body is soul-credential-migration.mjs and its command
 // line cli/migrate-credentials.mjs (#645). Run directly, this file only
 // points there.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../soul-credentials.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   process.stderr.write('soul-credentials: run agent-bot identity migrate-credentials\n');
   process.exitCode = 1;
 }

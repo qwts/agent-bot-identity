@@ -22,7 +22,7 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readAgentIdentity } from '../agent-identity.mjs';
+import { readAgentIdentity } from './agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { AGENT_ID_KEYS, PIN_KEYS } from './identity-format.mjs';
 import { accountHarness, accountName, detectHarness } from '../detect-harness.mjs';

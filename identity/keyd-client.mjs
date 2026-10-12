@@ -138,7 +138,7 @@ export function signKeydGrant({ agentId, app, tool, apiBase, installationId = nu
 
 // What the daemon's config says about where to mint, for a grant.
 export async function grantTarget({ env = process.env, config } = {}) {
-  const { apiBase, githubHost, loadConfig } = await import('./config.mjs');
+  const { apiBase, githubHost, loadConfig } = await import('../config.mjs');
   const loaded = config ?? loadConfig({ env });
   return {
     apiBase: apiBase(loaded),
@@ -278,7 +278,9 @@ export function keydVersionAction(status) {
 // Supervising keyd under launchd (`agent-bot keyd install|uninstall|status`)
 // is the host's job: keyd-supervisor.mjs (#645). Run directly, this file only
 // points there.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../keyd-client.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   process.stderr.write('keyd-client: run agent-bot keyd\n');
   process.exitCode = 1;
 }

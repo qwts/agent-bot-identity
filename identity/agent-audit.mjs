@@ -166,7 +166,9 @@ export async function auditCommand(argv, {
   return records;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../agent-audit.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   auditCommand(process.argv.slice(2)).catch((error) => {
     if (process.argv.includes('--json')) {
       process.stdout.write(`${JSON.stringify({ error: { code: error.code ?? 'audit-failed', message: error.message } })}\n`);

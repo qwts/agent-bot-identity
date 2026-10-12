@@ -16,13 +16,13 @@
 import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { mint } from './mint-token.mjs';
-import { isGateEnabled, loadConfig, githubHost } from './config.mjs';
+import { mint } from '../mint-token.mjs';
+import { isGateEnabled, loadConfig, githubHost } from '../config.mjs';
 import { presenceOrConsent, soulMarkers } from './owner-gate.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { currentAgentId, readAgentIdentity } from './agent-identity.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 
 // Harness detection alone still leaves an unpinned owner as a delegate.
@@ -195,7 +195,9 @@ async function main() {
   process.stdout.write(`username=x-access-token\npassword=${token}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../git-credential-bot.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   main().catch((err) => {
     console.error(`git-credential-bot: ${err.message}`);
     process.exit(1);

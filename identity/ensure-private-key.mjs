@@ -13,7 +13,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadConfig } from './config.mjs';
+import { loadConfig } from '../config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
 import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './identity-format.mjs';
@@ -465,7 +465,9 @@ export function main(argv = process.argv.slice(2)) {
   return result;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../ensure-private-key.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   try {
     main();
   } catch (error) {

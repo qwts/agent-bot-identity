@@ -7,7 +7,7 @@ import path from 'node:path';
 import { withLock } from '../file-lock.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { loadConfig } from '../config.mjs';
-import { credentialStores, legacyKeyRemovable } from '../soul-credentials.mjs';
+import { credentialStores, legacyKeyRemovable } from './soul-credentials.mjs';
 
 export const APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 export function validAppSlug(slug) { return typeof slug === 'string' && APP_SLUG.test(slug); }

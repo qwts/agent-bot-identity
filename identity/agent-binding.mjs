@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import process from 'node:process';
 
-import { createWindowsAccountCustody } from './windows-account-custody.mjs';
+import { createWindowsAccountCustody } from '../windows-account-custody.mjs';
 import { validateAgentId } from './identity-format.mjs';
 import { PROOF_HEADER, PROOF_WINDOW_MS, bindingKeyId, checkBindingProof, parseBindingProof, signBindingProof } from './binding-proof.mjs';
 
@@ -461,7 +461,9 @@ export async function revokeBinding({ env = process.env, cwd = process.cwd(), fe
   if (!response.ok) throw new Error(`binding revoke failed: HTTP ${response.status}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../agent-binding.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   try {
     if (process.argv.slice(2).join(' ') !== 'revoke') throw new Error('usage: agent-bot binding revoke');
     await revokeBinding();

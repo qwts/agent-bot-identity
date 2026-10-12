@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
-import { apiBase, githubHost, isGateEnabled, loadConfig } from './config.mjs';
+import { apiBase, githubHost, isGateEnabled, loadConfig } from '../config.mjs';
 import { assertSoulCoAuthor, currentAgentId, soulCoAuthorDomains } from './agent-identity.mjs';
 import { mintForCaller } from './git-credential-bot.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
@@ -299,7 +299,9 @@ async function main() {
   await runSignedCommit(parseSignedCommitArgs(process.argv.slice(2)));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../signed-commit.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   main().catch((error) => {
     process.stderr.write(`signed-commit: ${error.message}\n`);
     process.exitCode = 1;

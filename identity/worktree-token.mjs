@@ -31,10 +31,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isSoulBound, mintCredential, mintForCaller } from './git-credential-bot.mjs';
 import { ownerApprovalRequired, requireOwnerApproval } from './owner-approval.mjs';
-import { configuredAccountIdentity, accountName, detectAgentHarness } from './detect-harness.mjs';
-import { isGateEnabled, loadConfig } from './config.mjs';
+import { configuredAccountIdentity, accountName, detectAgentHarness } from '../detect-harness.mjs';
+import { isGateEnabled, loadConfig } from '../config.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 
 function git(...args) {
   // stdio pipes throughout: execFileSync otherwise passes git's stderr
@@ -195,7 +195,9 @@ async function main() {
   process.stdout.write(`${grant.token}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../worktree-token.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   main().catch((err) => {
     console.error(`worktree-token: ${err.message}`);
     process.exit(1);

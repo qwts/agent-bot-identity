@@ -21,13 +21,13 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { withLock } from './file-lock.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { withLock } from '../file-lock.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } from './config.mjs';
+import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } from '../config.mjs';
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
 import { AGENT_ID_KEYS, isAgentId, validateAgentId } from './identity-format.mjs';
 
@@ -720,7 +720,9 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../agent-identity.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   main().catch((error) => {
     console.error(`agent-identity: ${error.message}`);
     process.exit(1);
