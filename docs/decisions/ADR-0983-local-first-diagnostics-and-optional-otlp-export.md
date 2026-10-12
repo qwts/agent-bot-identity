@@ -1,6 +1,6 @@
 # ADR-0983: Local-first diagnostics, stable error codes and optional OTLP export
 
-**Status:** Proposed (the owner's choices of 2026-10-11, relayed by the coordinating agent; merging this record accepts it)
+**Status:** Accepted (2026-10-12; the owner's choices of 2026-10-11 as relayed by the coordinating agent, record merged in #997, implemented in #991, #999, #1000, #1001, #1002, #1004 and #1005)
 **Date:** 2026-10-11
 **Issue:** [qwts/agent-bot-identity#983](https://github.com/qwts/agent-bot-identity/issues/983)
 
@@ -66,7 +66,14 @@ the six questions below.
    or evidence of a caller, and a malformed one is replaced, not trusted. It
    is designed to cross machines later under the agent-net epic
    ([qwts/qwts-agent-org#46](https://github.com/qwts/qwts-agent-org/issues/46))
-   with the same rule.
+   with the same rule. The first wire contract, agreed with agent-comms
+   ([qwts/agent-comms#164](https://github.com/qwts/agent-comms/issues/164))
+   on 2026-10-12, is narrow: principal launch only, inbound only. A principal
+   may set an optional `traceparent` on `op:launch`; the broker forwards it
+   unchanged on `event:launch`, and the daemon makes its launch span a child
+   of it. Nothing is echoed on `launch-progress` or `launch-result`, mailbox
+   wake carries none, and sender authorization does not change. These are
+   untrusted correlation IDs, kept out of prompts and security receipts.
 
 The event record (schema version 1) has these fields, all optional except
 `v`, `at`, `component` and `event`: `v`, `at`, `id` (random event ID, for

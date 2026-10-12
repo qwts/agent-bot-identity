@@ -16,7 +16,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { sinceTime } from './identity-cli.mjs';
-import { cleanStoredEvent, readDiagnostics, runtimeVersion } from './diagnostics.mjs';
+import { cleanStoredEvent, DEFAULT_RETENTION_MS, readDiagnostics, runtimeVersion } from './diagnostics.mjs';
 
 export const EXPORT_FORMAT = 'agent-bot-diagnostics-export';
 export const EXPORT_VERSION = 1;
@@ -47,7 +47,7 @@ function options(argv, now) {
 }
 
 const tally = (events, key) => {
-  const counts = {};
+  const counts = Object.create(null); // a code named `__proto__` is just a key
   for (const event of events) if (event[key] !== undefined) counts[event[key]] = (counts[event[key]] ?? 0) + 1;
   return counts;
 };
@@ -55,6 +55,8 @@ const tally = (events, key) => {
 /** The export bundle for events since `sinceMs`; reads only the local store. */
 export function buildExport({ sinceMs, env = process.env, home = homedir(), now = () => new Date(), platform = process.platform, arch = process.arch, node = process.version } = {}) {
   const createdAt = now().toISOString();
+  // The window reported is the one read: nothing older than retention is.
+  const since = Math.max(sinceMs, now().getTime() - DEFAULT_RETENTION_MS);
   const all = readDiagnostics({ env, home, since: sinceMs, now })
     .map((event) => cleanStoredEvent(event, { env, home }))
     .filter(Boolean);
@@ -67,7 +69,7 @@ export function buildExport({ sinceMs, env = process.env, home = homedir(), now 
     platform,
     arch,
     node,
-    window: { since: new Date(Math.max(sinceMs, 0)).toISOString(), until: createdAt },
+    window: { since: new Date(since).toISOString(), until: createdAt },
     summary: {
       events: events.length,
       omitted: all.length - events.length,
