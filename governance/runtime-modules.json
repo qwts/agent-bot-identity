@@ -326,6 +326,7 @@
     "worktree-token.mjs": "identity",
     "identity/worktree-token.mjs": "identity",
     "identity-presence.mjs": "identity",
+    "identity/owner-decision-journal-frame.mjs": "identity",
     "identity/presence-verifier.mjs": "identity",
     "cold-wake-lock.mjs": "shared",
     "wake-webhook-store.mjs": "comms"

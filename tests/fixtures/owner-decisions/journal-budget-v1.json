@@ -1,0 +1,835 @@
+{
+  "version": 1,
+  "purpose": "Static maximal primitive-width templates and logical reservation arithmetic only; MAX_SAFE_INTEGER values are not live issuance/approval examples. No production codec, authority, filesystem allocation or recovery proof. Paired templates check typed record/preimage association and byte caps; they do not claim live proof/source linkage.",
+  "limits": {
+    "acceptedIds": 4096,
+    "framingBytes": 256,
+    "scratchPayloadBytes": 32768,
+    "namedFileEntries": 24,
+    "namedDirectories": 8,
+    "entryCharge": 4096,
+    "componentBytes": 64,
+    "globalReservationBytes": 1048576,
+    "globalNamedFileEntries": 16,
+    "globalNamedDirectories": 8,
+    "globalPayloadBytes": 131072
+  },
+  "stores": {
+    "broker": {
+      "reservationBytes": 262144,
+      "slots": [
+        {
+          "name": "acceptance",
+          "payloadCap": 4096
+        },
+        {
+          "name": "original-action",
+          "payloadCap": 32768
+        },
+        {
+          "name": "prepared-challenge",
+          "payloadCap": 32768
+        },
+        {
+          "name": "presence",
+          "payloadCap": 4096
+        },
+        {
+          "name": "receipt",
+          "payloadCap": 4096
+        },
+        {
+          "name": "authorization",
+          "payloadCap": 4096
+        },
+        {
+          "name": "release",
+          "payloadCap": 4096
+        },
+        {
+          "name": "initial-outcome",
+          "payloadCap": 4096
+        },
+        {
+          "name": "observation-reference",
+          "payloadCap": 2048
+        },
+        {
+          "name": "terminal-reference",
+          "payloadCap": 2048
+        }
+      ],
+      "expected": {
+        "payloadBytes": 94208,
+        "slotFramingBytes": 2560,
+        "scratchBytes": 33024,
+        "metadataBytes": 131072,
+        "requiredBytes": 260864,
+        "installationRequestBytes": 1073741824,
+        "globalRequiredBytes": 233472,
+        "installationReservedBytes": 1074790400
+      }
+    },
+    "daemon": {
+      "reservationBytes": 524288,
+      "slots": [
+        {
+          "name": "acceptance-context",
+          "payloadCap": 4096
+        },
+        {
+          "name": "original-action",
+          "payloadCap": 32768
+        },
+        {
+          "name": "prepared-challenge",
+          "payloadCap": 32768
+        },
+        {
+          "name": "presence",
+          "payloadCap": 4096
+        },
+        {
+          "name": "receipt",
+          "payloadCap": 4096
+        },
+        {
+          "name": "preparation",
+          "payloadCap": 4096
+        },
+        {
+          "name": "successful-check",
+          "payloadCap": 4096
+        },
+        {
+          "name": "pre-effect-refused",
+          "payloadCap": 4096
+        },
+        {
+          "name": "entered",
+          "payloadCap": 4096
+        },
+        {
+          "name": "completed",
+          "payloadCap": 4096
+        },
+        {
+          "name": "observation-pair",
+          "payloadCap": 4352
+        },
+        {
+          "name": "terminal-pair",
+          "payloadCap": 4352
+        },
+        {
+          "name": "linked-authoritative-event",
+          "payloadCap": 16384
+        },
+        {
+          "name": "local-lifecycle-outcome",
+          "payloadCap": 4096
+        }
+      ],
+      "expected": {
+        "payloadBytes": 127488,
+        "slotFramingBytes": 3584,
+        "scratchBytes": 33024,
+        "metadataBytes": 131072,
+        "requiredBytes": 295168,
+        "installationRequestBytes": 2147483648,
+        "globalRequiredBytes": 233472,
+        "installationReservedBytes": 2148532224
+      }
+    }
+  },
+  "administrativeRecords": [
+    {
+      "id": "acceptance-broker",
+      "slot": "acceptance",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "acceptance",
+        "principal": "principal_ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "soul": "agent_ffffffff-ffff-8fff-bfff-ffffffffffff",
+        "operation": "revision.approve",
+        "namespaceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "acceptedAt": 9007199254740991,
+        "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "daemonEpoch": 9007199254740991,
+        "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "reservationBytes": 262144
+      },
+      "canonicalJson": "{\"acceptedAt\":9007199254740991,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"kind\":\"acceptance\",\"namespaceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"operation\":\"revision.approve\",\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"principal\":\"principal_ffffffff-ffff-ffff-ffff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"reservationBytes\":262144,\"soul\":\"agent_ffffffff-ffff-8fff-bfff-ffffffffffff\",\"v\":1,\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"}",
+      "sha256": "2536178bcac211bfeefe4c59f4fc88654ab189fab2bd578ad2ef542db55a7902",
+      "utf8Bytes": 682,
+      "cap": 4096
+    },
+    {
+      "id": "acceptance-daemon",
+      "slot": "acceptance",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "acceptance",
+        "principal": "principal_ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "account": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "soul": "agent_ffffffff-ffff-8fff-bfff-ffffffffffff",
+        "operation": "revision.approve",
+        "namespaceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "acceptedAt": 9007199254740991,
+        "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "daemonEpoch": 9007199254740991,
+        "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "reservationBytes": 524288
+      },
+      "canonicalJson": "{\"acceptedAt\":9007199254740991,\"account\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"kind\":\"acceptance\",\"namespaceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"operation\":\"revision.approve\",\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"principal\":\"principal_ffffffff-ffff-ffff-ffff-ffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"reservationBytes\":524288,\"soul\":\"agent_ffffffff-ffff-8fff-bfff-ffffffffffff\",\"v\":1,\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"}",
+      "sha256": "2ae9711715e95bfc4ee48390cf4cea8f760ce093c1ad2a9adbb56896e6566c15",
+      "utf8Bytes": 682,
+      "cap": 4096
+    },
+    {
+      "id": "authorization",
+      "slot": "authorization",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "authorization",
+        "nonce": "__________________________________________8",
+        "actionDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "challengeDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "presenceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "exp": 9007199254740991,
+        "daemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "daemonEpoch": 9007199254740991,
+        "watchId": "ffffffff-ffff-4fff-bfff-ffffffffffff"
+      },
+      "canonicalJson": "{\"actionDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"challengeDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"daemonEpoch\":9007199254740991,\"daemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"exp\":9007199254740991,\"kind\":\"authorization\",\"nonce\":\"__________________________________________8\",\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"presenceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"v\":1,\"watchId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\"}",
+      "sha256": "33143a11e34d947949c35dfe7b631dd496476e3ad6647942cb44aef97cc5bbd3",
+      "utf8Bytes": 734,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-daemon-applied-applied",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "applied",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "applied",
+          "effectDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "sha256": "b5650827a1fcd916ead9564b852235dc657814a807f4c606ed65af6b30621e79",
+      "utf8Bytes": 538,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-daemon-refused-validation-refused",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "refused",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "validation-refused",
+          "effectDigest": null
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "sha256": "f0dac0cb2e933cce714784db36e6f2c0b7eb5eaa2890ae9db37553b8966d999b",
+      "utf8Bytes": 487,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-daemon-refused-authority-refused",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "refused",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "authority-refused",
+          "effectDigest": null
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"authority-refused\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "sha256": "c93b99854f51139fea69f2b65e8a23c6aeb378a60ec910965c07bfdd93d1dd99",
+      "utf8Bytes": 486,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-daemon-refused-deadline-expired",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "refused",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "deadline-expired",
+          "effectDigest": null
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "sha256": "53495e5bd66a5720e1e9f49e3f789ab0687b442c5e58d5f672c8a3ede80f349b",
+      "utf8Bytes": 485,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-daemon-cancelled-cancelled",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "cancelled",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "cancelled",
+          "effectDigest": null
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
+      "sha256": "246f3a314f1cebbefc231fb19c6ea88a6e8812b8d3dc32a69ebc758328700108",
+      "utf8Bytes": 480,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-daemon-expired-deadline-expired",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "expired",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "deadline-expired",
+          "effectDigest": null
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"expired\",\"v\":1}",
+      "sha256": "1bb56b135798b83e0e53b03e2b8738eb5982491966618ad5b6ac351e4884cef3",
+      "utf8Bytes": 485,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-daemon-indeterminate-effect-uncertain",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "indeterminate",
+        "receiptDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "outcome": {
+          "code": "effect-uncertain",
+          "effectDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "source": "daemon",
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"effect-uncertain\",\"effectDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"daemon\",\"state\":\"indeterminate\",\"v\":1}",
+      "sha256": "e4dc3d80f1536b9b7319b35a689cd1936ac6ae9eb3b0c2755ed44dc43811bcb0",
+      "utf8Bytes": 553,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-broker-refused",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "refused",
+        "receiptDigest": null,
+        "outcome": {
+          "code": "validation-refused",
+          "effectDigest": null
+        },
+        "source": "broker",
+        "reportingDaemonKey": null,
+        "reportingDaemonEpoch": null,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":null,\"reportingDaemonEpoch\":null,\"reportingDaemonKey\":null,\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"broker\",\"state\":\"refused\",\"v\":1}",
+      "sha256": "45bc6619b8ecbf1206db0237769dc1617bb0f7903500f29aeb36873fe7bc9805",
+      "utf8Bytes": 351,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-broker-cancelled",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "cancelled",
+        "receiptDigest": null,
+        "outcome": {
+          "code": "cancelled",
+          "effectDigest": null
+        },
+        "source": "broker",
+        "reportingDaemonKey": null,
+        "reportingDaemonEpoch": null,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":null,\"reportingDaemonEpoch\":null,\"reportingDaemonKey\":null,\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"broker\",\"state\":\"cancelled\",\"v\":1}",
+      "sha256": "76a360a746d587ca9e38bc9656cdcedc9253f04f85cc6924bbce928df097f34d",
+      "utf8Bytes": 344,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-broker-expired",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "expired",
+        "receiptDigest": null,
+        "outcome": {
+          "code": "deadline-expired",
+          "effectDigest": null
+        },
+        "source": "broker",
+        "reportingDaemonKey": null,
+        "reportingDaemonEpoch": null,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":null,\"reportingDaemonEpoch\":null,\"reportingDaemonKey\":null,\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"broker\",\"state\":\"expired\",\"v\":1}",
+      "sha256": "296e894f49d5080218e37be3f8b81ca842579d9b2f64a42c46988db68c9b83cb",
+      "utf8Bytes": 349,
+      "cap": 4096
+    },
+    {
+      "id": "outcome-broker-indeterminate",
+      "slot": "outcome",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "outcome",
+        "state": "indeterminate",
+        "receiptDigest": null,
+        "outcome": {
+          "code": "effect-uncertain",
+          "effectDigest": null
+        },
+        "source": "broker",
+        "reportingDaemonKey": null,
+        "reportingDaemonEpoch": null,
+        "at": 9007199254740991
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"kind\":\"outcome\",\"outcome\":{\"code\":\"effect-uncertain\",\"effectDigest\":null},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":null,\"reportingDaemonEpoch\":null,\"reportingDaemonKey\":null,\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"source\":\"broker\",\"state\":\"indeterminate\",\"v\":1}",
+      "sha256": "f43f8bd26f337b4e569911f7f2993592fe7f240cb71c869fa4f403697e994f8f",
+      "utf8Bytes": 355,
+      "cap": 4096
+    },
+    {
+      "id": "reconciliation-applied",
+      "slot": "reconciliation-reference",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "reconciliation-reference",
+        "originalDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "originalDaemonEpoch": 9007199254740991,
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991,
+        "finding": "applied",
+        "auditId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "evidenceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"auditId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"evidenceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"finding\":\"applied\",\"kind\":\"reconciliation-reference\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"v\":1}",
+      "sha256": "f3f4701be9892ec40b28bae5749d31b7fb6f6903eb0c200ed1be909ab99e0ef0",
+      "utf8Bytes": 604,
+      "cap": 2048
+    },
+    {
+      "id": "reconciliation-refused",
+      "slot": "reconciliation-reference",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "reconciliation-reference",
+        "originalDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "originalDaemonEpoch": 9007199254740991,
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991,
+        "finding": "refused",
+        "auditId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "evidenceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"auditId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"evidenceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"finding\":\"refused\",\"kind\":\"reconciliation-reference\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"v\":1}",
+      "sha256": "97a3807377e902ca197338527e01e0f530fa77a7f31a1d104fa89b7b159bd713",
+      "utf8Bytes": 604,
+      "cap": 2048
+    },
+    {
+      "id": "reconciliation-indeterminate",
+      "slot": "reconciliation-reference",
+      "record": {
+        "v": 1,
+        "requestId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "payloadDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "reconciliation-reference",
+        "originalDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "originalDaemonEpoch": 9007199254740991,
+        "reportingDaemonKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "reportingDaemonEpoch": 9007199254740991,
+        "at": 9007199254740991,
+        "finding": "indeterminate",
+        "auditId": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "evidenceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "canonicalJson": "{\"at\":9007199254740991,\"auditId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"evidenceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"finding\":\"indeterminate\",\"kind\":\"reconciliation-reference\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"ffffffff-ffff-4fff-bfff-ffffffffffff\",\"v\":1}",
+      "sha256": "29cc03ea50e1f0939a68e975ceabf1c80988bd81b67df733ae206efa7dffc5f4",
+      "utf8Bytes": 610,
+      "cap": 2048
+    }
+  ],
+  "reconciliationPairs": [
+    {
+      "id": "revision-indeterminate-pair",
+      "slot": "observation-pair",
+      "record": {
+        "v": 1,
+        "record": {
+          "v": 1,
+          "kind": "reconciliation",
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "effectId": "22222222-2222-4222-8222-000000000001",
+          "auditId": "11111111-1111-4111-8111-111111111111",
+          "originalDaemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "originalDaemonEpoch": 9007199254740991,
+          "reportingDaemonKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "reportingDaemonEpoch": 9007199254740991,
+          "at": 9007199254740991,
+          "finding": "indeterminate",
+          "basisDigest": null,
+          "observedDigest": "48ccb3e158e4dee25fb429f1abfd29f8bde2e92c699e2aae608b0d2762a3c843"
+        },
+        "preimage": {
+          "v": 1,
+          "head": {
+            "seq": 9999999999,
+            "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "proposal": {
+            "proposalId": "00000000-0000-4000-8000-000000000003",
+            "seq": 9999999999,
+            "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "parentRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "working": {
+            "rootDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "inventoryDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "canonicalJson": "{\"preimage\":{\"head\":{\"revision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"seq\":9999999999},\"proposal\":{\"parentRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"revision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"seq\":9999999999},\"v\":1,\"working\":{\"inventoryDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"rootDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"}},\"record\":{\"at\":9007199254740991,\"auditId\":\"11111111-1111-4111-8111-111111111111\",\"basisDigest\":null,\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"finding\":\"indeterminate\",\"kind\":\"reconciliation\",\"observedDigest\":\"48ccb3e158e4dee25fb429f1abfd29f8bde2e92c699e2aae608b0d2762a3c843\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1},\"v\":1}",
+      "sha256": "4cdf7c69d0008484e8367e8eda8c651458f3f637345cf46a346e54d52301fd3e",
+      "utf8Bytes": 1251,
+      "cap": 4352,
+      "componentBytes": {
+        "record": 669,
+        "preimage": 553
+      },
+      "wrapperBytes": 29
+    },
+    {
+      "id": "revision-applied-pair",
+      "slot": "terminal-pair",
+      "record": {
+        "v": 1,
+        "record": {
+          "v": 1,
+          "kind": "reconciliation",
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "effectId": "22222222-2222-4222-8222-000000000001",
+          "auditId": "11111111-1111-4111-8111-111111111111",
+          "originalDaemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "originalDaemonEpoch": 9007199254740991,
+          "reportingDaemonKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "reportingDaemonEpoch": 9007199254740991,
+          "at": 9007199254740991,
+          "finding": "applied",
+          "basisDigest": "85b1b91d1388c6b5988f1a6b15d38e8d90dab67174fa4f188dfabdf993e534ba",
+          "observedDigest": "48ccb3e158e4dee25fb429f1abfd29f8bde2e92c699e2aae608b0d2762a3c843"
+        },
+        "preimage": {
+          "v": 1,
+          "head": {
+            "seq": 9999999999,
+            "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "proposal": {
+            "proposalId": "00000000-0000-4000-8000-000000000003",
+            "seq": 9999999999,
+            "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "parentRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "working": {
+            "rootDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "inventoryDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "canonicalJson": "{\"preimage\":{\"head\":{\"revision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"seq\":9999999999},\"proposal\":{\"parentRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"revision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"seq\":9999999999},\"v\":1,\"working\":{\"inventoryDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"rootDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"}},\"record\":{\"at\":9007199254740991,\"auditId\":\"11111111-1111-4111-8111-111111111111\",\"basisDigest\":\"85b1b91d1388c6b5988f1a6b15d38e8d90dab67174fa4f188dfabdf993e534ba\",\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"finding\":\"applied\",\"kind\":\"reconciliation\",\"observedDigest\":\"48ccb3e158e4dee25fb429f1abfd29f8bde2e92c699e2aae608b0d2762a3c843\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1},\"v\":1}",
+      "sha256": "e9a810d70792f84e62939666ef1f777a30a81852c125dbf9085e822c5148dee0",
+      "utf8Bytes": 1307,
+      "cap": 4352,
+      "componentBytes": {
+        "record": 725,
+        "preimage": 553
+      },
+      "wrapperBytes": 29
+    },
+    {
+      "id": "revision-refused-pair",
+      "slot": "terminal-pair",
+      "record": {
+        "v": 1,
+        "record": {
+          "v": 1,
+          "kind": "reconciliation",
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "effectId": "22222222-2222-4222-8222-000000000001",
+          "auditId": "11111111-1111-4111-8111-111111111111",
+          "originalDaemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "originalDaemonEpoch": 9007199254740991,
+          "reportingDaemonKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "reportingDaemonEpoch": 9007199254740991,
+          "at": 9007199254740991,
+          "finding": "refused",
+          "basisDigest": "eb42d3d243345e12363aff841c2ac7c4de5980e467cdd624fbe2e7452a1049e7",
+          "observedDigest": "48ccb3e158e4dee25fb429f1abfd29f8bde2e92c699e2aae608b0d2762a3c843"
+        },
+        "preimage": {
+          "v": 1,
+          "head": {
+            "seq": 9999999999,
+            "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "proposal": {
+            "proposalId": "00000000-0000-4000-8000-000000000003",
+            "seq": 9999999999,
+            "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "parentRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "working": {
+            "rootDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "inventoryDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "canonicalJson": "{\"preimage\":{\"head\":{\"revision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"seq\":9999999999},\"proposal\":{\"parentRevision\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"00000000-0000-4000-8000-000000000003\",\"revision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"seq\":9999999999},\"v\":1,\"working\":{\"inventoryDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"rootDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"}},\"record\":{\"at\":9007199254740991,\"auditId\":\"11111111-1111-4111-8111-111111111111\",\"basisDigest\":\"eb42d3d243345e12363aff841c2ac7c4de5980e467cdd624fbe2e7452a1049e7\",\"effectId\":\"22222222-2222-4222-8222-000000000001\",\"finding\":\"refused\",\"kind\":\"reconciliation\",\"observedDigest\":\"48ccb3e158e4dee25fb429f1abfd29f8bde2e92c699e2aae608b0d2762a3c843\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"v\":1},\"v\":1}",
+      "sha256": "041c3239f9dfa073d469510af27231fc57695355c6999a35e96e9cb25bc917b9",
+      "utf8Bytes": 1307,
+      "cap": 4352,
+      "componentBytes": {
+        "record": 725,
+        "preimage": 553
+      },
+      "wrapperBytes": 29
+    },
+    {
+      "id": "cold-indeterminate-pair",
+      "slot": "observation-pair",
+      "record": {
+        "v": 1,
+        "record": {
+          "v": 1,
+          "kind": "reconciliation",
+          "requestId": "00000000-0000-4000-8000-000000000109",
+          "payloadDigest": "d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4",
+          "effectId": "22222222-2222-4222-8222-000000000009",
+          "auditId": "11111111-1111-4111-8111-111111111111",
+          "originalDaemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "originalDaemonEpoch": 9007199254740991,
+          "reportingDaemonKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "reportingDaemonEpoch": 9007199254740991,
+          "at": 9007199254740991,
+          "finding": "indeterminate",
+          "basisDigest": null,
+          "observedDigest": "decd9e79af04008a4b5408e468912d2a776ff0d7b240754eb929efa8187b2d25"
+        },
+        "preimage": {
+          "v": 1,
+          "setting": {
+            "mode": "resume",
+            "policy": "workspace"
+          },
+          "webhookDigest": "7777777777777777777777777777777777777777777777777777777777777777",
+          "resume": {
+            "harness": "opencode",
+            "sessionDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "toolHomeDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+            "destinationDigest": "6666666666666666666666666666666666666666666666666666666666666666"
+          }
+        }
+      },
+      "canonicalJson": "{\"preimage\":{\"resume\":{\"destinationDigest\":\"6666666666666666666666666666666666666666666666666666666666666666\",\"harness\":\"opencode\",\"sessionDigest\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"toolHomeDigest\":\"5555555555555555555555555555555555555555555555555555555555555555\"},\"setting\":{\"mode\":\"resume\",\"policy\":\"workspace\"},\"v\":1,\"webhookDigest\":\"7777777777777777777777777777777777777777777777777777777777777777\"},\"record\":{\"at\":9007199254740991,\"auditId\":\"11111111-1111-4111-8111-111111111111\",\"basisDigest\":null,\"effectId\":\"22222222-2222-4222-8222-000000000009\",\"finding\":\"indeterminate\",\"kind\":\"reconciliation\",\"observedDigest\":\"decd9e79af04008a4b5408e468912d2a776ff0d7b240754eb929efa8187b2d25\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payloadDigest\":\"d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"requestId\":\"00000000-0000-4000-8000-000000000109\",\"v\":1},\"v\":1}",
+      "sha256": "e6a17b17c1299c2373eaa1abf855671e47d7e3e305d695c0104eda368350a630",
+      "utf8Bytes": 1123,
+      "cap": 4352,
+      "componentBytes": {
+        "record": 669,
+        "preimage": 425
+      },
+      "wrapperBytes": 29
+    },
+    {
+      "id": "cold-applied-pair",
+      "slot": "terminal-pair",
+      "record": {
+        "v": 1,
+        "record": {
+          "v": 1,
+          "kind": "reconciliation",
+          "requestId": "00000000-0000-4000-8000-000000000109",
+          "payloadDigest": "d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4",
+          "effectId": "22222222-2222-4222-8222-000000000009",
+          "auditId": "11111111-1111-4111-8111-111111111111",
+          "originalDaemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "originalDaemonEpoch": 9007199254740991,
+          "reportingDaemonKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "reportingDaemonEpoch": 9007199254740991,
+          "at": 9007199254740991,
+          "finding": "applied",
+          "basisDigest": "1649c8a8d91f670bdf34a909915aa80cffedddff1166d8a9cdeef148207c8570",
+          "observedDigest": "decd9e79af04008a4b5408e468912d2a776ff0d7b240754eb929efa8187b2d25"
+        },
+        "preimage": {
+          "v": 1,
+          "setting": {
+            "mode": "resume",
+            "policy": "workspace"
+          },
+          "webhookDigest": "7777777777777777777777777777777777777777777777777777777777777777",
+          "resume": {
+            "harness": "opencode",
+            "sessionDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "toolHomeDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+            "destinationDigest": "6666666666666666666666666666666666666666666666666666666666666666"
+          }
+        }
+      },
+      "canonicalJson": "{\"preimage\":{\"resume\":{\"destinationDigest\":\"6666666666666666666666666666666666666666666666666666666666666666\",\"harness\":\"opencode\",\"sessionDigest\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"toolHomeDigest\":\"5555555555555555555555555555555555555555555555555555555555555555\"},\"setting\":{\"mode\":\"resume\",\"policy\":\"workspace\"},\"v\":1,\"webhookDigest\":\"7777777777777777777777777777777777777777777777777777777777777777\"},\"record\":{\"at\":9007199254740991,\"auditId\":\"11111111-1111-4111-8111-111111111111\",\"basisDigest\":\"1649c8a8d91f670bdf34a909915aa80cffedddff1166d8a9cdeef148207c8570\",\"effectId\":\"22222222-2222-4222-8222-000000000009\",\"finding\":\"applied\",\"kind\":\"reconciliation\",\"observedDigest\":\"decd9e79af04008a4b5408e468912d2a776ff0d7b240754eb929efa8187b2d25\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payloadDigest\":\"d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"requestId\":\"00000000-0000-4000-8000-000000000109\",\"v\":1},\"v\":1}",
+      "sha256": "0a8e42125f1b77190567de2d8e5b51d6ec5ef8d7c14ee8bd4c53153fccf6b615",
+      "utf8Bytes": 1179,
+      "cap": 4352,
+      "componentBytes": {
+        "record": 725,
+        "preimage": 425
+      },
+      "wrapperBytes": 29
+    },
+    {
+      "id": "cold-refused-pair",
+      "slot": "terminal-pair",
+      "record": {
+        "v": 1,
+        "record": {
+          "v": 1,
+          "kind": "reconciliation",
+          "requestId": "00000000-0000-4000-8000-000000000109",
+          "payloadDigest": "d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4",
+          "effectId": "22222222-2222-4222-8222-000000000009",
+          "auditId": "11111111-1111-4111-8111-111111111111",
+          "originalDaemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "originalDaemonEpoch": 9007199254740991,
+          "reportingDaemonKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "reportingDaemonEpoch": 9007199254740991,
+          "at": 9007199254740991,
+          "finding": "refused",
+          "basisDigest": "eb42d3d243345e12363aff841c2ac7c4de5980e467cdd624fbe2e7452a1049e7",
+          "observedDigest": "decd9e79af04008a4b5408e468912d2a776ff0d7b240754eb929efa8187b2d25"
+        },
+        "preimage": {
+          "v": 1,
+          "setting": {
+            "mode": "resume",
+            "policy": "workspace"
+          },
+          "webhookDigest": "7777777777777777777777777777777777777777777777777777777777777777",
+          "resume": {
+            "harness": "opencode",
+            "sessionDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "toolHomeDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+            "destinationDigest": "6666666666666666666666666666666666666666666666666666666666666666"
+          }
+        }
+      },
+      "canonicalJson": "{\"preimage\":{\"resume\":{\"destinationDigest\":\"6666666666666666666666666666666666666666666666666666666666666666\",\"harness\":\"opencode\",\"sessionDigest\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"toolHomeDigest\":\"5555555555555555555555555555555555555555555555555555555555555555\"},\"setting\":{\"mode\":\"resume\",\"policy\":\"workspace\"},\"v\":1,\"webhookDigest\":\"7777777777777777777777777777777777777777777777777777777777777777\"},\"record\":{\"at\":9007199254740991,\"auditId\":\"11111111-1111-4111-8111-111111111111\",\"basisDigest\":\"eb42d3d243345e12363aff841c2ac7c4de5980e467cdd624fbe2e7452a1049e7\",\"effectId\":\"22222222-2222-4222-8222-000000000009\",\"finding\":\"refused\",\"kind\":\"reconciliation\",\"observedDigest\":\"decd9e79af04008a4b5408e468912d2a776ff0d7b240754eb929efa8187b2d25\",\"originalDaemonEpoch\":9007199254740991,\"originalDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payloadDigest\":\"d0b44f8dc7ffb82644677623cb9cb4bde10e168d17971bcaa0b0ecaaa55007e4\",\"reportingDaemonEpoch\":9007199254740991,\"reportingDaemonKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"requestId\":\"00000000-0000-4000-8000-000000000109\",\"v\":1},\"v\":1}",
+      "sha256": "79ae07e9ca5b7b19a58051d02645ebafec8a2b084281408e22924466ce0ab96f",
+      "utf8Bytes": 1179,
+      "cap": 4352,
+      "componentBytes": {
+        "record": 725,
+        "preimage": 425
+      },
+      "wrapperBytes": 29
+    }
+  ]
+}
