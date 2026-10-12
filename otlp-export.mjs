@@ -7,6 +7,14 @@
 // from AGENT_BOT_OTLP_HEADERS as `name=value,name=value`, are read when the
 // exporter starts, and never appear in a log or error.
 //
+// Metrics (#983 decision 3): one cumulative counter, `agent_bot.operations`,
+// of finished operations by component, operation, outcome and code, and
+// `agent_bot.export.dropped`, what this exporter dropped. At most
+// MAX_SERIES attribute sets are kept; an operation past that is counted as
+// dropped. Counters are sent with the traces on each flush when they
+// changed; a failed send is simply tried again on the next flush, since the
+// values are cumulative.
+//
 // What is sent is fixed here: an operation's span with its name, trace and
 // span IDs, start and end time, status, and the attributes component,
 // outcome, stage, code, duration and the hashed agent; its stages as span
@@ -26,6 +34,7 @@ export const MAX_QUEUE = 512;
 export const BATCH_SIZE = 128;
 export const FLUSH_INTERVAL_MS = 5_000;
 export const REQUEST_TIMEOUT_MS = 5_000;
+export const MAX_SERIES = 256;
 const MAX_OPEN_SPANS = 64;
 const MAX_SPAN_EVENTS = 32;
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
@@ -102,6 +111,32 @@ export function tracesPayload(spans, { version = null, platform = process.platfo
   };
 }
 
+/** The OTLP metrics body for the operation counters and the dropped count. */
+export function metricsPayload(series, { dropped = 0, startMs, nowMs, version = null, platform = process.platform } = {}) {
+  const resource = [text('service.name', 'agent-bot'), text('os.type', platform)];
+  if (version) resource.push(text('service.version', version));
+  const sum = (dataPoints) => ({ aggregationTemporality: 2, isMonotonic: true, dataPoints });
+  const point = (attrs, value) => ({ attributes: attrs, startTimeUnixNano: nanos(startMs), timeUnixNano: nanos(nowMs), asInt: String(value) });
+  return {
+    resourceMetrics: [{
+      resource: { attributes: resource },
+      scopeMetrics: [{
+        scope: { name: 'agent-bot', ...(version ? { version } : {}) },
+        metrics: [
+          {
+            name: 'agent_bot.operations', unit: '{operation}', description: 'Finished operations by outcome and code',
+            sum: sum([...series.values()].map(({ labels, count }) => point([
+              text('agent_bot.component', labels.component), text('agent_bot.operation', labels.event),
+              text('agent_bot.outcome', labels.outcome), ...(labels.code ? [text('agent_bot.code', labels.code)] : []),
+            ], count))),
+          },
+          { name: 'agent_bot.export.dropped', unit: '{item}', description: 'Spans, stages and operations this exporter dropped', sum: sum([point([], dropped)]) },
+        ],
+      }],
+    }],
+  };
+}
+
 /**
  * An exporter for one OTLP/HTTP base URL. `enqueue(event)` takes a stored
  * diagnostics event (the store's sink); `flush()` sends what is queued;
@@ -110,15 +145,32 @@ export function tracesPayload(spans, { version = null, platform = process.platfo
 export function createOtlpExporter({
   endpoint, headers = {}, version = null, platform = process.platform, fetch: send = globalThis.fetch,
   maxQueue = MAX_QUEUE, batchSize = BATCH_SIZE, intervalMs = FLUSH_INTERVAL_MS, timeoutMs = REQUEST_TIMEOUT_MS,
-  setInterval: every = setInterval, clearInterval: cancel = clearInterval,
+  setInterval: every = setInterval, clearInterval: cancel = clearInterval, now = () => Date.now(), maxSeries = MAX_SERIES,
 }) {
-  const url = `${endpoint.replace(/\/+$/, '')}/v1/traces`;
+  const base = endpoint.replace(/\/+$/, '');
+  const url = `${base}/v1/traces`;
+  const metricsUrl = `${base}/v1/metrics`;
+  const startMs = now();
+  const series = new Map(); // attribute-set key -> { labels, count }
+  let metricsChanged = false;
+  let metricsInFlight = null;
+  let metricsSent = 0;
+  let droppedReported = 0;
   const queue = [];
   const open = new Map(); // spanId -> stage events awaiting their operation
   let sent = 0;
   let dropped = 0;
   let inFlight = null;
 
+  const count = (event) => {
+    const labels = { component: event.component, event: event.event, outcome: event.outcome, ...(event.code ? { code: event.code } : {}) };
+    const key = JSON.stringify(labels);
+    const entry = series.get(key);
+    if (entry) entry.count += 1;
+    else if (series.size < maxSeries) series.set(key, { labels, count: 1 });
+    else { dropped += 1; }
+    metricsChanged = true;
+  };
   const push = (span) => {
     if (queue.length >= maxQueue) { dropped += 1; return; }
     queue.push({ span, attempts: 0 });
@@ -136,19 +188,21 @@ export function createOtlpExporter({
         return;
       }
       if (!event.outcome) return;
+      count(event);
       const stages = open.get(event.spanId) ?? [];
       open.delete(event.spanId);
       push(spanFor(event, stages));
-      if (queue.length >= batchSize) void flush();
+      if (queue.length >= batchSize) void flushTraces();
     } catch { dropped += 1; }
   };
 
-  const post = async (batch) => {
+  const post = async (batch) => postJson(url, tracesPayload(batch.map((item) => item.span), { version, platform }));
+  const postJson = async (target, payload) => {
     try {
-      const response = await send(url, {
+      const response = await send(target, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify(tracesPayload(batch.map((item) => item.span), { version, platform })),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(timeoutMs),
         redirect: 'error',
       });
@@ -159,7 +213,22 @@ export function createOtlpExporter({
     }
   };
 
-  const flush = () => {
+  const flushMetrics = () => {
+    if (metricsInFlight) return metricsInFlight;
+    if (!metricsChanged && dropped === droppedReported) return Promise.resolve();
+    metricsChanged = false;
+    const reporting = dropped;
+    const payload = metricsPayload(series, { dropped, startMs, nowMs: now(), version, platform });
+    metricsInFlight = postJson(metricsUrl, payload).then((result) => {
+      if (result === 'sent') { metricsSent += 1; droppedReported = reporting; }
+      else if (result === 'retry') metricsChanged = true;
+    }).catch(() => { metricsChanged = true; }).finally(() => { metricsInFlight = null; });
+    return metricsInFlight;
+  };
+
+  const flush = () => Promise.all([flushTraces(), flushMetrics()]).then(() => {});
+
+  const flushTraces = () => {
     if (inFlight) return inFlight;
     if (queue.length === 0) return Promise.resolve();
     const batch = queue.splice(0, batchSize);
@@ -181,6 +250,6 @@ export function createOtlpExporter({
     enqueue,
     flush,
     stop: () => cancel(timer),
-    stats: () => ({ sent, dropped, queued: queue.length }),
+    stats: () => ({ sent, dropped, queued: queue.length, series: series.size, metricsSent }),
   };
 }

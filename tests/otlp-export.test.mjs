@@ -15,6 +15,7 @@ const AGENT = 'agent_11111111-1111-4111-8111-111111111111';
 const CANARY = 'ghs_CANARYcanary0123456789abcdefABCDEF';
 const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
 const noTimer = { setInterval: () => null, clearInterval: () => {} };
+const trace = ({ sent, dropped, queued }) => ({ sent, dropped, queued });
 
 function home() {
   const dir = mkdtempSync(join(tmpdir(), 'agent-bot-otlp-'));
@@ -24,6 +25,7 @@ function home() {
 function recordingFetch(responses = []) {
   const calls = [];
   const fetch = async (url, init) => {
+    if (url.endsWith('/v1/metrics')) return { ok: true, status: 200 }; // counters: tested below
     calls.push({ url, init, body: JSON.parse(init.body) });
     const next = responses.shift() ?? { status: 200 };
     if (next.throw) throw new Error(`network down ${CANARY}`);
@@ -85,7 +87,7 @@ test('an operation and its stages become one span with only allowlisted attribut
   assert.equal(spanFor({ ...base, at: '2026-10-11T00:00:02.000Z', event: 'launch', outcome: 'failed' }).status.code, 2);
   const sentText = JSON.stringify(calls[0].body);
   for (const leak of [CANARY, '/Users/someone', 'detail']) assert.equal(sentText.includes(leak), false, leak);
-  assert.deepEqual(exporter.stats(), { sent: 1, dropped: 0, queued: 0 });
+  assert.deepEqual(trace(exporter.stats()), { sent: 1, dropped: 0, queued: 0 });
 });
 
 test('the queue is bounded, failures retry once then drop, and nothing throws', async () => {
@@ -93,14 +95,14 @@ test('the queue is bounded, failures retry once then drop, and nothing throws', 
   const { fetch, calls } = recordingFetch([{ throw: true }, { status: 503 }, { status: 400 }]);
   const exporter = createOtlpExporter({ endpoint: 'https://c.example', fetch, maxQueue: 4, batchSize: 10, ...noTimer });
   for (let i = 0; i < 6; i += 1) exporter.enqueue(event(i));
-  assert.deepEqual(exporter.stats(), { sent: 0, dropped: 2, queued: 4 });
+  assert.deepEqual(trace(exporter.stats()), { sent: 0, dropped: 2, queued: 4 });
   await exporter.flush(); // network error: retried
-  assert.deepEqual(exporter.stats(), { sent: 0, dropped: 2, queued: 4 });
+  assert.deepEqual(trace(exporter.stats()), { sent: 0, dropped: 2, queued: 4 });
   await exporter.flush(); // 503 on the retry: dropped
-  assert.deepEqual(exporter.stats(), { sent: 0, dropped: 6, queued: 0 });
+  assert.deepEqual(trace(exporter.stats()), { sent: 0, dropped: 6, queued: 0 });
   exporter.enqueue(event(9));
   await exporter.flush(); // 400: dropped without retry
-  assert.deepEqual(exporter.stats(), { sent: 0, dropped: 7, queued: 0 });
+  assert.deepEqual(trace(exporter.stats()), { sent: 0, dropped: 7, queued: 0 });
   assert.equal(calls.length, 3);
   exporter.enqueue(null);
   exporter.enqueue({ traceId: TRACE, spanId: 'x', event: 42 });
@@ -147,12 +149,12 @@ test('spans reach a real loopback OTLP/HTTP collector', async (t) => {
   const diagnostics = createDiagnostics({ component: 'daemon', env: f.env, home: f.home, sink: exporter.enqueue });
   diagnostics.record({ event: 'launch', outcome: 'ok', traceId: TRACE, spanId: '00f067aa0ba902b7', agentId: AGENT, durationMs: 12, detail: CANARY });
   await exporter.flush();
-  assert.equal(received.length, 1);
-  assert.equal(received[0].url, '/v1/traces');
-  assert.equal(received[0].headers['x-api-key'], 'k');
-  const text = JSON.stringify(received[0].body);
+  assert.deepEqual(received.map((r) => r.url).sort(), ['/v1/metrics', '/v1/traces']);
+  for (const request of received) assert.equal(request.headers['x-api-key'], 'k');
+  const text = JSON.stringify(received.map((r) => r.body));
   for (const leak of [CANARY, AGENT, f.home]) assert.equal(text.includes(leak), false, leak);
   assert.equal(exporter.stats().sent, 1);
+  assert.equal(exporter.stats().metricsSent, 1);
 });
 
 test('the daemon builds no exporter from a config file without an endpoint', () => {
@@ -165,4 +167,49 @@ test('the daemon builds no exporter from a config file without an endpoint', () 
   writeFileSync(configFile, JSON.stringify({ settings: { diagnosticsOtlpEndpoint: 'http://localhost:4318' } }));
   diagnosticsExporter({ env: { ...f.env, AGENT_BOT_CONFIG: configFile }, home: f.home, create: (o) => { created.push(o); return {}; } });
   assert.deepEqual(created.map((o) => o.endpoint), ['http://localhost:4318']);
+});
+
+test('operations are counted by outcome and code as cumulative OTLP sums, bounded and resent only on change', async () => {
+  const posts = [];
+  let status = 200;
+  const fetch = async (url, init) => { if (url.endsWith('/v1/metrics')) posts.push(JSON.parse(init.body)); return { ok: status < 300, status }; };
+  let clock = Date.parse('2026-10-11T00:00:00Z');
+  const exporter = createOtlpExporter({ endpoint: 'https://c.example', fetch, now: () => clock, maxSeries: 2, ...noTimer });
+  const op = (outcome, code, i) => ({ v: 1, at: '2026-10-11T00:00:01.000Z', component: 'daemon', event: 'launch', outcome, ...(code ? { code } : {}),
+    traceId: TRACE, spanId: (i + 1).toString(16).padStart(16, '0'), detail: CANARY, agent: 'abcdef0123456789' });
+  exporter.enqueue(op('ok', null, 1));
+  exporter.enqueue(op('ok', null, 2));
+  exporter.enqueue(op('refused', 'harness-signed-out', 3));
+  exporter.enqueue(op('failed', 'tool-home-unwritable', 4)); // a third series: over the bound, dropped
+  exporter.enqueue({ ...op('ok', null, 5), event: 'launch-stage' }); // stages are not operations
+  clock += 60_000;
+  await exporter.flush();
+  assert.equal(posts.length, 1);
+  const [metric, droppedMetric] = posts[0].resourceMetrics[0].scopeMetrics[0].metrics;
+  assert.equal(metric.name, 'agent_bot.operations');
+  assert.equal(metric.sum.aggregationTemporality, 2);
+  assert.equal(metric.sum.isMonotonic, true);
+  const points = metric.sum.dataPoints.map((p) => [Object.fromEntries(p.attributes.map((a) => [a.key, a.value.stringValue])), p.asInt]);
+  assert.deepEqual(points, [
+    [{ 'agent_bot.component': 'daemon', 'agent_bot.operation': 'launch', 'agent_bot.outcome': 'ok' }, '2'],
+    [{ 'agent_bot.component': 'daemon', 'agent_bot.operation': 'launch', 'agent_bot.outcome': 'refused', 'agent_bot.code': 'harness-signed-out' }, '1'],
+  ]);
+  assert.equal(metric.sum.dataPoints[0].startTimeUnixNano, `${Date.parse('2026-10-11T00:00:00Z')}000000`);
+  assert.equal(metric.sum.dataPoints[0].timeUnixNano, `${Date.parse('2026-10-11T00:01:00Z')}000000`);
+  assert.equal(droppedMetric.name, 'agent_bot.export.dropped');
+  assert.equal(droppedMetric.sum.dataPoints[0].asInt, '1');
+  const text = JSON.stringify(posts);
+  for (const leak of [CANARY, 'abcdef0123456789', TRACE]) assert.equal(text.includes(leak), false, leak);
+
+  await exporter.flush();
+  assert.equal(posts.length, 1, 'unchanged counters are not resent');
+  status = 503;
+  exporter.enqueue(op('ok', null, 6));
+  await exporter.flush();
+  assert.equal(posts.length, 2);
+  status = 200;
+  await exporter.flush();
+  assert.equal(posts.length, 3, 'a failed send is tried again on the next flush');
+  assert.equal(posts[2].resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints[0].asInt, '3');
+  assert.equal(exporter.stats().series, 2);
 });
