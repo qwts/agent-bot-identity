@@ -24,6 +24,27 @@ const ZERO = `sha256:${'0'.repeat(64)}`;
 const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
 // How the owner proved a user action (#293), recorded beside it when known.
 const authorized = (options) => (options.authorization ? { authorization: options.authorization } : {});
+// An owner decision applied through agent-comms#77 (owner decision: keep
+// schemaVersion 1): its revision record carries the request linkage as an
+// optional top-level `ownerDecision` and `authorization: {method:
+// "owner-decision"}`. Only approve, reject, adopt and edit take it, never
+// alongside another authorization. The linkage is exactly these five fields.
+const LINKAGE = ['requestId', 'payloadDigest', 'receiptDigest', 'effectId', 'preparationDigest'];
+const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const HEX64 = /^[a-f0-9]{64}$/;
+// The owner-decision journal slot that retains the whole record.
+const OWNER_DECISION_EVENT_CAP = 16384;
+function decided(options) {
+  const linkage = options.ownerDecision;
+  if (linkage === undefined) return authorized(options);
+  if (options.authorization !== undefined) throw new Error('an owner-decision record takes no other authorization');
+  if (linkage === null || typeof linkage !== 'object' || Array.isArray(linkage) || Object.keys(linkage).length !== LINKAGE.length
+    || !LINKAGE.every((key) => Object.hasOwn(linkage, key)) || ![linkage.requestId, linkage.effectId].every((v) => typeof v === 'string' && UUID4.test(v))
+    || ![linkage.payloadDigest, linkage.receiptDigest, linkage.preparationDigest].every((v) => typeof v === 'string' && HEX64.test(v))) {
+    throw new Error('owner-decision linkage must be exactly {requestId, payloadDigest, receiptDigest, effectId, preparationDigest}');
+  }
+  return { authorization: { method: 'owner-decision' }, ownerDecision: Object.fromEntries(LINKAGE.map((key) => [key, linkage[key]])) };
+}
 const text = (value, label) => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
   return value;
@@ -120,7 +141,16 @@ function maybeLinked(temp, final) {
   } catch (error) { return error.code !== 'ENOENT'; }
 }
 function append(root, event, options) {
+  // A linkage passed to any other writer is refused, never silently dropped.
+  if (options.ownerDecision !== undefined && !event.ownerDecision) {
+    throw new Error('owner-decision linkage is only for owner-decision revision operations');
+  }
   const record = { schemaVersion: 1, ...event, at: (options.now ?? (() => new Date()))().toISOString() };
+  // An owner-decision record must fit the journal slot that retains it;
+  // otherwise nothing is written and the local ceremony stays the path.
+  if (record.ownerDecision && Buffer.byteLength(JSON.stringify(record) + '\n') > OWNER_DECISION_EVENT_CAP) {
+    throw Object.assign(new Error('owner-decision revision record is too large for its journal slot'), { code: 'owner-decision-linked-event-too-large' });
+  }
   const temp = join(root, `.${randomUUID()}.tmp`);
   const final = join(root, `${String(events(root).length).padStart(10, '0')}.json`);
   try {
@@ -228,7 +258,7 @@ export function adoptSoulPackage(id, packagePath, { reason = 'Adopt starting pac
     const stored = snapshot(root, packagePath, null, { preserve: true });
     if (identity.genesis && stored.revision !== identity.genesis.revision) throw new Error('starting package must match genesis');
     return append(root, { kind: 'revision', revision: stored.revision, parentRevision: stored.parentRevision,
-      author: 'user', reason, ...authorized(options) }, options);
+      author: 'user', reason, ...decided(options) }, options);
   });
 }
 
@@ -260,7 +290,7 @@ export async function editSoulRevision(id, packagePath, { reason, expectedParent
     const publish = apply ? prepareApply(directory, stored, resolve(packagePath) === directory) : null;
     assertParent(root, stored.parentRevision);
     const record = append(root, { kind: 'revision', revision: stored.revision,
-      parentRevision: stored.parentRevision, author: 'user', reason, ...authorized(options) }, options);
+      parentRevision: stored.parentRevision, author: 'user', reason, ...decided(options) }, options);
     // Both record-only and applying edits stay within this same lock; neither
     // invokes an async append port or reacquires the revision lock.
     if (requireHead(root).revision !== stored.revision) throw new Error('stale apply: recorded head moved');
@@ -430,13 +460,13 @@ export function decideSoulProposal(id, proposalId, decision, { reason, expectedP
     const proposal = listSoulProposals(id, options).find((item) => item.proposalId === proposalId);
     if (!proposal || proposal.status !== 'pending') throw new Error('proposal is not pending');
     if (expectedParent !== undefined && proposal.parentRevision !== expectedParent) throw new Error('stale proposal: expectedParent does not match its base');
-    if (decision === 'reject') return append(root, { kind: 'decision', proposalId, author: 'user', reason, ...authorized(options) }, options);
+    if (decision === 'reject') return append(root, { kind: 'decision', proposalId, author: 'user', reason, ...decided(options) }, options);
     assertParent(root, proposal.parentRevision);
     syncPackageTree(storedPackage(root, proposal.revision));
     syncDirectory(join(root, 'objects'));
     return append(root, { kind: 'revision', revision: proposal.revision, parentRevision: proposal.parentRevision,
       author: 'soul', reason: proposal.reason, proposalId, approval: 'user', approvedBy: 'user', approvalReason: reason,
-      ...authorized(options) }, options);
+      ...decided(options) }, options);
   }, expectedParent);
 }
 function safeRelative(value) {

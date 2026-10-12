@@ -168,8 +168,12 @@ never a terminal refusal.
 
 `identity/owner-decision-linked-event.mjs` covers slot 13,
 `linked-authoritative-event` (16384 bytes). It holds pure checks only. The
-local revision writer is unchanged and does not yet emit the `ownerDecision`
-field, so nothing validates until a reviewed adapter adds it.
+local revision writer (`soul-revisions.mjs`) now emits the optional
+`ownerDecision` linkage, with `authorization:{method:"owner-decision"}`, when
+an owner-decision operation passes it. Records stay `schemaVersion 1`, per
+the owner's decision. Nothing passes it yet: the effect composition that
+reads the record under the revision lock and fills this slot is a later
+slice.
 
 - **Revisions only.** Approve, reject, adopt and edit link one authoritative
   revision-journal event. A cold-wake change has none, so its slot stays
