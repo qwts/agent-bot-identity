@@ -25,11 +25,13 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::VerifyingKey;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::audit::{Audit, Receipt};
 use crate::consent::{Consent, Refusal};
@@ -872,9 +874,92 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
     (unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } == 0).then_some(uid)
 }
 
-fn serve_connection(stream: UnixStream, handle: impl Fn(&Value) -> Option<Value>) {
+/// Connection budgets for both sockets (#1067). Each channel admits a bounded
+/// number of connections, so a soul that opens many can neither exhaust
+/// threads and descriptors nor crowd out the owner channel, which has its own
+/// budget. A message must arrive whole within `frame` once it starts. The owner
+/// channel's clients send one request and leave, so an idle owner connection
+/// is closed after `owner_idle`; a soul connection may idle between messages,
+/// because the MCP relay holds one open for a whole harness session.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub soul_connections: usize,
+    pub owner_connections: usize,
+    pub frame: Duration,
+    pub owner_idle: Duration,
+    pub write: Duration,
+}
+
+pub const LIMITS: Limits = Limits {
+    soul_connections: 256,
+    owner_connections: 32,
+    frame: Duration::from_secs(10),
+    owner_idle: Duration::from_secs(30),
+    write: Duration::from_secs(10),
+};
+
+enum Frame {
+    Line(Vec<u8>),
+    TooLarge,
+    Closed,
+}
+
+/// One newline-terminated message. With no message under way the wait is
+/// `idle` (`None`: indefinitely); once a byte of one arrives, the rest must
+/// follow within `frame`.
+fn read_frame(
+    reader: &mut BufReader<UnixStream>,
+    idle: Option<Duration>,
+    frame: Duration,
+) -> Frame {
+    let mut line = Vec::new();
+    let mut started: Option<Instant> = None;
+    loop {
+        let wait = match started {
+            None => idle,
+            Some(at) => match frame.checked_sub(at.elapsed()) {
+                Some(left) if !left.is_zero() => Some(left),
+                _ => return Frame::Closed,
+            },
+        };
+        if reader.get_ref().set_read_timeout(wait).is_err() {
+            return Frame::Closed;
+        }
+        let available = match reader.fill_buf() {
+            Ok([]) => return Frame::Closed,
+            Ok(buf) => buf,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            // Idle past `idle`, a frame past its deadline, or a failed read.
+            Err(_) => return Frame::Closed,
+        };
+        let (take, done) = match available.iter().position(|&b| b == b'\n') {
+            Some(at) => (at + 1, true),
+            None => (available.len(), false),
+        };
+        if (line.len() + take) as u64 > MAX_LINE_BYTES {
+            return Frame::TooLarge;
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if done {
+            return Frame::Line(line);
+        }
+        started.get_or_insert_with(Instant::now);
+    }
+}
+
+fn serve_connection(
+    stream: UnixStream,
+    idle: Option<Duration>,
+    limits: Limits,
+    handle: impl Fn(&Value) -> Option<Value>,
+) {
     // SAFETY: getuid cannot fail.
     if peer_uid(&stream) != Some(unsafe { libc::getuid() }) {
+        return;
+    }
+    // A client that never reads its answers cannot hold the thread either.
+    if stream.set_write_timeout(Some(limits.write)).is_err() {
         return;
     }
     let Ok(mut writer) = stream.try_clone() else {
@@ -882,22 +967,18 @@ fn serve_connection(stream: UnixStream, handle: impl Fn(&Value) -> Option<Value>
     };
     let mut reader = BufReader::new(stream);
     loop {
-        let mut line = Vec::new();
-        match (&mut reader)
-            .take(MAX_LINE_BYTES)
-            .read_until(b'\n', &mut line)
-        {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {}
-        }
-        if line.last() != Some(&b'\n') && line.len() as u64 >= MAX_LINE_BYTES {
-            let _ = writeln!(
-                writer,
-                "{}",
-                failure(&Value::Null, -32600, "message too large")
-            );
-            return;
-        }
+        let line = match read_frame(&mut reader, idle, limits.frame) {
+            Frame::Line(line) => line,
+            Frame::Closed => return,
+            Frame::TooLarge => {
+                let _ = writeln!(
+                    writer,
+                    "{}",
+                    failure(&Value::Null, -32600, "message too large")
+                );
+                return;
+            }
+        };
         if line.trim_ascii().is_empty() {
             continue;
         }
@@ -911,6 +992,51 @@ fn serve_connection(stream: UnixStream, handle: impl Fn(&Value) -> Option<Value>
                 return;
             }
         }
+    }
+}
+
+/// A connection's place in its channel's budget, given back when it ends.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Accepts on `listener` within `capacity` connections. One past it is told
+/// so and closed at once, without a thread of its own.
+fn accept(
+    listener: UnixListener,
+    capacity: usize,
+    idle: Option<Duration>,
+    limits: Limits,
+    handle: impl Fn(&Value) -> Option<Value> + Clone + Send + 'static,
+) {
+    let active = Arc::new(AtomicUsize::new(0));
+    for stream in listener.incoming().flatten() {
+        if active.fetch_add(1, Ordering::SeqCst) >= capacity {
+            active.fetch_sub(1, Ordering::SeqCst);
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+            let _ = writeln!(
+                &stream,
+                "{}",
+                failure(
+                    &Value::Null,
+                    -32000,
+                    "agent-bot-keyd has too many open connections on this socket; close one and retry"
+                )
+            );
+            continue;
+        }
+        let slot = Slot(Arc::clone(&active));
+        let handle = handle.clone();
+        // Spawn can fail under pressure; the slot is returned when the
+        // closure (and with it the stream) is dropped.
+        let _ = std::thread::Builder::new().spawn(move || {
+            let _slot = slot;
+            serve_connection(stream, idle, limits, handle);
+        });
     }
 }
 
@@ -976,18 +1102,28 @@ pub fn listen(paths: &Paths) -> Result<Listeners, String> {
 
 /// Serves both channels until the process ends.
 pub fn serve(keyd: Arc<Keyd>, listeners: Listeners) {
+    serve_with(keyd, listeners, LIMITS);
+}
+
+pub fn serve_with(keyd: Arc<Keyd>, listeners: Listeners, limits: Limits) {
     let owner_keyd = Arc::clone(&keyd);
     let owner = listeners.owner;
     std::thread::spawn(move || {
-        for stream in owner.incoming().flatten() {
-            let keyd = Arc::clone(&owner_keyd);
-            std::thread::spawn(move || serve_connection(stream, |m| keyd.handle_owner(m)));
-        }
+        accept(
+            owner,
+            limits.owner_connections,
+            Some(limits.owner_idle),
+            limits,
+            move |m| owner_keyd.handle_owner(m),
+        )
     });
-    for stream in listeners.soul.incoming().flatten() {
-        let keyd = Arc::clone(&keyd);
-        std::thread::spawn(move || serve_connection(stream, |m| keyd.handle_soul(m)));
-    }
+    accept(
+        listeners.soul,
+        limits.soul_connections,
+        None,
+        limits,
+        move |m| keyd.handle_soul(m),
+    );
 }
 
 #[cfg(test)]
@@ -1236,6 +1372,115 @@ mod tests {
             serde_json::from_str::<Value>(&line).unwrap()["error"]["code"],
             -32700
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // #1067: both channels have connection budgets and frame deadlines.
+    fn serving(name: &str, limits: Limits) -> (std::path::PathBuf, Paths) {
+        let dir = crate::paths::tests::short_temp_dir(name);
+        let paths = Paths::under(&dir);
+        let listeners = listen(&paths).unwrap();
+        let keyd = Arc::new(keyd(true));
+        std::thread::spawn(move || serve_with(keyd, listeners, limits));
+        (dir, paths)
+    }
+
+    fn client(path: &Path) -> UnixStream {
+        let stream = UnixStream::connect(path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+    }
+
+    fn ask(stream: &UnixStream, method: &str) -> Value {
+        writeln!(
+            &*stream,
+            "{}",
+            json!({ "jsonrpc": "2.0", "id": 1, "method": method })
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
+    /// True when the server has closed the connection.
+    fn closed(stream: &UnixStream) -> bool {
+        let mut byte = [0u8; 1];
+        matches!(std::io::Read::read(&mut &*stream, &mut byte), Ok(0))
+    }
+
+    const QUICK: Limits = Limits {
+        soul_connections: 2,
+        owner_connections: 2,
+        frame: Duration::from_millis(200),
+        owner_idle: Duration::from_millis(200),
+        write: Duration::from_secs(1),
+    };
+
+    #[test]
+    fn a_message_that_never_finishes_is_closed_at_its_deadline() {
+        let (dir, paths) = serving("frame", QUICK);
+        let started = Instant::now();
+        let stream = client(&paths.socket);
+        write!(&stream, "{{\"jsonrpc\":").unwrap();
+        assert!(closed(&stream), "a partial frame is not held open");
+        assert!(started.elapsed() < Duration::from_secs(4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_soul_connection_may_idle_between_messages_but_an_owner_one_may_not() {
+        let (dir, paths) = serving("idle", QUICK);
+        let soul = client(&paths.socket);
+        let owner = client(&paths.owner_socket);
+        assert_eq!(ask(&soul, "ping")["result"], json!({}));
+        std::thread::sleep(QUICK.frame * 3);
+        assert_eq!(
+            ask(&soul, "ping")["result"],
+            json!({}),
+            "the MCP relay's connection outlives an idle spell"
+        );
+        assert!(closed(&owner), "an idle owner connection is closed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_soul_channel_refuses_more_while_the_owner_channel_still_answers() {
+        let (dir, paths) = serving("cap", QUICK);
+        let held: Vec<UnixStream> = (0..QUICK.soul_connections)
+            .map(|_| {
+                let stream = client(&paths.socket);
+                assert_eq!(ask(&stream, "ping")["result"], json!({}));
+                stream
+            })
+            .collect();
+        let extra = client(&paths.socket);
+        let mut line = String::new();
+        BufReader::new(&extra).read_line(&mut line).unwrap();
+        let refusal: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(refusal["error"]["code"], -32000);
+        assert!(refusal["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("too many open connections"));
+        assert!(closed(&extra));
+        // The owner's budget is its own.
+        let owner = client(&paths.owner_socket);
+        assert!(ask(&owner, "owner/status").get("result").is_some());
+        // A closed soul connection gives its place back.
+        drop(held);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let again = client(&paths.socket);
+            let answer = ask(&again, "ping");
+            if answer.get("result") == Some(&json!({})) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the slots were not released");
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
