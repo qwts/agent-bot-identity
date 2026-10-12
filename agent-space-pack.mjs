@@ -21,8 +21,7 @@ import process from 'node:process';
 
 import { validateAgentId } from './identity-format.mjs';
 import { apiBase, loadConfig } from './config.mjs';
-import { mintForCaller } from './git-credential-bot.mjs';
-import { resolveAgentSlug } from './identity-soul.mjs';
+import { mintForCaller, resolveAgentSlug } from './identity-soul.mjs';
 
 export const PACK_SCHEMA_VERSION = 1;
 export const PACK_FILE_SUFFIX = '.agent-space-pack.json';

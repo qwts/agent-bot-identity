@@ -15,21 +15,24 @@ import { stateDirectory } from './state-paths.mjs';
 import { listSouls, populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt, credentialNamespace, credentialVault, itemTitle, managedAppItem, NAMESPACE_VARIABLE, soulAppItem, soulSecretItem, validateAgentId, VAULT_VARIABLE } from './identity-format.mjs';
 import { loadConfig } from './config.mjs';
-import { appStoreTarget, legacyAppFolderStatus, migrateAppMetadata, readManagedAppCredential } from './identity-app-store.mjs';
 import { profileAppSlugs } from './organization-profile.mjs';
 import { assertOwnerAction, soulMarkers } from './owner-gate.mjs';
 import {
+  appStoreTarget,
   credentialStores,
   defaultCredentialStore,
+  legacyAppFolderStatus,
   legacyCredentialDirectory,
   legacyKeyRemovable,
+  migrateAppMetadata,
   readLegacyCredential,
+  readManagedAppCredential,
   readSoulCredential,
   readSoulSecret,
   verifyAppCredential,
   writeSoulCredential,
   writeSoulSecret,
-} from './soul-credentials.mjs';
+} from './identity-soul.mjs';
 import { declaredProviders } from './soul-providers.mjs';
 import { readSoulManifest } from './soul-runtimes.mjs';
 import { soulCredentialsDeclaration, writeSoulCredentialsDeclaration } from './soul-package.mjs';
@@ -147,7 +150,7 @@ export async function migrateCredentialsCommand(argv, {
       { options, env, home, now, write, stores });
   }
   if (options.to === 'keyd') {
-    const client = keyd ?? await import('./keyd-client.mjs').then((module) => ({
+    const client = keyd ?? await import('./identity-soul.mjs').then((module) => ({
       importKeys: (items) => module.importIntoKeyd(items, { env, home }),
     }));
     return finishMigration(await migrateToKeyd(souls, { file, env, home, platform, stores, verify, options, client, declare }),

@@ -15,7 +15,7 @@ import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByN
 
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, RETENTION, SOUL_LAYOUT, classificationContract } from './soul-env-contract.mjs';
-import { credentialStores } from './soul-credentials.mjs';
+import { credentialStores } from './identity-soul.mjs';
 import { inspectToolHomes, readMigrationJournal } from './soul-env-migrate.mjs';
 import { REVISIONS_FILE, TURNS_FILE, runsDirectory } from './soul-history.mjs';
 import { legacyThreadJournalPath, THREAD_CONTEXT_RELATIVE } from './soul-threads.mjs';

@@ -7,14 +7,12 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { pinnedSlug, readBinding, resolveAgentSlug } from './identity-soul.mjs';
+import { pinnedSlug, readAppMetadata, readBinding, reconcileAppCredentials, resolveAgentSlug, writeAppMetadata } from './identity-soul.mjs';
 import { AGENT_ID_KEYS } from './identity-format.mjs';
 import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
-import { reconcileAppCredentials } from './credential-reconciler.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
-import { readAppMetadata, writeAppMetadata } from './identity-app-store.mjs';
 import { assertWorktreeArea, placeWorktree, soulWorktreePath } from './soul-worktrees.mjs';
 
 const USAGE = `usage: agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
