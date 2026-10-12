@@ -20,3 +20,18 @@ export function asDaemon({ env, home, now }, run) {
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
 }
+
+// The same for an async `run`: the daemon's env and clock hold until its
+// promise settles.
+export async function asDaemonAsync({ env, home, now }, run) {
+  const keys = ['XDG_STATE_HOME', 'HOME', ...OVERRIDES];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of OVERRIDES) delete process.env[key];
+  process.env.XDG_STATE_HOME = env.XDG_STATE_HOME; process.env.HOME = home;
+  const realNow = Date.now;
+  if (now !== undefined) Date.now = () => now;
+  try { return await run(); } finally {
+    Date.now = realNow;
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+}

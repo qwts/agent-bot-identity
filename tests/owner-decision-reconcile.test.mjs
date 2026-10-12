@@ -22,7 +22,7 @@ import { decodeDaemonJournalFrame, encodeDaemonJournalFrame, requestDirectoryNam
 import { challengeFor, completedRecordFor, enteredRecordFor } from '../identity/owner-decision-evidence.mjs';
 import { createOwnerDecisionReconciler } from '../owner-decision-reconcile.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
-import { asDaemon } from './helpers/owner-decision-daemon-env.mjs';
+import { asDaemonAsync } from './helpers/owner-decision-daemon-env.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the journal and trust locks are Darwin-only' };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -138,16 +138,17 @@ async function crashed(t, operation, { apply = false, noLinked = false, adoptDig
   const journalRecord = (seq) => fs.readFileSync(path.join(revisionJournalRoot(soul, { stateDir }), `${String(seq).padStart(10, '0')}.json`));
   const direct = (overrides = {}) => open().reconcileRecordOnlyCompletion(requestId, { journalSeq: record?.journalSeq ?? 0, readLinkedEvent: journalRecord,
     at: 2_000_000_015, auditId: '44444444-4444-4444-8444-444444444444', preimage: { v: 1, head: null, proposal: null, working: null }, ...overrides });
-  const reconcile = (ceremony = () => ({ method: 'consent' })) => asDaemon({ env, home, now: NOW }, () => createOwnerDecisionReconciler({ ceremony })({ requestId }));
+  const reconcile = (ceremony = () => ({ method: 'consent' })) => asDaemonAsync({ env, home, now: NOW }, () => createOwnerDecisionReconciler({ ceremony })({ requestId }));
   const recover = () => open().recover(requestId);
   return { soul, stateDir, options, record, recordFile, write, read, payload, reconcile, direct, recover, open, preparation, trust, action: actionValue, entered: enteredRecordFor({ preparation,
     preparationDigest, receiptDigest, action: actionValue, at: AT }) };
 }
 const SLOTS = ['completed', 'terminal-pair', 'linked-authoritative-event'];
 const snapshot = (c) => SLOTS.map((slot) => sha256(c.read(slot)));
-function unchanged(c, run, expected) {
+// `run` may throw or return a promise that rejects.
+async function unchanged(c, run, expected) {
   const before = snapshot(c);
-  assert.throws(run, expected);
+  await assert.rejects(async () => run(), expected);
   assert.deepEqual(snapshot(c), before);
 }
 
@@ -156,7 +157,7 @@ test('each record-only operation reconciles: completed (slot 10), then the termi
     await t.test(operation, async (tt) => {
       const c = await crashed(tt, operation);
       assert.deepEqual(c.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
-      const done = c.reconcile();
+      const done = await c.reconcile();
       assert.equal(done.state, 'applied'); assert.equal(done.reconciled, 'completed');
       const completed = JSON.parse(c.payload('completed'));
       assert.equal(completed.phase, 'completed');
@@ -176,15 +177,15 @@ test('each record-only operation reconciles: completed (slot 10), then the termi
 test('an applying edit, a cold-wake request or no linked event is never reconciled', darwin, async (t) => {
   await t.test('an applying edit', async (tt) => {
     const c = await crashed(tt, 'revision.edit', { apply: true });
-    unchanged(c, () => c.reconcile(), { reason: 'owner-journal-transition-refused' });
+    await unchanged(c, () => c.reconcile(), { reason: 'owner-journal-transition-refused' });
   });
   await t.test('a cold-wake request', async (tt) => {
     const c = await crashed(tt, 'cold-wake.set');
-    unchanged(c, () => c.reconcile(), { reason: 'owner-journal-transition-refused' });
+    await unchanged(c, () => c.reconcile(), { reason: 'owner-journal-transition-refused' });
   });
   await t.test('no linked event', async (tt) => {
     const c = await crashed(tt, 'revision.approve', { noLinked: true });
-    unchanged(c, () => c.reconcile(), { reason: 'owner-journal-transition-refused' });
+    await unchanged(c, () => c.reconcile(), { reason: 'owner-journal-transition-refused' });
   });
 });
 
@@ -193,7 +194,7 @@ test('a linked event that is not in the revision journal, or not this request\'s
     const c = await crashed(tt, 'revision.approve');
     fs.chmodSync(c.recordFile, 0o600);
     fs.writeFileSync(c.recordFile, fs.readFileSync(c.recordFile, 'utf8').replace('"Decided"', '"Changed"'));
-    unchanged(c, () => c.reconcile(), { reason: 'linked-event-missing' });
+    await unchanged(c, () => c.reconcile(), { reason: 'linked-event-missing' });
   });
   await t.test('slot 13 holds a record of another request', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
@@ -202,7 +203,7 @@ test('a linked event that is not in the revision journal, or not this request\'s
     fs.chmodSync(c.recordFile, 0o600);
     fs.writeFileSync(c.recordFile, changed);
     c.write('linked-authoritative-event', changed);
-    unchanged(c, () => c.reconcile(), { reason: 'owner-journal-linked-event-refused' });
+    await unchanged(c, () => c.reconcile(), { reason: 'owner-journal-linked-event-refused' });
   });
 });
 
@@ -210,14 +211,29 @@ test('a non-empty slot 10 is a conflict and nothing is overwritten', darwin, asy
   const c = await crashed(t, 'revision.approve');
   c.write('completed', Buffer.from('{}'));
   let asked = false;
-  unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-conflict' });
+  await unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-conflict' });
   assert.equal(asked, false);
 });
 
 test('a refused ceremony writes nothing', darwin, async (t) => {
   const c = await crashed(t, 'revision.approve');
-  unchanged(c, () => c.reconcile(() => { throw new Error('owner declined'); }), { reason: 'ceremony-refused' });
+  await unchanged(c, () => c.reconcile(() => { throw new Error('owner declined'); }), { reason: 'ceremony-refused' });
   assert.deepEqual(c.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+});
+
+// The production ceremony (the local owner gate) is async: nothing may be
+// written until it resolves, and a rejection writes nothing.
+test('an async ceremony is awaited: a rejection writes nothing, and nothing is written before it resolves', darwin, async (t) => {
+  const c = await crashed(t, 'revision.approve');
+  await unchanged(c, () => c.reconcile(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); throw new Error('owner declined'); }),
+    { reason: 'ceremony-refused' });
+  assert.deepEqual(c.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+  let release;
+  const pending = c.reconcile(() => new Promise((resolve) => { release = resolve; }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert(c.read('completed').every((byte) => byte === 0), 'slot 10 written before the ceremony resolved');
+  release();
+  assert.equal((await pending).reconciled, 'completed');
 });
 
 test('a tampered stored package refuses', darwin, async (t) => {
@@ -228,7 +244,7 @@ test('a tampered stored package refuses', darwin, async (t) => {
       const file = path.join(objects, 'AGENTS.md');
       fs.chmodSync(objects, 0o700); fs.chmodSync(file, 0o600);
       fs.writeFileSync(file, 'Tampered\n');
-      unchanged(c, () => c.reconcile(), { reason: 'package-invalid' });
+      await unchanged(c, () => c.reconcile(), { reason: 'package-invalid' });
     });
   }
 });
@@ -243,14 +259,14 @@ test('a crash between slot 10 and the pair is safe: applied, and a retry writes 
   const completedBefore = c.read('completed');
   assert.equal(c.recover().state, 'applied');
   assert(c.read('terminal-pair').every((byte) => byte === 0));
-  const retried = c.reconcile();
+  const retried = await c.reconcile();
   assert.equal(retried.reconciled, 'pair');
   assert.deepEqual(c.read('completed'), completedBefore);
   assert.equal(JSON.parse(c.payload('terminal-pair')).record.basisDigest, sha256(c.payload('completed')));
   // Once the pair exists, a further reconciliation is a conflict, before any
   // ceremony.
   let asked = false;
-  unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-conflict' });
+  await unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-conflict' });
   assert.equal(asked, false);
 });
 
@@ -259,16 +275,16 @@ test('a completed cold-wake request without its pair is not offered', darwin, as
   c.write('completed', Buffer.from(canonicalJson(completedRecordFor({ entered: c.entered, action: c.action, at: AT + 1 }))));
   assert.equal(c.recover().state, 'applied');
   let asked = false;
-  unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-conflict' });
+  await unchanged(c, () => c.reconcile(() => { asked = true; }), { reason: 'owner-journal-conflict' });
   assert.equal(asked, false);
 });
 
 test('the reconciler refuses a malformed request ID and an unreadable trust store', darwin, async (t) => {
   const c = await crashed(t, 'revision.approve');
-  assert.throws(() => asDaemon({ env: c.trust.env, home: c.trust.home, now: NOW },
+  await assert.rejects(asDaemonAsync({ env: c.trust.env, home: c.trust.home, now: NOW },
     () => createOwnerDecisionReconciler({ ceremony: () => {} })({ requestId: 'not-a-request' })), { reason: 'invalid-owner-journal-record' });
   fs.rmSync(path.join(c.trust.root, 'namespace.json'));
-  unchanged(c, () => c.reconcile(), { reason: 'trust-unavailable' });
+  await unchanged(c, () => c.reconcile(), { reason: 'trust-unavailable' });
 });
 
 // The store's write refuses on its own, whatever the reconciler checked first.
@@ -276,40 +292,40 @@ test('the store write refuses bad input, a filled slot, and a linked event that 
   await t.test('malformed input', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
     for (const bad of [{ journalSeq: -1 }, { journalSeq: 1.5 }, { readLinkedEvent: null }, { at: -1 }, { auditId: 'audit' }, { preimage: null }]) {
-      unchanged(c, () => c.direct(bad), { reason: 'invalid-owner-journal-record' });
+      await unchanged(c, () => c.direct(bad), { reason: 'invalid-owner-journal-record' });
     }
-    unchanged(c, () => c.direct({ preimage: { v: 1, pad: 'x'.repeat(4096) } }), { reason: 'invalid-owner-journal-record' });
+    await unchanged(c, () => c.direct({ preimage: { v: 1, pad: 'x'.repeat(4096) } }), { reason: 'invalid-owner-journal-record' });
     assert.throws(() => c.open().reconcileRecordOnlyCompletion('not-a-request', { journalSeq: 0, readLinkedEvent: () => null, at: 0,
       auditId: '44444444-4444-4444-8444-444444444444', preimage: {} }), { reason: 'invalid-owner-journal-record' });
   });
   await t.test('a filled terminal pair or completed slot', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
     c.write('terminal-pair', Buffer.from('{}'));
-    unchanged(c, () => c.direct(), { reason: 'owner-journal-conflict' });
+    await unchanged(c, () => c.direct(), { reason: 'owner-journal-conflict' });
     const d = await crashed(tt, 'revision.approve');
     d.write('completed', Buffer.from('{}'));
-    unchanged(d, () => d.direct(), { reason: 'owner-journal-conflict' });
+    await unchanged(d, () => d.direct(), { reason: 'owner-journal-conflict' });
   });
   await t.test('no linked event', async (tt) => {
     const c = await crashed(tt, 'revision.approve', { noLinked: true });
-    unchanged(c, () => c.direct(), { reason: 'owner-journal-transition-refused' });
+    await unchanged(c, () => c.direct(), { reason: 'owner-journal-transition-refused' });
   });
   await t.test('the reader returns other bytes than slot 13', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
-    unchanged(c, () => c.direct({ readLinkedEvent: () => Buffer.from('{}\n') }), { reason: 'owner-journal-linked-event-refused' });
+    await unchanged(c, () => c.direct({ readLinkedEvent: () => Buffer.from('{}\n') }), { reason: 'owner-journal-linked-event-refused' });
   });
   await t.test('slot 13 and the reader agree on bytes that are not this request\'s event', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
     const other = Buffer.from('{"kind":"note"}\n');
     c.write('linked-authoritative-event', other);
-    unchanged(c, () => c.direct({ readLinkedEvent: () => other }), { reason: 'owner-journal-linked-event-refused' });
+    await unchanged(c, () => c.direct({ readLinkedEvent: () => other }), { reason: 'owner-journal-linked-event-refused' });
   });
   await t.test('a linked adopt whose revision is not the entered after-revision', async (tt) => {
     const c = await crashed(tt, 'revision.adopt', { adoptDigest: 'f'.repeat(64) });
-    unchanged(c, () => c.direct(), { reason: 'owner-journal-linked-event-refused' });
+    await unchanged(c, () => c.direct(), { reason: 'owner-journal-linked-event-refused' });
   });
   await t.test('a completion time before entry', async (tt) => {
     const c = await crashed(tt, 'revision.approve');
-    unchanged(c, () => c.direct({ at: AT - 1 }), { reason: 'invalid-owner-journal-record' });
+    await unchanged(c, () => c.direct({ at: AT - 1 }), { reason: 'invalid-owner-journal-record' });
   });
 });

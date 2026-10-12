@@ -1011,8 +1011,10 @@ daemon's own.
    completion, or a request already settled, is `owner-journal-conflict`.
    This happens before any ceremony.
 2. The owner ceremony: the existing local owner gate (`revisionOwnerGate`),
-   naming the request and soul. A refusal writes nothing
-   (`ceremony-refused`).
+   naming the request and soul. The gate is async, and the reconciler
+   awaits it: nothing below runs until presence or consent is proven. A
+   refusal, thrown or rejected, writes nothing (`ceremony-refused`). The
+   completion time is taken after the ceremony.
 3. For a revision that changes the head, the stored package at the entered
    after-revision must still validate to it (`package-invalid`).
 4. A resync through the daemon's read-only revision port: the record in the

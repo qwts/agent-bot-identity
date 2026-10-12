@@ -22,21 +22,23 @@ import { stateDirectory } from './state-paths.mjs';
 
 const refuse = (reason) => { throw Object.assign(new Error('owner decision reconciliation refused'), { code: 'owner-decision-reconcile', reason }); };
 
-// The ceremony, by default the existing local owner gate. Tests inject one.
+// The ceremony, by default the existing local owner gate (async: it resolves
+// only once presence or consent is proven). Tests inject one.
 const ownerCeremony = (requestId, soul) => revisionOwnerGate(`owner-decision reconcile ${requestId}`, { target: soul });
 
 // Factory for tests (an injected ceremony); production uses
 // reconcileOwnerDecisionRecordOnly, which always runs the real owner gate.
 export function createOwnerDecisionReconciler({ ceremony = ownerCeremony } = {}) {
-  return function reconcile({ requestId } = {}) {
-    const at = Math.floor(Date.now() / 1000);
+  return async function reconcile({ requestId } = {}) {
     let namespaceDigest;
     try { ({ namespaceDigest } = readOwnerDecisionTrust()); } catch { refuse('trust-unavailable'); }
     const store = createDaemonJournalStore({ namespaceDigest });
     // What there is to reconcile, from the journal (refuses anything else).
     const view = store.readRecordOnlyReconcilable(requestId);
-    // The owner-local ceremony: a refusal writes nothing.
-    try { ceremony(requestId, view.soul); } catch { refuse('ceremony-refused'); }
+    // The owner-local ceremony, awaited: nothing below runs until it has
+    // resolved, and a refusal (thrown or rejected) writes nothing.
+    try { await ceremony(requestId, view.soul); } catch { refuse('ceremony-refused'); }
+    const at = Math.floor(Date.now() / 1000);
     // The immutable package: for a revision that changes the head, the stored
     // package at the entered after-revision must still validate to it.
     if (view.afterRevision !== view.beforeRevision) {
