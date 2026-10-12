@@ -36,12 +36,22 @@
 //              `failed`, never a `waiting`: the sockets are dropped so the
 //              soul is honestly cold next time.
 //
+// Diagnostics (#983, #1027): with a `diagnostics` port, every dispatch also
+// records one `wake` event under its own span, a child of the event's
+// `traceparent` when that is an exact valid value, else a new root. The
+// stage is the path taken (`warm`, `cold`, `merged` into a running cold
+// turn, `waiting`); the outcome is `ok`, `refused` for an expected wait
+// (paused, cold wake off) or `failed`. The traceparent is untrusted
+// correlation only: it never reaches the frame, the report or the receipt,
+// and recording never changes the dispatch.
+//
 // Every dispatch also writes a receipt, even when the broker report rejects.
 // The receipt is `{ agentId, count, outcome }` and nothing else: it names a
 // soul and a count, never message content, a cursor, or anything a socket
 // carried — the audit trail must not become a second copy of the mailbox.
 
 import { isAgentId } from './identity-format.mjs';
+import { startSpan } from './traceparent.mjs';
 
 export const WAKE_OUTCOMES = Object.freeze(['warm', 'cold', 'waiting', 'failed']);
 export const WAKE_FRAME_EVENT = 'wake';
@@ -140,19 +150,25 @@ function dropSockets(pool, agentId) {
 // cold path means the outcome is `waiting`, never a fabricated `cold`.
 export async function dispatchWake(event, ports) {
   assertPorts(ports ?? {});
-  const { pool, coldWake, report, receipt, isPaused = () => false } = ports;
+  const { pool, coldWake, report, receipt, isPaused = () => false, diagnostics = null, nowMs = () => Date.now() } = ports;
   const wake = validateEvent(event);
   const agentId = wake.agentId;
   const messageIds = [...wake.messageIds];
+  const span = diagnostics ? startSpan(typeof wake.traceparent === 'string' ? wake.traceparent : null) : null;
+  const startedAt = diagnostics ? nowMs() : 0;
 
   let outcome = null;
   let detail = null;
+  let stage = 'waiting';
+  let code;
 
   const paused = isPaused(agentId);
   if (paused) {
     outcome = 'waiting';
     detail = 'soul is paused';
+    code = 'wake-paused';
   } else if (pool.has(agentId)) {
+    stage = 'warm';
     const frame = wakeFrame(wake);
     let delivered;
     let sendFailed = false;
@@ -176,8 +192,10 @@ export async function dispatchWake(event, ports) {
         ? 'every warm socket failed to take the frame: the warm pool threw'
         : 'every warm socket failed to take the frame';
       dropSockets(pool, agentId);
+      code = 'wake-warm-failed';
     }
   } else if (typeof coldWake === 'function') {
+    stage = 'cold';
     let cold = null;
     try {
       cold = await coldWake(wake);
@@ -191,6 +209,8 @@ export async function dispatchWake(event, ports) {
       // (ADR-0008 decision 9), so the wake waits for a session to arm.
       outcome = 'waiting';
       detail = 'no warm socket and cold wake is off for this soul';
+      stage = 'waiting';
+      code = 'wake-cold-off';
     } else if (typeof cold !== 'object' || !COLD_OUTCOMES.includes(cold.outcome)) {
       // A cold path that answers with something outside its own vocabulary is
       // a defect, and the broker still needs an answer for this wake. Fail
@@ -215,22 +235,38 @@ export async function dispatchWake(event, ports) {
         if (detail === null && outcome === 'waiting') {
           detail = 'no warm socket and cold wake is off for this soul';
         }
+        if (outcome === 'cold' && cold.merged === true) stage = 'merged';
+        if (outcome === 'waiting') { stage = 'waiting'; code = 'wake-cold-off'; }
       }
     }
+    if (outcome === 'failed') code = 'wake-cold-failed';
   } else {
     outcome = 'waiting';
     detail = 'no warm socket and no cold wake path configured';
+    code = 'wake-cold-off';
   }
 
   // The broker learns the outcome first: a wake report is what makes the
   // message's fate legible, and a receipt is the daemon's private audit of a
   // dispatch that already happened. The receipt is written even when the
   // report rejects (a disconnected broker); the rejection still propagates.
+  let reported = false;
   try {
     await report(agentId, messageIds, outcome, detail);
+    reported = true;
   } finally {
     if (typeof receipt === 'function') {
       receipt({ event: 'wake', agentId, count: wake.count, outcome, ...(paused ? { decision: 'paused' } : {}) });
+    }
+    if (diagnostics) {
+      const failed = outcome === 'failed' || !reported;
+      try {
+        diagnostics.record({
+          event: 'wake', stage, outcome: failed ? 'failed' : outcome === 'waiting' ? 'refused' : 'ok',
+          code: reported ? code : 'wake-report-failed', agentId, durationMs: nowMs() - startedAt,
+          traceId: span.traceId, spanId: span.spanId, parentSpanId: span.parentSpanId ?? undefined,
+        });
+      } catch { /* diagnostics never change a dispatch */ }
     }
   }
   return { agentId, messageIds, outcome, detail, count: wake.count };

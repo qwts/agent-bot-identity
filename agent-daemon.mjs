@@ -2100,7 +2100,7 @@ async function serveDaemon({
   server.dream = dream;
   await taskReporter.recover({ log: (line) => process.stderr.write(`agent-daemon: ${line}\n`) });
   server.wakePlane = createWakePlane({
-    turns, isPaused,
+    turns, isPaused, diagnostics,
     pool: server.warmPool,
     snapshot: (agentId) => readColdWakeSnapshot(agentId, { env, home }),
     lookupSoul: (agentId) => server.bindings.findAgent(agentId) ?? recordedWorktree(agentId, { env, home }),

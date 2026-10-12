@@ -17,6 +17,16 @@ an expected refusal (the owner's choice, a policy or this host's setup, such
 as `harness-signed-out`), and `failed` a fault. Codes are listed in
 `governance/error-codes.json` and never change meaning.
 
+Each wake the broker sends is recorded as one `wake` event whose stage is the
+path it took: `warm` (a listening session took it), `cold` (a cold turn
+started), `merged` (it joined a cold turn already running) or `waiting`. A
+paused soul (`wake-paused`) or cold wake being off (`wake-cold-off`) is an
+expected refusal; a warm or cold path that failed, or a report the broker did
+not take, is `failed`. A wake that carries an exact version-00 `traceparent`
+continues that trace; otherwise it starts its own. Daemon starts and
+shutdowns, harness turns, approvals and credential refreshes are recorded
+the same way.
+
 Events of one operation share a W3C trace ID, so a launch can be followed
 across processes. Trace and span IDs are untrusted correlation IDs: they only
 link events and never identify, authenticate or authorize anyone. A launch

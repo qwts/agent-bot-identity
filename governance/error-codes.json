@@ -353,6 +353,46 @@
       "kind": "failure",
       "registered": "0.10.64",
       "summary": "The App installation token could not be minted."
+    },
+    {
+      "n": 45,
+      "code": "wake-paused",
+      "component": "wake",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A wake found its soul paused; the messages wait."
+    },
+    {
+      "n": 46,
+      "code": "wake-cold-off",
+      "component": "wake",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A wake found no warm socket and cold wake off for the soul; the messages wait."
+    },
+    {
+      "n": 47,
+      "code": "wake-warm-failed",
+      "component": "wake",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "Every warm socket failed to take a wake frame."
+    },
+    {
+      "n": 48,
+      "code": "wake-cold-failed",
+      "component": "wake",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The cold wake path failed or answered outside its contract."
+    },
+    {
+      "n": 49,
+      "code": "wake-report-failed",
+      "component": "wake",
+      "kind": "failure",
+      "registered": "0.10.64",
+      "summary": "The wake outcome could not be reported to the broker."
     }
   ]
 }
