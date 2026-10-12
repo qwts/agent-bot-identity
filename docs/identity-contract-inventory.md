@@ -205,7 +205,7 @@ identity semantics:
 
 | Route | Class | Handler | Stability | Callers |
 | --- | --- | --- | --- | --- |
-| `POST /v0/vouch` | binding | `agent-daemon.mjs:592` | **public** | agent-comms `lib/client.mjs:253` (`aud: agent-comms`); the token is checked by the broker against the key paired by `daemon pair-comms` |
+| `POST /v0/vouch` | binding | `agent-daemon.mjs:599` | **public** | agent-comms `lib/client.mjs:253` (`aud: agent-comms`); the token is checked by the broker against the key paired by `daemon pair-comms` |
 | `POST /v0/bind` | binding (bind token) | `identity-routes.mjs:35` | internal | `daemon-client.mjs:197`, which `setup-worktree` and `soul-join` use |
 | `GET /v0/binding` | binding | `identity-routes.mjs:99` | internal | `daemon-client.mjs:201` |
 | `DELETE /v0/binding` | binding | `identity-routes.mjs:105` | internal | `daemon-client.mjs:212`, `agent-binding.mjs:405` |
@@ -214,9 +214,9 @@ identity semantics:
 | `POST /v0/keyd/grant` | binding | `identity-routes.mjs:309` | **public** | keyd relay (`keyd/src/relay.rs:22`; the same in GeniusBar's snapshot) |
 | `POST /v0/inbox/take` | binding | `identity-routes.mjs:237` | internal | `daemon-client.mjs:222` |
 | `POST /v0/grants/request`, `/spend` | binding | `identity-routes.mjs:276`, `:291` | internal | `daemon-client.mjs:227`, `:230` |
-| `GET /v0/identity/apps` | bearer | `agent-daemon.mjs:627` | internal | none outside this repository; GeniusBar uses the CLI |
-| `GET /v0/identity/apps/jobs/{id}` | bearer | `agent-daemon.mjs:627` | internal | as above |
-| `POST /v0/identity/apps/{action}` | owner | `agent-daemon.mjs:627` | internal | as above |
+| `GET /v0/identity/apps` | bearer | `agent-daemon.mjs:634` | internal | none outside this repository; GeniusBar uses the CLI |
+| `GET /v0/identity/apps/jobs/{id}` | bearer | `agent-daemon.mjs:634` | internal | as above |
+| `POST /v0/identity/apps/{action}` | owner | `agent-daemon.mjs:634` | internal | as above |
 
 Two routes straddle identity and soul (F9):
 
