@@ -14,8 +14,10 @@ import {
 } from './owner-decision-journal-frame.mjs';
 import {
   bindEffect, bindPreparation, challengeFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest, effectOutcome,
+  enteredRecordFor,
 } from './owner-decision-evidence.mjs';
 import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
+import { canonicalJson } from '../canonical-json.mjs';
 
 export const DAEMON_JOURNAL_LIMIT = 4096;
 export const DAEMON_RESERVATION_BYTES = 524288;
@@ -42,6 +44,7 @@ const ADMISSION_SLOTS = ['original-action', 'acceptance-context'];
 const PUBLIC = Object.freeze({
   'owner-journal-capacity': 'journal-capacity',
   'owner-journal-conflict': 'conflict',
+  'owner-journal-consumed': 'conflict',
   'owner-journal-platform-unsupported': 'owner-decision-unsupported',
   'invalid-owner-journal-record': 'bad-request',
 });
@@ -184,7 +187,8 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       ownedDirectory(io, root); ownedDirectory(io, requests);
       return operation();
     } catch (error) {
-      if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict'].includes(error?.reason)) poisoned = true;
+      if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict', 'owner-journal-consumed', 'owner-journal-entry-refused']
+        .includes(error?.reason)) poisoned = true;
       if (error?.reason) throw error;
       throw journalError(error?.code === 'invalid-owner-journal-frame' ? 'owner-journal-corrupt' : 'owner-journal-io');
     } finally {
@@ -323,7 +327,10 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
         { phase: 'refused', preparation, preparationDigest, receiptDigest, action }));
       return { ...effectOutcome(slots['pre-effect-refused']), refusalReason: refused.detail.code };
     }
-    if (slots['successful-check']) return { state: 'released' };
+    if (slots['successful-check']) {
+      return { state: 'released', view: Object.freeze({ action, actionBytes: saved.action, acceptance, preparation, preparationDigest,
+        receiptDigest, presenceToken: slots.presence.toString('latin1') }) };
+    }
     if (slots.presence || slots.receipt) return { state: 'authorizing' };
     return { state: slots['prepared-challenge'] ? 'prepared' : 'preparing' };
   }
@@ -380,6 +387,44 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   return {
     // Charged request directories, including orphans and unknown entries.
     count: () => locked(() => scan().length),
+
+    // The effect-entry consumption point for one request (C2; disabled, no
+    // route). Under the journal lock the request must be exactly `released`:
+    // anything already entered, refused or applied is consumed (`conflict`),
+    // and any other phase refuses. The synchronous `decide(view)` receives a
+    // frozen read-only view of the saved request and either throws (nothing is
+    // written) or returns { at } seconds. The store then derives the entered
+    // record itself from the saved preparation and action, re-checks its
+    // binding, and publishes it to slot 9 before any effect. Durable entered
+    // is consumption: a crash after it is effect-uncertain, never a retry.
+    enterEffect(requestId, decide) {
+      if (!matches(UUID4, requestId) || typeof decide !== 'function') fail('invalid-owner-journal-record');
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-entry-refused');
+        const graph = readGraph(name, requestId);
+        if (['indeterminate', 'applied', 'refused'].includes(graph.state)) fail('owner-journal-consumed');
+        if (graph.state !== 'released') fail('owner-journal-entry-refused');
+        recoveryFlush(graph);
+        const { view } = graph;
+        // A refusal from decide writes nothing and does not poison the store;
+        // its own reason is carried as `refusal`.
+        let decision;
+        try { decision = decide(view); } catch (error) {
+          throw Object.assign(journalError('owner-journal-entry-refused'), { refusal: typeof error?.reason === 'string' ? error.reason : null });
+        }
+        if (decision === null || typeof decision !== 'object' || typeof decision.then === 'function'
+          || !Number.isSafeInteger(decision.at) || decision.at < 0) fail('owner-journal-entry-refused');
+        const record = enteredRecordFor({ preparation: view.preparation, preparationDigest: view.preparationDigest,
+          receiptDigest: view.receiptDigest, action: view.action, at: decision.at });
+        bindEffect(record, { phase: 'entered', preparation: view.preparation, preparationDigest: view.preparationDigest,
+          receiptDigest: view.receiptDigest, action: view.action });
+        const bytes = Buffer.from(canonicalJson(record));
+        publish(graph.dir, 'entered', bytes, graph.binding);
+        return { state: 'entered', requestId, effectId: view.preparation.effectId, enteredDigest: effectDigest(bytes),
+          physicalFlushGuaranteed: false };
+      });
+    },
 
     // Explicit recovery of one request after reopen. Absent is only "no such
     // directory"; otherwise the typed phase from readGraph, after the

@@ -504,3 +504,32 @@ through an in-process port instead of `identityOp('read')`.
   uniform target refusal: a missing or malformed port, a result that is a
   promise or thenable, or any strict-custody failure (symlink, extra hard link,
   foreign owner, oversize, invalid record).
+
+## Effect-entry gate (disabled)
+
+`owner-decision-effect-gate.mjs` (host) is the consumption point before any
+owner-decision effect. It composes identity's trust readiness, native p1
+verification and the request journal, now exported through `identity-host.mjs`,
+with soul's locked target resolution. There is no route.
+
+**Inside the journal's exclusive lock, in order, synchronously:**
+1. The journal requires the request to be exactly `released`. A request that
+   is already entered, applied or refused is consumed and refuses
+   (`conflict`).
+2. Re-read the current trust. It refuses with `trust-unavailable` if:
+   - no pair is ready;
+   - the active pair was enrolled after this request's `preparedAt`, which
+     covers a revocation, a rotation, or a re-enrollment of the same pair.
+3. The presented p1 must be exactly the one stored for the request, so an
+   alias with flipped signature bits refuses. It is re-verified against the
+   active presence pin, the preparation's own nonce and the daemon's clock.
+   Failures refuse with `validation-failed`.
+4. Re-resolve the target through the strict identity port. A target that is
+   no longer live refuses with `target-unavailable`.
+5. The journal builds the `entered` record itself, from the saved preparation
+   and action, and publishes it to slot 9.
+
+**What consumption means.** Durable `entered` is consumption. It is keyed per
+request by the daemon-generated nonce in its preparation, never by
+`presenceDigest`. A crash after it is `effect-uncertain`. Every refusal writes
+nothing. No effect runs here.
