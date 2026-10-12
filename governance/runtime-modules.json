@@ -331,6 +331,7 @@
     "identity/owner-decision-journal-store.mjs": "identity",
     "identity/owner-decision-linked-event.mjs": "identity",
     "identity/owner-decision-prepared.mjs": "identity",
+    "identity/owner-decision-trust.mjs": "identity",
     "identity/presence-verifier.mjs": "identity",
     "cold-wake-lock.mjs": "shared",
     "wake-webhook-store.mjs": "comms"
