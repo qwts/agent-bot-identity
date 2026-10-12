@@ -16,7 +16,7 @@ import { credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, 
 import { stateDirectory } from '../state-paths.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
-import { buildAppJwt, pickInstallation } from '../mint-token.mjs';
+import { buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd, removeAppFromKeyd } from './keyd-client.mjs';
 import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, readManagedAppCredential, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
 

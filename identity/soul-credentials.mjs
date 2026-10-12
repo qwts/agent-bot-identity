@@ -527,7 +527,7 @@ export function appKeyStores(slug, { env = process.env, home = homedir(), config
 // The live check: an App JWT signed with the stored key, sent to GET /app.
 // It proves GitHub accepts the key without minting an installation token.
 export async function verifyAppCredential({ appId, privateKeyPem }, { env = process.env, fetchImpl = fetch } = {}) {
-  const { buildAppJwt } = await import('../mint-token.mjs');
+  const { buildAppJwt } = await import('./mint-token.mjs');
   const { apiBase, loadConfig } = await import('../config.mjs');
   createPrivateKey(privateKeyPem);
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));

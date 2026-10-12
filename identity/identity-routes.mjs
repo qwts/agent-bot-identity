@@ -15,13 +15,13 @@
 
 import { readAgentIdentity, mintAgentIdentity } from './agent-identity.mjs';
 import { childBindingPath } from './agent-binding.mjs';
-import { isGateEnabled } from './config.mjs';
+import { isGateEnabled } from '../config.mjs';
 import { SCHEMA_VERSION } from './daemon-client.mjs';
 import { validAppSlug } from './identity-app-store.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { boundRepository, inboxError } from './inbox-take.mjs';
 import { grantTarget, KEYD_TOOL_NAMES, mintViaKeyd, signKeydGrant } from './keyd-client.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { stateDirectory } from '../state-paths.mjs';
 
 export function createIdentityRoutes({
   bindings, env, home, config, now,

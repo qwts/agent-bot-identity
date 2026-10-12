@@ -144,9 +144,15 @@ test('each old identity path is only a re-export shim of its moved file', () => 
     const source = readFileSync(new URL(`../${old}`, import.meta.url), 'utf8').replace(/^#![^\n]*\n/u, '');
     let spec = path.posix.relative(path.posix.dirname(old), moved);
     if (!spec.startsWith('.')) spec = `./${spec}`;
-    assert.equal(source, `// Moved to ${moved} (#645, ADR-0645 step 6). This path keeps working\n`
-      + '// for callers that import it here; it re-exports the moved file.\n'
-      + `export { ${exportedNames(target).join(', ')} } from '${spec}';\n`, `${old}: not a plain shim of ${moved}`);
+    // A moved file with no exports is a command: its shim only loads it.
+    const names = exportedNames(target);
+    assert.equal(source, names.length
+      ? `// Moved to ${moved} (#645, ADR-0645 step 6). This path keeps working\n`
+        + '// for callers that import it here; it re-exports the moved file.\n'
+        + `export { ${names.join(', ')} } from '${spec}';\n`
+      : `// Moved to ${moved} (#645, ADR-0645 step 6). This path keeps working\n`
+        + '// for callers that run it here; it loads the moved file.\n'
+        + `import '${spec}';\n`, `${old}: not a plain shim of ${moved}`);
   }
 });
 

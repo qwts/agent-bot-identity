@@ -69,7 +69,9 @@ function operatorReceipt({ decision, appSlug = null, reason }) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../../cli/mint-token.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   main().catch((err) => {
     console.error(`mint-token: ${err.message}`);
     process.exit(1);

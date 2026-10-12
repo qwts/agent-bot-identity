@@ -1,0 +1,1 @@
+- The host entry, identity's route handler, the mint-token library and the `agent-bot mint-token` command move into `identity/`; their old paths stay as shims, and `cli/mint-token.mjs` still runs the command (#645, ADR-0645 step 6).

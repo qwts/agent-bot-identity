@@ -28,7 +28,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { resolveAppCredential } from './soul-credentials.mjs';
-import { loadConfig, apiBase } from './config.mjs';
+import { loadConfig, apiBase } from '../config.mjs';
 
 function b64url(input) {
   return Buffer.from(input).toString('base64url');
@@ -290,7 +290,9 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
 // The command line lives in cli/mint-token.mjs, with its output format in
 // cli/mint-output.mjs (#645). Run directly, this file only points there and
 // mints nothing.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly, from here or through the shim at its old path (#645, step 6).
+if (process.argv[1] && [import.meta.url, new URL('../mint-token.mjs', import.meta.url).href]
+  .includes(pathToFileURL(process.argv[1]).href)) {
   console.error('mint-token: run agent-bot mint-token');
   process.exit(1);
 }
