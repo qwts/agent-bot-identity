@@ -35,7 +35,8 @@ no workflow uses `pull_request_target`. One gap remains: if the fork behind an
 open pull request is deleted, GitHub no longer marks the head as a fork, and a
 rerun takes the runner the repository variables name. The `Action Policy` job
 then refuses any actor not on its allow list before other jobs run or check
-out code.
+out code. The changelog fragment check runs outside that policy job, so it
+always uses a GitHub-hosted runner (#1066).
 
 Approval for outside contributors' workflows is required repository
 configuration, not something the workflow files enforce: the owner turns on

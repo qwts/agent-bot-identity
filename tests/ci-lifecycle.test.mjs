@@ -176,6 +176,57 @@ test('fork pull requests run only on GitHub-hosted runners with no secrets', () 
     }
   }
   // policy, merge-evidence, preflight-evidence, complete, workflow-runtime,
-  // skill-gate, two linux-bundle platforms, gate, changelog and CodeQL.
-  assert.equal(guarded, 11);
+  // skill-gate, two linux-bundle platforms, gate and CodeQL.
+  assert.equal(guarded, 10);
+});
+
+// Splits a workflow's top-level jobs into { name: body } by their two-space keys.
+function workflowJobs(source) {
+  const section = source.split(/^jobs:\n/m)[1] ?? '';
+  const jobs = {};
+  for (const block of section.split(/^(?=  [A-Za-z0-9_-]+:\n)/m)) {
+    const key = block.match(/^  ([A-Za-z0-9_-]+):\n/);
+    if (key) jobs[key[1]] = block;
+  }
+  return jobs;
+}
+
+function jobNeeds(body) {
+  const value = body.match(/^    needs:\s*(.+)$/m)?.[1] ?? '';
+  return value.replace(/[[\]]/g, '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+// #1066: GitHub can report a deleted fork as a non-fork on rerun, so the fork
+// check above sends such a run to the label a repository variable names. Any
+// pull_request job that then runs repository code on that label must wait for
+// the Action Policy job (whose pinned shared action runs no PR code), and a job
+// that overrides the default with always() must still require its success.
+test('a deleted-fork rerun reaches a variable-selected runner only behind Action Policy', () => {
+  const workflows = { 'ci.yml': ci, 'changelog.yml': changelog };
+  const deletedFork = (expression) => /vars\.[A-Z_]+/.test(expression);
+  let gated = 0;
+  for (const [name, source] of Object.entries(workflows)) {
+    assert.match(source, /^on:\n(?:.*\n)*?  pull_request:/m, `${name} is not a pull_request workflow`);
+    const jobs = workflowJobs(source);
+    assert.ok(Object.keys(jobs).length > 0, `${name}: no jobs parsed`);
+    for (const [job, body] of Object.entries(jobs)) {
+      const runners = [...body.matchAll(/^\s*(?:-\s+)?(?:runs-on|runner):\s*(.+)$/gm)].map((match) => match[1]);
+      const selfHostable = runners.some(deletedFork);
+      const runsCode = /actions\/checkout@|^    uses: \.\//m.test(body);
+      if (job === 'policy') {
+        assert.equal(name, 'ci.yml');
+        assert.doesNotMatch(body, /actions\/checkout@|^\s+run:/m, 'Action Policy must not run repository code');
+        continue;
+      }
+      if (!runsCode || (!selfHostable && !/^    uses: \.\//m.test(body))) continue;
+      assert.ok(jobNeeds(body).includes('policy'), `${name}: ${job} runs PR code on a variable runner without Action Policy`);
+      const condition = body.match(/^    if:\s*(?:>-\n)?([\s\S]*?)(?=^    [a-z-]+:)/m)?.[1] ?? '';
+      if (/always\(\)/.test(condition)) {
+        assert.match(condition, /needs\.policy\.result == 'success'/, `${name}: ${job} runs after a failed Action Policy`);
+      }
+      gated += 1;
+    }
+  }
+  // complete, codeql, workflow-runtime, skill-gate and linux-bundle.
+  assert.equal(gated, 5);
 });
