@@ -2,7 +2,7 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1462,6 +1462,40 @@ test('doctor warns about soul folders that belong to no active soul', async () =
     { agentId: ids.retired, path: dirs.retired, status: 'retired' },
     { agentId: ids.unknown, path: dirs.unknown, status: 'unknown' },
   ] });
+});
+
+// Two live souls with one generated name (#1003): doctor names them and
+// their IDs, ignores retired souls, and changes nothing in the census.
+test('doctor warns about a name shared by more than one active soul', async () => {
+  const home = tempRoot();
+  const census = join(home, '.local', 'state', 'agent-bot', 'population.json');
+  const ids = {
+    first: 'agent_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    second: 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    retired: 'agent_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  };
+  const row = (key, name, status) => ({ id: ids[key], name, appSlug: null, parentId: null, status,
+    spacePath: join(home, '.agent-space', ids[key]), worktree: null, worktrees: [],
+    transcriptLocator: null, lastSeen: '2026-10-11T20:18:00.000Z' });
+  const write = (souls) => {
+    mkdirSync(dirname(census), { recursive: true });
+    writeFileSync(census, `${JSON.stringify({ schemaVersion: 1, souls }, null, 2)}\n`);
+  };
+  const dependencies = machineDependencies(home);
+  write({ [ids.first]: row('first', 'solid-cairn-63', 'active'), [ids.retired]: row('retired', 'solid-cairn-63', 'retired') });
+  const quiet = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  assert.equal(quiet.machine.checks.find(({ id }) => id === 'souls.names'), undefined);
+  write({ [ids.first]: row('first', 'solid-cairn-63', 'active'), [ids.second]: row('second', 'solid-cairn-63', 'active'),
+    [ids.retired]: row('retired', 'solid-cairn-63', 'retired') });
+  const before = readFileSync(census, 'utf8');
+  const report = await collectReadiness({ command: 'doctor', scope: 'machine', ...dependencies });
+  const check = report.machine.checks.find(({ id }) => id === 'souls.names');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'soul-name-duplicate');
+  assert.match(check.message, /solid-cairn-63 \(agent_aaaaaaaa-.*, agent_bbbbbbbb-/);
+  assert.match(check.action, /Agent ID/);
+  assert.deepEqual(check.evidence, { duplicates: [{ name: 'solid-cairn-63', agentIds: [ids.first, ids.second] }] });
+  assert.equal(readFileSync(census, 'utf8'), before, 'doctor renames nothing');
 });
 
 // Doctor describes each active soul's environment through the same

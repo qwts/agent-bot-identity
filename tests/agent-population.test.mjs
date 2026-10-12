@@ -18,7 +18,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   displayName,
+  duplicateSoulNames,
   formatPopulation,
+  generatedSoulName,
+  SOUL_NAME_ATTEMPTS,
   listSouls,
   PRESENCE_WINDOW_MS,
   populationFile,
@@ -401,6 +404,63 @@ test('name lookup answers a unique handle and refuses ambiguity (#92)', () => {
     () => showSoulByName(displayName(FIRST_ID), { file }),
     /shared by 2 souls/,
   );
+});
+
+// Two active souls once both came out as solid-cairn-63 (#1003).
+test('a new soul gets a generated name no other soul holds, retired ones included (#1003)', () => {
+  const file = path.join(scratch(), 'population.json');
+  const THIRD_ID = 'agent_33333333-3333-4333-8333-333333333333';
+  // Another soul already holds the second soul's derived name; a retired one
+  // holds its first retry.
+  upsertSoul(fixture({ name: displayName(SECOND_ID) }), { file });
+  upsertSoul(fixture({ id: THIRD_ID, name: generatedSoulName(SECOND_ID, 1), status: 'retired',
+    spacePath: `/spaces/${THIRD_ID}` }), { file });
+  const created = upsertSoul(fixture({ id: SECOND_ID, name: undefined, spacePath: `/spaces/${SECOND_ID}` }), { file });
+  assert.equal(created.name, generatedSoulName(SECOND_ID, 2));
+  assert.match(created.name, /^[a-z]+-[a-z]+-[0-9a-f]{2}$/);
+  // Deterministic, and attempt 0 is the name a soul always had.
+  assert.equal(generatedSoulName(SECOND_ID, 2), generatedSoulName(SECOND_ID, 2));
+  assert.equal(generatedSoulName(SECOND_ID, 0), displayName(SECOND_ID));
+  // The first soul keeps its recorded name; nothing renames it.
+  assert.equal(showSoul(FIRST_ID, { file }).name, displayName(SECOND_ID));
+  assert.equal(showSoul(SECOND_ID, { file }).name, created.name);
+});
+
+test('a soul with no neighbour keeps the name derived from its ID (#1003)', () => {
+  const file = path.join(scratch(), 'population.json');
+  assert.equal(upsertSoul(fixture({ name: undefined }), { file }).name, displayName(FIRST_ID));
+  // A chosen name is kept even when another soul has it.
+  assert.equal(upsertSoul(fixture({ id: SECOND_ID, name: displayName(FIRST_ID), spacePath: `/spaces/${SECOND_ID}` }), { file }).name,
+    displayName(FIRST_ID));
+});
+
+test('generation gives up after a bounded number of attempts with a clear error (#1003)', () => {
+  const file = path.join(scratch(), 'population.json');
+  for (let attempt = 0; attempt < SOUL_NAME_ATTEMPTS; attempt += 1) {
+    const id = `agent_aaaaaaaa-aaaa-4aaa-8aaa-${attempt.toString(16).padStart(12, '0')}`;
+    upsertSoul(fixture({ id, name: generatedSoulName(SECOND_ID, attempt), spacePath: `/spaces/${id}` }), { file });
+  }
+  const before = readFileSync(file, 'utf8');
+  assert.throws(
+    () => upsertSoul(fixture({ id: SECOND_ID, name: undefined, spacePath: `/spaces/${SECOND_ID}` }), { file }),
+    new RegExp(`could not generate a soul name for ${SECOND_ID} that no other soul uses after ${SOUL_NAME_ATTEMPTS} attempts`),
+  );
+  assert.equal(readFileSync(file, 'utf8'), before, 'a refused generation writes nothing');
+});
+
+test('duplicate names among live souls are reported, never renamed (#1003)', () => {
+  const file = path.join(scratch(), 'population.json');
+  const THIRD_ID = 'agent_33333333-3333-4333-8333-333333333333';
+  upsertSoul(fixture({ name: 'solid-cairn-63' }), { file });
+  upsertSoul(fixture({ id: SECOND_ID, name: 'solid-cairn-63', status: 'finalized', spacePath: `/spaces/${SECOND_ID}` }), { file });
+  upsertSoul(fixture({ id: THIRD_ID, name: displayName(FIRST_ID), status: 'retired', spacePath: `/spaces/${THIRD_ID}` }), { file });
+  assert.deepEqual(duplicateSoulNames({ file }), [{ name: 'solid-cairn-63', agentIds: [FIRST_ID, SECOND_ID] }]);
+  const before = readFileSync(file, 'utf8');
+  duplicateSoulNames({ file });
+  assert.equal(readFileSync(file, 'utf8'), before);
+  // A retired soul sharing a name is history, not ambiguity.
+  updateSoulStatus(SECOND_ID, 'retired', { file });
+  assert.deepEqual(duplicateSoulNames({ file }), []);
 });
 
 test('the PARENT column tells no-parent apart from parent-unknown (#91)', () => {
