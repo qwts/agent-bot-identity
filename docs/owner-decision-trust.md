@@ -49,8 +49,15 @@ A key is canonical unpadded base64url of exactly 32 bytes and a valid Ed25519
 point. Its `keyId` is SHA-256 of the Ed25519 SPKI DER, matching agent-comms.
 The receipt and presence keys must differ, and neither may be this daemon's
 own vouch key. That key's ID, `daemonKey` (SHA-256 of the vouch SPKI DER), is
-required at enrollment and at every readiness check. An active pin equal to
-it refuses (`owner-decision-unsupported`). `service.brokerUid` is the broker's
+derived at enrollment and at every readiness check from this daemon's
+existing vouch key: `vouchDaemonKey` in `identity/vouch.mjs`, which reads
+`$XDG_STATE_HOME/agent-bot/vouch-key.pem` read-only (the same env and home as
+the trust root, never creating a key).
+- A caller may pass `daemonKey`, but only as an exact check against the
+  derived value. A mismatch refuses with `bad-request`.
+- A missing or invalid vouch key refuses with `owner-decision-unsupported`.
+  The key is never derived from input.
+- An active pin equal to it refuses (`owner-decision-unsupported`). `service.brokerUid` is the broker's
 own service account: never 0 and never the owner's uid. A stored enrollment
 that breaks this rule is refused as damage.
 

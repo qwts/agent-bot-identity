@@ -12,6 +12,13 @@ import path from 'node:path';
 import process from 'node:process';
 import { canonicalJson } from '../canonical-json.mjs';
 import { createOwnerDecisionTrustWriter, isNamespaceDigest, readOwnerDecisionTrust } from '../identity/owner-decision-trust.mjs';
+import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
+
+// A scratch vouch key for readiness checks, never the real one.
+const vouchState = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-namespace-vouch-')));
+process.on('exit', () => fs.rmSync(vouchState, { recursive: true, force: true }));
+const vouchEnv = { XDG_STATE_HOME: vouchState };
+loadOrCreateVouchKey(vouchStateDir({ env: vouchEnv }));
 
 const VECTORS_URL = new URL('./fixtures/owner-decisions/broker-namespace-v1.json', import.meta.url);
 const VECTORS_SHA256 = '559aff92b9dfe47a252d684a019a6b3928bc397c9e911607540289ad1ecac179';
@@ -59,14 +66,14 @@ test('namespace.json accepts each published digest and refuses every other spell
         assert.throws(() => writer.enrollNamespace({ namespaceDigest: value }), { code: 'bad-request', reason: 'owner-trust-invalid-input' });
       }
       assert.equal(writer.enrollNamespace({ namespaceDigest: vector.namespaceDigest }).state, 'enrolled');
-      assert.throws(() => readOwnerDecisionTrust({ root, namespaceDigest: vector.namespaceDigest, daemonKey: 'f'.repeat(64) }), { reason: 'owner-trust-no-active-key' });
+      assert.throws(() => readOwnerDecisionTrust({ root, namespaceDigest: vector.namespaceDigest, env: vouchEnv }), { reason: 'owner-trust-no-active-key' });
       // A stored record carrying any other spelling is refused as damage, and kept.
       const file = path.join(root, 'namespace.json');
       const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
       for (const value of rejected.filter((candidate) => !candidate.endsWith('\n'))) {
         fs.writeFileSync(file, canonicalJson({ ...stored, namespaceDigest: value }), { mode: 0o600 });
         const before = fs.readFileSync(file);
-        assert.throws(() => readOwnerDecisionTrust({ root, daemonKey: 'f'.repeat(64) }), { code: 'storage-failed' });
+        assert.throws(() => readOwnerDecisionTrust({ root, env: vouchEnv }), { code: 'storage-failed' });
         assert(fs.readFileSync(file).equals(before));
       }
     });

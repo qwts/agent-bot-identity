@@ -14,10 +14,12 @@
 //   audit lines). Either could bring back a revoked key, so the broker's
 //   online revocation check before application stays mandatory.
 import * as fs from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { createHash, createPublicKey, randomUUID } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
+import { vouchDaemonKey } from './vouch.mjs';
 
 export const TRUST_LIMITS = Object.freeze({ versions: 1024, record: 1024, confirmation: 512, auditLine: 512 });
 // One namespace line plus one line per key version; reconcile appends only
@@ -58,13 +60,16 @@ const PUBLIC = Object.freeze({
   'owner-trust-invalid-input': 'bad-request',
   'owner-trust-conflict': 'conflict',
   'owner-trust-role': 'owner-decision-unsupported',
+  'owner-trust-no-vouch-key': 'owner-decision-unsupported',
+  'owner-trust-daemon-key-mismatch': 'bad-request',
 });
 export function trustError(reason) {
   return Object.assign(new Error('owner decision trust refused'), { code: PUBLIC[reason] ?? 'storage-failed', reason });
 }
 const fail = (reason = 'owner-trust-corrupt') => { throw trustError(reason); };
 
-export function ownerDecisionTrustRoot({ env = process.env, home = process.env.HOME } = {}) {
+// Resolved from the same env/home as the vouch key (vouch.mjs vouchStateDir).
+export function ownerDecisionTrustRoot({ env = process.env, home = homedir() } = {}) {
   const stateHome = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
   return path.join(stateHome, 'agent-bot', 'owner-decision-trust');
 }
@@ -104,6 +109,18 @@ function chainFields(value, namespaceDigest) {
   return value.v === 1 && value.namespaceDigest === namespaceDigest && Number.isSafeInteger(value.version)
     && value.version >= 1 && value.version <= TRUST_LIMITS.versions && matches(DIGEST, value.previousDigest)
     && seconds(value.at) && matches(UUID4, value.auditId);
+}
+
+// This daemon's own key ID, always derived from its existing vouch key (the
+// key the broker approved at pairing). A caller may pass the value it holds,
+// but only as a check: anything else refuses. Without a vouch key there is
+// no owner-decision trust at all.
+function ownDaemonKey(supplied, { env, home }) {
+  let derived;
+  try { derived = vouchDaemonKey({ env, home }); } catch { fail('owner-trust-no-vouch-key'); }
+  if (derived === null) fail('owner-trust-no-vouch-key');
+  if (supplied !== undefined && supplied !== derived) fail('owner-trust-daemon-key-mismatch');
+  return derived;
 }
 
 // The broker runs in its own service account: never root, never the owner.
@@ -383,14 +400,16 @@ function platformCheck() {
 // Readiness for one use: the pinned namespace and the single active,
 // completely audited key enrollment. Missing trust is unsupported; anything
 // unsettled, damaged or foreign is storage-failed and kept as found.
-// `daemonKey` (SHA-256 of this daemon's vouch SPKI DER) is required, so a
-// pin equal to it is always refused.
-export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, io = fs } = {}) {
+// The daemonKey (SHA-256 of this daemon's vouch SPKI DER) is derived from the
+// vouch key under `env`/`home`; a supplied `daemonKey` must equal it. A pin
+// equal to it is always refused.
+export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, env = process.env, home = homedir(), io = fs } = {}) {
   platformCheck();
-  if (typeof root !== 'string' || !path.isAbsolute(root) || !matches(DIGEST, daemonKey)) fail('owner-trust-invalid-input');
+  if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
+  const ownKey = ownDaemonKey(daemonKey, { env, home });
   try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }
   const lock = acquireLock(io, root);
-  try { return ready(readGraph(io, root), namespaceDigest, daemonKey); }
+  try { return ready(readGraph(io, root), namespaceDigest, ownKey); }
   catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
   finally { io.closeSync(lock); }
 }
@@ -400,7 +419,7 @@ export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, io = 
 // `maxVersions` may only lower the fixed capacity (tests use it to reach the
 // limit); the reader always enforces TRUST_LIMITS.versions.
 export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}, now = () => Math.floor(Date.now() / 1000),
-  maxVersions = TRUST_LIMITS.versions } = {}) {
+  maxVersions = TRUST_LIMITS.versions, env = process.env, home = homedir() } = {}) {
   platformCheck();
   if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
   const capacity = Math.min(TRUST_LIMITS.versions, maxVersions);
@@ -540,11 +559,12 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
 
     // A new enrollment is legal only with no active one: rotation is a
     // confirmed revocation first. Keys come only from the owner ceremony.
-    // `daemonKey` is this daemon's own vouch key ID; neither pin may equal it.
+    // Neither pin may be this daemon's own vouch key (derived; a supplied
+    // `daemonKey` must equal it).
     enrollKeys({ receiptKey, presenceKey, brokerUid, daemonKey, at = now(), auditId = randomUUID() } = {}) {
       const receipt = ed25519KeyPin(receiptKey), presence = ed25519KeyPin(presenceKey);
-      if (receipt.keyId === presence.keyId || !matches(DIGEST, daemonKey)
-        || receipt.keyId === daemonKey || presence.keyId === daemonKey) fail('owner-trust-invalid-input');
+      const ownKey = ownDaemonKey(daemonKey, { env, home });
+      if (receipt.keyId === presence.keyId || receipt.keyId === ownKey || presence.keyId === ownKey) fail('owner-trust-invalid-input');
       if (!validBrokerUid(brokerUid) || !seconds(at) || !matches(UUID4, auditId)) fail('owner-trust-invalid-input');
       return appendKeyRecord((graph, chain) => {
         if (graph.active) fail('owner-trust-conflict');

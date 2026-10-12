@@ -1,7 +1,7 @@
 // Disabled owner-decision trust records (#1007): the pinned broker namespace
 // and the versioned key pins. Storage cases run only on Darwin, where the
 // journal-style O_EXLOCK lock exists; key and schema cases run everywhere.
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -12,15 +12,21 @@ import { canonicalJson } from '../canonical-json.mjs';
 import {
   TRUST_LIMITS, createOwnerDecisionTrustWriter, ed25519KeyPin, ownerDecisionTrustRoot, readOwnerDecisionTrust, trustError,
 } from '../identity/owner-decision-trust.mjs';
+import { loadOrCreateVouchKey, vouchDaemonKey, vouchStateDir } from '../identity/vouch.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const refused = (reason, code) => (error) => error.reason === reason && (code === undefined || error.code === code);
 const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
-// This daemon's own vouch key ID, and a broker service uid that is neither
-// root nor the owner running the tests.
-const daemonKey = sha256(generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }));
+// A scratch vouch key standing in for this daemon's (never the real one),
+// its derived key ID, and a broker service uid that is neither root nor the
+// owner running the tests.
+const vouchState = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-vouch-')));
+after(() => fs.rmSync(vouchState, { recursive: true, force: true }));
+const env = { XDG_STATE_HOME: vouchState };
+const vouch = loadOrCreateVouchKey(vouchStateDir({ env }));
+const daemonKey = vouchDaemonKey({ env });
 const brokerUid = process.getuid() + 1;
 const keys = () => ({ receiptKey: rawKey(), presenceKey: rawKey(), brokerUid, daemonKey });
 
@@ -29,8 +35,8 @@ function freshRoot(t) {
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   return path.join(base, 'trust');
 }
-const read = (root, options = {}) => readOwnerDecisionTrust({ root, daemonKey, ...options });
-const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, ...options });
+const read = (root, options = {}) => readOwnerDecisionTrust({ root, env, ...options });
+const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, env, ...options });
 // Every file under the root, for "kept as found" checks.
 function snapshot(root) {
   const out = {};
@@ -342,21 +348,39 @@ test('the broker service uid is never root or the owner, and no pin may be this 
   for (const uid of [0, process.getuid(), -1, 2 ** 32, 1.5, '600']) {
     assert.throws(() => w.enrollKeys({ ...keys(), brokerUid: uid }), invalidInput, String(uid));
   }
-  // A pin equal to our daemonKey, or no daemonKey to compare with, refuses at enrollment.
-  const own = generateKeyPairSync('ed25519').publicKey, ownKey = own.export({ format: 'jwk' }).x;
-  const ownId = sha256(own.export({ type: 'spki', format: 'der' }));
-  assert.throws(() => w.enrollKeys({ ...keys(), receiptKey: ownKey, daemonKey: ownId }), invalidInput);
-  assert.throws(() => w.enrollKeys({ ...keys(), presenceKey: ownKey, daemonKey: ownId }), invalidInput);
-  assert.throws(() => w.enrollKeys({ ...keys(), daemonKey: undefined }), invalidInput);
+  // Our own vouch key can be neither pin, whether or not the caller names it.
+  const ownKey = vouch.publicKey.export({ format: 'jwk' }).x;
+  assert.equal(ed25519KeyPin(ownKey).keyId, daemonKey);
+  for (const extra of [{}, { daemonKey }]) {
+    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, receiptKey: ownKey }), invalidInput);
+    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, presenceKey: ownKey }), invalidInput);
+  }
+  // A supplied daemonKey is only ever a check against the derived one.
+  assert.throws(() => w.enrollKeys({ ...keys(), daemonKey: 'f'.repeat(64) }), refused('owner-trust-daemon-key-mismatch', 'bad-request'));
   assert.equal(fs.existsSync(path.join(root, 'keys')), false);
 
-  // Readiness requires our daemonKey and refuses an active pin equal to it.
-  const enrolled = keys(), pin = ed25519KeyPin(enrolled.receiptKey);
-  w.enrollKeys(enrolled);
+  // Readiness derives our key, verifies a supplied one, and needs a vouch key at all.
+  const { daemonKey: _omit, ...withoutDaemonKey } = keys();
+  w.enrollKeys(withoutDaemonKey);
   assert.equal(read(root).state, 'ready');
-  assert.throws(() => readOwnerDecisionTrust({ root }), invalidInput);
-  assert.throws(() => read(root, { daemonKey: pin.keyId }), refused('owner-trust-role', 'owner-decision-unsupported'));
-  assert.throws(() => read(root, { daemonKey: ed25519KeyPin(enrolled.presenceKey).keyId }), refused('owner-trust-role'));
+  assert.equal(read(root, { daemonKey }).state, 'ready');
+  assert.throws(() => read(root, { daemonKey: 'f'.repeat(64) }), refused('owner-trust-daemon-key-mismatch', 'bad-request'));
+  const empty = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-novouch-')));
+  t.after(() => fs.rmSync(empty, { recursive: true, force: true }));
+  assert.throws(() => read(root, { env: { XDG_STATE_HOME: empty } }), refused('owner-trust-no-vouch-key', 'owner-decision-unsupported'));
+  assert.deepEqual(fs.readdirSync(empty), [], 'checking never creates a vouch key');
+});
+
+test('an active pin that is this daemon\'s vouch key leaves no authority', darwin, (t) => {
+  // Enrolled under one daemon, then read by a daemon whose vouch key is that receipt key.
+  const root = freshRoot(t), w = writer(root);
+  w.enrollNamespace({ namespaceDigest });
+  const other = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-other-vouch-')));
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  const otherEnv = { XDG_STATE_HOME: other }, otherVouch = loadOrCreateVouchKey(vouchStateDir({ env: otherEnv }));
+  w.enrollKeys({ ...keys(), receiptKey: otherVouch.publicKey.export({ format: 'jwk' }).x });
+  assert.equal(read(root).state, 'ready');
+  assert.throws(() => read(root, { env: otherEnv }), refused('owner-trust-role', 'owner-decision-unsupported'));
 });
 
 test('a stored enrollment naming root or the owner as the broker is refused as damage', darwin, async (t) => {
