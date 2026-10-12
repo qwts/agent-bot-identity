@@ -474,7 +474,6 @@ how each one is done, and §9 puts them in order.
   - `readiness.mjs`, `doctor.mjs`, `bootstrap.mjs` and `sync-hooks.mjs`
     import identity only through it and the other listed contracts, and a
     module-boundaries test holds them to that. Readiness keeps its test hooks.
-- **F14. Assign the non-`.mjs` identity assets.** The extraction plan has to
 - **F14. Assign the non-`.mjs` identity assets.** *Done (2026-10-11, owner
   answer):*
   - The module map's `assets` assigns `keyd/`,
