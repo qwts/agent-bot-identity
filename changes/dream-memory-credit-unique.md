@@ -1,0 +1,1 @@
+- Dream maintenance credits at most one harness memory file per verified soul change; another memory file citing the same change is reported as `artifact-already-credited` and stays eligible for later runs (#929).

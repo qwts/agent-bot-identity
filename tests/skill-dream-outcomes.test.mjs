@@ -142,3 +142,33 @@ test('a memory item is processed only by a verified soul change it cites, within
   assert.equal(interpret(JSON.stringify(report([memoryItem(null)]))).report.status, 'invalid');
   assert.equal(interpret(JSON.stringify(report([])), { inputs: memoryInputs }).unreported, 2, 'memory items count as delivered');
 });
+
+test('one verified change credits at most one memory item; the rest stay eligible (#929)', () => {
+  const MEMORY = `sha256:${'c'.repeat(64)}`, R1 = `sha256:${'d'.repeat(64)}`, R2 = `sha256:${'e'.repeat(64)}`;
+  const PROPOSAL = '00000000-0000-4000-8000-000000000001';
+  const names = ['a.md', 'b.md', 'c.md', 'd.md'];
+  const memoryInputs = { ...inputs, schemaVersion: 3, conversation: null, coverage: { ...inputs.coverage, memory: 'supported' },
+    memory: { harness: 'claude', remaining: 0, nextCursor: null,
+      items: names.map(name => ({ path: `projects/-p/memory/${name}`, digest: MEMORY, size: 4, excerptBytes: 4, truncated: false })) } };
+  const memoryItem = (name, evidence) => ({ path: `memory:claude/projects/-p/memory/${name}`, digest: MEMORY, outcome: 'completed', reason: 'consolidated', evidence });
+  // The verifier resolves a proposal to its revision: R1 either way, R2 by its own revision.
+  const verifyRevisionEvidence = ({ reference }) => ({ schemaVersion: 1, verdict: 'not-verified', reasons: ['change-outside-delivered'],
+    attribution: 'not-established', checked: { event: { revision: reference.revision === R2 ? R2 : R1, status: 'pending' },
+      changedPaths: [{ path: 'skills/notes/SKILL.md', change: 'added', type: 'file' }], changedCount: 1 } });
+  const outcome = interpret(JSON.stringify(report([memoryItem('a.md', { revision: R1 }), memoryItem('b.md', { revision: R1 }),
+    memoryItem('c.md', { proposalId: PROPOSAL }), memoryItem('d.md', { revision: R2 })])), { inputs: memoryInputs, verifyRevisionEvidence });
+  assert.deepEqual(outcome.items.map(({ verification }) => [verification.evidence, verification.reason, verification.artifactRevision]), [
+    ['verified-change', null, R1],
+    ['not-verified', 'artifact-already-credited', null],
+    ['not-verified', 'artifact-already-credited', null],
+    ['verified-change', null, R2],
+  ]);
+  assert.equal(validateDreamOutcome(outcome, { runId: run.runId, inputs: memoryInputs }), outcome);
+  // A package source citing a change that already credited a memory item is still processed by it.
+  const sourceInputs = { ...memoryInputs, sources: [{ ...inputs.sources[0] }] };
+  const verifySource = () => ({ schemaVersion: 1, verdict: 'verified-change', reasons: [], attribution: 'not-established',
+    checked: { event: { revision: R1, status: 'pending' }, changedPaths: [{ path: 'AGENTS.md', change: 'modified', type: 'file' }], changedCount: 1 } });
+  const mixed = interpret(JSON.stringify(report([memoryItem('a.md', { revision: R1 }), { ...item(), evidence: { revision: R1 } }])),
+    { inputs: sourceInputs, verifyRevisionEvidence: verifySource });
+  assert.deepEqual(mixed.items.map(({ verification }) => verification.evidence), ['verified-change', 'verified-change']);
+});

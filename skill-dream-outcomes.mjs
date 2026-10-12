@@ -128,6 +128,8 @@ export function interpretDreamReport({ reply = '', replyTruncated = false, run, 
     }
   } catch { return fallback('invalid', 'report-invalid'); }
   const checked = new Map();
+  // Revisions that have already credited a memory item in this report (#929).
+  const creditedMemory = new Set();
   const items = report.items.map(item => {
     const verification = { claim: 'agent-reported', evidence: 'agent-reported', reason: null,
       artifactRevision: null, proposalStatus: null, attribution: 'not-established' };
@@ -155,6 +157,9 @@ export function interpretDreamReport({ reply = '', replyTruncated = false, run, 
       // delivered package sources, as long as every changed path is
       // definition or skill content and at least one is a file (a change of
       // directories alone is not content). Age or deletion never processes one.
+      // One verified change credits at most one memory item (#929, owner
+      // decision 2026-10-12): the first in report order; any other memory
+      // item citing the same revision earns no credit and stays eligible.
       const memory = sources.get(item.path).memory;
       const event = result?.attribution === 'not-established' && hash(result.checked?.event?.revision)
         && [null, 'pending', 'approved', 'rejected', 'uncertain'].includes(result.checked.event.status) && Array.isArray(result.checked?.changedPaths);
@@ -163,11 +168,14 @@ export function interpretDreamReport({ reply = '', replyTruncated = false, run, 
         && result.checked.changedCount > 0 && result.checked.changedCount === result.checked.changedPaths.length
         && result.checked.changedPaths.every(change => isDreamSourcePath(change.path))
         && result.checked.changedPaths.some(change => change.type === 'file');
-      if (verifiedMemory || !memory && event && result.verdict === 'verified-change'
+      if (verifiedMemory && creditedMemory.has(result.checked.event.revision)) {
+        verification.reason = 'artifact-already-credited';
+      } else if (verifiedMemory || !memory && event && result.verdict === 'verified-change'
         && result.checked.changedPaths.some(change => change.path === item.path)) {
         verification.evidence = 'verified-change'; verification.reason = null;
         verification.artifactRevision = result.checked.event.revision;
         verification.proposalStatus = result.checked.event.status;
+        if (memory) creditedMemory.add(result.checked.event.revision);
       } else if (!memory && result?.verdict === 'verified-change') {
         verification.reason = 'artifact-does-not-change-source';
       }
