@@ -58,8 +58,23 @@ Execute bits are preserved. Symlinks are refused, and `.soul-state/` and
 only the manifest's revision fields are rewritten; all other files stay in place.
 A running soul is allowed: package files are read per turn.
 
-The per-soul revision lock covers snapshotting, recording, and publication, and
-a moved recorded head refuses application. Publication is atomic per file, not
+The per-soul synchronous revision lock covers snapshotting, recording, and publication,
+including record-only edits. No asynchronous append callback crosses that lock.
+Hosts may pass a typed `expectedParent` revision to edit, propose or decide; it
+must equal the locked head, and a decision also requires that proposal's base.
+Explicit null is invalid. An ordinary local reject without this option still
+permits stale-proposal cleanup.
+
+On POSIX, snapshot files and directories are synchronized before journal
+publication. Journal-file fsync precedes its exclusive link, and directory fsync
+precedes success, history mirroring or working-file application. Sync failures
+throw; a complete record already linked before directory-fsync failure remains
+an uncertain publication, with no working files applied. Windows local commands
+synchronize files but retain existing directory semantics; this does not claim
+POSIX crash durability there. None of these local records proves a request-linked
+owner-decision effect or enables broker owner-decision routes.
+
+A moved recorded head refuses application. Publication is atomic per file, not
 for the whole folder: an I/O failure after recording can leave a recorded revision
 and a partially updated folder. The command fails in that case. On success the
 returned JSON revision record adds `applied: true` and `changed: [paths]`, a sorted
