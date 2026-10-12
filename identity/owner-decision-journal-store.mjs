@@ -122,6 +122,20 @@ export function initializeDaemonJournal(root, { io = fs } = {}) {
   } catch (error) { fail(error?.reason ?? 'owner-journal-io'); }
 }
 
+// Lists a directory without ever holding more than `max` names: reading
+// stops and refuses at entry max+1, before anything else is allocated.
+function listBounded(io, dir, max) {
+  const names = [];
+  const handle = io.opendirSync(dir);
+  try {
+    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
+      if (names.length === max) fail();
+      names.push(entry.name);
+    }
+  } finally { handle.closeSync(); }
+  return names;
+}
+
 function readExactly(io, fd, size) {
   const bytes = Buffer.alloc(size);
   if (io.readSync(fd, bytes, 0, size, 0) !== size) fail('owner-journal-io');
@@ -171,9 +185,9 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   // Every entry in the request container is charged, whatever it holds: an
   // orphan from interrupted admission is never fresh, refunded or reused.
   function scan() {
-    const entries = io.readdirSync(requests);
+    const entries = listBounded(io, requests, DAEMON_JOURNAL_LIMIT);
     // An unknown or excess entry stays for inspection and refuses every write.
-    if (entries.length > DAEMON_JOURNAL_LIMIT || !entries.every((entry) => matches(DIGEST, entry))) fail();
+    if (!entries.every((entry) => matches(DIGEST, entry))) fail();
     return entries;
   }
 
@@ -223,7 +237,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
           } finally { io.closeSync(fd); }
         }
         flushDirectory(io, dir); fault('request:files-flushed');
-        const names = io.readdirSync(dir).sort();
+        const names = listBounded(io, dir, FILES.length).sort();
         if (names.join('\n') !== FILES.map((file) => file.name).sort().join('\n')) fail();
         for (const { name: fileName, size } of FILES) {
           const fd = openFixed(io, path.join(dir, fileName), size, O_RDONLY);

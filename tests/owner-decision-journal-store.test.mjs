@@ -155,6 +155,21 @@ test('the 4096-request limit counts orphans across namespaces and refuses with j
   assert.equal(store.count(), DAEMON_JOURNAL_LIMIT);
 });
 
+test('a request container past the limit refuses without listing it whole', darwin, (t) => {
+  const root = freshRoot(t);
+  for (let index = 0; index <= DAEMON_JOURNAL_LIMIT; index++) {
+    fs.mkdirSync(path.join(requestsOf(root), createHash('sha256').update(String(index)).digest('hex')), { mode: 0o700 });
+  }
+  let read = 0;
+  const io = { ...fs, readdirSync: () => assert.fail('the request container is never read whole'),
+    opendirSync: (dir) => { const handle = fs.opendirSync(dir); return { readSync: () => { read++; return handle.readSync(); }, closeSync: () => handle.closeSync() }; } };
+  const store = createDaemonJournalStore({ root, namespaceDigest, io }), input = request();
+  assert.throws(() => store.admit(input.action, input.acceptance), refused('owner-journal-corrupt'));
+  assert.equal(read, DAEMON_JOURNAL_LIMIT + 1);
+  assert.throws(() => createDaemonJournalStore({ root, namespaceDigest, io }).count(), refused('owner-journal-corrupt'));
+  assert.equal(fs.readdirSync(requestsOf(root)).length, DAEMON_JOURNAL_LIMIT + 1);
+});
+
 test('an unknown entry refuses every write and stays for inspection', darwin, (t) => {
   const root = freshRoot(t), input = request();
   fs.writeFileSync(path.join(requestsOf(root), 'stray'), '');
