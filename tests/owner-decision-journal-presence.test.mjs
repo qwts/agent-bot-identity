@@ -119,3 +119,31 @@ test('a p1 for another key, action, nonce, audience or kind, or out of time, ref
     ['a pin whose keyId is not its key', run(ok, { trust: { presenceKey: { ...signerTrust.presenceKey, keyId: trust.presenceKey.keyId } } })],
   ]) assert.throws(attempt, refused, name);
 });
+
+test('the challenge nonce is required, canonical and exactly 32 bytes', () => {
+  const v = vectors.positive[0], bytes = bytesOf(v), now = v.presencePayload.iat * 1000;
+  const { nonce: _omit, ...withoutNonce } = v.presencePayload;
+  const noNonce = p1(withoutNonce);
+  const nonceRefused = { ...refused, reason: 'owner-presence-nonce' };
+  // Missing on both sides: undefined never matches undefined.
+  assert.throws(() => verifyOwnerDecisionPresence(noNonce, { actionBytes: bytes, trust: signerTrust, nowMilliseconds: now }), nonceRefused);
+  const raw = Buffer.from(v.presencePayload.nonce, 'base64url');
+  const last = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'.split('')
+    .map((ch) => `${v.presencePayload.nonce.slice(0, 42)}${ch}`).find((x) => x !== v.presencePayload.nonce && Buffer.from(x, 'base64url').equals(raw));
+  assert(last, 'a non-canonical spelling of the same 32 bytes exists');
+  for (const [name, nonce] of [['non-canonical trailing bits', last], ['padded', `${v.presencePayload.nonce}=`],
+    ['standard base64', raw.toString('base64')], ['31 bytes', raw.subarray(0, 31).toString('base64url')],
+    ['33 bytes', Buffer.concat([raw, Buffer.from([1])]).toString('base64url')], ['empty', ''], ['not a string', 42]]) {
+    // Even a p1 carrying exactly that value refuses.
+    assert.throws(() => verifyOwnerDecisionPresence(p1({ ...v.presencePayload, nonce }), { actionBytes: bytes, nonce, trust: signerTrust, nowMilliseconds: now }),
+      nonceRefused, name);
+  }
+});
+
+test('an iat beyond the 30-second future skew refuses; at the skew it verifies', () => {
+  const v = vectors.positive[0], bytes = bytesOf(v), nowSeconds = v.presencePayload.iat;
+  const at = (iat) => p1({ ...v.presencePayload, iat, exp: iat + 60 });
+  const check = (token) => verifyOwnerDecisionPresence(token, { actionBytes: bytes, nonce: v.presencePayload.nonce, trust: signerTrust, nowMilliseconds: nowSeconds * 1000 });
+  assert.equal(check(at(nowSeconds + 30)).payload.iat, nowSeconds + 30);
+  assert.throws(() => check(at(nowSeconds + 31)), refused);
+});

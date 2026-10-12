@@ -455,7 +455,11 @@ owner-decision action grammar: agent-comms `docs/owner-decisions.md` and
   from its key. The check uses agent-bot's existing keyd p1 semantics,
   unchanged: audience `agent-bot-owner`, kind `presence`, at most a 120-second
   lifetime, 30-second skew. The p1 must sign this action's text and the
-  challenge nonce.
+  challenge nonce, which must be exactly 32 bytes in canonical base64url.
+- **Replay protection keys on the nonce.** Any future replay protection must
+  key on the nonce, never on `presenceDigest`. Flipping the unused trailing
+  bits of the signature's base64url gives a different token, and so a
+  different `presenceDigest`, that still verifies.
 
 The tests reproduce every category in the shared `v1.json` vectors: positive,
 display boundaries, serialization, negative encodings, primitives and native

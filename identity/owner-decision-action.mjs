@@ -181,6 +181,10 @@ export function verifyOwnerDecisionPresence(presenceToken, { actionBytes, nonce,
   } catch { fail('owner-presence-trust'); }
   if (typeof presenceToken !== 'string' || presenceToken.length > 4096 || !/^[\x21-\x7e]+$/.test(presenceToken)
     || !Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) fail('owner-presence-invalid');
+  // The challenge nonce: exactly 32 bytes as canonical unpadded base64url. The
+  // p1's nonce must equal it, so a missing nonce on both sides never matches.
+  if (!matches(/^[A-Za-z0-9_-]{43}$/, nonce) || Buffer.from(nonce, 'base64url').length !== 32
+    || Buffer.from(nonce, 'base64url').toString('base64url') !== nonce) fail('owner-presence-nonce');
   let payload;
   try {
     payload = verifyPresence(presenceToken, { key: raw.toString('base64'), action: decoded.actionText, nonce, now: nowMilliseconds });
