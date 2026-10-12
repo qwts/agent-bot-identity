@@ -16,7 +16,7 @@
 import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { mint } from '../mint-token.mjs';
+import { mint } from './mint-token.mjs';
 import { isGateEnabled, loadConfig, githubHost } from '../config.mjs';
 import { presenceOrConsent, soulMarkers } from './owner-gate.mjs';
 import { readBinding } from './agent-binding.mjs';

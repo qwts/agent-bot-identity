@@ -1,9 +1,3 @@
-export function formatMintGrant(grant, { json = false } = {}) {
-  if (!json) return `${grant.token}\n`;
-  return `${JSON.stringify({
-    schema_version: 1,
-    token: grant.token,
-    expires_at: grant.expires_at,
-    installation_id: grant.installation_id,
-  })}\n`;
-}
+// Moved to identity/cli/mint-output.mjs (#645, ADR-0645 step 6). This path keeps working
+// for callers that import it here; it re-exports the moved file.
+export { formatMintGrant } from '../identity/cli/mint-output.mjs';

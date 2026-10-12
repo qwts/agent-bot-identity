@@ -32,7 +32,7 @@ function routeTable() {
 // and soul's routes are cases of identity-routes.mjs and soul-routes.mjs,
 // which the daemon calls (#645).
 function daemonRoutes() {
-  const source = ['agent-daemon.mjs', 'identity-routes.mjs', 'soul-routes.mjs']
+  const source = ['agent-daemon.mjs', 'identity/identity-routes.mjs', 'soul-routes.mjs']
     .map((file) => readFileSync(path.join(root, file), 'utf8')).join('\n');
   const cases = new Set([...source.matchAll(/case '((?:GET|POST|DELETE) \/v[01]\/[^']+)'/g)].map((match) => match[1]));
   const routes = new Set(cases);
