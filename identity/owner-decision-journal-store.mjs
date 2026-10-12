@@ -17,6 +17,7 @@ import {
   effectOutcome, enteredRecordFor, refusedRecordFor,
 } from './owner-decision-evidence.mjs';
 import { verifyLinkedEvent } from './owner-decision-linked-event.mjs';
+import { readOwnerDecisionTrust } from './owner-decision-trust.mjs';
 import { verifyOwnerDecisionReceipt } from './owner-decision-receipt.mjs';
 import { verifyOwnerDecisionPresence } from './owner-decision-action.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
@@ -195,7 +196,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       return operation();
     } catch (error) {
       if (!['invalid-owner-journal-record', 'owner-journal-capacity', 'owner-journal-conflict', 'owner-journal-consumed', 'owner-journal-entry-refused',
-        'owner-journal-transition-refused', 'owner-journal-intake-refused'].includes(error?.reason)) poisoned = true;
+        'owner-journal-transition-refused', 'owner-journal-intake-refused', 'owner-journal-trust-unavailable'].includes(error?.reason)) poisoned = true;
       if (error?.reason) throw error;
       throw journalError(error?.code === 'invalid-owner-journal-frame' ? 'owner-journal-corrupt' : 'owner-journal-io');
     } finally {
@@ -714,26 +715,37 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     },
 
     // The preparation (C2; disabled, no route), under the journal lock: the
-    // v2 record (owner decision Q3) with `trustVersion`, the active trust
-    // enrollment's chain version that the caller read from current trust
-    // readiness, then the exact prepared challenge it implies (which never
-    // carries trustVersion). `preparation` is every other preparation field
-    // (the daemon's effectId, nonce, times, binding, stage and expected
-    // state); the store adds v, kind and trustVersion and binds the record to
-    // the admission and action. Legal only from `admitted`, or from
-    // `preparing` with the same preparation (finishing its challenge); the
-    // same preparation and challenge again are an idempotent duplicate, and
-    // any other preparation or later phase is a conflict.
-    recordPreparation(requestId, { preparation, trustVersion } = {}) {
-      if (!matches(UUID4, requestId) || !plain(preparation)) fail('invalid-owner-journal-record');
+    // v2 record (owner decision Q3) with `trustVersion`, then the exact
+    // prepared challenge it implies (which never carries trustVersion).
+    // The version is never the caller's: the store reads the live active
+    // trust itself (readOwnerDecisionTrust for this journal's namespace, with
+    // the trust lock taken inside the journal lock, refusing rather than
+    // waiting) and records that enrollment's chain version. No ready active
+    // pair, a busy or damaged trust store, or a foreign namespace refuses
+    // with owner-journal-trust-unavailable and writes nothing.
+    // `preparation` is every other preparation field (the daemon's effectId,
+    // nonce, times, binding, stage and expected state); `trust` is
+    // {root, env, home} for the trust store. The store adds v, kind and
+    // trustVersion and binds the record to the admission and action. Legal
+    // only from `admitted`, or from `preparing` with the same preparation
+    // (finishing its challenge); the same preparation and challenge again are
+    // an idempotent duplicate, and any other preparation or later phase is a
+    // conflict.
+    recordPreparation(requestId, { preparation, trust, ...rest } = {}) {
+      if (!matches(UUID4, requestId) || !plain(preparation) || !plain(trust) || Object.keys(rest).length > 0) fail('invalid-owner-journal-record');
       const name = requestDirectoryName({ namespaceDigest, requestId });
       return locked(() => {
         if (!scan().includes(name)) fail('owner-journal-transition-refused');
         const graph = readGraph(name, requestId);
         const action = JSON.parse(graph.saved.action.toString('utf8'));
+        let trustVersion;
+        try { ({ version: trustVersion } = readOwnerDecisionTrust({ root: trust.root, env: trust.env, home: trust.home, namespaceDigest })); }
+        catch (error) {
+          throw Object.assign(journalError('owner-journal-trust-unavailable'), { refusal: typeof error?.reason === 'string' ? error.reason : null });
+        }
         let bytes, record;
         try {
-          // decodePreparation checks the version itself; it must come only from here.
+          // decodePreparation checks the version itself; it comes only from live trust.
           if (Object.hasOwn(preparation, 'trustVersion')) throw new Error();
           bytes = Buffer.from(canonicalJson({ ...preparation, v: 2, kind: 'preparation', trustVersion }));
           record = bindPreparation(decodePreparation(bytes), { acceptance: graph.saved.record, action });

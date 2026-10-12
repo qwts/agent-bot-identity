@@ -51,7 +51,7 @@ function d1(broker, payload) {
 // the enrolled presence signer and broker (a forger's keys).
 function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce = nonceOf(1), storedP1Nonce = nonce, upTo = 'successful-check',
   receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token, shared,
-  p1Key, d1Key, d1Fields = {}, trustVersion = 1, v1Preparation = false } = {}) {
+  p1Key, d1Key, d1Fields = {}, trustVersion = 1, v1Preparation = false, viaWriter = false } = {}) {
   const base = shared?.base ?? fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-gate-')));
   if (!shared) t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
@@ -89,7 +89,17 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   const write = (slot, payload) => fs.writeFileSync(path.join(dir, `${slot}.record`), encodeDaemonJournalFrame(payload, { namespaceDigest, requestId, slot }));
   const order = [['preparation', Buffer.from(canonicalJson(preparation))], ['prepared-challenge', challengeFor(preparation, action)],
     ['presence', Buffer.from(presence, 'ascii')], ['receipt', receipt], ['successful-check', Buffer.from(canonicalJson(check))]];
-  for (const [slot, payload] of order) { write(slot, payload); if (slot === upTo) break; }
+  // `viaWriter` prepares through the store's writer (live trust version)
+  // instead of writing the preparation and challenge directly.
+  if (viaWriter) {
+    const { v, kind, trustVersion: ignored, ...fields } = preparation; void v; void kind; void ignored;
+    createDaemonJournalStore({ root: journalRoot, namespaceDigest }).recordPreparation(requestId,
+      { preparation: fields, trust: { root: trustRoot, env, home } });
+  }
+  for (const [slot, payload] of order) {
+    if (!(viaWriter && ['preparation', 'prepared-challenge'].includes(slot))) write(slot, payload);
+    if (slot === upTo) break;
+  }
 
   const stateDir = path.join(base, 'identity'), censusFile = path.join(base, 'population.json');
   if (!shared) {
@@ -413,4 +423,21 @@ test('entry requires the current trust chain version to equal the preparation\'s
     assert.equal(r.recover().state, 'released');
     refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
   });
+});
+
+// The #1056 probe: the version comes only from live trust, so a request
+// prepared through the writer under version 1, followed by a compromised
+// revoke and a same-pair re-enroll stamped before preparedAt (rollback),
+// refuses at entry.
+test('a request prepared under live trust refuses after a rollback re-enroll of the same pair', darwin, (t) => {
+  const r = released(t, { viaWriter: true });
+  const keys = path.join(r.trustRoot, 'keys');
+  const head = fs.readdirSync(keys).filter((n) => /^\d{10}\.json$/.test(n)).sort().at(-1);
+  r.trustWriter(1_999_999_400).revokeKeys({ revokes: sha256(fs.readFileSync(path.join(keys, head))), reason: 'compromised' });
+  r.trustWriter(1_999_999_500).enrollKeys({ receiptKey: rawKey(r.broker), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+  refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+});
+
+test('a request prepared through the writer under unchanged trust enters', darwin, (t) => {
+  assert.equal(released(t, { viaWriter: true }).enter().state, 'entered');
 });

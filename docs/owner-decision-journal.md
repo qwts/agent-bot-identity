@@ -712,6 +712,11 @@ route. None is built here.
   That fails closed: it never releases or enters. But the request keeps its
   charged directory until a reviewed cleanup path exists. That path is an
   open item.
+- **A preparation written around the writer.** The writer records only the
+  live trust version, so a caller can't preset a future one. A preparation
+  written straight into the journal, bypassing the writer, could still claim
+  any version. As with slot 6, only the daemon's custody of its own journal
+  protects against that.
 - **The check's expiry is not bounded by the receipt or preparation.**
   `check.exp` is checked only against the daemon clock at intake. The gate's
   re-verification of p1 freshness at entry is what bounds the window in
@@ -777,14 +782,23 @@ recovery. A refused write doesn't poison the instance.
 
 ## Preparation writer and trust version (v2, disabled)
 
-`recordPreparation(requestId, {preparation, trustVersion})` writes the v2
+`recordPreparation(requestId, {preparation, trust})` writes the v2
 preparation (owner decision Q3; agent-comms `effect-evidence-v2.json` at
 bf0b705, vendored), then the exact prepared challenge it implies.
 - **What the record holds.** The v1 fields plus `trustVersion`: the active
-  trust enrollment's chain version, an odd integer from 1 to 1023, which the
-  caller reads from current trust readiness. The store adds `v:2`, `kind` and
-  `trustVersion`; a `trustVersion` inside `preparation` refuses. It binds the
-  record to the admission and action.
+  trust enrollment's chain version, an odd integer from 1 to 1023. The caller
+  never supplies it. The store reads live trust itself:
+  - it calls `readOwnerDecisionTrust` for this journal's namespace, with
+    `trust` as `{root, env, home}`;
+  - it takes the trust lock inside the journal lock, and refuses rather than
+    waits;
+  - it records that version.
+
+  No ready active pair, a busy or damaged trust store, or another namespace
+  refuses with `owner-journal-trust-unavailable` and writes nothing. A
+  `trustVersion` in the call or inside `preparation` refuses. The store adds
+  `v:2`, `kind` and `trustVersion`, and binds the record to the admission
+  and action.
 - **What stays the same.** The challenge never carries `trustVersion`.
   Downstream effect and reconciliation records stay v1, bound to the v2
   preparation's digest.

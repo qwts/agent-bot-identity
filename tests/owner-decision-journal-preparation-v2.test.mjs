@@ -5,7 +5,7 @@
 // stay v1, re-bound to the v2 preparation digests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,9 @@ import { canonicalJson } from '../canonical-json.mjs';
 import { decodeDaemonJournalFrame, encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
 import { bindEffect, bindPreparation, challengeFor, decodeEffect, decodePreparation } from '../identity/owner-decision-evidence.mjs';
+import { createOwnerDecisionTrustWriter, readOwnerDecisionTrust } from '../identity/owner-decision-trust.mjs';
+import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
+import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 
 const V2_URL = new URL('./fixtures/owner-decisions/effect-evidence-v2.json', import.meta.url);
 const V2_SHA256 = 'ff7385f661bb0b0bbc2b36f94634ba1fd1ebcc359dce130149db8a21257e2410';
@@ -105,8 +108,12 @@ test('every v2 transaction binds downstream to its v2 preparation, and the chall
 
 const namespaceDigest = 'a'.repeat(64);
 const template = byId('approve-preparation').record;
+const brokerUid = process.getuid() + 1;
+const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
 
-function admitted(t) {
+// An admitted request, and a scratch daemon trust store for its namespace
+// (vouch key, namespace and, unless `enrolled` is false, one key pair).
+function admitted(t, { enrolled = true, trustNamespace = namespaceDigest } = {}) {
   const requestId = '11111111-1111-4111-8111-111111111111';
   const parameters = { proposalId: template.expected.proposal.proposalId, expectedRevision: template.expected.head.revision, reason: 'Ship it' };
   const action = Buffer.from(canonicalJson({ v: 1, requestId, principal: template.principal, account: template.account, soul: template.soul,
@@ -120,15 +127,24 @@ function admitted(t) {
   initializeDaemonJournal(root);
   const open = (options = {}) => createDaemonJournalStore({ root, namespaceDigest, ...options });
   open().admit(action, Buffer.from(canonicalJson(acceptance)));
+  const env = { XDG_STATE_HOME: path.join(base, 'state') }, home = base;
+  loadOrCreateVouchKey(vouchStateDir({ env }));
+  const trust = { root: path.join(base, 'trust'), env, home };
+  const trustWriter = (now = 1_999_999_000) => withCurrentObservation(
+    createOwnerDecisionTrustWriter({ root: trust.root, env, home, now: () => now, legacyPresenceKey: null }), trust);
+  trustWriter().enrollNamespace({ namespaceDigest: trustNamespace });
+  const pair = { receiptKey: rawKey(), presenceKey: rawKey(), brokerUid };
+  if (enrolled) trustWriter().enrollKeys(pair);
+  const liveVersion = () => readOwnerDecisionTrust({ ...trust, namespaceDigest: trustNamespace, legacyPresenceKey: null }).version;
   // Every preparation field except v, kind and trustVersion, which the store adds.
   const { v, kind, trustVersion, ...fields } = template; void v; void kind; void trustVersion;
-  const preparation = { ...fields, requestId, payloadDigest: acceptance.payloadDigest, actionDigest: fields.actionDigest };
+  const preparation = { ...fields, requestId, payloadDigest: acceptance.payloadDigest };
   const dir = path.join(root, 'requests', requestDirectoryName({ namespaceDigest, requestId }));
   const read = (slot) => fs.readFileSync(path.join(dir, `${slot}.record`));
   const payload = (slot) => decodeDaemonJournalFrame(read(slot), { namespaceDigest, requestId, slot }).payload;
-  const prepare = (input = {}, store = open()) => store.recordPreparation(requestId, { preparation, trustVersion: 1, ...input });
+  const prepare = (input = {}, store = open()) => store.recordPreparation(requestId, { preparation, trust, ...input });
   const recover = () => open().recover(requestId);
-  return { root, requestId, action, preparation, open, read, payload, prepare, recover };
+  return { root, requestId, action, preparation, trust, trustWriter, pair, liveVersion, open, read, payload, prepare, recover };
 }
 const snapshot = (j) => ['preparation', 'prepared-challenge'].map((slot) => sha256(j.read(slot)));
 function unchanged(j, run, expected) {
@@ -138,47 +154,89 @@ function unchanged(j, run, expected) {
 }
 const badRequest = { reason: 'invalid-owner-journal-record', code: 'bad-request' };
 const conflict = { reason: 'owner-journal-conflict', code: 'conflict' };
+const untrusted = (refusal) => ({ reason: 'owner-journal-trust-unavailable', code: 'storage-failed', ...(refusal ? { refusal } : {}) });
+const revokeAndEnroll = (j, { revokeAt, enrollAt, pair = j.pair }) => {
+  const head = fs.readdirSync(path.join(j.trust.root, 'keys')).filter((n) => /^\d{10}\.json$/.test(n)).sort().at(-1);
+  j.trustWriter(revokeAt).revokeKeys({ revokes: sha256(fs.readFileSync(path.join(j.trust.root, 'keys', head))), reason: 'compromised' });
+  if (enrollAt !== undefined) j.trustWriter(enrollAt).enrollKeys(pair);
+};
 
-test('the writer records a v2 preparation with the trust version, then its exact challenge', darwin, (t) => {
+test('the writer records the live trust chain version, then the exact challenge', darwin, (t) => {
   const j = admitted(t);
-  for (const trustVersion of [1, 1023]) {
-    const k = trustVersion === 1 ? j : admitted(t);
-    assert.equal(k.prepare({ trustVersion }).state, 'prepared');
-    const record = JSON.parse(k.payload('preparation'));
-    assert.equal(record.v, 2); assert.equal(record.trustVersion, trustVersion);
-    assert.deepEqual(record, { ...k.preparation, v: 2, kind: 'preparation', trustVersion });
-    assert(k.payload('prepared-challenge').equals(challengeFor(record, k.action)));
-    assert(!k.payload('prepared-challenge').toString().includes('trustVersion'));
-  }
-  // The same preparation again is an idempotent duplicate; any other conflicts.
+  assert.equal(j.prepare().state, 'prepared');
+  const record = JSON.parse(j.payload('preparation'));
+  assert.equal(record.trustVersion, j.liveVersion()); assert.equal(record.trustVersion, 1);
+  assert.deepEqual(record, { ...j.preparation, v: 2, kind: 'preparation', trustVersion: 1 });
+  assert(j.payload('prepared-challenge').equals(challengeFor(record, j.action)));
+  assert(!j.payload('prepared-challenge').toString().includes('trustVersion'));
   assert.equal(j.prepare().duplicate, true);
-  unchanged(j, () => j.prepare({ trustVersion: 3 }), conflict);
   unchanged(j, () => j.prepare({ preparation: { ...j.preparation, effectId: '33333333-3333-4333-8333-333333333333' } }), conflict);
 });
 
-test('a malformed trust version or preparation refuses and writes nothing', darwin, async (t) => {
-  for (const trustVersion of [undefined, 0, 2, 1024, 1025, 1.5, '1', null]) {
-    await t.test(String(trustVersion), (tt) => {
+test('after a re-enrollment the writer records the new live version', darwin, (t) => {
+  const j = admitted(t);
+  revokeAndEnroll(j, { revokeAt: 1_999_999_100, enrollAt: 1_999_999_200 });
+  assert.equal(j.liveVersion(), 3);
+  j.prepare();
+  assert.equal(JSON.parse(j.payload('preparation')).trustVersion, 3);
+});
+
+test('the caller can never choose the version', darwin, async (t) => {
+  for (const input of [{ trustVersion: 3 }, { trustVersion: 1 }, { preparation: { trustVersion: 3 } }]) {
+    await t.test(JSON.stringify(input), (tt) => {
       const j = admitted(tt);
-      unchanged(j, () => j.prepare({ trustVersion }), badRequest);
+      const call = input.preparation ? { preparation: { ...j.preparation, ...input.preparation } } : input;
+      unchanged(j, () => j.prepare(call), badRequest);
       assert.equal(j.recover().state, 'admitted');
     });
   }
-  await t.test('a trust version smuggled in the preparation', (tt) => {
-    const j = admitted(tt);
-    unchanged(j, () => j.prepare({ preparation: { ...j.preparation, trustVersion: 1 } }), badRequest);
+});
+
+test('no ready live trust refuses preparation and writes nothing', darwin, async (t) => {
+  await t.test('no active pair', (tt) => {
+    const j = admitted(tt, { enrolled: false });
+    unchanged(j, () => j.prepare(), untrusted('owner-trust-no-active-key'));
   });
-  await t.test('a preparation for another request or payload', (tt) => {
+  await t.test('revoked', (tt) => {
+    const j = admitted(tt);
+    revokeAndEnroll(j, { revokeAt: 1_999_999_100 });
+    unchanged(j, () => j.prepare(), untrusted('owner-trust-no-active-key'));
+  });
+  await t.test('no trust store', (tt) => {
+    const j = admitted(tt);
+    unchanged(j, () => j.prepare({ trust: { ...j.trust, root: path.join(j.trust.root, 'missing') } }), untrusted('owner-trust-missing'));
+  });
+  await t.test('trust enrolled for another namespace', (tt) => {
+    const j = admitted(tt, { trustNamespace: 'b'.repeat(64) });
+    unchanged(j, () => j.prepare(), untrusted('owner-trust-corrupt'));
+  });
+  await t.test('a busy trust lock refuses rather than waits', (tt) => {
+    const j = admitted(tt);
+    const held = fs.openSync(path.join(j.trust.root, '.trust-lock'), fs.constants.O_RDWR | 0x20);
+    try { unchanged(j, () => j.prepare(), untrusted('owner-trust-busy')); } finally { fs.closeSync(held); }
+    assert.equal(j.prepare().state, 'prepared');
+  });
+});
+
+test('malformed input refuses before the lock; a refusal leaves the instance usable', darwin, async (t) => {
+  await t.test('malformed', (tt) => {
+    const j = admitted(tt), held = acquireDaemonJournalLock(j.root);
+    try {
+      assert.throws(() => j.prepare({ preparation: null }), badRequest);
+      assert.throws(() => j.prepare({ trust: null }), badRequest);
+      assert.throws(() => j.open().recordPreparation('nope', { preparation: j.preparation, trust: j.trust }), badRequest);
+    } finally { fs.closeSync(held); }
+  });
+  await t.test('bad bindings', (tt) => {
     const j = admitted(tt);
     unchanged(j, () => j.prepare({ preparation: { ...j.preparation, payloadDigest: 'e'.repeat(64) } }), badRequest);
     unchanged(j, () => j.prepare({ preparation: { ...j.preparation, extra: 1 } }), badRequest);
   });
-  await t.test('malformed input refuses before the lock', (tt) => {
-    const j = admitted(tt), held = acquireDaemonJournalLock(j.root);
-    try {
-      assert.throws(() => j.prepare({ preparation: null }), badRequest);
-      assert.throws(() => j.open().recordPreparation('nope', { preparation: j.preparation, trustVersion: 1 }), badRequest);
-    } finally { fs.closeSync(held); }
+  await t.test('usable after refusals', (tt) => {
+    const j = admitted(tt), store = j.open();
+    assert.throws(() => j.prepare({ trustVersion: 3 }, store), badRequest);
+    assert.throws(() => j.prepare({ trust: { ...j.trust, root: path.join(j.trust.root, 'missing') } }, store), untrusted());
+    assert.equal(j.prepare({}, store).state, 'prepared');
   });
 });
 
@@ -186,7 +244,11 @@ test('a crash between the preparation and its challenge is finished by the same 
   const j = admitted(t);
   assert.throws(() => j.prepare({}, j.open({ fault: (at) => { if (at === 'preparation:trailer-flushed') throw new Error('crash'); } })));
   assert.equal(j.recover().state, 'preparing');
-  unchanged(j, () => j.prepare({ trustVersion: 3 }), conflict);
+  // Trust moved since: the same fields now carry another version, so it conflicts.
+  const k = admitted(t);
+  assert.throws(() => k.prepare({}, k.open({ fault: (at) => { if (at === 'preparation:trailer-flushed') throw new Error('crash'); } })));
+  revokeAndEnroll(k, { revokeAt: 1_999_999_100, enrollAt: 1_999_999_200 });
+  unchanged(k, () => k.prepare(), conflict);
   assert.equal(j.prepare().state, 'prepared');
 });
 
@@ -200,7 +262,7 @@ test('the writer scans first, flushes first, refuses busy, and conflicts in any 
   });
   await t.test('an unknown request', (tt) => {
     const j = admitted(tt);
-    assert.throws(() => j.open().recordPreparation('33333333-3333-4333-8333-333333333333', { preparation: j.preparation, trustVersion: 1 }),
+    assert.throws(() => j.open().recordPreparation('33333333-3333-4333-8333-333333333333', { preparation: j.preparation, trust: j.trust }),
       { reason: 'owner-journal-transition-refused' });
   });
   await t.test('flush before the first write', (tt) => {
@@ -209,7 +271,7 @@ test('the writer scans first, flushes first, refuses busy, and conflicts in any 
     const flushed = seen.indexOf('recovery:directories-flushed');
     assert(flushed >= 0 && flushed < seen.indexOf('preparation:body-written'), seen.join(' '));
   });
-  await t.test('busy', (tt) => {
+  await t.test('busy journal', (tt) => {
     const j = admitted(tt), held = acquireDaemonJournalLock(j.root);
     try { unchanged(j, () => j.prepare(), { reason: 'owner-journal-busy' }); } finally { fs.closeSync(held); }
   });
@@ -220,11 +282,5 @@ test('the writer scans first, flushes first, refuses busy, and conflicts in any 
       encodeDaemonJournalFrame(Buffer.from('p1.x.y'), { namespaceDigest, requestId: j.requestId, slot: 'presence' }));
     assert.equal(j.recover().state, 'authorizing');
     unchanged(j, () => j.prepare(), conflict);
-  });
-  await t.test('a refusal leaves the instance usable', (tt) => {
-    const j = admitted(tt), store = j.open();
-    assert.throws(() => j.prepare({ trustVersion: 2 }, store), badRequest);
-    assert.equal(j.prepare({}, store).state, 'prepared');
-    assert.throws(() => j.prepare({ trustVersion: 3 }, store), conflict);
   });
 });
