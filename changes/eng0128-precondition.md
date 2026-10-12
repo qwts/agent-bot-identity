@@ -1,0 +1,1 @@
+- The identity extraction plan marks its ENG-0128 precondition met, linking the recorded amendment in qwts-agent-sop#83 (#645).
