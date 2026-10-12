@@ -93,11 +93,21 @@ function expectedShape(operation, e) {
 
 // --- preparation (slot 6) ---
 
+const PREPARATION_V1 = ['v', 'kind', 'requestId', 'principal', 'account', 'soul', 'operation', 'payloadDigest', 'effectId', 'actionDigest',
+  'nonce', 'acceptedAt', 'preparedAt', 'exp', 'daemonKey', 'daemonEpoch', 'watchId', 'stage', 'expected'];
+// The trust chain version a v2 preparation records: the active enrollment's,
+// so an odd integer 1..1023 (owner decision Q3; agent-comms effect-evidence-v2).
+// (A negative or zero value is never odd under `% 2 === 1`.)
+const trustChainVersion = (value) => Number.isSafeInteger(value) && value <= 1023 && value % 2 === 1;
+
+// A preparation is v2, the v1 fields plus `trustVersion` (what the daemon
+// writes), or v1 without it (the vendored v1 vectors). Only v2 can enter: the
+// effect-entry gate requires its trustVersion to equal the current chain's.
 export function decodePreparation(bytes) {
   const p = decodeCanonical(bytes);
-  if (!exact(p, ['v', 'kind', 'requestId', 'principal', 'account', 'soul', 'operation', 'payloadDigest', 'effectId', 'actionDigest',
-    'nonce', 'acceptedAt', 'preparedAt', 'exp', 'daemonKey', 'daemonEpoch', 'watchId', 'stage', 'expected'])
-    || p.v !== 1 || p.kind !== 'preparation' || !uuid(p.requestId) || !matches(PRINCIPAL, p.principal)
+  const shape = p?.v === 2 ? exact(p, [...PREPARATION_V1, 'trustVersion']) && trustChainVersion(p.trustVersion)
+    : p?.v === 1 && exact(p, PREPARATION_V1);
+  if (!shape || p.kind !== 'preparation' || !uuid(p.requestId) || !matches(PRINCIPAL, p.principal)
     || !matches(ACCOUNT, p.account) || !matches(SOUL, p.soul) || !digest(p.payloadDigest) || !uuid(p.effectId)
     || !digest(p.actionDigest) || !matches(/^[A-Za-z0-9_-]{43}$/, p.nonce) || Buffer.from(p.nonce, 'base64url').length !== 32
     || Buffer.from(p.nonce, 'base64url').toString('base64url') !== p.nonce

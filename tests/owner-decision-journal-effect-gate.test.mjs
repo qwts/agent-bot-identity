@@ -51,7 +51,7 @@ function d1(broker, payload) {
 // the enrolled presence signer and broker (a forger's keys).
 function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce = nonceOf(1), storedP1Nonce = nonce, upTo = 'successful-check',
   receiptKeys = (broker, signer) => ({ brokerKey: keyIdOf(broker), presenceKey: keyIdOf(signer) }), receiptToken = (token) => token, shared,
-  p1Key, d1Key, d1Fields = {} } = {}) {
+  p1Key, d1Key, d1Fields = {}, trustVersion = 1, v1Preparation = false } = {}) {
   const base = shared?.base ?? fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-gate-')));
   if (!shared) t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
@@ -73,7 +73,10 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   const journalRoot = path.join(base, 'journal');
   if (!shared) initializeDaemonJournal(journalRoot);
   createDaemonJournalStore({ root: journalRoot, namespaceDigest }).admit(action, Buffer.from(canonicalJson(acceptance)));
-  const preparation = { ...template, requestId, payloadDigest: acceptance.payloadDigest, nonce, acceptedAt: 2_000_000_000, preparedAt: 2_000_000_000, exp: 2_000_000_180 };
+  // A v2 preparation recording the trust chain version it was prepared under
+  // (the one enrollment, version 1, unless a test says otherwise).
+  const preparation = { ...template, ...(v1Preparation ? {} : { v: 2, trustVersion }), requestId, payloadDigest: acceptance.payloadDigest, nonce, acceptedAt: 2_000_000_000,
+    preparedAt: 2_000_000_000, exp: 2_000_000_180 };
   const { actionText } = decodeOwnerDecisionAction(action);
   const presence = p1(p1Key ?? signer, { actionText, nonce: storedP1Nonce });
   const receipt = Buffer.from(receiptToken(d1(d1Key ?? broker, { v: 1, aud: 'agent-comms-owner-decision', ...receiptKeys(broker, signer), requestId,
@@ -384,5 +387,30 @@ test('re-verifying the d1 does not tighten entry beyond the p1', darwin, async (
   await t.test('the p1 still bounds entry', (tt) => {
     const r = released(tt);
     assert.equal(r.enter({ nowMilliseconds: (2_000_000_060 + 31) * 1000 }).reason, 'validation-failed');
+  });
+});
+
+// The trust chain version recorded at preparation (v2, owner decision Q3;
+// agent-comms effect-evidence-v2 entryCases) must equal the current one.
+test('entry requires the current trust chain version to equal the preparation\'s', darwin, async (t) => {
+  await t.test('same trust (entryCases same-trust): enters', (tt) => {
+    assert.equal(released(tt, { trustVersion: 1 }).enter().state, 'entered');
+  });
+  await t.test('changed trust (entryCases changed-trust): refuses and writes nothing', (tt) => {
+    const r = released(tt, { trustVersion: 3 });
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+  await t.test('a same-pair re-enroll stamped before preparation (clock rollback) now refuses', (tt) => {
+    const r = released(tt);
+    const keys = path.join(r.trustRoot, 'keys');
+    const head = fs.readdirSync(keys).filter((n) => /^\d{10}\.json$/.test(n)).sort().at(-1);
+    r.trustWriter(1_999_999_400).revokeKeys({ revokes: sha256(fs.readFileSync(path.join(keys, head))), reason: 'rotated' });
+    r.trustWriter(1_999_999_500).enrollKeys({ receiptKey: rawKey(r.broker), presenceKey: rawKey(r.signer), brokerUid: process.getuid() + 1 });
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
+  });
+  await t.test('a v1 preparation, with no trust version, never enters', (tt) => {
+    const r = released(tt, { v1Preparation: true });
+    assert.equal(r.recover().state, 'released');
+    refusedWithoutWrite(r, r.enter(), 'trust-unavailable');
   });
 });

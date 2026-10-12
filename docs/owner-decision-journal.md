@@ -557,11 +557,12 @@ second, or one stamped earlier after a clock rollback, would pass it.
   refuses.
 - A rotation of either key, in any second and across a clock rollback, is
   caught by the receipt key binding.
-- A re-enrollment of the same pair is caught by the timestamp layer when it is
-  stamped in or after the preparation's second. One stamped before
-  `preparedAt` after a clock rollback is not detected. Strict binding needs
-  the trust version persisted at preparation, which is a new persisted field
-  and an owner decision; it is not done here.
+- A re-enrollment of the same pair is caught by the trust version binding
+  (owner decision Q3). The v2 preparation records the active enrollment's
+  chain version as `trustVersion`, and entry requires the current version to
+  equal it, in any second and across a clock rollback. The timestamp layer
+  remains as a second check. A v1 preparation has no version and never
+  enters.
 
 **Completion through the gate.** An `entered` result is frozen and carries
 `complete(result)`, bound to the store instance that entered and to that
@@ -768,5 +769,33 @@ recovery. A refused write doesn't poison the instance.
   request refuses as corrupt.
 - Beside an applied effect, a mismatched pair leaves the request
   indeterminate.
-- A terminal pair anywhere else refuses as an unsupported phase.
+- A terminal pair before entry, with no refusal, refuses as an unsupported
+  phase.
+- Beside an entered-only request, a terminal pair leaves it indeterminate,
+  which fails closed.
 - An observation pair leaves the request indeterminate, as before.
+
+## Preparation writer and trust version (v2, disabled)
+
+`recordPreparation(requestId, {preparation, trustVersion})` writes the v2
+preparation (owner decision Q3; agent-comms `effect-evidence-v2.json` at
+bf0b705, vendored), then the exact prepared challenge it implies.
+- **What the record holds.** The v1 fields plus `trustVersion`: the active
+  trust enrollment's chain version, an odd integer from 1 to 1023, which the
+  caller reads from current trust readiness. The store adds `v:2`, `kind` and
+  `trustVersion`; a `trustVersion` inside `preparation` refuses. It binds the
+  record to the admission and action.
+- **What stays the same.** The challenge never carries `trustVersion`.
+  Downstream effect and reconciliation records stay v1, bound to the v2
+  preparation's digest.
+- **Phases.** Legal from `admitted`, or from `preparing` with the same
+  preparation, which finishes its challenge after a crash. The same
+  preparation again is an idempotent duplicate. A different preparation, or
+  any later phase, is a conflict.
+- **Locking.** It runs under the journal lock: the request scan first, the
+  recovery flush before writing, and a busy lock refuses. A refused input
+  doesn't poison the instance.
+
+The decoder accepts v2 and keeps v1 for the vendored v1 vectors. The
+effect-entry gate requires the current chain version to equal the
+preparation's `trustVersion`, so a v1 preparation never enters.

@@ -1,0 +1,1 @@
+- Add the disabled owner-decision preparation writer: it records a v2 preparation carrying the active trust chain version, and the effect-entry gate now requires the current trust chain version to equal it, so any revoke, rotation or re-enrollment since preparation refuses (agent-comms#77).

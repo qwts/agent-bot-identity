@@ -10,9 +10,10 @@
 //      preparedAt. The key binding covers any rotation of either key, in any
 //      second and across clock rollback; the timestamp is a second layer that
 //      also refuses a same-pair re-enroll in or after the preparation's
-//      second. A same-pair re-enroll stamped before preparedAt (a rollback)
-//      is not detected: that needs the trust version persisted at
-//      preparation, which is an owner decision. Then re-verify the stored
+//      second. The trust chain version recorded in the v2 preparation must
+//      equal the current one, which also catches a same-pair re-enroll
+//      stamped before preparedAt (a rollback); a v1 preparation, with no
+//      version, never enters. Then re-verify the stored
 //      d1 itself under the current receipt pin (signature, daemonKey, saved
 //      challenge, stored p1), on the receipt's own clock so entry is never
 //      tightened (validation-failed; a pin problem has already refused as
@@ -67,6 +68,10 @@ export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
       if (!view.receiptKeys || !brokerKey || !presenceKey
         || view.receiptKeys.brokerKey !== brokerKey || view.receiptKeys.presenceKey !== presenceKey) refuse('trust-unavailable');
       if (!Number.isSafeInteger(trust.enrolledAt) || trust.enrolledAt >= view.preparation.preparedAt) refuse('trust-unavailable');
+      // The trust chain version recorded at preparation (v2) must still be
+      // the current one: any revoke, rotation or re-enrollment since, in any
+      // second and across clock rollback, refuses. A v1 preparation has none.
+      if (trust.version !== view.preparation.trustVersion) refuse('trust-unavailable');
       // The stored d1 itself, re-verified under the current receipt pin, as
       // issued: a planted receipt (bad signature, another challenge or p1)
       // refuses even when it names the right key IDs.

@@ -713,6 +713,48 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       });
     },
 
+    // The preparation (C2; disabled, no route), under the journal lock: the
+    // v2 record (owner decision Q3) with `trustVersion`, the active trust
+    // enrollment's chain version that the caller read from current trust
+    // readiness, then the exact prepared challenge it implies (which never
+    // carries trustVersion). `preparation` is every other preparation field
+    // (the daemon's effectId, nonce, times, binding, stage and expected
+    // state); the store adds v, kind and trustVersion and binds the record to
+    // the admission and action. Legal only from `admitted`, or from
+    // `preparing` with the same preparation (finishing its challenge); the
+    // same preparation and challenge again are an idempotent duplicate, and
+    // any other preparation or later phase is a conflict.
+    recordPreparation(requestId, { preparation, trustVersion } = {}) {
+      if (!matches(UUID4, requestId) || !plain(preparation)) fail('invalid-owner-journal-record');
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        const action = JSON.parse(graph.saved.action.toString('utf8'));
+        let bytes, record;
+        try {
+          // decodePreparation checks the version itself; it must come only from here.
+          if (Object.hasOwn(preparation, 'trustVersion')) throw new Error();
+          bytes = Buffer.from(canonicalJson({ ...preparation, v: 2, kind: 'preparation', trustVersion }));
+          record = bindPreparation(decodePreparation(bytes), { acceptance: graph.saved.record, action });
+        } catch { fail('invalid-owner-journal-record'); }
+        const challenge = challengeFor(record, graph.saved.action);
+        if (graph.state !== 'admitted') {
+          const present = graph.bytes.get('preparation.record');
+          const saved = zeros(present) ? null : decodeDaemonJournalFrame(present, { ...graph.binding, slot: 'preparation' }).payload;
+          if (!['preparing', 'prepared'].includes(graph.state) || !saved?.equals(bytes)) fail('owner-journal-conflict');
+          recoveryFlush(graph);
+          if (graph.state === 'prepared') return settled(graph, { duplicate: true });
+          publish(graph.dir, 'prepared-challenge', challenge, graph.binding);
+          return settled(readGraph(name, requestId), {});
+        }
+        recoveryFlush(graph);
+        publish(graph.dir, 'preparation', bytes, graph.binding);
+        publish(graph.dir, 'prepared-challenge', challenge, graph.binding);
+        return settled(readGraph(name, requestId), {});
+      });
+    },
+
     // Explicit recovery of one request after reopen. Absent is only "no such
     // directory"; otherwise the typed phase from readGraph, after the
     // recovery flush. An orphan, partial, corrupt or unsupported pre-entry
