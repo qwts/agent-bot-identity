@@ -1,7 +1,7 @@
 // Disabled owner-decision trust records (#1007): the pinned broker namespace
 // and the versioned key pins. Storage cases run only on Darwin, where the
 // journal-style O_EXLOCK lock exists; key and schema cases run everywhere.
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -12,21 +12,33 @@ import { canonicalJson } from '../canonical-json.mjs';
 import {
   TRUST_LIMITS, createOwnerDecisionTrustWriter, ed25519KeyPin, ownerDecisionTrustRoot, readOwnerDecisionTrust, trustError,
 } from '../identity/owner-decision-trust.mjs';
+import { loadOrCreateVouchKey, vouchDaemonKey, vouchStateDir } from '../identity/vouch.mjs';
+import { presencePinPath } from '../identity/owner-presence.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const refused = (reason, code) => (error) => error.reason === reason && (code === undefined || error.code === code);
 const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
-const keys = () => ({ receiptKey: rawKey(), presenceKey: rawKey(), brokerUid: 501 });
+// A scratch vouch key standing in for this daemon's (never the real one),
+// its derived key ID, and a broker service uid that is neither root nor the
+// owner running the tests.
+const vouchState = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-vouch-')));
+after(() => fs.rmSync(vouchState, { recursive: true, force: true }));
+const env = { XDG_STATE_HOME: vouchState };
+const vouch = loadOrCreateVouchKey(vouchStateDir({ env }));
+const daemonKey = vouchDaemonKey({ env });
+const brokerUid = process.getuid() + 1;
+const keys = () => ({ receiptKey: rawKey(), presenceKey: rawKey(), brokerUid, daemonKey });
 
 function freshRoot(t) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   return path.join(base, 'trust');
 }
-const read = (root, options = {}) => readOwnerDecisionTrust({ root, ...options });
-const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, ...options });
+// home is the scratch directory too, so keyd's presence cache is never the real one.
+const read = (root, options = {}) => readOwnerDecisionTrust({ root, env, home: vouchState, ...options });
+const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, env, home: vouchState, ...options });
 // Every file under the root, for "kept as found" checks.
 function snapshot(root) {
   const out = {};
@@ -83,17 +95,42 @@ test('one active enrollment: enroll, revoke exactly it, enroll again; never two,
   assert.throws(() => read(root, { namespaceDigest: 'b'.repeat(64) }), refused('owner-trust-corrupt', 'storage-failed'));
   assert.throws(() => w.enrollKeys(keys()), refused('owner-trust-conflict'));
   const same = rawKey();
-  assert.throws(() => w.enrollKeys({ receiptKey: same, presenceKey: same, brokerUid: 1 }), refused('owner-trust-invalid-input'));
+  assert.throws(() => w.enrollKeys({ receiptKey: same, presenceKey: same, brokerUid, daemonKey }), refused('owner-trust-invalid-input'));
 
   const v1 = sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json')));
   assert.throws(() => w.revokeKeys({ revokes: 'f'.repeat(64), reason: 'rotated' }), refused('owner-trust-conflict'));
   assert.equal(w.revokeKeys({ revokes: v1, reason: 'rotated' }).state, 'revoked');
   assert.throws(() => read(root), refused('owner-trust-no-active-key'));
   assert.throws(() => w.revokeKeys({ revokes: v1, reason: 'rotated' }), refused('owner-trust-conflict'));
-  const second = keys(), rotated = w.enrollKeys({ ...second, brokerUid: 502 });
+  const second = keys(), rotated = w.enrollKeys({ ...second, brokerUid: brokerUid + 1 });
   assert.equal(rotated.version, 3); assert.deepEqual(rotated.presenceKey, ed25519KeyPin(second.presenceKey));
-  assert.equal(rotated.service.brokerUid, 502); assert.equal(rotated.namespaceDigest, namespaceDigest);
+  assert.equal(rotated.service.brokerUid, brokerUid + 1); assert.equal(rotated.namespaceDigest, namespaceDigest);
   assert.equal(fs.statSync(path.join(root, 'namespace.json')).mode & 0o7777, 0o600);
+});
+
+test('the last version is reserved for a terminal revocation, after which nothing is possible', darwin, (t) => {
+  // Enrolling into the last slot is refused.
+  {
+    const root = freshRoot(t), w = writer(root, { maxVersions: 3 });
+    w.enrollNamespace({ namespaceDigest });
+    w.enrollKeys(keys());
+    w.revokeKeys({ revokes: sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json'))), reason: 'rotated' });
+    const before = snapshot(root);
+    assert.throws(() => w.enrollKeys(keys()), refused('owner-trust-bounds'));
+    assert.deepEqual(snapshot(root), before);
+  }
+  // Revoking into the last slot succeeds, and then growth stops.
+  const root = freshRoot(t), w = writer(root, { maxVersions: 2 });
+  w.enrollNamespace({ namespaceDigest });
+  w.enrollKeys(keys());
+  assert.equal(w.revokeKeys({ revokes: sha256(fs.readFileSync(path.join(root, 'keys', '0000000001.json'))), reason: 'decommissioned' }).version, 2);
+  const before = snapshot(root);
+  assert.throws(() => w.enrollKeys(keys()), refused('owner-trust-bounds'));
+  assert.throws(() => w.revokeKeys({ revokes: 'f'.repeat(64), reason: 'rotated' }), refused('owner-trust-conflict'));
+  assert.equal(w.enrollNamespace({ namespaceDigest }).state, 'enrolled');
+  assert.throws(() => w.enrollNamespace({ namespaceDigest: 'b'.repeat(64) }), refused('owner-trust-conflict'));
+  assert.throws(() => read(root), refused('owner-trust-no-active-key', 'owner-decision-unsupported'));
+  assert.deepEqual(snapshot(root), before);
 });
 
 test('capacity refuses growth and keeps every record', darwin, (t) => {
@@ -328,5 +365,102 @@ test('reconcile checks custody first and keeps any pending bytes it cannot match
     assert.throws(() => writer(root).reconcile(), (error) => error.code === 'storage-failed');
     assert.equal(fs.readFileSync(`${root}-target`, 'utf8'), 'outside');
     assert(fs.lstatSync(path.join(keysDir, '.pending.json')).isSymbolicLink());
+  });
+});
+
+test('the broker service uid is never root or the owner, and no pin may be this daemon\'s own key', darwin, (t) => {
+  const root = freshRoot(t), w = writer(root);
+  w.enrollNamespace({ namespaceDigest });
+  const invalidInput = refused('owner-trust-invalid-input', 'bad-request');
+  for (const uid of [0, process.getuid(), -1, 2 ** 32, 1.5, '600']) {
+    assert.throws(() => w.enrollKeys({ ...keys(), brokerUid: uid }), invalidInput, String(uid));
+  }
+  // Our own vouch key can be neither pin, whether or not the caller names it.
+  const ownKey = vouch.publicKey.export({ format: 'jwk' }).x;
+  assert.equal(ed25519KeyPin(ownKey).keyId, daemonKey);
+  for (const extra of [{}, { daemonKey }]) {
+    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, receiptKey: ownKey }), invalidInput);
+    assert.throws(() => w.enrollKeys({ ...keys(), ...extra, presenceKey: ownKey }), invalidInput);
+  }
+  // A supplied daemonKey is only ever a check against the derived one.
+  assert.throws(() => w.enrollKeys({ ...keys(), daemonKey: 'f'.repeat(64) }), refused('owner-trust-daemon-key-mismatch', 'bad-request'));
+  assert.equal(fs.existsSync(path.join(root, 'keys')), false);
+
+  // Readiness derives our key, verifies a supplied one, and needs a vouch key at all.
+  const { daemonKey: _omit, ...withoutDaemonKey } = keys();
+  w.enrollKeys(withoutDaemonKey);
+  assert.equal(read(root).state, 'ready');
+  assert.equal(read(root, { daemonKey }).state, 'ready');
+  assert.throws(() => read(root, { daemonKey: 'f'.repeat(64) }), refused('owner-trust-daemon-key-mismatch', 'bad-request'));
+  const empty = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-novouch-')));
+  t.after(() => fs.rmSync(empty, { recursive: true, force: true }));
+  assert.throws(() => read(root, { env: { XDG_STATE_HOME: empty } }), refused('owner-trust-no-vouch-key', 'owner-decision-unsupported'));
+  assert.deepEqual(fs.readdirSync(empty), [], 'checking never creates a vouch key');
+});
+
+test('an active pin that is this daemon\'s vouch key leaves no authority', darwin, (t) => {
+  // Enrolled under one daemon, then read by a daemon whose vouch key is that receipt key.
+  const root = freshRoot(t), w = writer(root);
+  w.enrollNamespace({ namespaceDigest });
+  const other = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-other-vouch-')));
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  const otherEnv = { XDG_STATE_HOME: other }, otherVouch = loadOrCreateVouchKey(vouchStateDir({ env: otherEnv }));
+  w.enrollKeys({ ...keys(), receiptKey: otherVouch.publicKey.export({ format: 'jwk' }).x });
+  assert.equal(read(root).state, 'ready');
+  assert.throws(() => read(root, { env: otherEnv }), refused('owner-trust-role', 'owner-decision-unsupported'));
+});
+
+test('a stored enrollment naming root or the owner as the broker is refused as damage', darwin, async (t) => {
+  for (const uid of [0, process.getuid()]) {
+    await t.test(String(uid), (tt) => {
+      const root = freshRoot(tt), w = writer(root);
+      w.enrollNamespace({ namespaceDigest });
+      w.enrollKeys(keys());
+      // Rewrite version 1 with the forbidden uid, re-binding its audit line
+      // and confirmation, so only the uid rule can refuse it.
+      const file = path.join(root, 'keys', '0000000001.json');
+      const value = { ...JSON.parse(fs.readFileSync(file, 'utf8')) };
+      value.service = { ...value.service, brokerUid: uid };
+      const bytes = Buffer.from(canonicalJson(value));
+      fs.writeFileSync(file, bytes);
+      const audit = path.join(root, 'audit.jsonl'), lines = fs.readFileSync(audit, 'utf8').trim().split('\n');
+      const last = { ...JSON.parse(lines.at(-1)), recordDigest: sha256(bytes) }, line = `${canonicalJson(last)}\n`;
+      fs.writeFileSync(audit, `${[...lines.slice(0, -1), canonicalJson(last)].join('\n')}\n`);
+      const confirm = path.join(root, 'keys', '0000000001.confirm.json');
+      fs.writeFileSync(confirm, canonicalJson({ ...JSON.parse(fs.readFileSync(confirm, 'utf8')), recordDigest: sha256(bytes), auditLineDigest: sha256(line) }));
+      assert.throws(() => read(root), refused('owner-trust-corrupt', 'storage-failed'));
+    });
+  }
+});
+
+test('the presence pin is the native p1 signer, never keyd\'s legacy presence key', darwin, async (t) => {
+  const asBase64 = (x) => Buffer.from(x, 'base64url').toString('base64');
+  await t.test('an injected legacy key refuses enrollment and readiness, in either encoding', (tt) => {
+    const root = freshRoot(tt);
+    writer(root).enrollNamespace({ namespaceDigest });
+    const enrolled = keys();
+    for (const legacyPresenceKey of [enrolled.presenceKey, asBase64(enrolled.presenceKey)]) {
+      assert.throws(() => writer(root, { legacyPresenceKey }).enrollKeys(enrolled), refused('owner-trust-invalid-input', 'bad-request'));
+    }
+    assert.equal(fs.existsSync(path.join(root, 'keys')), false);
+    // The rule is about presence only: a receipt key equal to it is a different role check.
+    writer(root, { legacyPresenceKey: rawKey() }).enrollKeys(enrolled);
+    assert.equal(read(root, { legacyPresenceKey: null }).state, 'ready');
+    assert.throws(() => read(root, { legacyPresenceKey: asBase64(enrolled.presenceKey) }), refused('owner-trust-role', 'owner-decision-unsupported'));
+    assert.equal(read(root, { legacyPresenceKey: enrolled.receiptKey }).state, 'ready');
+  });
+  await t.test('by default keyd\'s cached pin is read, prompt-free, as a deny-list', (tt) => {
+    const root = freshRoot(tt);
+    writer(root).enrollNamespace({ namespaceDigest });
+    const enrolled = keys(), cache = presencePinPath({ env, home: vouchState });
+    fs.mkdirSync(path.dirname(cache), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(cache, `${asBase64(enrolled.presenceKey)}\n`, { mode: 0o600 });
+    tt.after(() => fs.rmSync(cache, { force: true }));
+    assert.throws(() => writer(root).enrollKeys(enrolled), refused('owner-trust-invalid-input'));
+    writer(root, { legacyPresenceKey: null }).enrollKeys(enrolled);
+    assert.throws(() => read(root), refused('owner-trust-role'));
+    // An unreadable or malformed cache excludes nothing; it never grants trust either.
+    fs.writeFileSync(cache, 'not a key\n');
+    assert.equal(read(root).state, 'ready');
   });
 });

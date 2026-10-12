@@ -47,14 +47,56 @@ record kinds:
 
 A key is canonical unpadded base64url of exactly 32 bytes and a valid Ed25519
 point. Its `keyId` is SHA-256 of the Ed25519 SPKI DER, matching agent-comms.
-The receipt and presence keys must differ.
+The receipt and presence keys must differ, and neither may be this daemon's
+own vouch key. That key's ID, `daemonKey` (SHA-256 of the vouch SPKI DER), is
+derived at enrollment and at every readiness check from this daemon's
+existing vouch key: `vouchDaemonKey` in `identity/vouch.mjs`, which reads
+`$XDG_STATE_HOME/agent-bot/vouch-key.pem` read-only (the same env and home as
+the trust root, never creating a key).
+- A caller may pass `daemonKey`, but only as an exact check against the
+  derived value. A mismatch refuses with `bad-request`.
+- A missing or invalid vouch key refuses with `owner-decision-unsupported`.
+  The key is never derived from input.
+- An active pin equal to it refuses (`owner-decision-unsupported`).
+
+**Four distinct key roles.** Never confuse these four:
+
+| Key | Role |
+| --- | --- |
+| The native enrollment key | Used only for enrollment. |
+| The native agent-bot-owner p1 signer | The trust record's `presenceKey`. |
+| The broker's `receiptKey` | Signs receipts. |
+| This daemon's vouch key | The source of `daemonKey`. |
+
+`presenceKey` must pin the future native p1 signer, **never keyd's legacy
+presence seed**.
+- **Refusal.** An enrollment whose `presenceKey` equals keyd's legacy presence
+  key refuses with `bad-request`. Readiness with such an active pin refuses
+  with `owner-decision-unsupported`.
+- **Where the legacy key comes from.** By default it is read, prompt-free, from
+  keyd's cached pin `presence.pub` (`presencePinPath`). A caller or test may
+  inject it as `legacyPresenceKey`; `null` means none.
+- **The cache is a deny-list only.** A soul could write that file, so it can
+  add refusals or miss one, but it never grants trust.
+- **Why not re-derive it.** The code-signed re-derivation
+  (`pinnedPresenceKey` / `pinnedPresenceKeyWithoutDialog`) is deliberately not
+  run in trust checks. It executes `codesign` and the keyd binary, may touch
+  keyd's Keychain item, and writes the cache and audit receipts. Its stronger
+  check is left to the enrollment ceremony, which independently verifies the
+  native signer. `service.brokerUid` is the broker's
+own service account: never 0 and never the owner's uid. A stored enrollment
+that breaks this rule is refused as damage.
 
 At most one enrollment is ever active:
 - a new enrollment is legal only when none is active;
 - a revocation must name the active enrollment's digest exactly;
 - rotating keys, or changing the service identity, means a revocation followed
   by a new enrollment;
-- the namespace and the journal are never touched.
+- the namespace and the journal are never touched;
+- the last version (1024) is reserved for a terminal revocation, so an
+  enrollment is refused at version 1024 or above and every enrollment can be
+  revoked. After that terminal revocation, growth stops: there is no new
+  namespace, reset or fallback, and owner decisions are unsupported.
 
 **Audit and confirmation.** Each record is published under a fixed
 `.pending.json` name: write it and fsync, link it to the final name, fsync the

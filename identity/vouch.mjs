@@ -14,6 +14,7 @@
 // mirrors: signature, version, audience, the 300-second cap, and expiry.
 
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
@@ -181,6 +182,19 @@ export function loadOrCreateVouchKey(stateDir, {
 // but hands its caller only the public half.
 export function vouchPublicKeyPem({ env = process.env, home = homedir(), ...options } = {}) {
   return loadOrCreateVouchKey(vouchStateDir({ env, home }), options).publicKeyPem.toString();
+}
+
+// This daemon's owner-decision daemonKey (agent-comms#77): SHA-256 of its
+// existing vouch key's Ed25519 SPKI DER (44 bytes), lowercase hex. Read-only:
+// it never creates a key and returns null when there is none, so a check can
+// never mint the key it is checking against. POSIX custody only; Windows has
+// no owner-decision support.
+export function vouchDaemonKey({ env = process.env, home = homedir() } = {}) {
+  const privateKey = readVouchKey(vouchKeyPath(vouchStateDir({ env, home })), { platform: 'posix' });
+  if (!privateKey) return null;
+  const der = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+  if (der.length !== 44) throw new Error('vouch key is not an Ed25519 key');
+  return createHash('sha256').update(der).digest('hex');
 }
 
 function unixSeconds(now) {
