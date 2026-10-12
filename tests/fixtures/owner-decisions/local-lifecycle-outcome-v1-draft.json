@@ -1,0 +1,783 @@
+{
+  "v": 1,
+  "status": "draft-daemon-producer",
+  "slot": "local-lifecycle-outcome",
+  "cap": 4096,
+  "sources": {
+    "recordShape": "agent-comms d071a9b docs/owner-decision-journal-records.md Exact administrative records",
+    "mapping": "effect-outcomes-v1.json"
+  },
+  "frame": {
+    "namespaceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "requestId": "00000000-0000-4000-8000-000000000101",
+    "role": "daemon"
+  },
+  "vectors": [
+    {
+      "id": "admitted-refused-validation-refused",
+      "expected": "valid",
+      "context": {
+        "phase": "admitted",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 404,
+      "sha256": "4cb6b0057fea1df2e1e562eb7a8cf1e0ded58912c07aa16d7937d48a2663a441",
+      "frameSha256": "d4c87d3e61c2b54a149d64209fb35a7089020500a4fa6bf09b17a26bf051bb64"
+    },
+    {
+      "id": "admitted-cancelled-cancelled",
+      "expected": "valid",
+      "context": {
+        "phase": "admitted",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
+      "utf8Bytes": 397,
+      "sha256": "606299fcad8ee609e8f6f1bc7b26ee9268705094c689c7791080c7d677da6639",
+      "frameSha256": "440d2f1a92d81776ba77276d541aca3a46c3d5d12b9e022a425720de9ea9becf"
+    },
+    {
+      "id": "preparing-expired-deadline-expired",
+      "expected": "valid",
+      "context": {
+        "phase": "preparing",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"expired\",\"v\":1}",
+      "utf8Bytes": 402,
+      "sha256": "1169ac277a2592b37a0d1a9e530ea4ecc1ceb3ad281461d18b57a7a64f2bd6b9",
+      "frameSha256": "29dadacc9b7c7c91abb882f17737b98f96db4904a6d0385a100fe581771be31f"
+    },
+    {
+      "id": "prepared-refused-authority-refused",
+      "expected": "valid",
+      "context": {
+        "phase": "prepared",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"authority-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 403,
+      "sha256": "bbe43a59c6061a71549d2fd0a3a60594b4bd22792cbb106db98c6bc59e395b4f",
+      "frameSha256": "1994a090c9ecef73143afa021f002ddc6872260a43e81388b8b2687c1fd44076"
+    },
+    {
+      "id": "prepared-cancelled-cancelled",
+      "expected": "valid",
+      "context": {
+        "phase": "prepared",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
+      "utf8Bytes": 397,
+      "sha256": "606299fcad8ee609e8f6f1bc7b26ee9268705094c689c7791080c7d677da6639",
+      "frameSha256": "440d2f1a92d81776ba77276d541aca3a46c3d5d12b9e022a425720de9ea9becf"
+    },
+    {
+      "id": "authorizing-refused-deadline-expired",
+      "expected": "valid",
+      "context": {
+        "phase": "authorizing",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 464,
+      "sha256": "a6522387d189ccaff81422e9212584c8b52effaeccacf5dbfa78a810fcb1bbee",
+      "frameSha256": "343dc216e15a83cb019b7a41267013d22b96e1ed7c4f695b9320e50ab49f3da0"
+    },
+    {
+      "id": "authorizing-expired-deadline-expired",
+      "expected": "valid",
+      "context": {
+        "phase": "authorizing",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"expired\",\"v\":1}",
+      "utf8Bytes": 464,
+      "sha256": "0663c41390ae48081443dbe7a8f34357c37a6bf5daad7d5df468f9913a23ce4d",
+      "frameSha256": "99811918537fc8f7c172b2c83529dc993510034595b2ca1501151c5804e343bc"
+    },
+    {
+      "id": "refused-validation-refused",
+      "expected": "valid",
+      "context": {
+        "phase": "refused",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "refusalCode": "expected-state-changed"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 528,
+      "sha256": "0b4566a3f6316e50d0da73ad9d3177ae7faefccf36c9589fdec6ff577bffd41a",
+      "frameSha256": "9a446a67830860836c64c01941d8b7ba5615df885839522d3027d33b853df9cc"
+    },
+    {
+      "id": "refused-storage-refused",
+      "expected": "valid",
+      "context": {
+        "phase": "refused",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "refusalCode": "storage-unavailable"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"storage-refused\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 525,
+      "sha256": "d7a77679258f32cfd6d811698e0ef1e12d3faa95f0229a241e122b0d740d2c4e",
+      "frameSha256": "4d803e13b12192362cd606069e65b9d805b97dee60324bb1f00bacbc3bcdd99a"
+    },
+    {
+      "id": "refused-before-receipt-authority-refused",
+      "expected": "valid",
+      "context": {
+        "phase": "refused",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "refusalCode": "trust-unavailable"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"authority-refused\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 465,
+      "sha256": "d96275cf8f1151cd2f547f0d6f4f8fc9b62fc62fa5d288b7a5e29681f6acc7a2",
+      "frameSha256": "04ffeb1d227d9248d98b0b2b9b702acb75db65cd48b667a543f136eb81c2efa7"
+    },
+    {
+      "id": "indeterminate-effect-uncertain",
+      "expected": "valid",
+      "context": {
+        "phase": "indeterminate",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"effect-uncertain\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"indeterminate\",\"v\":1}",
+      "utf8Bytes": 470,
+      "sha256": "3dda18f5619f2025e0b90b438edb0025de1b920bf4fa9195d3ec68ec350239eb",
+      "frameSha256": "7d00f01fb4f18c01f81872d54d597cd8e9dc0fffec0a8bc452e4dd119471a5de"
+    },
+    {
+      "id": "applied-applied",
+      "expected": "valid",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "fc0518edd1ff52d4f757d2fb6158a062cf548e596ee037339275acebab9e34e1",
+      "frameSha256": "7611cb7511bd7649020a4668453ebab89a1ab305d53e08512f8bb17e46c9afaa"
+    },
+    {
+      "id": "applied-later-epoch",
+      "expected": "valid",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":2,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "725f9730c07d175befb5d4a4a8443e338d1e5952f6179c6de684f2514d36a1c9",
+      "frameSha256": "f32ec38f1c70f7ea2d58161b78ecdb94d67a099e3979518ea93ef6b08625bbbd"
+    },
+    {
+      "id": "negative-broker-source",
+      "expected": "owner-outcome-source",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"broker\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "2e5c0992dcddc61fb8894a8ffbf337023293ad9d6b711791f1ba8a43c039a7c1",
+      "frameSha256": "6c11a46165f72ee2364e02923e2b902654f44c8beb6ba04950915378038b40a2"
+    },
+    {
+      "id": "negative-null-reporter",
+      "expected": "owner-outcome-source",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":null,\"reportingDaemonKey\":null,\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 458,
+      "sha256": "376bf6a73724c250c7752ab86757b06fb7672a7ac381cc8ecd6a99676c5480af",
+      "frameSha256": "2f86b561cbf8d1cf3428babaf0a26aed76a127c71fe608cb2e17bbd05244fe0f"
+    },
+    {
+      "id": "negative-other-reporter",
+      "expected": "owner-outcome-reporter",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "6c9351501271eaed2788c0cf6444e43b8961b3918e597cb2d51c71a64fcbb9d2",
+      "frameSha256": "23d02108716961061ba43e48d48571e7ce04962d64672422934fb8b87e5bead1"
+    },
+    {
+      "id": "negative-epoch-went-back",
+      "expected": "owner-outcome-reporter",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 3
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":2,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "725f9730c07d175befb5d4a4a8443e338d1e5952f6179c6de684f2514d36a1c9",
+      "frameSha256": "f32ec38f1c70f7ea2d58161b78ecdb94d67a099e3979518ea93ef6b08625bbbd"
+    },
+    {
+      "id": "negative-other-request",
+      "expected": "owner-outcome-binding",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000102\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "2abbd36da8e7ea5fb0c87f0057d94009a48db02da8a19250cdc829b055abeab5",
+      "frameSha256": "0a33d77abc7e6741e91ed06a8d971b46139dd14e6e14324d36ba28d780da175e"
+    },
+    {
+      "id": "negative-other-payload",
+      "expected": "owner-outcome-binding",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "807215c2296bef71b777c498dd27a3cce36b4b4f77c7121f414a0cda71bfcf9b",
+      "frameSha256": "a97c8db8ec8ed5a336d56c67fd67b4ba412ea83f35e00e93a882c5803010aec8"
+    },
+    {
+      "id": "negative-receipt-null-after-issuance",
+      "expected": "owner-outcome-receipt",
+      "context": {
+        "phase": "indeterminate",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"effect-uncertain\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"indeterminate\",\"v\":1}",
+      "utf8Bytes": 408,
+      "sha256": "c1d8553fd996b1a135107b255a8228f7842575b7829ab97994bc994ff2f0e9de",
+      "frameSha256": "b3259a7c89b8a5fb495b7b4eddd11a80e1389bfe417fe95dc819bd7c4e5ef633"
+    },
+    {
+      "id": "negative-receipt-before-issuance",
+      "expected": "owner-outcome-receipt",
+      "context": {
+        "phase": "prepared",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 466,
+      "sha256": "2b7dadb1e536dd337d6f58e924c5921cf356344bd73eb78503f9c8c0d23bbccc",
+      "frameSha256": "a4705ccef2418800556def508adeb07f923a9456881148d959c8dc0e16e017d9"
+    },
+    {
+      "id": "negative-released-refused",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "released",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 464,
+      "sha256": "a6522387d189ccaff81422e9212584c8b52effaeccacf5dbfa78a810fcb1bbee",
+      "frameSha256": "343dc216e15a83cb019b7a41267013d22b96e1ed7c4f695b9320e50ab49f3da0"
+    },
+    {
+      "id": "negative-released-expired",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "released",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"deadline-expired\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"expired\",\"v\":1}",
+      "utf8Bytes": 464,
+      "sha256": "0663c41390ae48081443dbe7a8f34357c37a6bf5daad7d5df468f9913a23ce4d",
+      "frameSha256": "99811918537fc8f7c172b2c83529dc993510034595b2ca1501151c5804e343bc"
+    },
+    {
+      "id": "negative-authorizing-cancelled",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "authorizing",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"cancelled\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"cancelled\",\"v\":1}",
+      "utf8Bytes": 459,
+      "sha256": "edf35e939c94cf38a3781a06a1cc931c86bdbeca5a9a621fca80716ee430cc8d",
+      "frameSha256": "6db1f2680e8fa9d9a0420ec33cf1e14981b419afb4cd8f4132b3a4e6f618da84"
+    },
+    {
+      "id": "negative-early-storage-refused",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "prepared",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"storage-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 401,
+      "sha256": "25ce75766bb24a778a50ba0696c182011a5a3f5f4488ca47118defdb17cb21be",
+      "frameSha256": "398cfe9bca505a54f616d832b5e89d9b8d3dd265d4ac13fd369a0befe68d851f"
+    },
+    {
+      "id": "negative-early-refusal-with-digest",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "prepared",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": null,
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":null,\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 466,
+      "sha256": "383f774bf17655def02eec059db56d3767253222dbad68a1a58f16e97e65f646",
+      "frameSha256": "90fecc24804ceae8468494ee95be32d7bda4782a814483763e81b29135ebae03"
+    },
+    {
+      "id": "negative-indeterminate-with-digest",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "indeterminate",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"effect-uncertain\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"indeterminate\",\"v\":1}",
+      "utf8Bytes": 532,
+      "sha256": "603c2228458ae06b1f2f071d90e275a8fb6c5138d3492d669c69567e60a9494b",
+      "frameSha256": "f06ffc74bb41474c6ac1cd512d9f194a5b4faf8f148789c6b489eaedb9207de5"
+    },
+    {
+      "id": "negative-indeterminate-as-applied",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "indeterminate",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "fc0518edd1ff52d4f757d2fb6158a062cf548e596ee037339275acebab9e34e1",
+      "frameSha256": "7611cb7511bd7649020a4668453ebab89a1ab305d53e08512f8bb17e46c9afaa"
+    },
+    {
+      "id": "negative-indeterminate-as-refused",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "indeterminate",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": null
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 466,
+      "sha256": "2b7dadb1e536dd337d6f58e924c5921cf356344bd73eb78503f9c8c0d23bbccc",
+      "frameSha256": "a4705ccef2418800556def508adeb07f923a9456881148d959c8dc0e16e017d9"
+    },
+    {
+      "id": "negative-applied-other-digest",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "e3dd0b30b1ebc3a3da1628f746b76def18f7c170ad69df0d9722e4e6c81ddf6c",
+      "frameSha256": "1e8dfd066023e8f4b77edf461256b7ecff4d7a659c8c6a1539cda1f8da5e6be2"
+    },
+    {
+      "id": "negative-refused-wrong-code",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "refused",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "refusalCode": "expected-state-changed"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"authority-refused\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 527,
+      "sha256": "c1cb27c57e425d572afdb83fb5b3de92e801a87251f6d54530b27c6230772b0a",
+      "frameSha256": "1ce3e3af71b9b6fa731d5f12d45afb52c2789c3621ddae7f6a822b8424e6fb9b"
+    },
+    {
+      "id": "negative-refused-null-digest",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "refused",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "refusalCode": "expected-state-changed"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"validation-refused\",\"effectDigest\":null},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"refused\",\"v\":1}",
+      "utf8Bytes": 466,
+      "sha256": "2b7dadb1e536dd337d6f58e924c5921cf356344bd73eb78503f9c8c0d23bbccc",
+      "frameSha256": "a4705ccef2418800556def508adeb07f923a9456881148d959c8dc0e16e017d9"
+    },
+    {
+      "id": "negative-extra-key",
+      "expected": "owner-outcome-shape",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"note\":\"x\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 528,
+      "sha256": "6b3544c43db14e1dd3f5d9d8f7f25c5e4f502d6d994076a3d99e6b82d4c33335",
+      "frameSha256": "0cc747edddda2bb0523f6f0fb9d97c06a39c7c1426788706fa97e51a4d914ae8"
+    },
+    {
+      "id": "negative-outcome-extra-key",
+      "expected": "owner-outcome-shape",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"detail\":\"x\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 530,
+      "sha256": "3cbf792cf0d02d901205f35c9ba60c305dfa8de9d0a08b41092679a73223f1cb",
+      "frameSha256": "18c8ef69a3375da202faf88b2fa24ad541c18b3f19007541df4ce3f0908fb7ca"
+    },
+    {
+      "id": "negative-negative-at",
+      "expected": "owner-outcome-shape",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":-1,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 509,
+      "sha256": "b1f6eaa477d2ad02c489a7c2296d9b5bc44f4e59818b58e583eb9fea4372ef3f",
+      "frameSha256": "06e2bbe0f90001246105ba2001ac654dd0dbd716787103fc9c0b4a1405a2d621"
+    },
+    {
+      "id": "negative-refused-as-applied",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "refused",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "refusalCode": "expected-state-changed"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "e3dd0b30b1ebc3a3da1628f746b76def18f7c170ad69df0d9722e4e6c81ddf6c",
+      "frameSha256": "1e8dfd066023e8f4b77edf461256b7ecff4d7a659c8c6a1539cda1f8da5e6be2"
+    },
+    {
+      "id": "negative-v2",
+      "expected": "owner-outcome-shape",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":2}",
+      "utf8Bytes": 517,
+      "sha256": "3e1939a0301d2130ad46bbf958f4cabf507f5f93b857a60c38a57a80e867a728",
+      "frameSha256": "53a81b236c61a5a2e0dda908f6f55a357c859290079cf0c2a079e241e4c558b7"
+    },
+    {
+      "id": "negative-kind",
+      "expected": "owner-outcome-shape",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"reconciliation\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 524,
+      "sha256": "bf2f147ac914101ba4d46149e6d6fa746366d2ad2576c5d162c53437471b8dfc",
+      "frameSha256": "eac51a7b8f841653f35784df16349dbacc109d4323f2df298238b3762c7f1020"
+    },
+    {
+      "id": "negative-details-retired",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"details-retired\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 525,
+      "sha256": "a9ba74daca23065c17f1cd395f2ca8920f2e438f63644db0f4d92fc318f27af3",
+      "frameSha256": "6200a4b0176328584816502a954a591199611402e73a846e083fe82e095fb153"
+    },
+    {
+      "id": "negative-non-canonical",
+      "expected": "owner-outcome-encoding",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\n \"v\": 1,\n \"kind\": \"outcome\",\n \"requestId\": \"00000000-0000-4000-8000-000000000101\",\n \"payloadDigest\": \"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\n \"state\": \"applied\",\n \"receiptDigest\": \"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\n \"outcome\": {\n  \"code\": \"applied\",\n  \"effectDigest\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"\n },\n \"source\": \"daemon\",\n \"reportingDaemonKey\": \"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n \"reportingDaemonEpoch\": 1,\n \"at\": 2000000020\n}",
+      "utf8Bytes": 561,
+      "sha256": "ceac7122627b265cb2cde7552bd5a26e475c05b4df1ca7ecc1157c899f795e63",
+      "frameSha256": "64a10133bf4907f34a789b510df916bdadad50b48e768ec217413f4607b9a771"
+    }
+  ]
+}

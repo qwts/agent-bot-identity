@@ -596,7 +596,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     // lock. Legal only for a prepared request that has not entered: preparing,
     // prepared, authorizing or released. `refusal` is { code, at }, code one
     // of the final-refusal reasons; the store builds the record (binding the
-    // checked receipt, or none before the check) and publishes slot 7. The
+    // checked receipt, or none before the check) and publishes slot 8. The
     // request is then refused with the mapped outcome. Entered, applied or
     // already refused is a conflict; an admitted request refuses.
     refusePreEffect(requestId, refusal) {
@@ -657,7 +657,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     // saved receipt. Legal only from `authorizing` with both presence and
     // receipt. It must name exactly the acceptance binding and the saved
     // receipt's digest, and be unexpired now (now < exp, seconds); it is
-    // published canonically to slot 6, and the request is then `released`.
+    // published canonically to slot 7, and the request is then `released`.
     // A check already saved, or any later phase, is a conflict; any other
     // phase refuses. A saved check is never replayed or replaced.
     recordSuccessfulCheck(requestId, { check, nowMilliseconds } = {}) {
