@@ -331,7 +331,7 @@
     "approval-action.mjs": "Names a waiting proposal's soul from the population for the owner's prompt; soul, shared by the daemon host and the approvals command.",
     "canonical-json.mjs": "The canonical byte form behind soul revisions and genesis IDs; shared so identity can derive IDs without importing soul. soul-package re-exports it.",
     "cli/identity.mjs": "`agent-bot identity`: composes identity with soul (a local `spawn --package` hashes the package) and the census (`finalize`). It runs identity's record operations through identityOp and asks the daemon for a spawn through daemon-client.mjs (#645, F13); agent-identity.mjs keeps the library and the git hooks' entry (current, show, record).",
-    "cli/mint-output.mjs": "The documented stdout of `agent-bot mint-token` (plain token or the `--json` object). Identity's with cli/mint-token.mjs (#645, F13 step 2).",
+    "cli/mint-output.mjs": "The documented stdout of `agent-bot mint-token` (plain token or the `--json` object). The module map assigns this formatter to identity together with cli/mint-token.mjs, the command it formats for (#645, F13 step 2).",
     "cli/mint-token.mjs": "`agent-bot mint-token`: identity's own command line. It sits in cli/ because dispatch runs it as its own process; the module map assigns it to identity, as the owner chose for the thin wrappers (#645, F13 step 2). Every import is identity's.",
     "cli/soul-env-transfer.mjs": "The `soul env export|import` process entry: composes the soul module's life archive with the host interaction store (#583), which soul may not import.",
     "comms-membership.mjs": "Joins and leaves agent-comms as a launched soul; split from the daemon host so soul lifecycle commands need not import it.",

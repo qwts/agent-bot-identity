@@ -396,7 +396,7 @@ how each one is done, and §9 puts them in order.
     - `readiness.mjs`, with 16 identity imports;
     - `doctor.mjs:15` and `:16`;
     - `bootstrap.mjs:18` and `:21`;
-    - `cli/mint-token.mjs:9` used `mintForCaller`; that file is identity's since F13 step 2.
+    - `cli/mint-token.mjs:10` used `mintForCaller`; that file is identity's since F13 step 2.
 - **F8. Owner authority used by soul and cli.** `owner-action.mjs` (soul)
   composes `owner-gate`, `owner-statement` and `owner-presence` to ask the
   owner (`owner-action.mjs:9` to `:22`). `soulMarkers` is imported by
@@ -438,7 +438,7 @@ how each one is done, and §9 puts them in order.
   (`soul-credentials.mjs:128`). The layout contract (`soul-env-contract.mjs`)
   records that subtree as identity-owned. Nothing moves.
 - **F13. CLI facade files.** These cli files import identity internals:
-  - `cli/identity.mjs:17` and `:18`, `cli/mint-token.mjs:7` to `:11` (reassigned to identity in F13 step 2),
+  - `cli/identity.mjs:17` and `:18`, `cli/mint-token.mjs:8` to `:12` (reassigned to identity in F13 step 2),
     `cli/principal.mjs:7`, `cli/owner.mjs:7` to `:10` and
     `cli/identity-apps.mjs:8`;
   - `cli/dispatch.mjs:5`, `install.mjs:24` and `readiness.mjs:28`, which use
