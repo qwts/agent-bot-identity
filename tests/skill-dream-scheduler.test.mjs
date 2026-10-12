@@ -597,7 +597,7 @@ test('processing checkpoints and events refuse claims the verified outcome does 
   const legacy = copy(state); delete legacy.processingCheckpoints; legacy.schemaVersion = 8;
   f.replace(legacy);
   const upgraded = createDreamScheduler(f.ports).status();
-  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [10, []]);
+  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [11, []]);
   assert.equal(f.state().schemaVersion, 8);
 });
 
@@ -870,7 +870,7 @@ test('v8 journals keep only the preview digest; inline v1 outcomes stay valid fo
   const state = f.state();
   assert.deepEqual(validateDreamEvents(transaction, { state }), transaction);
   // The same outcome inline is the pre-v8 journal form, valid only there.
-  const inline = copy(transaction), old = inline.find(event => event.kind === 'outcome-recorded');
+  const inline = copy(transaction), old = inline.find(event => event.kind === 'outcome-recorded'); delete old.inputFormat;
   old.outcome = copy(outcome); old.receipt.digest = dreamOutcomeDigest(outcome);
   const oldState = { ...copy(state), schemaVersion: 7, outcomeReceipts: [copy(old.receipt)] };
   assert.throws(() => validateDreamEvents(inline, { state: { ...copy(state), outcomeReceipts: [copy(old.receipt)] } }), { code: 'dream-state-invalid' });
@@ -900,7 +900,7 @@ test('v6 state upgrades its runs with null ownership, and stateless v6 events st
   assert.deepEqual(validateDreamState(legacy), legacy);
   f.replace(legacy);
   const upgraded = createDreamScheduler(f.ports).status();
-  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [10, null]);
+  assert.deepEqual([upgraded.schemaVersion, upgraded.flights[0].ownership], [11, null]);
   const started = copy(f.events.find(event => event.kind === 'started'));
   delete started.run.ownership;
   assert.deepEqual(validateDreamEvents([started]), [started]);
@@ -923,7 +923,7 @@ test('a memory item verified by a cited soul change is processed under its memor
   call.stageOutcome(interpretDreamReport({ run: call.run, inputs, reply, endedAt: new Date().toISOString(), verifyRevisionEvidence: verify }));
   call.resolve(); await started.done;
   const state = f.state();
-  assert.equal(state.schemaVersion, 10);
+  assert.equal(state.schemaVersion, 11);
   assert.deepEqual(state.processingCheckpoints[0].entries.map(entry => [entry.path, entry.digest, entry.artifactRevision]), [[key, MEMORY, R1]]);
   assert.deepEqual(createDreamScheduler(f.ports).status().processingCheckpoints, state.processingCheckpoints);
   // A version-9 state cannot hold a memory item, so an older daemon never misreads one.
@@ -936,12 +936,54 @@ test('a memory item verified by a cited soul change is processed under its memor
   }
 });
 
-test('a version-9 journal reads as version 10 and keeps its processing checkpoints', async () => {
+test('a version-9 journal reads as version 11 and keeps its processing checkpoints', async () => {
   const { f, R1, sources, verifier, settle } = processingFixture();
   await settle({ inputs: sources(['AGENTS.md']), items: [['AGENTS.md', { revision: R1 }]], verify: verifier(R1, ['AGENTS.md']) });
   const state = f.state(), legacy = structuredClone(state); legacy.schemaVersion = 9;
   f.replace(legacy);
   const upgraded = createDreamScheduler(f.ports).status();
-  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [10, state.processingCheckpoints]);
+  assert.deepEqual([upgraded.schemaVersion, upgraded.processingCheckpoints], [11, state.processingCheckpoints]);
   assert.equal(f.state().schemaVersion, 9, 'read-only inspection does not migrate disk');
+});
+
+test('from version 11 an outcome records its input format, and the count bound is exact for it (#929)', async () => {
+  const { f, R1, sources, verifier, settle } = processingFixture();
+  const tail = await settle({ inputs: sources(['AGENTS.md']), items: [['AGENTS.md', { revision: R1 }]], verify: verifier(R1, ['AGENTS.md']) });
+  const state = f.state(), recorded = tail.find(event => event.kind === 'outcome-recorded');
+  assert.deepEqual([state.schemaVersion, recorded.inputFormat], [11, 1]);
+  assert.deepEqual(validateDreamEvents(tail, { state }), tail);
+  // A version-11 outcome must name a known input format, the run's own.
+  for (const mutate of [
+    events => { delete events.find(event => event.kind === 'outcome-recorded').inputFormat; },
+    events => { events.find(event => event.kind === 'outcome-recorded').inputFormat = 4; },
+    events => { events.find(event => event.kind === 'outcome-recorded').inputFormat = null; },
+    events => { events.find(event => event.kind === 'outcome-recorded').inputFormat = 2; },
+  ]) {
+    const events = copy(tail); mutate(events); assert.throws(() => validateDreamEvents(events, { state }), { code: 'dream-state-invalid' });
+  }
+  // An older state never holds one.
+  assert.throws(() => validateDreamEvents(tail, { state: { ...copy(state), schemaVersion: 10 } }), { code: 'dream-state-invalid' });
+  // The bound, on the outcome and the run's ended event alone: 100 for formats
+  // 1 and 2, 164 for format 3; an older event keeps its journal's bound.
+  const bounded = (count, inputFormat) => {
+    const events = copy(tail).filter(event => ['ended', 'outcome-recorded'].includes(event.kind));
+    const event = events.find(row => row.kind === 'outcome-recorded');
+    event.outcome.unreported = count - event.outcome.items.length; event.receipt.digest = dreamOutcomeDigest(event.outcome);
+    if (inputFormat === undefined) delete event.inputFormat; else event.inputFormat = inputFormat;
+    return events;
+  };
+  for (const inputFormat of [1, 2]) {
+    assert.deepEqual(validateDreamEvents(bounded(100, inputFormat)), bounded(100, inputFormat));
+    assert.throws(() => validateDreamEvents(bounded(101, inputFormat)), { code: 'dream-state-invalid' }, `format ${inputFormat} over 100`);
+  }
+  assert.deepEqual(validateDreamEvents(bounded(164, 3)), bounded(164, 3));
+  assert.throws(() => validateDreamEvents(bounded(165, 3)), { code: 'dream-outcome-invalid' }, 'over 164 is never a valid outcome');
+  assert.deepEqual(validateDreamEvents(bounded(164)), bounded(164), 'an unformatted event read without state keeps the version-10 bound');
+  const legacy = events => {
+    const receipt = events.find(row => row.kind === 'outcome-recorded').receipt;
+    return { ...copy(state), outcomeReceipts: [...state.outcomeReceipts.filter(row => row.runId !== receipt.runId), copy(receipt)] };
+  };
+  assert.deepEqual(validateDreamEvents(bounded(164), { state: { ...legacy(bounded(164)), schemaVersion: 10 } }), bounded(164));
+  assert.deepEqual(validateDreamEvents(bounded(100), { state: { ...legacy(bounded(100)), schemaVersion: 9 } }), bounded(100));
+  assert.throws(() => validateDreamEvents(bounded(101), { state: { ...legacy(bounded(101)), schemaVersion: 9 } }), { code: 'dream-state-invalid' });
 });

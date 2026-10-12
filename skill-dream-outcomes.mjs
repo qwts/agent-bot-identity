@@ -8,6 +8,9 @@ import { DREAM_INPUT_LIMITS, DREAM_MEMORY_LIMITS, deliveredDreamItems, isDreamSo
 // (package sources and, from input format 3, memory items).
 export const DREAM_OUTCOME_LIMITS = Object.freeze({ bytes: 256 * 1024, textBytes: 64 * 1024, references: 4, items: 100,
   total: DREAM_INPUT_LIMITS.entries + DREAM_MEMORY_LIMITS.items });
+// The exact count bound for an outcome whose input format is known (#929):
+// only format 3 delivers memory items, so formats 1 and 2 keep 100.
+export const dreamOutcomeCountLimit = inputFormat => (inputFormat === 3 ? DREAM_OUTCOME_LIMITS.total : DREAM_INPUT_LIMITS.entries);
 const HASH = /^sha256:[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const CODE = /^[a-z][a-z0-9-]{0,63}$/;
