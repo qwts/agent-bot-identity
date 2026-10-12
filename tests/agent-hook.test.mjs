@@ -2,7 +2,7 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -282,27 +282,38 @@ test('verdict reading maps the exit codes a hook author actually uses', () => {
   assert.equal(readVerdict({ status: 1, stdout: ALLOW_LINE }).decision, 'error');
 });
 
-// agent-bot is normally a ~/.local/bin symlink into one clone, so resolving
-// relative to the module would look inside the toolkit and silently find
-// nothing when the project carries its own agent-hooks/.
-test('hooks are found in the working repo, not only beside the module', () => {
-  const repo = path.join(root, `proj${(seq += 1)}`);
-  mkdirSync(path.join(repo, 'agent-hooks', 'pre-command'), { recursive: true });
-  execFileSync('git', ['init', '--quiet'], { cwd: repo });
-  const hook = path.join(repo, 'agent-hooks', 'pre-command', '50-deny');
-  writeFileSync(hook, DENY);
-  chmodSync(hook, 0o755);
+// A machine-wide adapter must not run executables that the checkout being
+// worked in supplies: opening a repository is not a decision to trust it
+// (#1065). Only the owner's AGENT_BOT_HOOKS_DIR or the toolkit's own
+// agent-hooks/ run.
+test('a checkout\'s own agent-hooks/ never run without an owner-set AGENT_BOT_HOOKS_DIR', () => {
+  const proj = path.join(root, `proj${(seq += 1)}`);
+  mkdirSync(path.join(proj, 'agent-hooks', 'pre-command'), { recursive: true });
+  mkdirSync(path.join(proj, 'agent-hooks', 'session-start'), { recursive: true });
+  execFileSync('git', ['init', '--quiet'], { cwd: proj });
+  const marker = path.join(root, `ran${seq}`);
+  const planted = `#!/bin/sh\ntouch ${JSON.stringify(marker)}\necho "planted" >&2\nexit 2\n`;
+  for (const event of ['pre-command', 'session-start']) {
+    const hook = path.join(proj, 'agent-hooks', event, '50-planted');
+    writeFileSync(hook, planted);
+    chmodSync(hook, 0o755);
+  }
 
   const env = { ...process.env };
   delete env.AGENT_BOT_HOOKS_DIR;
-  // git rev-parse returns the realpath, and on macOS the temp dir arrives via
-  // the /var -> /private/var symlink.
-  assert.equal(resolveHooksDir(env, repo), path.join(realpathSync(repo), 'agent-hooks'));
+  assert.equal(resolveHooksDir(env, proj), path.join(repo, 'agent-hooks'));
 
   const run = spawnSync(process.execPath, [runner, '--dialect', 'claude', '--event', 'pre-command'], {
-    input: '{}', encoding: 'utf8', cwd: repo, env,
+    input: JSON.stringify({ cwd: proj, tool_name: 'Bash', tool_input: { command: 'ls' } }), encoding: 'utf8', cwd: proj,
+    env: { ...env, HOME: path.join(root, `home${seq}`), XDG_STATE_HOME: path.join(root, `state${seq}`) },
   });
-  assert.equal(JSON.parse(run.stdout).hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(run.stderr.includes('planted'), false, run.stderr);
+  assert.notEqual(JSON.parse(run.stdout || '{}').hookSpecificOutput?.permissionDecision, 'deny', run.stdout);
+  assert.equal(existsSync(marker), false);
+
+  // The owner opting a project in still works.
+  const optedIn = { ...env, AGENT_BOT_HOOKS_DIR: path.join(proj, 'agent-hooks') };
+  assert.equal(resolveHooksDir(optedIn, proj), path.join(proj, 'agent-hooks'));
 });
 
 test('combine short-circuits on deny and keeps ask below it', () => {
