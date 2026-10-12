@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { createOwnerDecisionTrustWriter, readOwnerDecisionNamespace, readOwnerDecisionTrust } from '../identity/owner-decision-trust.mjs';
+import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
 
 // Scratch state and home for every writer and reader here, with a generated
@@ -17,7 +18,7 @@ const scratch = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-namesp
 process.on('exit', () => fs.rmSync(scratch, { recursive: true, force: true }));
 const scope = { env: { XDG_STATE_HOME: scratch }, home: scratch };
 loadOrCreateVouchKey(vouchStateDir(scope));
-const writer = (root, options = {}) => createOwnerDecisionTrustWriter({ root, ...scope, ...options });
+const writer = (root, options = {}) => withCurrentObservation(createOwnerDecisionTrustWriter({ root, ...scope, ...options }), { root, ...scope });
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);

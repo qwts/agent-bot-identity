@@ -16,6 +16,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { mintAgentIdentity } from '../identity/agent-identity.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
 import { createOwnerDecisionTrustWriter } from '../identity/owner-decision-trust.mjs';
+import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
 import { encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { challengeFor } from '../identity/owner-decision-evidence.mjs';
@@ -56,7 +57,8 @@ function released(t, { requestId = '11111111-1111-4111-8111-111111111111', nonce
   const env = { XDG_STATE_HOME: path.join(base, 'xdg') }, home = base;
   const signer = shared?.signer ?? generateKeyPairSync('ed25519'), broker = shared?.broker ?? generateKeyPairSync('ed25519');
   const trustRoot = path.join(base, 'trust');
-  const trustWriter = (now) => createOwnerDecisionTrustWriter({ root: trustRoot, env, home, now: () => now, legacyPresenceKey: null });
+  const trustWriter = (now) => withCurrentObservation(createOwnerDecisionTrustWriter({ root: trustRoot, env, home, now: () => now, legacyPresenceKey: null }),
+    { root: trustRoot, env, home });
   if (!shared) {
     loadOrCreateVouchKey(vouchStateDir({ env }));
     trustWriter(1_999_999_000).enrollNamespace({ namespaceDigest });
