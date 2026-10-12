@@ -202,7 +202,14 @@ authority. There is no route.
   and repairs nothing.
 - **Validator.** `validateOwnerDecisionTrustObservation(bytes)` is the frozen
   v1 validator. The 16 frozen vectors are vendored in
-  `tests/fixtures/owner-decisions/daemon-trust-observation-v1.json`.
+  `tests/fixtures/owner-decisions/daemon-trust-observation-v1.json`. The
+  companion `daemon-trust-observation-v1-negatives.json` adds two exact-byte
+  refusals built from the `none` vector:
+  - a leading UTF-8 BOM, which must refuse `not-json`;
+  - `namespaceDigest` as a one-element array of its valid hex, which must
+    refuse `digest`.
+
+  The 16 vectors themselves are unchanged.
 
 ## Versioned key writers (V1, disabled)
 

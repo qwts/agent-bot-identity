@@ -71,6 +71,29 @@ test('the vendored vectors are the frozen copy and the validator reproduces ever
   assert.equal(pair({ extra: 1 }), 'active');
 });
 
+// The negative-vector companion: exact bytes a validator must refuse, built
+// from the v1 `none` vector, which is left untouched.
+const NEGATIVES_URL = new URL('./fixtures/owner-decisions/daemon-trust-observation-v1-negatives.json', import.meta.url);
+const NEGATIVES_SHA256 = 'a6f16ee96924611f96f4b52b8f81e7b8fd815d3a5faf2d37baef1b0f4bd618f8';
+test('the negative companion: a leading BOM is not JSON, and a non-string digest is not a digest', () => {
+  assert.equal(sha256(fs.readFileSync(NEGATIVES_URL)), NEGATIVES_SHA256);
+  const negatives = JSON.parse(fs.readFileSync(NEGATIVES_URL, 'utf8'));
+  assert.equal(negatives.base.sha256, VECTORS_SHA256);
+  const none = Buffer.from(vectors.vectors.find(({ id }) => id === 'none').canonicalJson);
+  assert.deepEqual(negatives.vectors.map(({ id, expected }) => `${id}:${expected}`),
+    ['negative-leading-utf8-bom:not-json', 'negative-non-string-namespace-digest:digest']);
+  for (const vector of negatives.vectors) {
+    const bytes = Buffer.from(vector.base64, 'base64');
+    assert.equal(bytes.length, vector.utf8Bytes, vector.id); assert.equal(sha256(bytes), vector.sha256, vector.id);
+    assert.equal(validateOwnerDecisionTrustObservation(bytes), vector.expected, vector.id);
+  }
+  // Exactly the none vector with one change each.
+  const [bom, array] = negatives.vectors.map(({ base64 }) => Buffer.from(base64, 'base64'));
+  assert(bom.equals(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), none])));
+  const value = JSON.parse(none);
+  assert.equal(array.toString(), canonicalJson({ ...value, namespaceDigest: [value.namespaceDigest] }));
+});
+
 // A scratch daemon: its own vouch key, home and trust root.
 function daemon(t) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-observation-')));

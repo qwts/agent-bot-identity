@@ -1,0 +1,28 @@
+{
+  "v": 1,
+  "schema": "owner-decision-daemon-trust-observation-v1",
+  "companion": "negatives",
+  "base": {
+    "file": "daemon-trust-observation-v1.json",
+    "sha256": "08c78eca8779c0eda2ff5092093170f03fd641e6d4d82c6bb6b4fb27c4aad689",
+    "vector": "none"
+  },
+  "vectors": [
+    {
+      "id": "negative-leading-utf8-bom",
+      "expected": "not-json",
+      "note": "the valid none vector preceded by a UTF-8 byte order mark (EF BB BF)",
+      "base64": "77u/eyJhY3RpdmUiOm51bGwsImNoYWluVmVyc2lvbiI6MCwiZGFlbW9uS2V5Ijp7ImFsZyI6ImVkMjU1MTkiLCJrZXlJZCI6IjUwM2Q4ZWU0NmQ1ODFjNjQ5OTY2NTY5YWUwOTVlMjcwNDFkZTgzMzIyZThlMDQ4MGU1NTM5ZTAwZDJkNWQ4NzQiLCJwdWJsaWNLZXkiOiIwRXF5TW5RcnRLczZFMmk5UmhYazV0QWlTcmNhQVd1dmhTQ2pNc2wzaHpjIn0sImhlYWRSZWNvcmREaWdlc3QiOiI3ZjUyZjBiNzVjMTdiNGVhMmVhMWZkYTg5YjIwNjMzZDdhZmM1N2E1M2VjZmQ0NGExZGVhODlhM2FlZjMwMzcxIiwia2luZCI6Im93bmVyLWRlY2lzaW9uLWRhZW1vbi10cnVzdC1vYnNlcnZhdGlvbiIsIm5hbWVzcGFjZURpZ2VzdCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJuYW1lc3BhY2VSZWNvcmREaWdlc3QiOiI3ZjUyZjBiNzVjMTdiNGVhMmVhMWZkYTg5YjIwNjMzZDdhZmM1N2E1M2VjZmQ0NGExZGVhODlhM2FlZjMwMzcxIiwic3RhdGUiOiJub25lIiwidiI6MX0=",
+      "utf8Bytes": 530,
+      "sha256": "5d518ae3dd249c59f74e9e509d8bc887ad6c5196e25e7e0941905da1d5cf37d5"
+    },
+    {
+      "id": "negative-non-string-namespace-digest",
+      "expected": "digest",
+      "note": "the valid none vector with namespaceDigest as a one-element array of its valid hex, canonical",
+      "base64": "eyJhY3RpdmUiOm51bGwsImNoYWluVmVyc2lvbiI6MCwiZGFlbW9uS2V5Ijp7ImFsZyI6ImVkMjU1MTkiLCJrZXlJZCI6IjUwM2Q4ZWU0NmQ1ODFjNjQ5OTY2NTY5YWUwOTVlMjcwNDFkZTgzMzIyZThlMDQ4MGU1NTM5ZTAwZDJkNWQ4NzQiLCJwdWJsaWNLZXkiOiIwRXF5TW5RcnRLczZFMmk5UmhYazV0QWlTcmNhQVd1dmhTQ2pNc2wzaHpjIn0sImhlYWRSZWNvcmREaWdlc3QiOiI3ZjUyZjBiNzVjMTdiNGVhMmVhMWZkYTg5YjIwNjMzZDdhZmM1N2E1M2VjZmQ0NGExZGVhODlhM2FlZjMwMzcxIiwia2luZCI6Im93bmVyLWRlY2lzaW9uLWRhZW1vbi10cnVzdC1vYnNlcnZhdGlvbiIsIm5hbWVzcGFjZURpZ2VzdCI6WyJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIl0sIm5hbWVzcGFjZVJlY29yZERpZ2VzdCI6IjdmNTJmMGI3NWMxN2I0ZWEyZWExZmRhODliMjA2MzNkN2FmYzU3YTUzZWNmZDQ0YTFkZWE4OWEzYWVmMzAzNzEiLCJzdGF0ZSI6Im5vbmUiLCJ2IjoxfQ==",
+      "utf8Bytes": 529,
+      "sha256": "35038165af5a944d0ed06a9d434e91de5d28c6e9e48ae3b419db02e2a4360f7e"
+    }
+  ]
+}
