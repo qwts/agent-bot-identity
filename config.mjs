@@ -22,7 +22,8 @@
 //       "keydTeamId": "ABCDE12345",        // Developer ID team that signs keyd (#594)
 //       "keydIdentifier": "agent-bot-keyd", // keyd's code-signing identifier (#594)
 //       "soulCoauthorDomain": "souls.example.org", // soul co-author email domain (ADR-0815)
-//       "skillSearchAdapter": "local-text"  // soul skill search adapter (#902)
+//       "skillSearchAdapter": "local-text", // soul skill search adapter (#902)
+//       "diagnosticsOtlpEndpoint": "https://collector.example:4318" // opt-in OTLP export (ADR-0983)
 //     },
 //     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
 //   }
@@ -370,6 +371,25 @@ export function skillSearchAdapterSetting(config = loadConfig()) {
   return value;
 }
 
+// The OTLP/HTTP base URL diagnostics are exported to (ADR-0983 decision 4),
+// or null: export is off unless this is set. Ambient OTEL_* variables never
+// turn it on. https, or http only to a loopback collector; no credentials,
+// query or fragment in the URL (headers come from AGENT_BOT_OTLP_HEADERS at
+// run time and are never stored here).
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+export function diagnosticsOtlpEndpointSetting(config = loadConfig()) {
+  const value = settingsSection(config).diagnosticsOtlpEndpoint;
+  if (value === undefined) return null;
+  const invalid = () => new Error('invalid settings.diagnosticsOtlpEndpoint: expected an https URL (or http to localhost) with no credentials, query or fragment');
+  if (typeof value !== 'string' || value.length > 2048) throw invalid();
+  let url;
+  try { url = new URL(value); } catch { throw invalid(); }
+  const loopback = LOOPBACK_HOSTS.has(url.hostname);
+  if (!(url.protocol === 'https:' || (url.protocol === 'http:' && loopback))
+    || url.username || url.password || url.search || url.hash) throw invalid();
+  return url.href.replace(/\/+$/, '');
+}
+
 // The owner statement keys this organization accepts (#753), as
 // `{ name, store, alg, fingerprint }`, or null when it declares none. The
 // profile validates them; a hand-written config is held to the same rule,
@@ -392,6 +412,7 @@ function validateSettings(config) {
   soulCoauthorDomainSetting(config);
   skillSearchAdapterSetting(config);
   ownerKeysSetting(config);
+  diagnosticsOtlpEndpointSetting(config);
   keydSignerSetting(config);
   rosterScope(config);
   validateFeatures(config);

@@ -119,11 +119,12 @@ function expirePrevious(dir, nowMs, retentionMs) {
 
 /**
  * A recorder for one component. `record(fields)` returns true when the event
- * was appended. `dropped()` is the count not yet recorded.
+ * was appended. `dropped()` is the count not yet recorded. `sink(event)`, if
+ * given, is called with each stored event after it is appended.
  */
 export function createDiagnostics({
   component, version = null, env = process.env, home = homedir(), now = () => new Date(),
-  maxFileBytes = DEFAULT_MAX_FILE_BYTES, retentionMs = DEFAULT_RETENTION_MS,
+  maxFileBytes = DEFAULT_MAX_FILE_BYTES, retentionMs = DEFAULT_RETENTION_MS, sink = null,
 } = {}) {
   let dropped = 0;
   const dir = diagnosticsDirectory({ env, home });
@@ -152,6 +153,9 @@ export function createDiagnostics({
       lines.push(JSON.stringify(event));
       append(`${lines.join('\n')}\n`);
       dropped = 0;
+      // An optional sink (the OTLP exporter) sees what was stored, after it
+      // was stored; it can neither block nor fail the record.
+      if (sink) { try { sink(event); } catch { /* best effort */ } }
       return true;
     } catch {
       dropped += 1;
