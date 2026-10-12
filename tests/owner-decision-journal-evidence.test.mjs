@@ -24,6 +24,24 @@ const invalid = (reason = 'owner-evidence-invalid') => ({ code: 'invalid-owner-d
 const byId = (id) => fixture.records.find((record) => record.id === id);
 const bytesOf = (vector) => Buffer.from(vector.canonicalJson);
 
+// The signed action each fixture transaction implies (the fixture carries
+// preparations, not actions): the operation's parameters as the daemon would
+// have validated them.
+function actionFor(id, p) {
+  const e = p.expected, reason = 'r';
+  let parameters;
+  if (['revision.approve', 'revision.reject'].includes(p.operation)) parameters = { proposalId: e.proposal.proposalId, expectedRevision: e.head.revision, reason };
+  else if (p.operation === 'revision.adopt') parameters = { stagingId: p.stage.stagingId, packageDigest: p.stage.contentDigest, expectedRevision: null, reason };
+  else if (p.operation === 'revision.edit') {
+    parameters = { stagingId: p.stage.stagingId, packageDigest: p.stage.contentDigest, expectedRevision: e.head.revision, reason, apply: e.destination !== null };
+  } else {
+    const mode = id.replace(/^wake-/, '').replace(/-preparation$/, '');
+    parameters = mode.startsWith('resume') ? { mode: 'resume', policy: mode.replace('resume-', '') }
+      : mode === 'webhook' ? { mode, stagingId: p.stage.stagingId, configurationDigest: p.stage.contentDigest, host: 'example.com' } : { mode };
+  }
+  return { v: 1, requestId: p.requestId, principal: p.principal, account: p.account, soul: p.soul, operation: p.operation, parameters };
+}
+
 test('the vendored effect evidence is the pinned copy and every record decodes to its exact bytes', () => {
   assert.equal(sha256(fs.readFileSync(FIXTURE_URL)), FIXTURE_SHA256);
   let decoded = 0;
@@ -45,12 +63,13 @@ test('every fixture transaction binds: entered and completed to their preparatio
     const preparation = decodePreparation(bytesOf(vector));
     const effects = fixture.records.filter(({ record }) => record.kind === 'effect' && record.requestId === preparation.requestId);
     const enteredVector = effects.find(({ record }) => record.phase === 'entered');
-    const receiptDigest = enteredVector.record.receiptDigest, apply = enteredVector.record.detail.apply === true;
-    const entered = bindEffect(decodeEffect(bytesOf(enteredVector)), { phase: 'entered', preparation, preparationDigest: vector.sha256, receiptDigest, apply });
+    const receiptDigest = enteredVector.record.receiptDigest, action = actionFor(vector.id, preparation);
+    bindPreparation(preparation, { acceptance: preparation, action });
+    const entered = bindEffect(decodeEffect(bytesOf(enteredVector)), { phase: 'entered', preparation, preparationDigest: vector.sha256, receiptDigest, action });
     bindEffect(decodeEffect(bytesOf(effects.find(({ record }) => record.phase === 'completed'))),
-      { phase: 'completed', preparation, preparationDigest: vector.sha256, receiptDigest, entered });
+      { phase: 'completed', preparation, preparationDigest: vector.sha256, receiptDigest, action, entered });
     const refused = effects.find(({ record }) => record.phase === 'refused');
-    if (refused) bindEffect(decodeEffect(bytesOf(refused)), { phase: 'refused', preparation, preparationDigest: vector.sha256, receiptDigest });
+    if (refused) bindEffect(decodeEffect(bytesOf(refused)), { phase: 'refused', preparation, preparationDigest: vector.sha256, receiptDigest, action });
     if (preparation.operation === 'cold-wake.set') assert.equal(entered.detail.beforeDigest, coldStateDigest(preparation.expected));
   }
 });
@@ -84,11 +103,13 @@ test('records outside the exact typed shapes refuse', () => {
 
 test('effect records bind to exactly their preparation, receipt and entered transition', () => {
   const pv = byId('approve-preparation'), preparation = decodePreparation(bytesOf(pv));
-  const ev = byId('approve-entered'), receiptDigest = ev.record.receiptDigest;
-  const base = { phase: 'entered', preparation, preparationDigest: pv.sha256, receiptDigest, apply: false };
+  const ev = byId('approve-entered'), receiptDigest = ev.record.receiptDigest, action = actionFor(pv.id, preparation);
+  const base = { phase: 'entered', preparation, preparationDigest: pv.sha256, receiptDigest, action };
   const entered = bindEffect(decodeEffect(bytesOf(ev)), base);
   const binding = invalid('owner-evidence-binding');
-  for (const options of [{ preparationDigest: 'f'.repeat(64) }, { receiptDigest: 'f'.repeat(64) }, { apply: true }, { phase: 'completed', entered }]) {
+  for (const options of [{ preparationDigest: 'f'.repeat(64) }, { receiptDigest: 'f'.repeat(64) }, { phase: 'completed', entered },
+    { action: { ...action, parameters: { ...action.parameters, proposalId: '44444444-4444-4444-8444-444444444444' } } },
+    { action: { ...action, parameters: { ...action.parameters, expectedRevision: `sha256:${'f'.repeat(64)}` } } }, { action: undefined }]) {
     assert.throws(() => bindEffect(decodeEffect(bytesOf(ev)), { ...base, ...options }), binding, JSON.stringify(Object.keys(options)));
   }
   for (const edit of [(r) => { r.effectId = '33333333-3333-4333-8333-333333333333'; }, (r) => { r.detail.afterRevision = r.detail.beforeRevision; },
@@ -101,8 +122,29 @@ test('effect records bind to exactly their preparation, receipt and entered tran
   assert.throws(() => bindEffect(completed, { ...base, phase: 'completed', entered }), binding);
   // A cold entry must start from the prepared typed state.
   const cp = byId('wake-on-preparation'), cold = decodePreparation(bytesOf(cp)), ce = structuredClone(byId('wake-on-entered').record);
+  const coldAction = actionFor(cp.id, cold), coldBase = { phase: 'entered', preparation: cold, preparationDigest: cp.sha256, receiptDigest: ce.receiptDigest };
+  bindEffect(ce, { ...coldBase, action: coldAction });
+  // The after state is what the action asks for: a different mode does not bind.
+  assert.throws(() => bindEffect(ce, { ...coldBase, action: { ...coldAction, parameters: { mode: 'off' } } }), binding);
   ce.detail.beforeDigest = 'f'.repeat(64);
-  assert.throws(() => bindEffect(ce, { phase: 'entered', preparation: cold, preparationDigest: cp.sha256, receiptDigest: ce.receiptDigest }), binding);
+  assert.throws(() => bindEffect(ce, { ...coldBase, action: coldAction }), binding);
+  // A completed cold record must name the requested setting and webhook.
+  const wv = byId('wake-webhook-preparation'), webhook = decodePreparation(bytesOf(wv)), wAction = actionFor(wv.id, webhook);
+  const wEntered = byId('wake-webhook-entered').record, wCompleted = structuredClone(byId('wake-webhook-completed').record);
+  const wBase = { preparation: webhook, preparationDigest: wv.sha256, receiptDigest: wEntered.receiptDigest, action: wAction };
+  bindEffect(wCompleted, { ...wBase, phase: 'completed', entered: wEntered });
+  for (const edit of [(r) => { r.detail.webhookDigest = null; }, (r) => { r.detail.settingsDigest = 'f'.repeat(64); }]) {
+    const record = structuredClone(wCompleted); edit(record);
+    assert.throws(() => bindEffect(record, { ...wBase, phase: 'completed', entered: wEntered }), binding);
+  }
+  // Adopt and edit must land exactly the staged package.
+  for (const id of ['adopt', 'edit-apply', 'edit-record']) {
+    const v = byId(`${id}-preparation`), p = decodePreparation(bytesOf(v)), a = actionFor(v.id, p);
+    const en = byId(`${id}-entered`).record, opts = { phase: 'entered', preparation: p, preparationDigest: v.sha256, receiptDigest: en.receiptDigest };
+    bindEffect(en, { ...opts, action: a });
+    assert.throws(() => bindEffect(en, { ...opts, action: { ...a, parameters: { ...a.parameters, packageDigest: 'e'.repeat(64) } } }), binding, id);
+    if (id.startsWith('edit')) assert.throws(() => bindEffect(en, { ...opts, action: { ...a, parameters: { ...a.parameters, apply: !a.parameters.apply } } }), binding, id);
+  }
 });
 
 // --- the store's typed graph, end to end on disk ---
@@ -195,6 +237,10 @@ test('before entry an inconsistent graph refuses; after entry it is only ever in
     ['a challenge that is not the preparation\'s', (tx, j) => { j.write('preparation'); j.write('prepared-challenge', Buffer.from('{}')); }],
     ['a check without its receipt', (tx, j) => { j.write('preparation'); j.write('prepared-challenge'); j.write('presence'); j.write('successful-check'); }],
     ['completed without entered', (tx, j) => { j.write('preparation'); j.write('completed'); }],
+    ['a preparation naming another proposal', (tx, j) => {
+      const p = JSON.parse(tx.slots.preparation); p.expected.proposal.proposalId = '44444444-4444-4444-8444-444444444444';
+      j.write('preparation', Buffer.from(canonicalJson(p)));
+    }],
     ['a preparation for another request time', (tx, j) => {
       const p = JSON.parse(tx.slots.preparation); p.acceptedAt += 1; j.write('preparation', Buffer.from(canonicalJson(p)));
     }],
@@ -214,6 +260,12 @@ test('before entry an inconsistent graph refuses; after entry it is only ever in
     ['entered with a pre-effect refusal beside it', (tx, j) => { j.write('pre-effect-refused'); j.write('completed'); j.write('linked-authoritative-event'); }],
     ['entered without the check', (tx, j) => { j.write('completed'); j.write('linked-authoritative-event'); }, ['successful-check']],
   ];
+  after.push(['a linked event recording another revision', (tx, j) => {
+    const event = JSON.parse(tx.slots['linked-authoritative-event']); event.revision = `sha256:${'e'.repeat(64)}`;
+    const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
+    const c = JSON.parse(tx.slots.completed); c.detail.journalRecordDigest = sha256(bytes);
+    j.write('completed', Buffer.from(canonicalJson(c))); j.write('linked-authoritative-event', bytes);
+  }]);
   for (const [name, damage, skip = []] of after) {
     await t.test(name, (tt) => {
       const tx = transaction(), j = journal(tt, tx);
@@ -223,6 +275,27 @@ test('before entry an inconsistent graph refuses; after entry it is only ever in
       assert.equal(result.state, 'indeterminate', name);
       assert.deepEqual(result.outcome, { code: 'effect-uncertain', effectDigest: null });
     });
+  }
+});
+
+test('a preparation must name exactly what the signed action names, for every variant', () => {
+  const binding = invalid('owner-evidence-binding');
+  const cases = {
+    'approve-preparation': [(a) => { a.parameters.proposalId = '44444444-4444-4444-8444-444444444444'; }, (a) => { a.parameters.expectedRevision = `sha256:${'f'.repeat(64)}`; }],
+    'reject-preparation': [(a) => { a.parameters.proposalId = '44444444-4444-4444-8444-444444444444'; }],
+    'adopt-preparation': [(a) => { a.parameters.expectedRevision = `sha256:${'a'.repeat(64)}`; }],
+    'edit-apply-preparation': [(a) => { a.parameters.expectedRevision = `sha256:${'f'.repeat(64)}`; }, (a) => { a.parameters.apply = false; }],
+    'wake-on-preparation': [(a) => { a.parameters = { mode: 'resume', policy: 'workspace' }; }, (a) => { a.parameters = { mode: 'sideways' }; }],
+    'wake-resume-workspace-preparation': [(a) => { a.parameters = { mode: 'on' }; }],
+    'wake-webhook-preparation': [(a) => { a.parameters.stagingId = '44444444-4444-4444-8444-444444444444'; }, (a) => { a.parameters.configurationDigest = 'e'.repeat(64); }],
+  };
+  for (const [id, edits] of Object.entries(cases)) {
+    const p = decodePreparation(bytesOf(byId(id)));
+    bindPreparation(p, { acceptance: p, action: actionFor(id, p) });
+    for (const edit of edits) {
+      const action = structuredClone(actionFor(id, p)); edit(action);
+      assert.throws(() => bindPreparation(p, { acceptance: p, action }), binding, `${id} ${JSON.stringify(action.parameters)}`);
+    }
   }
 });
 

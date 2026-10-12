@@ -243,6 +243,17 @@ Nothing here writes, applies, verifies a signature or grants authority.
 
 The store reads each request as one graph.
 
+Every binding comes from the signed action:
+- the preparation's expected proposal, head and destination must be the ones
+  the action names;
+- `entered` must describe the transition to exactly what the action asks for:
+  the approved proposal revision, `sha256:<packageDigest>` for adopt and edit,
+  or for cold-wake the requested setting and webhook, with `settingsDigest`
+  checked as well;
+- the linked event's identifiers come from the action and acceptance, never
+  from the preparation, and a revision event must record the completed
+  `afterRevision`.
+
 **Before any effect has entered**, every slot is either empty or a committed
 typed record bound to this request, and the graph is one of these phases:
 

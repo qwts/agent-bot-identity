@@ -107,7 +107,20 @@ export function bindPreparation(p, { acceptance, action }) {
     if (p.stage === null || p.stage.stagingId !== parameters.stagingId || p.stage.kind !== (webhook ? 'webhook' : 'package')
       || p.stage.contentDigest !== (webhook ? parameters.configurationDigest : parameters.packageDigest)) fail('owner-evidence-binding');
   } else if (p.stage !== null) fail('owner-evidence-binding');
-  if (p.operation === 'revision.edit' && (p.expected.destination !== null) !== (parameters.apply === true)) fail('owner-evidence-binding');
+  // The prepared expectation must be the one the signed action names.
+  const e = p.expected;
+  if (['revision.approve', 'revision.reject'].includes(p.operation)) {
+    if (e.proposal.proposalId !== parameters.proposalId || e.head.revision !== parameters.expectedRevision) fail('owner-evidence-binding');
+  } else if (p.operation === 'revision.adopt') {
+    if (parameters.expectedRevision !== null || e.head !== null) fail('owner-evidence-binding');
+  } else if (p.operation === 'revision.edit') {
+    if (e.head.revision !== parameters.expectedRevision || (e.destination !== null) !== (parameters.apply === true)) fail('owner-evidence-binding');
+  } else {
+    // Resume context is bound exactly when the current or desired mode is resume.
+    if (!coldSetting(desiredSetting(parameters)) || (e.resume !== null) !== (parameters.mode === 'resume' || e.setting.mode === 'resume')) {
+      fail('owner-evidence-binding');
+    }
+  }
   const deadlines = [p.acceptedAt + WINDOW, p.preparedAt + WINDOW, ...(p.stage ? [p.stage.expiresAt] : [])];
   if (!deadlines.every(Number.isSafeInteger) || p.exp !== Math.min(...deadlines)
     || p.preparedAt < Math.max(0, p.acceptedAt - 30)) fail('owner-evidence-binding');
@@ -164,15 +177,21 @@ export function decodeEffect(bytes) {
   return r;
 }
 
+// The cold-wake setting a `cold-wake.set` action asks for.
+function desiredSetting(parameters) {
+  return parameters.mode === 'resume' ? { mode: 'resume', policy: parameters.policy } : { mode: parameters.mode };
+}
+
 // The SHA-256 of the typed cold-wake state, as before/after digests use it.
 export function coldStateDigest({ setting, webhookDigest, resume }) {
   return sha256(canonicalJson({ v: 1, setting, webhookDigest, resume }));
 }
 
 // One effect record belongs to exactly this preparation and receipt, in the
-// phase expected; entered must describe the prepared expectation, and
-// completed must repeat its entered record's transition.
-export function bindEffect(r, { phase, preparation, preparationDigest, receiptDigest, entered = null, apply = false }) {
+// phase expected. Entered must describe the transition from the prepared
+// expectation to exactly what the signed action asks for, and completed must
+// repeat its entered record's transition. `action` is the original action.
+export function bindEffect(r, { phase, preparation, preparationDigest, receiptDigest, action, entered = null }) {
   if (r.phase !== phase || r.requestId !== preparation.requestId || r.payloadDigest !== preparation.payloadDigest
     || r.preparationDigest !== preparationDigest || r.effectId !== preparation.effectId) fail('owner-evidence-binding');
   if (phase === 'refused') {
@@ -180,15 +199,23 @@ export function bindEffect(r, { phase, preparation, preparationDigest, receiptDi
     return r;
   }
   if (r.receiptDigest !== receiptDigest) fail('owner-evidence-binding');
-  const d = r.detail, e = preparation.expected;
+  const d = r.detail, e = preparation.expected, parameters = action?.parameters;
+  if (!plain(parameters) || action.requestId !== preparation.requestId || action.operation !== preparation.operation) fail('owner-evidence-binding');
   if (preparation.operation === 'cold-wake.set') {
-    if (d.kind !== 'cold-wake' || d.beforeDigest !== coldStateDigest(e)) fail('owner-evidence-binding');
-    if (phase === 'completed' && (d.beforeDigest !== entered.detail.beforeDigest || d.afterDigest !== entered.detail.afterDigest)) fail('owner-evidence-binding');
+    const desired = desiredSetting(parameters), webhookDigest = desired.mode === 'webhook' ? parameters.configurationDigest : null;
+    if (d.kind !== 'cold-wake' || d.beforeDigest !== coldStateDigest(e)
+      || d.afterDigest !== coldStateDigest({ setting: desired, webhookDigest, resume: e.resume })) fail('owner-evidence-binding');
+    if (phase === 'completed' && (d.beforeDigest !== entered.detail.beforeDigest || d.afterDigest !== entered.detail.afterDigest
+      || d.settingsDigest !== sha256(canonicalJson(desired)) || d.webhookDigest !== webhookDigest)) fail('owner-evidence-binding');
     return r;
   }
-  if (d.kind !== 'revision' || d.beforeRevision !== (e.head?.revision ?? null) || d.proposalId !== (e.proposal?.proposalId ?? null)) fail('owner-evidence-binding');
+  const named = ['revision.approve', 'revision.reject'].includes(preparation.operation) ? parameters.proposalId : null;
+  if (d.kind !== 'revision' || d.beforeRevision !== (e.head?.revision ?? null) || d.beforeRevision !== (parameters.expectedRevision ?? null)
+    || d.proposalId !== named || d.proposalId !== (e.proposal?.proposalId ?? null)) fail('owner-evidence-binding');
   if (preparation.operation === 'revision.approve' && d.afterRevision !== e.proposal.revision) fail('owner-evidence-binding');
   if (preparation.operation === 'revision.reject' && d.afterRevision !== d.beforeRevision) fail('owner-evidence-binding');
+  if (['revision.adopt', 'revision.edit'].includes(preparation.operation) && d.afterRevision !== `sha256:${parameters.packageDigest}`) fail('owner-evidence-binding');
+  const apply = preparation.operation === 'revision.edit' && parameters.apply === true;
   if (phase === 'entered') {
     if (d.apply !== apply) fail('owner-evidence-binding');
   } else if (d.beforeRevision !== entered.detail.beforeRevision || d.afterRevision !== entered.detail.afterRevision

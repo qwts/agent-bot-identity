@@ -302,7 +302,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
   }
 
   function preEffectGraph(decode, saved) {
-    const { slots, acceptance, preparation, preparationDigest, receiptDigest, typed } = evidence(decode, saved);
+    const { slots, acceptance, action, preparation, preparationDigest, receiptDigest, typed } = evidence(decode, saved);
     // Nothing after entry can exist without it; pairs and the local outcome
     // belong to later phases.
     for (const slot of ['completed', 'observation-pair', 'terminal-pair', 'linked-authoritative-event', 'local-lifecycle-outcome']) {
@@ -320,7 +320,7 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     }
     if (slots['pre-effect-refused']) {
       const refused = typed(() => bindEffect(decodeEffect(slots['pre-effect-refused']),
-        { phase: 'refused', preparation, preparationDigest, receiptDigest }));
+        { phase: 'refused', preparation, preparationDigest, receiptDigest, action }));
       return { state: 'refused', refusal: { code: refused.detail.code, effectDigest: effectDigest(slots['pre-effect-refused']) } };
     }
     if (slots['successful-check']) return { state: 'released' };
@@ -336,18 +336,20 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       || !slots.presence || !slots.receipt || !slots['successful-check'] || slots['pre-effect-refused'] || !slots.entered || !slots.completed
       || slots['observation-pair'] || slots['terminal-pair'] || slots['local-lifecycle-outcome']) fail();
     decodeSuccessfulCheck(slots['successful-check'], { acceptance, receiptDigest });
-    const apply = preparation.operation === 'revision.edit' && action.parameters.apply === true;
-    const entered = bindEffect(decodeEffect(slots.entered), { phase: 'entered', preparation, preparationDigest, receiptDigest, apply });
-    const completed = bindEffect(decodeEffect(slots.completed), { phase: 'completed', preparation, preparationDigest, receiptDigest, entered });
+    const entered = bindEffect(decodeEffect(slots.entered), { phase: 'entered', preparation, preparationDigest, receiptDigest, action });
+    const completed = bindEffect(decodeEffect(slots.completed), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
     if (preparation.operation === 'cold-wake.set') {
       if (slots['linked-authoritative-event']) fail();
     } else {
       if (!slots['linked-authoritative-event']) fail();
-      verifyLinkedEvent(slots['linked-authoritative-event'], {
-        operation: preparation.operation, journalBytes: slots['linked-authoritative-event'],
-        journalRecordDigest: completed.detail.journalRecordDigest, proposalId: preparation.expected.proposal?.proposalId,
-        linkage: { requestId: preparation.requestId, payloadDigest: preparation.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest },
+      // Identifiers come from the signed action and acceptance, never from
+      // the preparation, and a revision event must record the completed revision.
+      const event = verifyLinkedEvent(slots['linked-authoritative-event'], {
+        operation: action.operation, journalBytes: slots['linked-authoritative-event'],
+        journalRecordDigest: completed.detail.journalRecordDigest, proposalId: action.parameters.proposalId,
+        linkage: { requestId: acceptance.requestId, payloadDigest: acceptance.payloadDigest, receiptDigest, effectId: preparation.effectId, preparationDigest },
       });
+      if (event.kind === 'revision' && event.revision !== completed.detail.afterRevision) fail();
     }
     return { state: 'applied', outcome: { code: 'applied', effectDigest: effectDigest(slots.completed) } };
   }
