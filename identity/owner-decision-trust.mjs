@@ -141,7 +141,14 @@ function legacyPresenceRaw(injected, { env, home }) {
     return raw.length === 32 ? raw : null;
   };
   if (injected !== undefined) return injected === null ? null : decode(injected);
-  try { return decode(fs.readFileSync(presencePinPath({ env, home }), 'utf8').trim()); } catch { return null; }
+  // No-follow and non-blocking, then a regular file only: a FIFO or anything
+  // else at the cache path is no pin, never a hang.
+  let fd;
+  try {
+    fd = fs.openSync(presencePinPath({ env, home }), O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (!fs.fstatSync(fd).isFile()) return null;
+    return decode(fs.readFileSync(fd, 'utf8').trim());
+  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 const isLegacyPresence = (pin, legacy) => legacy !== null && Buffer.from(pin.publicKey, 'base64url').equals(legacy);
 
@@ -216,7 +223,7 @@ function assertAncestors(io, dir) {
 }
 
 function ownedDirectory(io, dir) {
-  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(dir);
     if (!held.isDirectory() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o700
@@ -225,7 +232,7 @@ function ownedDirectory(io, dir) {
 }
 
 function flushDirectory(io, dir) {
-  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  const fd = io.openSync(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK);
   try { io.fsyncSync(fd); } catch { fail('owner-trust-flush'); } finally { io.closeSync(fd); }
 }
 
@@ -246,7 +253,8 @@ function listBounded(io, dir, max) {
 // `max` bytes and flushes it (the explicit recovery flush), then requires the
 // bytes to be unchanged. Reads never create.
 function readFlushed(io, file, max) {
-  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW);
+  // O_NONBLOCK: a FIFO opens at once and fails the regular-file check.
+  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(file);
     if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || held.nlink !== 1
@@ -265,7 +273,7 @@ function readFlushed(io, file, max) {
 // name, and within `max` bytes. Used by reconcile, where a pending name may
 // legitimately have a second link.
 function readHeld(io, file, max, links) {
-  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW);
+  const fd = io.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   try {
     const held = io.fstatSync(fd), named = io.lstatSync(file);
     if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o7777) !== 0o600 || !links.includes(held.nlink)
@@ -565,7 +573,7 @@ function vouchKeyIdentity({ env, home }) {
   const file = vouchKeyPath(vouchStateDir({ env, home }));
   let fd;
   try {
-    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW);
+    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.uid !== process.getuid()) throw new Error('untrusted');
     const bytes = fs.readFileSync(fd);
@@ -661,7 +669,8 @@ export function createOwnerDecisionTrustWriter({ root, io = fs, fault = () => {}
     const line = Buffer.concat([encode(entry, TRUST_LIMITS.auditLine - 1), Buffer.from('\n')]);
     let created = false;
     try { io.lstatSync(file); } catch (error) { if (error?.code !== 'ENOENT') throw error; created = true; }
-    const fd = io.openSync(file, O_WRONLY | O_APPEND | O_NOFOLLOW | (created ? O_CREAT | O_EXCL : 0), 0o600);
+    // O_NONBLOCK: a FIFO at the audit path fails the open at once (ENXIO).
+    const fd = io.openSync(file, O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | (created ? O_CREAT | O_EXCL : 0), 0o600);
     try {
       if (io.writeSync(fd, line) !== line.length) fail('owner-trust-io');
       fault(`${step}:audit-written`);

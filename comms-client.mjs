@@ -29,6 +29,8 @@ import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
+  constants as fsConstants,
+  fstatSync,
   openSync,
   lstatSync,
   mkdirSync,
@@ -119,6 +121,17 @@ function checkCredentialShape(value) {
   return value;
 }
 
+// POSIX: non-blocking, then a regular file only, read from the same
+// descriptor; a FIFO or other special file refuses at once. Links are still
+// followed, as before (owner and mode custody is noted for before wiring).
+function readRegularFile(file) {
+  const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('not a regular file');
+    return readFileSync(fd, 'utf8');
+  } finally { closeSync(fd); }
+}
+
 export function loadCommsCredential({ env = process.env, home = homedir(), platform = process.platform,
   windowsCustody = null } = {}) {
   const file = commsCredentialFile({ env, home });
@@ -138,7 +151,7 @@ export function loadCommsCredential({ env = process.env, home = homedir(), platf
       custody.assertOwnedDirectory(path.dirname(file), sid);
       custody.assertOwnedFile(file, sid);
     }
-    raw = readFileSync(file, 'utf8');
+    raw = platform === 'win32' ? readFileSync(file, 'utf8') : readRegularFile(file);
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
     fail('unpaired', 'the saved comms credential could not be read; pair again');

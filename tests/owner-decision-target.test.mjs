@@ -2,8 +2,9 @@
 // every target the daemon cannot act for is the same early refusal, after
 // exactly one census read and one identity read, through the only export.
 // Reads are counted by instrumenting the node builtins (never by injecting
-// anything into production code): the census reads the population file with
-// fs.readFileSync, and the identity read runs the identity entry with
+// anything into production code): the census opens the population file with
+// fs.openSync (non-blocking, then reads that descriptor), and the identity
+// read runs the identity entry with
 // child_process.execFileSync.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -52,10 +53,10 @@ function fixtures(t) {
 // Runs the real resolver while counting its census and identity reads.
 function counted({ file, stateDir }, request, options = {}) {
   const reads = { census: 0, identity: [] };
-  const readFileSync = fs.readFileSync, execFileSync = childProcess.execFileSync;
-  fs.readFileSync = function counting(target, ...rest) {
+  const openSync = fs.openSync, execFileSync = childProcess.execFileSync;
+  fs.openSync = function counting(target, ...rest) {
     if (target === file) reads.census++;
-    return readFileSync.call(this, target, ...rest);
+    return openSync.call(this, target, ...rest);
   };
   childProcess.execFileSync = function counting(command, args, options) {
     if (Array.isArray(args) && args.at(-1) === 'read') reads.identity.push(JSON.parse(options.input).id);
@@ -65,7 +66,7 @@ function counted({ file, stateDir }, request, options = {}) {
   try {
     return { result: resolveOwnerDecisionTarget(request, { daemonAccount, file, stateDir, ...options }), reads };
   } finally {
-    fs.readFileSync = readFileSync; childProcess.execFileSync = execFileSync;
+    fs.openSync = openSync; childProcess.execFileSync = execFileSync;
     syncBuiltinESMExports();
   }
 }

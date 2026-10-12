@@ -22,15 +22,18 @@ import process from 'node:process';
 export const OWNER_DECISION_REVISION_PORT_KIND = 'owner-decision-revision-read-v1';
 export const REVISION_RECORD_MAX_BYTES = 16384;
 const SOUL = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const { O_RDONLY, O_NOFOLLOW } = fs.constants;
+const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
 
 const refuse = () => { throw Object.assign(new Error('owner decision revision record unavailable'), { code: 'owner-decision-revision-read' }); };
 const owned = (stat) => stat.uid === process.getuid() && (stat.mode & 0o022) === 0;
 
+// One fixed-ancestry directory's identity: a real owned directory with no
+// group or world write. Returned so the walk can be repeated after the read.
 function ownedDirectory(dir) {
   let stat;
   try { stat = fs.lstatSync(dir); } catch { refuse(); }
   if (!stat.isDirectory() || stat.isSymbolicLink() || !owned(stat)) refuse();
+  return `${stat.dev}:${stat.ino}`;
 }
 
 export function createOwnerDecisionRevisionPort({ stateDir } = {}) {
@@ -40,15 +43,18 @@ export function createOwnerDecisionRevisionPort({ stateDir } = {}) {
     read(agentId, seq) {
       if (typeof agentId !== 'string' || !SOUL.test(agentId) || !Number.isSafeInteger(seq) || seq < 0 || seq > 9_999_999_999) refuse();
       const revisions = path.join(stateDir, 'soul-revisions'), agentDir = path.join(revisions, agentId);
-      for (const dir of [stateDir, revisions, agentDir]) ownedDirectory(dir);
+      const ancestry = [stateDir, revisions, agentDir];
+      const identities = ancestry.map(ownedDirectory).join('|');
       const file = path.join(agentDir, `${String(seq).padStart(10, '0')}.json`);
       // The name's identity now, then the no-follow open must be that file.
+      // O_NONBLOCK: a FIFO at the path (even one swapped in after the lstat)
+      // opens at once and then fails the regular-file check, never blocking.
       let named, fd;
       try { named = fs.lstatSync(file); } catch { refuse(); }
-      try { fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW); } catch { refuse(); }
+      try { fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK); } catch { refuse(); }
       try {
         const before = fs.fstatSync(fd);
-        if (!before.isFile() || !owned(before) || before.dev !== named.dev || before.ino !== named.ino
+        if (!before.isFile() || before.nlink !== 1 || !owned(before) || before.dev !== named.dev || before.ino !== named.ino
           || before.size < 1 || before.size > REVISION_RECORD_MAX_BYTES) refuse();
         const bytes = Buffer.alloc(before.size);
         let offset = 0;
@@ -58,10 +64,11 @@ export function createOwnerDecisionRevisionPort({ stateDir } = {}) {
           offset += read;
         }
         // Nothing changed while reading: the same size and mtime, still one
-        // link, and still the file the name points to.
+        // link, still owned with no group or world write, still the file the
+        // name points to, and the same fixed ancestry directories.
         const after = fs.fstatSync(fd), now = fs.lstatSync(file);
-        if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.nlink !== 1
-          || now.dev !== before.dev || now.ino !== before.ino) refuse();
+        if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.nlink !== 1 || !owned(after)
+          || now.dev !== before.dev || now.ino !== before.ino || ancestry.map(ownedDirectory).join('|') !== identities) refuse();
         return bytes;
       } finally { fs.closeSync(fd); }
     },
