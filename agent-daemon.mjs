@@ -109,7 +109,7 @@ import { diagnosticsOtlpEndpointSetting, isGateEnabled, loadConfig } from './con
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDiagnostics, runtimeVersion } from './diagnostics.mjs';
 import { createOtlpExporter, otlpHeaders } from './otlp-export.mjs';
-import { diagnosedApprovals, recordDaemonShutdown, recordDaemonStart, withTurnDiagnostics } from './daemon-diagnostics.mjs';
+import { diagnosedApprovals, recordCredentialRefresh, recordDaemonShutdown, recordDaemonStart, withTurnDiagnostics } from './daemon-diagnostics.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLaunchRefusal, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
@@ -397,6 +397,8 @@ export function createDaemonServer({
   grantLedger = createGrantLedger({ env, home, now }),
   grantActor = createGrantActor({ env }),
   computerUse = createComputerUseActivity({ now }),
+  // The daemon's diagnostics recorder (#983); credential refreshes record into it.
+  diagnostics = null,
   // #253 replaces this with its persistent lookup. The default reads the
   // in-memory registry and does not change how bindings are stored.
   lookupBinding: lookupBindingOverride = null,
@@ -700,6 +702,14 @@ export function createDaemonServer({
           if (url.search) throw Object.assign(new Error('Dream status accepts no query fields.'), { statusCode: 400 });
           sendJson(res, 200, server.dream.status());
         }
+        return;
+      }
+      if (route === 'POST /v0/credential') {
+        // A credential refresh's outcome for diagnostics (#983); the route,
+        // its receipts and its response are unchanged.
+        const startedAt = Date.now();
+        try { await handleIdentityRoute(route, req, res); } catch (error) { recordCredentialRefresh(diagnostics, { startedAt, error }); throw error; }
+        recordCredentialRefresh(diagnostics, { startedAt });
         return;
       }
       if (await handleIdentityRoute(route, req, res)) return;
@@ -2070,7 +2080,7 @@ async function serveDaemon({
     template: () => defaultTeamTemplate({ config: userConfig, env }),
     account,
   });
-  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns, asideRelay: relay });
+  server = createDaemonServer({ env, home, config, now, comms, executor, taskReporter, teamStarter, computerUse, turns, asideRelay: relay, diagnostics });
   dream = createDreamService({ directory: path.join(path.dirname(daemonStateFile({ env, home })), 'dream'),
     turns, executorFor, isPaused, now, approvals: diagnosedApprovals(request => server.interaction.requestTurnApproval(request), { diagnostics }),
     verifyRevisionEvidence: request => verifyDreamRevisionEvidence({ ...request, stateDir: stateDirectory({ env, home }) }),

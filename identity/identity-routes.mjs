@@ -96,6 +96,8 @@ export function createIdentityRoutes({
             { event: 'credential-mint', operation: 'tier1-app-token', decision: 'denied', reason: 'no-live-binding' },
             { env, home, now },
           );
+          // Stable codes for diagnostics (#983); the response is unchanged.
+          error.code ??= 'credential-no-binding';
           throw error;
         }
         let grant;
@@ -112,7 +114,7 @@ export function createIdentityRoutes({
             decision: 'failed',
             reason: 'identity-unreadable',
           }, { env, home, now });
-          throw error;
+          throw Object.assign(error, { code: 'credential-identity-unreadable' });
         }
         // A retired soul's binding proof is not authority to mint (#775):
         // retirement ends its App use even before its bindings are swept.
@@ -125,7 +127,7 @@ export function createIdentityRoutes({
             ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
             reason: 'soul-retired',
           }, { env, home, now });
-          throw Object.assign(new Error('this soul is retired'), { statusCode: 409 });
+          throw Object.assign(new Error('this soul is retired'), { statusCode: 409, code: 'credential-soul-retired' });
         }
         // The agent path mints only for a conversation (ENG-0081 amendment
         // decision 2): the binding's transcript locator, or the one the
@@ -139,7 +141,7 @@ export function createIdentityRoutes({
             ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
             reason: 'no-transcript-locator',
           }, { env, home, now });
-          throw Object.assign(new Error('this soul has no transcript locator yet; bind it to its conversation first'), { statusCode: 409 });
+          throw Object.assign(new Error('this soul has no transcript locator yet; bind it to its conversation first'), { statusCode: 409, code: 'credential-no-transcript' });
         }
         // The add-on gate decides, not the record: a soul that carries a
         // github field gets no App token while github-identity is off.
@@ -153,7 +155,7 @@ export function createIdentityRoutes({
             ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
             reason: githubOn ? 'no-github-app' : 'github-identity-off',
           }, { env, home, now });
-          throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409 });
+          throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409, code: githubOn ? 'credential-no-app' : 'credential-github-off' });
         }
         try {
           grant = await mintImpl({

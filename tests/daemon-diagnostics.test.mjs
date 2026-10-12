@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { readDiagnostics } from '../diagnostics.mjs';
 import {
-  diagnosedApprovals, recordDaemonShutdown, recordDaemonStart, turnFailureCode, withTurnDiagnostics,
+  diagnosedApprovals, recordCredentialRefresh, recordDaemonShutdown, recordDaemonStart, turnFailureCode, withTurnDiagnostics,
 } from '../daemon-diagnostics.mjs';
 import { runDaemon } from '../agent-daemon.mjs';
 
@@ -123,4 +123,18 @@ test('a daemon that fails before it is ready leaves a coded, redacted start even
   ]);
   assert.match(events[0].detail, /daemon port must be an integer/);
   assert.equal(JSON.stringify(events).includes(home), false);
+});
+
+test('credential refresh codes are registered with the kinds the recorder gives them', () => {
+  const kinds = new Map(REGISTRY.codes.map((entry) => [entry.code, entry.kind]));
+  for (const code of ['credential-no-binding', 'credential-soul-retired', 'credential-no-transcript', 'credential-github-off', 'credential-no-app']) {
+    const { events, diagnostics } = recorder();
+    recordCredentialRefresh(diagnostics, { startedAt: 0, nowMs: () => 1, error: Object.assign(new Error('x'), { code }) });
+    assert.deepEqual([events[0].outcome, events[0].code, kinds.get(code)], ['refused', code, 'refusal']);
+  }
+  for (const [error, code] of [[Object.assign(new Error('x'), { code: 'credential-identity-unreadable' }), 'credential-identity-unreadable'], [new Error('network'), 'credential-mint-failed']]) {
+    const { events, diagnostics } = recorder();
+    recordCredentialRefresh(diagnostics, { startedAt: 0, nowMs: () => 1, error });
+    assert.deepEqual([events[0].outcome, events[0].code, kinds.get(code)], ['failed', code, 'failure']);
+  }
 });
