@@ -51,6 +51,7 @@ import {
   isWindowsSid,
   readWindowsBrokerPin,
 } from './comms-windows.mjs';
+import { OWNER_DECISION_EVENTS, ownerDecisionIntakeBound, watchIdentityFromReady } from './owner-decision-watch.mjs';
 
 export const COMMS_PROTOCOL_VERSION = 1;
 export const COMMS_MAX_LINE_BYTES = 128 * 1024;
@@ -772,7 +773,13 @@ export function createCommsSupervisor({
   platform = process.platform,
   windowsCustody = null,
   windowsCreateConnection = null,
+  // Expected owner-decision daemonKey (agent-comms#77): SHA-256 of this
+  // daemon's vouch SPKI DER. Without it no watch identity is ever bound.
+  daemonKey = null,
 } = {}) {
+  // The current socket's owner-decision watch identity, recorded at `ready`
+  // and dropped with the socket. In memory only; never persisted or replayed.
+  let watchIdentity = null;
   const state = {
     connected: false,
     lastWakeAt: null,
@@ -809,12 +816,27 @@ export function createCommsSupervisor({
 
   async function watchOnce(pair, signal) {
     const client = clientFactory(clientOptions(paths, pair, windowsOptions));
+    // The owner-decision identity binds at the first ready of this socket only.
+    let identityDecided = false;
     await client.stream(
       { op: 'account-watch', auth: { daemon: pair.account, secret: pair.secret } },
       (event) => {
         if (event?.event === 'ready' || event?.ok === true) {
           state.connected = true;
           state.lastError = null;
+          if (identityDecided) {
+            // A repeat ready never replaces or clears this socket's binding.
+            // (A bare {ok:true} never reaches this handler on a stream: the
+            // connection layer consumes it.)
+            noteError(Object.assign(new Error('owner-decision watch identity not rebound: repeated ready on the same watch'), { code: 'owner-watch-identity' }));
+          } else {
+            identityDecided = true;
+            // A refused identity is surfaced, never silent, and never stops
+            // the watch: wake and launch continue without owner intake.
+            if (event?.event === 'ready') {
+              try { watchIdentity = watchIdentityFromReady(event, { daemonKey }); } catch (error) { noteError(error); }
+            }
+          }
           backoffMs = COMMS_WATCH_MIN_BACKOFF_MS;
           Promise.resolve().then(() => onLaunch?.recover?.(launchPorts(pair))).catch(noteError);
           return;
@@ -825,6 +847,12 @@ export function createCommsSupervisor({
             : launchPorts(pair).report({ requestId: event.requestId, status: 'failed', agentId: null,
               detail: 'daemon launch handler is unavailable' })).catch(noteError);
           return;
+        }
+        // Owner-decision relay intake is disabled. One that is not bound to
+        // this socket's identity is surfaced, never silently ignored; bound or
+        // not, it is dropped below with every other non-wake event.
+        if (OWNER_DECISION_EVENTS.includes(event?.event) && !ownerDecisionIntakeBound(event, watchIdentity)) {
+          noteError(Object.assign(new Error(`owner-decision event not bound to this watch: ${event.event}`), { code: 'owner-watch-identity' }));
         }
         if (event?.event !== 'wake') return;
         let wake;
@@ -872,6 +900,7 @@ export function createCommsSupervisor({
       } catch (error) {
         if (!stopped) noteError(error);
       }
+      watchIdentity = null;
       state.connected = false;
       if (stopped) break;
       state.reconnects += 1;
@@ -883,6 +912,11 @@ export function createCommsSupervisor({
   return {
     getState() {
       return { ...state };
+    },
+    // The live socket's bound owner-decision watch identity, or null. Not
+    // part of status output.
+    watchIdentity() {
+      return watchIdentity;
     },
     report(fields) {
       const pair = credential ?? loadCommsCredential({ env, home });
