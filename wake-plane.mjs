@@ -199,7 +199,7 @@ export function acpExecutorFor({
   identities, policy, baseEnv, onHarnessSession = null, createExecutor = createAcpExecutor,
   interactionStore = { env: baseEnv },
   identityFor = null,
-  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, reasoningEffortFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null, log = null,
+  commsFor = () => true, modeFor = () => 'safe', modelFor = () => null, reasoningEffortFor = () => null, claudeOptionsFor = () => null, onModels = null, reachEnv = {}, keydFor = () => null, harnessDirsFor = () => [], runtimeEnvFor = null, toolHomeEnvFor = null, providerEnvFor = null, log = null,
 }) {
   return ({ agentId, harness, cwd, env }) => {
     const identity = identities(agentId);
@@ -225,11 +225,12 @@ export function acpExecutorFor({
       forward: routed,
     }), ...(keyd ? [keydMcpServerEntry({ bin: keyd, binding, env: mcpEnv, forward: routed })] : [])];
     // The turn's executor in the mode this turn runs in.
-    const build = (mode) => {
+    const build = (mode, claudeOptions = null) => {
       const executor = createExecutor({
         harness,
         identity: { app, agentId },
         mode,
+        claudeOptions,
         model: modelFor(agentId, { harness, cwd }),
         reasoningEffort: reasoningEffortFor(agentId, { harness, cwd }),
         identityFor,
@@ -257,9 +258,16 @@ export function acpExecutorFor({
     // Read once per turn: a mode change applies to the next turn. The turn's
     // harness and cwd select the repo and package layers (#379). A loosening
     // the owner is asked about resolves later; the turn waits for the answer.
+    // Claude allow rules are checked in the mode the turn runs in (#379); a
+    // question about them, too, is answered before the turn starts.
     const mode = modeFor(agentId, { harness, cwd });
-    if (typeof mode?.then !== 'function') return build(mode);
-    return async (input) => build(await mode)(input);
+    const optionsFor = (resolved) => claudeOptionsFor(agentId, { harness, cwd, mode: resolved });
+    if (typeof mode?.then !== 'function') {
+      const options = optionsFor(mode);
+      if (typeof options?.then !== 'function') return build(mode, options);
+      return async (input) => build(mode, await options)(input);
+    }
+    return async (input) => { const resolved = await mode; return build(resolved, await optionsFor(resolved))(input); };
   };
 }
 

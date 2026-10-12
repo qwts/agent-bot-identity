@@ -691,10 +691,40 @@ for those depends on the adapter that runs it:
   before the daemon is asked
   ([`settings.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/settings.ts#L446-L470),
   [`tools.ts`](https://github.com/zed-industries/claude-code-acp/blob/e5b836820bcc1350699d53c488bd1a1a7223d86c/src/tools.ts#L787-L831)).
-  Either way, a declared `deny` holds on both paths, and a matching `allow`
-  rule runs the tool without the daemon's approval queue, whatever the mode;
-  in a repo, the repo's own rules do the same. This is not yet
-  under the ask-before-loosening rule above (open on #379).
+  The daemon offers no filesystem or terminal, so no `mcp__acp__*` tools
+  exist on its turns and the CLI's own evaluation decides. A declared `deny`
+  holds on both paths. A matching `allow` rule would run the tool without the
+  daemon's approval queue, so on a safe daemon turn allow rules are a
+  loosening under the rule above (owner decision, 2026-10-11;
+  `daemonClaudeOptionsFor` in `agent-daemon.mjs`):
+  - The rules are the `permissions.allow` entries in the working directory's
+    `.claude/settings.json` and `.claude/settings.local.json`: the package's
+    rendering in the soul's home (layer `soul`), the repo's own files
+    elsewhere (layer `repo`). The daemon asks the owner once per soul and set
+    of declaring files, through the same keyd prompt, receipt
+    (`operation: loosen-allow-rules`) and kept owner-decided proposal (tool
+    `permission-rules:allow`) as a loosening of the mode. The digest covers
+    each file's sha256, so any change to them asks again.
+  - **Approved:** the rules apply as written.
+  - **Declined, or keyd cannot ask** (logged as
+    `permission-allow-rules-need-owner`): the session gets one more settings
+    layer through the SDK's `extraArgs` (`--settings`), which lists each of
+    those rules under `permissions.ask`. Claude evaluates `ask` before
+    `allow` ([permission settings](https://code.claude.com/docs/en/settings#permission-settings)),
+    so each such call reaches the daemon's approval queue. `deny` and `env`
+    still come from the files. Nothing is kept when keyd cannot ask, so the
+    next turn asks again.
+  - A settings file the daemon cannot read as a regular file under 1 MiB
+    (opened through a link as Claude does, but without blocking, so a FIFO or
+    device never stalls the daemon) has unknown rules that no `ask` list is
+    sure to cover. It is never put to the owner, and the safe turn does not
+    start; the log says which file.
+  - Autopilot turns are not checked, since every call is allowed then; a
+    direct open reads the files as they are, without this check.
+  The SDK option is `extraArgs` in `@anthropic-ai/claude-agent-sdk` 0.2.44,
+  the version the pinned adapter depends on. It passes CLI flags through, and
+  the adapter spreads the session's `_meta.claudeCode.options` into the SDK
+  options it builds.
 - **OpenCode.** A daemon turn runs as the daemon's own `agent-bot` agent,
   whose ruleset (`OPENCODE_DAEMON_PERMISSION` in `acp-registry.mjs`) starts
   with `"*": "ask"`. OpenCode appends an agent's rules after the config's

@@ -96,7 +96,7 @@ import { soulEnvironment, userToolDirs } from './shell-path.mjs';
 export { daemonStatus, joinLaunchedSoul, leaveLaunchedSoul, soulEnvironment, userToolDirs };
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
-import { resolveSoulMode } from './soul-mode.mjs';
+import { claudeAllowLayer, resolveSoulMode } from './soul-mode.mjs';
 import { identityAppSouls } from './identity-app-souls.mjs';
 import { runtimeProfileInfo } from './organization-profile.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
@@ -1450,8 +1450,8 @@ export const LOOSENING_TOOL = 'permission-mode:autopilot';
 const loosenedOperation = (agentId, { source, file, digest }) => operationDigest({ change: 'permission-mode', mode: 'autopilot', agentId, source, file, sha256: digest });
 
 // The owner's remembered answer for this exact loosening, or null.
-function rememberedLoosening(agentId, operation, { env, home }) {
-  const answers = listProposals({}, { env, home }).filter((proposal) => proposal.agentId === agentId && proposal.tool === LOOSENING_TOOL
+function rememberedLoosening(agentId, tool, operation, { env, home }) {
+  const answers = listProposals({}, { env, home }).filter((proposal) => proposal.agentId === agentId && proposal.tool === tool
     && proposal.operationDigest === operation && proposal.decidedBy === OWNER_DECIDER && ['approved', 'denied'].includes(proposal.status));
   return answers.at(-1)?.status ?? null;
 }
@@ -1463,6 +1463,35 @@ const noLooseningDialog = async () => { throw Object.assign(new Error('agent-bot
 // A person's no through keyd.
 const ownerDeclined = (error) => error?.code === 'owner-declined';
 
+// One owner question about a loosening: the remembered answer for this exact
+// operation, else keyd's prompt, receipted first and then kept. Returns
+// 'approved' or 'denied', or null when the owner could not be asked or the
+// answer could not be receipted, so the caller keeps the stricter setting and
+// the next turn asks again. `say` words the log lines.
+async function askOwnerToLoosen({ agentId, tool, operation, action, summary, receipt, say, ask, log, env, home, now }) {
+  let remembered = null;
+  try { remembered = rememberedLoosening(agentId, tool, operation, { env, home }); } catch { /* unreadable store: ask */ }
+  if (remembered) return remembered;
+  let decision;
+  let proof = null;
+  try { proof = await ask(action); decision = 'approved'; }
+  catch (error) {
+    if (!ownerDeclined(error)) { log(say.unavailable(error)); return null; }
+    decision = 'denied';
+  }
+  // The receipt comes first: an answer that cannot be receipted is neither
+  // kept nor applied.
+  try {
+    appendAuditReceipt({ event: 'soul-mode', agentId, ...receipt, decision: decision === 'approved' ? 'approved' : 'declined',
+      ...(proof?.method ? { reason: proof.method } : {}) }, { env, home, now });
+  } catch (error) { log(say.unreceipted(error)); return null; }
+  try {
+    const proposal = createProposal({ agentId, tool, operationDigest: operation, summary }, { env, home, now });
+    decideProposal(proposal.proposalId, { decision, decidedBy: OWNER_DECIDER }, { env, home, now });
+  } catch (error) { log(say.unkept(error)); }
+  return decision;
+}
+
 export function daemonModeFor({
   env = process.env, home = homedir(), config, now = () => new Date(),
   presence = keydPresenceWithoutDialog,
@@ -1472,35 +1501,17 @@ export function daemonModeFor({
   // One question per soul and digest at a time, however many turns start.
   const asking = new Map();
   const loosen = async (agentId, resolved) => {
-    const operation = loosenedOperation(agentId, resolved);
-    let remembered = null;
-    try { remembered = rememberedLoosening(agentId, operation, { env, home }); } catch { /* unreadable store: ask */ }
-    if (remembered) return remembered === 'approved' ? resolved.declared : resolved.mode;
-    const action = `soul mode ${agentId} autopilot ${resolved.source} sha256:${resolved.digest} ${resolved.file}`;
-    let decision;
-    let proof = null;
-    try { proof = await ask(action); decision = 'approved'; }
-    catch (error) {
-      if (!ownerDeclined(error)) {
-        log(`agent-bot daemon: ${resolved.code}: ${agentId}: the ${resolved.source} declares ${resolved.declared}; running ${resolved.mode}, the owner could not be asked (${error.message})`);
-        return resolved.mode;
-      }
-      decision = 'denied';
-    }
-    // The receipt comes first: an answer that cannot be receipted is neither
-    // kept nor applied, so the turn runs safe and the next turn asks again.
-    try {
-      appendAuditReceipt({ event: 'soul-mode', agentId, operation: 'loosen', decision: decision === 'approved' ? 'approved' : 'declined',
-        detail: `${resolved.source} sha256:${resolved.digest}`, ...(proof?.method ? { reason: proof.method } : {}) }, { env, home, now });
-    } catch (error) {
-      log(`agent-bot daemon: ${resolved.code}: ${agentId}: the owner's answer could not be receipted; running ${resolved.mode}, the next turn asks again (${error.message})`);
-      return resolved.mode;
-    }
-    try {
-      const proposal = createProposal({ agentId, tool: LOOSENING_TOOL, operationDigest: operation, summary: `run ${agentId} in autopilot as its ${resolved.source} declares` }, { env, home, now });
-      decideProposal(proposal.proposalId, { decision, decidedBy: OWNER_DECIDER }, { env, home, now });
-    } catch (error) { log(`agent-bot daemon: ${agentId}: the owner's answer on autopilot could not be kept; the next turn asks again (${error.message})`); }
-    return decision === 'approved' ? resolved.declared : resolved.mode;
+    const answer = await askOwnerToLoosen({ agentId, tool: LOOSENING_TOOL, operation: loosenedOperation(agentId, resolved),
+      action: `soul mode ${agentId} autopilot ${resolved.source} sha256:${resolved.digest} ${resolved.file}`,
+      summary: `run ${agentId} in autopilot as its ${resolved.source} declares`,
+      receipt: { operation: 'loosen', detail: `${resolved.source} sha256:${resolved.digest}` },
+      say: {
+        unavailable: (error) => `agent-bot daemon: ${resolved.code}: ${agentId}: the ${resolved.source} declares ${resolved.declared}; running ${resolved.mode}, the owner could not be asked (${error.message})`,
+        unreceipted: (error) => `agent-bot daemon: ${resolved.code}: ${agentId}: the owner's answer could not be receipted; running ${resolved.mode}, the next turn asks again (${error.message})`,
+        unkept: (error) => `agent-bot daemon: ${agentId}: the owner's answer on autopilot could not be kept; the next turn asks again (${error.message})`,
+      },
+      ask, log, env, home, now });
+    return answer === 'approved' ? resolved.declared : resolved.mode;
   };
   return (agentId, { harness = null, cwd = null } = {}) => {
     let soulDir = null;
@@ -1509,6 +1520,61 @@ export function daemonModeFor({
     if (!resolved.code) return resolved.mode;
     const key = `${agentId} ${resolved.source} ${resolved.file} ${resolved.digest}`;
     if (!asking.has(key)) asking.set(key, loosen(agentId, resolved).catch(() => resolved.mode).finally(() => asking.delete(key)));
+    return asking.get(key);
+  };
+}
+
+// Claude allow rules on a daemon turn (#379, owner decision 2026-10-11). In
+// safe mode, `permissions.allow` rules in the turn's project or local Claude
+// settings (claudeAllowLayer) would run matching tools without the daemon's
+// approval queue, so they go through the same ask-before-loosening question
+// as a declared autopilot, once per soul and set of declaring files (the
+// digest covers each file's sha256). Approved: the rules apply. Declined, or
+// nobody could ask: the turn passes Claude a `--settings` layer (the SDK's
+// `extraArgs`) that makes each of those rules `ask`, which Claude evaluates
+// before `allow`, so the call reaches the daemon. A file that could not be
+// read here has unknown rules that no `ask` list can be sure to cover, so it
+// is never put to the owner and the turn does not start. Autopilot turns are
+// not checked (nothing is asked then), and other harnesses get nothing.
+export const ALLOW_RULES_TOOL = 'permission-rules:allow';
+export const ALLOW_RULES_NEED_OWNER = 'permission-allow-rules-need-owner';
+const allowRulesOperation = (agentId, { source, files, digest }) => operationDigest({ change: 'permission-rules', effect: 'allow', agentId, source, files, sha256: digest });
+
+export function daemonClaudeOptionsFor({
+  env = process.env, home = homedir(), config, now = () => new Date(),
+  presence = keydPresenceWithoutDialog,
+  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, allowChallenge: false, consent: noLooseningDialog }) }),
+  log = (line) => process.stderr.write(`${line}\n`),
+} = {}) {
+  const asking = new Map();
+  return (agentId, { harness = null, cwd = null, mode = 'safe' } = {}) => {
+    if (harness !== 'claude' || mode !== 'safe') return null;
+    let soulDir = null;
+    try { soulDir = soulDirectory(agentId, { env, home, config, file: populationFile({ env, home }), readOnly: true }); } catch { /* no census row: no package layer */ }
+    const layer = claudeAllowLayer({ harness, cwd, soulDir });
+    if (!layer) return null;
+    if (layer.unreadable) {
+      const message = `${ALLOW_RULES_NEED_OWNER}: ${agentId}: a ${layer.source} Claude settings file is not a readable regular file under 1 MiB `
+        + `(${layer.files.join(', ')}); its allow rules are unknown, so a safe daemon turn cannot start there`;
+      log(`agent-bot daemon: ${message}`);
+      return Promise.reject(new Error(message));
+    }
+    const strict = { extraArgs: { settings: JSON.stringify({ permissions: { ask: layer.allow } }) } };
+    const key = `${agentId} ${layer.source} ${layer.digest}`;
+    if (!asking.has(key)) {
+      asking.set(key, askOwnerToLoosen({ agentId, tool: ALLOW_RULES_TOOL, operation: allowRulesOperation(agentId, layer),
+        action: `soul allow-rules ${agentId} ${layer.source} sha256:${layer.digest} ${layer.files.join(' ')}`,
+        summary: `let ${agentId} run the tools its ${layer.source}'s Claude allow rules allow without asking`,
+        receipt: { operation: 'loosen-allow-rules', detail: `${layer.source} sha256:${layer.digest}` },
+        say: {
+          unavailable: (error) => `agent-bot daemon: ${ALLOW_RULES_NEED_OWNER}: ${agentId}: the ${layer.source} declares Claude allow rules; they ask the daemon, the owner could not be asked (${error.message})`,
+          unreceipted: (error) => `agent-bot daemon: ${ALLOW_RULES_NEED_OWNER}: ${agentId}: the owner's answer could not be receipted; the allow rules ask the daemon, the next turn asks again (${error.message})`,
+          unkept: (error) => `agent-bot daemon: ${agentId}: the owner's answer on Claude allow rules could not be kept; the next turn asks again (${error.message})`,
+        },
+        ask, log, env, home, now })
+        .then((answer) => (answer === 'approved' ? null : strict), () => strict)
+        .finally(() => asking.delete(key)));
+    }
     return asking.get(key);
   };
 }
@@ -1721,6 +1787,7 @@ export async function runDaemon({
       modeFor: daemonModeFor({ env, home, config }),
       modelFor: daemonModelFor({ env, home, config }),
       reasoningEffortFor: daemonReasoningEffortFor({ env, home, config }),
+      claudeOptionsFor: daemonClaudeOptionsFor({ env, home, config }),
       identityFor,
       onModels: (agentId, models) => recordSoulModels(agentId, models, { env, home }),
       // A daemon-run soul's home is not a git worktree, so the session-start

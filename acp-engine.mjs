@@ -345,6 +345,9 @@ export function createAcpExecutor({
   mode = 'safe',
   model = null,
   reasoningEffort = null,
+  // Extra Claude Agent SDK options for the session (#379): the daemon's
+  // `extraArgs` settings layer when Claude allow rules must ask.
+  claudeOptions = null,
   onModels = null,
   // Public soul identity, looked up only for a new session's first prompt.
   identityFor = null,
@@ -380,6 +383,7 @@ export function createAcpExecutor({
   }
   if (typeof spawn !== 'function') failEngine('spawn must be a function');
   if (typeof log !== 'function') failEngine('log must be a function');
+  if (claudeOptions !== null && (typeof claudeOptions !== 'object' || Array.isArray(claudeOptions))) failEngine('claudeOptions must be an object');
 
   const run = async ({
     invocation, message, attachments, signal,
@@ -570,11 +574,12 @@ export function createAcpExecutor({
       if (harness === 'claude' && effortValue !== null && claudeEffort === null) {
         log('acp engine: explicit reasoning effort is unsupported by the pinned Claude adapter; continuing with the harness setting');
       }
+      const claudeSessionOptions = { ...(claudeOptions ?? {}), ...(claudeEffort !== null ? { effort: claudeEffort } : {}) };
       const sessionParams = {
         cwd,
         mcpServers: [...turnMcpServers],
-        ...(harness === 'claude' && claudeEffort !== null
-          ? { _meta: { claudeCode: { options: { effort: claudeEffort } } } }
+        ...(harness === 'claude' && Object.keys(claudeSessionOptions).length
+          ? { _meta: { claudeCode: { options: claudeSessionOptions } } }
           : {}),
       };
       let promptMessage = message;
