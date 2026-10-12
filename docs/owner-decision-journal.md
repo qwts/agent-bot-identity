@@ -447,7 +447,22 @@ owner-decision action grammar: agent-comms `docs/owner-decisions.md` and
   It then validates the typed operation, rebuilds the exact one-line text the
   owner's native presence signs, and returns `payloadDigest` and
   `actionDigest`. The text refuses, and is never truncated, past 400 Unicode
-  scalars, past 500 UTF-8 bytes, or with any control character.
+  scalars or past 500 UTF-8 bytes.
+- **Display rejections.** A reason, and the rebuilt display text, refuse any
+  scalar in the agent-comms owner-display rejection policy: every Unicode
+  17.0.0 Cc, Cf, Zl and Zp code point. That covers controls, bidi overrides
+  and isolates, zero-width characters, the BOM, tag characters, and the line
+  and paragraph separators.
+  - The policy is a frozen literal table of 25 inclusive ranges
+    (`OWNER_DISPLAY_REJECTED_RANGES`), never an ambient `\p{}` property, and
+    it equals `display-rejections-v1.json`. That file is vendored from
+    agent-comms `62aaba9` (merged #221, reviewed signed head `cb7b8e9`),
+    SHA-256 `2c2c7b75…`.
+  - The decoder is still disabled: nothing here enables owner decisions at
+    runtime.
+  - Everything else is kept exactly, with no trimming or normalization:
+    right-to-left scripts, combining marks, variation selectors, and a
+    literal `\u202E` written as text.
 - **Verifying.** `verifyOwnerDecisionPresence(p1, { actionBytes, nonce, trust,
   nowMilliseconds })` verifies the p1 against the active presence pin from
   `readOwnerDecisionTrust`. That pin is the future native signer, which trust
