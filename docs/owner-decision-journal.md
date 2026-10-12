@@ -670,3 +670,30 @@ instance; a storage failure (an unknown `requests/` entry included) does.
   pre-effect refusal ends it.
 - A receipt or check body without its trailer refuses as found.
 - A committed check is `released`.
+
+## Before wiring
+
+These are open items for whoever wires the disabled owner-decision pieces to a
+route. None is built here.
+
+- **Authenticate the check's source.** The slot-6 successful check is unsigned
+  JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
+  authenticate its source as the broker, by its peer uid on the connection.
+  The journal checks only that the check names the saved binding.
+- **Pass current trust to intake.** `recordDecision` verifies against the pins
+  its caller passes, so wiring must pass the current pins from
+  `readOwnerDecisionTrust`.
+  - Forged pins (a forger's key under the real key ID) fail at intake,
+    because both verifiers recompute key IDs.
+  - Stale pins after a rotation get through intake. The effect-entry gate,
+    which reads real trust, then refuses with `trust-unavailable` and never
+    enters.
+- **Torn intake slots use a slot until a cleanup path exists.** A torn body in
+  slot 4, 5 or 6 leaves the request refusing as `owner-journal-unsupported-phase`.
+  That fails closed: it never releases or enters. But the request keeps its
+  charged directory until a reviewed cleanup path exists. That path is an
+  open item.
+- **The check's expiry is not bounded by the receipt or preparation.**
+  `check.exp` is checked only against the daemon clock at intake. The gate's
+  re-verification of p1 freshness at entry is what bounds the window in
+  which a released request can enter.

@@ -1,0 +1,1 @@
+- Test the disabled owner-decision intake end to end under forged and stale trust pins, and document what wiring must do first (agent-comms#77).
