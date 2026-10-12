@@ -104,14 +104,14 @@ import { readSoulEnvironment } from './soul-env.mjs';
 import { launchSandbox, personaBlockNotice, readSandboxStatus, turnSandboxProblem, setSandboxAccount, setSandboxEnabled, setSandboxOverride, validateSandboxAccount } from './sandbox.mjs';
 import { checkSopLaunchPolicy } from './sop.mjs';
 import { resolveSoulModel, resolveSoulReasoningEffort, soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
-import { ownerGate as soulSettingOwnerGate, readColdWakeSettings, setColdWake } from './cold-wake-settings.mjs';
+import { ownerGate as soulSettingOwnerGate, readColdWakeSnapshot, setColdWake } from './cold-wake-settings.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDaemonLogCheck, daemonLogPath, DAEMON_LOG_CHECK_INTERVAL_MS } from './daemon-log.mjs';
 import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLaunchRefusal, teamLimits } from './team-start.mjs';
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
 import { harnessAuth } from './harness-auth.mjs';
-import { createWebhookWaker, readWebhook } from './wake-webhook.mjs';
+import { createWebhookWaker } from './wake-webhook.mjs';
 import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath } from './acp-registry.mjs';
 import { computePackageRevision, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
@@ -1955,7 +1955,7 @@ export async function runDaemon({
   server.wakePlane = createWakePlane({
     turns, isPaused,
     pool: server.warmPool,
-    settings: () => readColdWakeSettings({ env, home }),
+    snapshot: (agentId) => readColdWakeSnapshot(agentId, { env, home }),
     lookupSoul: (agentId) => server.bindings.findAgent(agentId) ?? recordedWorktree(agentId, { env, home }),
     identities,
     executorFor,
@@ -1972,7 +1972,7 @@ export async function runDaemon({
       ...turnEnvPorts,
     }),
     // Webhook wake (#334) runs only for a soul the owner set to `webhook`.
-    webhookWaker: createWebhookWaker({ read: (agentId) => readWebhook(agentId, { env, home }) }),
+    webhookWaker: createWebhookWaker({ read: () => { throw new Error('cold wake requires its selected configuration'); } }),
     // The relay runs agent-comms, which a launchd PATH does not reach.
     relay,
     taskReporter,

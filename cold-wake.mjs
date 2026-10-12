@@ -119,7 +119,7 @@ function describeError(error) {
   return `${code}: ${message.length > 200 ? `${message.slice(0, 200)}…` : message}`;
 }
 
-export function createColdWaker({ isPaused = () => false, executor, settings, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, ownerReply = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
+export function createColdWaker({ isPaused = () => false, executor, settings, snapshot = null, lookupBinding, identities, receipt, relay = null, webhook = null, taskReporter = null, authStatus = null, ownerReply = null, threads = {}, log = (line) => process.stderr.write(`cold-wake: ${line}\n`) }) {
   if (typeof executor !== 'function') throw new Error('cold waker requires an executor');
   if (typeof lookupBinding !== 'function') throw new Error('cold waker requires lookupBinding');
   if (typeof identities !== 'function') throw new Error('cold waker requires identities');
@@ -174,7 +174,8 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
   async function coldWake(event) {
     const { agentId, count, cursor, messageIds } = event ?? {};
     if (isPaused(agentId)) return pausedWake(agentId);
-    const currentSettings = typeof settings === 'function' ? await settings() : settings;
+    const selected = snapshot ? snapshot(agentId) : null;
+    const currentSettings = selected ? { [agentId]: selected.setting } : typeof settings === 'function' ? await settings() : settings;
     // The setting picks the lane (#323): an ACP turn or a resumed harness
     // session. The executor receives it as `wake`.
     const wake = wakeSetting(currentSettings?.[agentId]);
@@ -222,7 +223,7 @@ export function createColdWaker({ isPaused = () => false, executor, settings, lo
       // The call is the whole flight: the routine runs on the harness's side,
       // and the messages stay unacked until the soul acks them.
       try {
-        await webhook({ agentId, worktree: binding.worktree });
+        await webhook({ agentId, worktree: binding.worktree, ...(selected ? { configuration: selected.webhook } : {}) });
         receipt({ event: 'cold-wake', agentId, decision: 'webhook' });
         return { outcome: 'cold', detail: 'webhook accepted' };
       } catch (error) {
