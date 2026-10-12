@@ -530,9 +530,11 @@ question in the F9 and F13 design note:
   `cli/mint-token.mjs` (with `cli/mint-output.mjs`) turned out to be one,
   and it is reassigned to identity. The other three pass soul into identity,
   so the owner kept them in cli until after F8 (see F13 step 2 under F13).
-- **F13 Q3, readiness:** an identity entry operation, `doctor-checks`,
-  returns identity's checks as JSON, and `readiness.mjs` stays in cli and
-  merges them.
+- **F13 Q3, readiness:** the first answer was an identity entry operation,
+  `doctor-checks`, whose JSON `readiness.mjs` would merge. The owner replaced
+  it with one published entry, `identity-cli.mjs`: a contract importable by
+  cli only, with an exact export list, so readiness keeps its test hooks
+  (see F13 step 3 under F13).
 
 ## 9. Order of work
 
@@ -569,7 +571,8 @@ mechanical moves; steps 6 to 10 change how a module reaches identity.
     2. reassign `cli/mint-token.mjs` and `cli/mint-output.mjs` in the
        module map (`cli/principal.mjs`, `cli/owner.mjs` and
        `cli/identity-apps.mjs` stay in cli until after F8);
-    3. add `doctor-checks` for readiness, doctor, bootstrap and sync-hooks;
+    3. publish `identity-cli.mjs` for readiness, doctor, bootstrap and
+       sync-hooks;
     4. move `agent-approvals.mjs` and `cli/soul-dream.mjs` after F8's
        owner-prompt design.
 11. **F14:** assign the remaining assets.
