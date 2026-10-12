@@ -297,7 +297,11 @@ function acquireLock(io, root) {
 // authority at all rather than an earlier key.
 // `allowPending` is only for explicit reconciliation, which must look at the
 // graph around an interrupted publication; readiness never sets it.
-function readGraph(io, root, { allowPending = false } = {}) {
+// The namespace part every reader shares: custody of the root and its
+// ancestors, the bounded top-level listing, and the flushed, validated
+// namespace record with its confirmation bytes (null when absent). It never
+// touches keys/.
+function readNamespacePart(io, root, { allowPending = false } = {}) {
   assertAncestors(io, root); ownedDirectory(io, root);
   const top = listBounded(io, root, ROOT_NAMES.size + 1).filter((name) => {
     if (name !== PENDING) return true;
@@ -310,14 +314,30 @@ function readGraph(io, root, { allowPending = false } = {}) {
     if (top.length !== 1) fail();
     fail('owner-trust-missing');
   }
-  const namespaceBytes = readFlushed(io, path.join(root, NAMESPACE), TRUST_LIMITS.record);
-  const namespace = decode(namespaceBytes);
-  if (!namespaceRecord(namespace)) fail();
-  const namespaceDigest = namespace.namespaceDigest;
-  const records = [{ subject: 'namespace', version: 0, bytes: namespaceBytes, value: namespace, digest: sha256(namespaceBytes) }];
+  const bytes = readFlushed(io, path.join(root, NAMESPACE), TRUST_LIMITS.record);
+  const value = decode(bytes);
+  if (!namespaceRecord(value)) fail();
+  const confirmation = top.includes(NAMESPACE_CONFIRMATION)
+    ? readFlushed(io, path.join(root, NAMESPACE_CONFIRMATION), TRUST_LIMITS.confirmation) : null;
+  return { top, record: { subject: 'namespace', version: 0, bytes, value, digest: sha256(bytes) }, confirmation };
+}
+
+// One record's confirmation must bind it exactly to its single audit line.
+function confirmed(record, confirmationBytes, lines, namespaceDigest) {
+  const value = decode(confirmationBytes);
+  if (!confirmationRecord(value) || value.subject !== record.subject || value.version !== record.version
+    || value.recordDigest !== record.digest || value.namespaceDigest !== namespaceDigest || value.auditId !== record.value.auditId
+    || lines.length !== 1 || lines[0].value.recordDigest !== record.digest || lines[0].value.auditId !== record.value.auditId
+    || lines[0].value.namespaceDigest !== namespaceDigest || value.auditLineDigest !== sha256(lines[0].bytes)) fail();
+}
+
+function readGraph(io, root, { allowPending = false } = {}) {
+  const { top, record: namespaceRecordEntry, confirmation: namespaceConfirmation } = readNamespacePart(io, root, { allowPending });
+  const namespaceDigest = namespaceRecordEntry.value.namespaceDigest;
+  const records = [namespaceRecordEntry];
   const confirmations = new Map();
   let active = null;
-  if (top.includes(NAMESPACE_CONFIRMATION)) confirmations.set('namespace:0', readFlushed(io, path.join(root, NAMESPACE_CONFIRMATION), TRUST_LIMITS.confirmation));
+  if (namespaceConfirmation) confirmations.set('namespace:0', namespaceConfirmation);
 
   if (top.includes(KEYS)) {
     const keys = path.join(root, KEYS);
@@ -373,10 +393,7 @@ function readGraph(io, root, { allowPending = false } = {}) {
     if (lines.length > 1) fail();
     const confirmation = confirmations.get(`${record.subject}:${record.version}`);
     if (!confirmation) { pending.push(record); continue; }
-    const value = decode(confirmation);
-    if (!confirmationRecord(value) || value.subject !== record.subject || value.version !== record.version
-      || value.recordDigest !== record.digest || value.namespaceDigest !== namespaceDigest || value.auditId !== record.value.auditId
-      || lines.length !== 1 || value.auditLineDigest !== sha256(lines[0].bytes)) fail();
+    confirmed(record, confirmation, lines, namespaceDigest);
   }
   return { namespaceDigest, records, active, audit, pending };
 }
@@ -433,6 +450,33 @@ export function readOwnerDecisionTrust({ root, namespaceDigest, daemonKey, legac
   const lock = acquireLock(io, root);
   try { return ready(readGraph(io, root), namespaceDigest, ownKey, legacyPresenceRaw(legacyPresenceKey, { env, home })); }
   catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
+  finally { io.closeSync(lock); }
+}
+
+// The pinned namespace alone, for a host's first key enrollment: it must not
+// depend on the key chain it is about to start, so it works before any keys
+// exist and between a revocation and the next enrollment. Under the same
+// exclusive lock and with the same custody, flush and validation as the full
+// reader applies to the namespace part, it requires namespace.json, its
+// confirmation and exactly one matching line in the dedicated audit file.
+// It returns only {namespaceDigest}: never readiness, pins or authority. The
+// full readOwnerDecisionTrust stays mandatory for capability and for every
+// trust check. A busy lock, a pending audit or a pending publication refuses
+// with storage-failed for an explicit retry; nothing is repaired, replayed
+// or written.
+export function readOwnerDecisionNamespace({ root, io = fs } = {}) {
+  platformCheck();
+  if (typeof root !== 'string' || !path.isAbsolute(root)) fail('owner-trust-invalid-input');
+  try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }
+  const lock = acquireLock(io, root);
+  try {
+    const { top, record, confirmation } = readNamespacePart(io, root);
+    if (!confirmation) fail('owner-trust-audit-pending');
+    const lines = top.includes(AUDIT) ? readAudit(io, root).filter(({ value }) => value.subject === 'namespace' && value.version === 0) : [];
+    flushDirectory(io, root);
+    confirmed(record, confirmation, lines, record.value.namespaceDigest);
+    return { namespaceDigest: record.value.namespaceDigest };
+  } catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
   finally { io.closeSync(lock); }
 }
 
