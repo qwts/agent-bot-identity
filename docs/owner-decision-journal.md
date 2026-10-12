@@ -622,7 +622,7 @@ persisted format.
     changed, or a cold-wake request carries a linked event.
   - Through the effect-entry gate, completion is the gate's bound
     `complete(result)` (below).
-- **`refusePreEffect(requestId, {code, at})`** publishes slot 7, the final
+- **`refusePreEffect(requestId, {code, at})`** publishes slot 8, the final
   pre-effect refusal.
   - It is legal from `preparing`, `prepared`, `authorizing` or `released`. It
     binds the checked receipt, or `null` before the successful check.
@@ -670,7 +670,7 @@ No persisted format changes.
     the request is released, refused, entered or applied.
   - It refuses (`storage-failed`) for an admitted or preparing request.
 - **`recordSuccessfulCheck(requestId, {check, nowMilliseconds})`** publishes
-  slot 6, the one successful check, canonically.
+  slot 7, the one successful check, canonically.
   - It is legal only from `authorizing` with both presence and receipt.
   - The check must decode as a released `mayApply:true` check naming exactly
     the acceptance binding and the saved receipt's digest. Otherwise it
@@ -695,7 +695,7 @@ instance; a storage failure (an unknown `requests/` entry included) does.
 These are open items for whoever wires the disabled owner-decision pieces to a
 route. None is built here.
 
-- **Authenticate the check's source.** The slot-6 successful check is unsigned
+- **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.
   The journal checks only that the check names the saved binding.
@@ -708,14 +708,14 @@ route. None is built here.
     which reads real trust, then refuses with `trust-unavailable` and never
     enters.
 - **Torn intake slots use a slot until a cleanup path exists.** A torn body in
-  slot 4, 5 or 6 leaves the request refusing as `owner-journal-unsupported-phase`.
+  slot 4, 5 or 7 leaves the request refusing as `owner-journal-unsupported-phase`.
   That fails closed: it never releases or enters. But the request keeps its
   charged directory until a reviewed cleanup path exists. That path is an
   open item.
 - **A preparation written around the writer.** The writer records only the
   live trust version, so a caller can't preset a future one. A preparation
   written straight into the journal, bypassing the writer, could still claim
-  any version. As with slot 6, only the daemon's custody of its own journal
+  any version. As with slot 7, only the daemon's custody of its own journal
   protects against that.
 - **The check's expiry is not bounded by the receipt or preparation.**
   `check.exp` is checked only against the daemon clock at intake. The gate's
@@ -723,7 +723,7 @@ route. None is built here.
   which a released request can enter.
 - **The successful check isn't re-verified at entry.** It's unsigned, so
   there is nothing to re-verify; only the daemon's custody of its own journal
-  protects slot 6. Entry does re-verify the stored p1 and d1. A slot-6 check
+  protects slot 7. Entry does re-verify the stored p1 and d1. A slot-7 check
   planted next to a genuine p1 and d1 that the broker never released would
   still enter. Authenticating the check's source at intake, the first item
   above, is the only defence before wiring.
@@ -838,7 +838,11 @@ slot:
 - the reporting key must be this daemon's key from the acceptance, and the
   epoch never goes back;
 - `requestId` and `payloadDigest` are the acceptance's;
-- `receiptDigest` is the saved receipt's, or null exactly before one exists.
+- `receiptDigest` is the saved receipt's, or null when none exists. The
+  context requires none before the decision arrives (admitted, preparing,
+  prepared) and one from released onward (released, indeterminate, applied).
+  In authorizing the presence may arrive without its receipt, and a refusal
+  may come before the receipt, so both may be either.
 
 **Context.** The finding comes from the request's validated journal graph,
 using the effect-outcomes-v1 mapping, never from the record:
@@ -856,6 +860,6 @@ Storage-refused exists only with its durable refusal digest.
 
 **Vectors.** The draft semantic vectors are
 `tests/fixtures/owner-decisions/local-lifecycle-outcome-v1-draft.json`: 13
-positive and 24 negative. Each carries its context, the exact record bytes,
+positive and 27 negative. Each carries its context, the exact record bytes,
 their SHA-256 and the SHA-256 of the slot-14 frame for a fixed namespace and
 request.

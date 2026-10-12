@@ -12,7 +12,7 @@ import { encodeDaemonJournalFrame } from '../identity/owner-decision-journal-fra
 import { LOCAL_OUTCOME_CAP, validateLocalLifecycleOutcome } from '../identity/owner-decision-local-outcome.mjs';
 
 const URL_ = new URL('./fixtures/owner-decisions/local-lifecycle-outcome-v1-draft.json', import.meta.url);
-const SHA256 = '066548f37d074169c3bdfa3e7f956747142fadb6b5500b869bfcdbff31265551';
+const SHA256 = 'dd0dda10ae13d341f378209306ef7e2a4ece864a39ac76fee8f826b559216e85';
 const fixture = JSON.parse(readFileSync(URL_, 'utf8'));
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const outcome = (bytes, context) => { try { validateLocalLifecycleOutcome(bytes, context); return 'valid'; } catch (error) { return error.reason; } };
@@ -20,7 +20,7 @@ const outcome = (bytes, context) => { try { validateLocalLifecycleOutcome(bytes,
 test('the draft vectors are pinned and every one gives its expected result', () => {
   assert.equal(sha256(readFileSync(URL_)), SHA256);
   assert.equal(fixture.slot, 'local-lifecycle-outcome'); assert.equal(fixture.cap, LOCAL_OUTCOME_CAP);
-  assert.equal(fixture.vectors.length, 37);
+  assert.equal(fixture.vectors.length, 40);
   assert.equal(fixture.vectors.filter(({ expected }) => expected === 'valid').length, 13);
   for (const vector of fixture.vectors) {
     const bytes = Buffer.from(vector.canonicalJson);
@@ -41,6 +41,7 @@ test('each phase admits exactly its own findings', () => {
     admitted: { phase: 'admitted', acceptance, receiptDigest: null, effectDigest: null },
     prepared: { phase: 'prepared', acceptance, receiptDigest: null, effectDigest: null },
     authorizing: { phase: 'authorizing', acceptance, receiptDigest: receipt, effectDigest: null },
+    'authorizing, presence only': { phase: 'authorizing', acceptance, receiptDigest: null, effectDigest: null },
     released: { phase: 'released', acceptance, receiptDigest: receipt, effectDigest: null },
     indeterminate: { phase: 'indeterminate', acceptance, receiptDigest: receipt, effectDigest: null },
     applied: { phase: 'applied', acceptance, receiptDigest: receipt, effectDigest: digest },
@@ -52,6 +53,7 @@ test('each phase admits exactly its own findings', () => {
     admitted: ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'cancelled:cancelled', 'expired:deadline-expired'],
     prepared: ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'cancelled:cancelled', 'expired:deadline-expired'],
     authorizing: ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'expired:deadline-expired'],
+    'authorizing, presence only': ['refused:validation-refused', 'refused:authority-refused', 'refused:deadline-expired', 'expired:deadline-expired'],
     released: [], indeterminate: ['indeterminate:effect-uncertain'], applied: ['applied:applied'],
   };
   for (const [phase, context] of Object.entries(contexts)) {
@@ -72,7 +74,8 @@ test('an inconsistent context refuses before any record is read', () => {
   const bytes = Buffer.from(base.canonicalJson), c = base.context;
   for (const context of [null, { ...c, phase: 'done' }, { ...c, acceptance: { ...c.acceptance, daemonEpoch: 0 } }, { ...c, effectDigest: null },
     { ...c, phase: 'indeterminate' }, { ...c, phase: 'refused' }, { ...c, phase: 'prepared', effectDigest: null }, { ...c, refusalCode: 'expired' },
-    { ...c, receiptDigest: 'x' }]) {
+    { ...c, receiptDigest: 'x' }, { ...c, receiptDigest: null }, { ...c, phase: 'released', effectDigest: null, receiptDigest: null },
+    { ...c, phase: 'indeterminate', effectDigest: null, receiptDigest: null }]) {
     assert.equal(outcome(bytes, context), 'owner-outcome-context', JSON.stringify(context));
   }
   assert.equal(outcome(Buffer.alloc(LOCAL_OUTCOME_CAP + 1, 0x20), c), 'owner-outcome-encoding');

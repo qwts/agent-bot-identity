@@ -684,6 +684,64 @@
       "frameSha256": "06e2bbe0f90001246105ba2001ac654dd0dbd716787103fc9c0b4a1405a2d621"
     },
     {
+      "id": "negative-refused-as-applied",
+      "expected": "owner-outcome-finding",
+      "context": {
+        "phase": "refused",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "refusalCode": "expected-state-changed"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 517,
+      "sha256": "e3dd0b30b1ebc3a3da1628f746b76def18f7c170ad69df0d9722e4e6c81ddf6c",
+      "frameSha256": "1e8dfd066023e8f4b77edf461256b7ecff4d7a659c8c6a1539cda1f8da5e6be2"
+    },
+    {
+      "id": "negative-v2",
+      "expected": "owner-outcome-shape",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"outcome\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":2}",
+      "utf8Bytes": 517,
+      "sha256": "3e1939a0301d2130ad46bbf958f4cabf507f5f93b857a60c38a57a80e867a728",
+      "frameSha256": "53a81b236c61a5a2e0dda908f6f55a357c859290079cf0c2a079e241e4c558b7"
+    },
+    {
+      "id": "negative-kind",
+      "expected": "owner-outcome-shape",
+      "context": {
+        "phase": "applied",
+        "acceptance": {
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "payloadDigest": "19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87",
+          "daemonKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "daemonEpoch": 1
+        },
+        "receiptDigest": "3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd",
+        "effectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "canonicalJson": "{\"at\":2000000020,\"kind\":\"reconciliation\",\"outcome\":{\"code\":\"applied\",\"effectDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"19879f0a16933f3a7ff67a40aa53dba5395b5192ac9691da9ebed78891ce1e87\",\"receiptDigest\":\"3645f954f5f5c1216defa47c4e46dd1de6b70a7ebbb2650f5ce45eabaea65fbd\",\"reportingDaemonEpoch\":1,\"reportingDaemonKey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000101\",\"source\":\"daemon\",\"state\":\"applied\",\"v\":1}",
+      "utf8Bytes": 524,
+      "sha256": "bf2f147ac914101ba4d46149e6d6fa746366d2ad2576c5d162c53437471b8dfc",
+      "frameSha256": "eac51a7b8f841653f35784df16349dbacc109d4323f2df298238b3762c7f1020"
+    },
+    {
       "id": "negative-details-retired",
       "expected": "owner-outcome-finding",
       "context": {

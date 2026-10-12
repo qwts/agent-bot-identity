@@ -70,8 +70,11 @@ function checkContext(context) {
   const proven = ['refused', 'applied'].includes(context.phase);
   if (proven !== matches(DIGEST, context.effectDigest) || (!proven && context.effectDigest !== null)) fail('owner-outcome-context');
   if ((context.phase === 'refused') !== Object.hasOwn(REFUSAL_OUTCOMES, context.refusalCode ?? '')) fail('owner-outcome-context');
-  // A receipt exists exactly from authorizing on.
+  // No receipt exists before the decision arrives; authorizing may hold the
+  // presence without its receipt, and a refusal may come before the receipt;
+  // from released on the receipt always exists.
   if (['admitted', 'preparing', 'prepared'].includes(context.phase) && context.receiptDigest !== null) fail('owner-outcome-context');
+  if (['released', 'indeterminate', 'applied'].includes(context.phase) && context.receiptDigest === null) fail('owner-outcome-context');
 }
 
 // Validates exact slot-14 payload bytes against the request's graph. Returns
