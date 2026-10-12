@@ -50,3 +50,29 @@ export function resolveOwnerDecisionTarget(request = {}, { daemonAccount, file =
   try { record = identityOp('read', { id, ...(stateDir ? { stateDir } : {}) }); } catch { record = null; }
   return classifyOwnerDecisionTarget(request, { daemonAccount, row, record });
 }
+
+// The final-entry identity port's exact shape: a frozen
+// { kind: 'owner-decision-identity-read-v1', read(id) } whose read is
+// synchronous. The host builds it (owner-decision-identity-port.mjs); soul
+// only checks the shape and never launches a process or awaits.
+const IDENTITY_PORT_KIND = 'owner-decision-identity-read-v1';
+function validPort(port) {
+  return port !== null && typeof port === 'object' && Object.isFrozen(port)
+    && Object.keys(port).length === 2 && port.kind === IDENTITY_PORT_KIND && typeof port.read === 'function';
+}
+
+// Resolution for the locked final entry: the same fixed census read, then the
+// identity through the strict in-process port, classified identically. A
+// missing or malformed port, a port that returns a promise, or any read
+// failure gives the same uniform refusal.
+export function resolveOwnerDecisionTargetLocked(request = {}, { daemonAccount, file = populationFile(), identityPort } = {}) {
+  if (!validPort(identityPort)) return TARGET_REFUSAL;
+  const id = matches(SOUL, request?.soul) ? request.soul : PLACEHOLDER_SOUL;
+  let row = null, record = null;
+  try { row = showSoul(id, { file }); } catch { row = null; }
+  try {
+    record = identityPort.read(id);
+    if (record !== null && typeof record === 'object' && typeof record.then === 'function') record = null;
+  } catch { record = null; }
+  return classifyOwnerDecisionTarget(request, { daemonAccount, row, record });
+}

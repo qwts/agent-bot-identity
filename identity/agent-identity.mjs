@@ -19,6 +19,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import fsModule, { constants as fsConstants } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { withLock } from '../file-lock.mjs';
@@ -260,10 +261,33 @@ function withRegistryLock(root, operation) {
   return withLock(path.join(root, '.allocation.lock'), 'identity allocation', operation);
 }
 
-export function readAgentIdentity(id, { stateDir = stateDirectory() } = {}) {
+// The strict custody read (owner-decision final entry, agent-comms#77): the
+// record must be this account's own regular single-link file, opened without
+// following a link, at most IDENTITY_RECORD_MAX_BYTES, read from the same open
+// descriptor. `io` is injectable only so tests can simulate stats.
+export const IDENTITY_RECORD_MAX_BYTES = 64 * 1024;
+function readStrictRecord(file, io) {
+  const fd = io.openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const held = io.fstatSync(fd), named = io.lstatSync(file);
+    if (!held.isFile() || held.nlink !== 1 || held.uid !== process.getuid() || held.dev !== named.dev || held.ino !== named.ino) {
+      throw new Error('identity record is not a private single-link regular file owned by this account');
+    }
+    if (held.size < 1 || held.size > IDENTITY_RECORD_MAX_BYTES) throw new Error('identity record size is out of bounds');
+    const bytes = Buffer.alloc(held.size);
+    if (io.readSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error('identity record read was short');
+    return bytes.toString('utf8');
+  } finally { io.closeSync(fd); }
+}
+
+// `custody: 'strict'` is opt-in for the owner-decision final-entry port; every
+// existing caller keeps the default read unchanged.
+export function readAgentIdentity(id, { stateDir = stateDirectory(), custody = 'default', io = fsModule } = {}) {
+  if (custody !== 'default' && custody !== 'strict') throw new Error('custody must be default or strict');
   let record;
   try {
-    record = JSON.parse(readFileSync(identityPath(stateDir, id), 'utf8'));
+    const file = identityPath(stateDir, id);
+    record = JSON.parse(custody === 'strict' ? readStrictRecord(file, io) : readFileSync(file, 'utf8'));
   } catch (error) {
     throw new Error(`could not read Agent ID ${id}: ${error.message}`);
   }

@@ -1,0 +1,1 @@
+- Add a disabled in-process, strict-custody identity read port for the owner-decision locked final entry, so it never launches a process or awaits; existing identity reads are unchanged (agent-comms#77).
