@@ -585,7 +585,7 @@ test('non-npm harnesses install from a pinned archive or as a uv tool into .soul
   assert.ok(existsSync(path.join(muse.path, 'bin', 'goose')));
   assert.ok(!existsSync(`${muse.path}.installing`), 'the in-place marker is gone');
   const tool = d.commands.find((c) => c.args[0] === 'tool');
-  assert.deepEqual(tool.args, ['tool', 'install', 'goose-ai==1.9.0']);
+  assert.deepEqual(tool.args, ['tool', 'install', '--no-build', 'goose-ai==1.9.0'], 'wheels only: no build backend runs as the daemon (#1059)');
   assert.equal(tool.env.UV_TOOL_DIR, path.join(muse.path, 'tools'));
   assert.equal(tool.env.UV_TOOL_BIN_DIR, path.join(muse.path, 'bin'));
   assert.equal(tool.env.UV_PYTHON_INSTALL_DIR, path.join(f.runtimes, 'python', PYTHON.version));
@@ -628,7 +628,7 @@ test('a locked uv tool installs into its own venv with uv pip --require-hashes a
   assert.equal(d.commands.some((c) => c.args[0] === 'tool'), false, 'uv tool install cannot require hashes, so it is never used for a locked tool');
   const venv = d.commands.find((c) => c.args[0] === 'venv'), pip = d.commands.find((c) => c.args[0] === 'pip');
   assert.deepEqual(venv.args, ['venv', '--no-python-downloads', path.join(muse.path, 'venv')], 'the venv uses the soul\'s installed Python and never downloads another');
-  assert.deepEqual(pip.args, ['pip', 'install', '--python', path.join(muse.path, 'venv', 'bin', 'python'), '--require-hashes', '-r', path.join(muse.path, 'requirements.lock.txt')]);
+  assert.deepEqual(pip.args, ['pip', 'install', '--python', path.join(muse.path, 'venv', 'bin', 'python'), '--no-build', '--require-hashes', '-r', path.join(muse.path, 'requirements.lock.txt')], 'wheels only, even from a lock that lists an sdist hash (#1059)');
   assert.equal(pip.env.UV_PYTHON_PREFERENCE, 'only-managed');
   assert.equal(readFileSync(path.join(muse.path, 'requirements.lock.txt'), 'utf8'), `goose-ai==1.9.0 --hash=sha256:${A} --hash=sha256:${B}\nrequests==2.32.3 --hash=sha256:${B}\n`);
   assert.deepEqual(readdirSync(path.join(muse.path, 'bin')), ['goose'], 'only the declared executable is linked; pip and python stay in the venv');

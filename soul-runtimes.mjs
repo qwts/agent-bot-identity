@@ -938,6 +938,14 @@ async function installPython({ version, archive, catalogRelease = null }, target
   }
 }
 
+// Wheels only (#1059). A soul template, which an agent may pick for a
+// teammate, names the package, and the daemon runs this install as its own
+// user. Building a source distribution runs that package's build backend,
+// which is arbitrary code with the daemon's filesystem authority. A wheel
+// install copies files and runs nothing, so uv is told never to build:
+// a package or dependency with no wheel for this platform fails the install.
+const NO_BUILD = Object.freeze(['--no-build']);
+
 // A uv tool's venv carries absolute paths, so it is installed in place
 // with an `.installing` marker beside it: a marked directory is incomplete
 // and is redone; other versions are never touched. A locked tool (#617,
@@ -960,7 +968,7 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
     const python = pythonExecutable ? ['--python', pythonExecutable, '--no-python-downloads'] : [];
     if (install.lock) await installLockedUvTool(install, target, uvBin, { env, python, runImpl, uvFailed, label, action });
     else {
-      try { await runImpl(uvBin, ['tool', 'install', ...python, `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
+      try { await runImpl(uvBin, ['tool', 'install', ...python, ...NO_BUILD, `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
       catch (error) { uvFailed(error); }
     }
     if (!hasExecutable(path.join(target, 'bin'), install.bin, platform)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
@@ -983,7 +991,7 @@ async function installLockedUvTool(install, target, uvBin, { env, python, runImp
     // Only the soul's managed Python (or the owner's override): uv may not
     // fetch an interpreter of its own choosing for a locked tool (#617).
     await runImpl(uvBin, ['venv', ...(python.length ? python : ['--no-python-downloads']), venv], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
-    await runImpl(uvBin, ['pip', 'install', '--python', path.join(venv, 'bin', 'python'), '--require-hashes', '-r', lockFile], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
+    await runImpl(uvBin, ['pip', 'install', '--python', path.join(venv, 'bin', 'python'), ...NO_BUILD, '--require-hashes', '-r', lockFile], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
   } catch (error) { uvFailed(error); }
   const source = path.join(venv, 'bin', install.bin);
   if (!executableFile(source)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
