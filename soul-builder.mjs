@@ -203,6 +203,20 @@ function opencodeRule(rule) {
   return null;
 }
 
+// The declared deny rules OpenCode can spell, as its own permission keys:
+// `{ bash: [patterns], edit: boolean }`. The daemon adds them to its OpenCode
+// agent's rules (#379) so a declared deny holds on a daemon turn too.
+export function opencodeDenies(settings) {
+  const deny = { bash: [], edit: false };
+  for (const { effect, rule } of permissionRules(settings)) {
+    if (effect !== 'deny' || typeof rule !== 'string' || !PERMISSION_RULE.test(rule)) continue;
+    const native = opencodeRule(rule);
+    if (native?.tool === 'edit') deny.edit = true;
+    else if (native) for (const pattern of native.patterns) if (!deny.bash.includes(pattern)) deny.bash.push(pattern);
+  }
+  return deny;
+}
+
 // The declared keys this target actually renders: OpenCode renders
 // `permissions` only when at least one rule maps; the rest are reported.
 function renderedKeys(target, settings) {

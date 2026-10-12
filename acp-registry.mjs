@@ -94,16 +94,27 @@ const OPENCODE_DAEMON_PERMISSION = Object.freeze({
   plan_enter: 'deny',
   plan_exit: 'deny',
 });
-const OPENCODE_DAEMON_CONFIG = JSON.stringify({
-  default_agent: OPENCODE_DAEMON_AGENT,
-  agent: {
-    [OPENCODE_DAEMON_AGENT]: {
-      mode: 'primary',
-      description: 'Driven by the agent-bot daemon: every privileged tool asks the daemon policy.',
-      permission: OPENCODE_DAEMON_PERMISSION,
+// A soul's declared OpenCode denies (#379, owner decision 2026-10-11) are
+// appended to the agent's rules. OpenCode applies the last matching rule
+// (`evaluate` in permission/index.ts, v1.18.32), so they win over the
+// agent's `"*": "ask"`; nothing else changes. `deny` is
+// `{ bash: [patterns], edit: boolean }`, as opencodeDenies() returns it.
+export function opencodeDaemonConfig(deny = {}) {
+  const permission = { ...OPENCODE_DAEMON_PERMISSION };
+  if (deny.bash?.length) permission.bash = Object.fromEntries(deny.bash.map((pattern) => [pattern, 'deny']));
+  if (deny.edit) permission.edit = 'deny';
+  return JSON.stringify({
+    default_agent: OPENCODE_DAEMON_AGENT,
+    agent: {
+      [OPENCODE_DAEMON_AGENT]: {
+        mode: 'primary',
+        description: 'Driven by the agent-bot daemon: every privileged tool asks the daemon policy.',
+        permission,
+      },
     },
-  },
-});
+  });
+}
+const OPENCODE_DAEMON_CONFIG = opencodeDaemonConfig();
 
 // Codex's workspace-write sandbox turns network access off, and the
 // agent-comms broker is a unix socket that counts as network: under the

@@ -357,6 +357,9 @@ export function createAcpExecutor({
   mcpServers = [],
   getHarnessSession = null,
   env: baseEnv = process.env,
+  // Per-turn variables set after the row's own (#379): the daemon's
+  // OpenCode config carrying the soul's declared denies.
+  setEnv = null,
   spawn = spawnChild,
   turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS,
   exitGraceMs = DEFAULT_EXIT_GRACE_MS,
@@ -380,6 +383,10 @@ export function createAcpExecutor({
   }
   if (baseEnv === null || typeof baseEnv !== 'object' || Array.isArray(baseEnv)) {
     failEngine('env must be an object of environment variables');
+  }
+  if (setEnv !== null && (typeof setEnv !== 'object' || Array.isArray(setEnv)
+    || Object.entries(setEnv).some(([name, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof value !== 'string'))) {
+    failEngine('setEnv must map variable names to strings');
   }
   if (typeof spawn !== 'function') failEngine('spawn must be a function');
   if (typeof log !== 'function') failEngine('log must be a function');
@@ -415,7 +422,7 @@ export function createAcpExecutor({
       failEngine('attachments need an injected reach-back MCP server; none is configured');
     }
 
-    const env = harnessProcessEnv(row, baseEnv);
+    const env = Object.assign(harnessProcessEnv(row, baseEnv), setEnv ?? {});
 
     // detached puts the agent in its own process group, so killTree can take
     // down the whole tree — spawn-runner rows like npx launch the actual

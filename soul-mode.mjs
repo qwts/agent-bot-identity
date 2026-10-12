@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
-import { harnessSettings } from './soul-builder.mjs';
+import { harnessSettings, opencodeDenies } from './soul-builder.mjs';
 
 export const SOUL_MODES = Object.freeze(['safe', 'autopilot']);
 
@@ -105,6 +105,17 @@ export function repoPermissionMode(directory, harness) {
 // The mode a soul package declares for this harness, or null.
 export function packagePermissionMode(directory, harness) {
   return packageLayer(directory, harness).mode;
+}
+
+// The OpenCode deny rules a soul package declares, `{ bash, edit }` (#379),
+// read the same guarded way as its mode; an unreadable package declares none.
+export function packageOpencodeDenies(directory) {
+  const none = { bash: [], edit: false };
+  if (!directory || !path.isAbsolute(directory)) return none;
+  let manifest = null;
+  try { manifest = JSON.parse(readSettingsText(path.join(directory, 'soul.json'))); } catch { /* declares nothing */ }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return none;
+  return opencodeDenies(harnessSettings(manifest, 'opencode'));
 }
 
 // `{ mode, source, declared, code }` for one turn. `source` is `pick`, `repo`,

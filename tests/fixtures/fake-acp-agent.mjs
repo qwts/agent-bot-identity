@@ -62,6 +62,7 @@ async function handlePrompt({ sessionId, prompt }) {
       FAKE_KEEP: process.env.FAKE_KEEP ?? null,
       FAKE_SET: process.env.FAKE_SET ?? null,
       CODEX_CONFIG: process.env.CODEX_CONFIG ?? null,
+      OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT ?? null,
       cwd: session.cwd,
       mcpServers: session.mcpServers,
       loaded: session.loaded,

@@ -96,7 +96,7 @@ import { soulEnvironment, userToolDirs } from './shell-path.mjs';
 export { daemonStatus, joinLaunchedSoul, leaveLaunchedSoul, soulEnvironment, userToolDirs };
 import { createCommsSupervisor, pairDaemonComms, readCommsStatus } from './comms-client.mjs';
 import { attachWakeEndpoint } from './agent-wake.mjs';
-import { claudeAllowLayer, resolveSoulMode } from './soul-mode.mjs';
+import { claudeAllowLayer, packageOpencodeDenies, resolveSoulMode } from './soul-mode.mjs';
 import { identityAppSouls } from './identity-app-souls.mjs';
 import { runtimeProfileInfo } from './organization-profile.mjs';
 import { readSoulProfile } from './soul-profile.mjs';
@@ -112,7 +112,7 @@ import { createTeamStarter, defaultTeamTemplate, harnessLaunchProblem, harnessLa
 import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, soulNpmHarnessDirs } from './soul-home.mjs';
 import { harnessAuth } from './harness-auth.mjs';
 import { createWebhookWaker } from './wake-webhook.mjs';
-import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath } from './acp-registry.mjs';
+import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath, opencodeDaemonConfig } from './acp-registry.mjs';
 import { computePackageRevision, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
@@ -1590,6 +1590,20 @@ export function daemonModelFor({ env = process.env, home = homedir(), config } =
   };
 }
 
+// Per-turn harness variables (#379): an OpenCode turn's daemon config
+// carries the soul package's declared denies, so a deny the package renders
+// for a direct open also holds under the daemon. Tightening only: the
+// daemon's own rules are otherwise unchanged. Read once per turn.
+export function daemonHarnessSetEnvFor({ env = process.env, home = homedir(), config } = {}) {
+  return (agentId, { harness = null } = {}) => {
+    if (harness !== 'opencode') return null;
+    let soulDir = null;
+    try { soulDir = soulDirectory(agentId, { env, home, config, file: populationFile({ env, home }), readOnly: true }); } catch { /* no census row: no package layer */ }
+    const deny = packageOpencodeDenies(soulDir);
+    return deny.bash.length || deny.edit ? { OPENCODE_CONFIG_CONTENT: opencodeDaemonConfig(deny) } : null;
+  };
+}
+
 export function daemonReasoningEffortFor({ env = process.env, home = homedir(), config } = {}) {
   return (agentId, { harness = null, cwd = null } = {}) => {
     let soulDir = null;
@@ -1788,6 +1802,7 @@ export async function runDaemon({
       modelFor: daemonModelFor({ env, home, config }),
       reasoningEffortFor: daemonReasoningEffortFor({ env, home, config }),
       claudeOptionsFor: daemonClaudeOptionsFor({ env, home, config }),
+      harnessSetEnvFor: daemonHarnessSetEnvFor({ env, home, config }),
       identityFor,
       onModels: (agentId, models) => recordSoulModels(agentId, models, { env, home }),
       // A daemon-run soul's home is not a git worktree, so the session-start

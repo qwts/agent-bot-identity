@@ -768,10 +768,16 @@ for those depends on the adapter that runs it:
   ([`agent.ts`](https://github.com/anomalyco/opencode/blob/545f51d26cc39a907d2867492d498d9607ea5fa4/packages/opencode/src/agent/agent.ts#L272-L293))
   and the last matching rule wins
   ([`permission/index.ts`](https://github.com/anomalyco/opencode/blob/545f51d26cc39a907d2867492d498d9607ea5fa4/packages/opencode/src/permission/index.ts#L28-L38),
-  v1.18.32). So the rendered `permission.bash` / `permission.edit`, and with
-  them a declared `deny`, apply to a direct open only; under the daemon every
-  shell or edit call asks the daemon, which decides by the resolved mode
-  (open on #379).
+  v1.18.32). On its own that would make the rendered `permission.bash` /
+  `permission.edit` apply to a direct open only. So the daemon appends the
+  soul package's declared denies that OpenCode can spell (`Bash`,
+  `Bash(…)`, `Edit` / `Write` / `MultiEdit`) to its agent's rules for every
+  OpenCode turn, whatever the working directory (owner decision, 2026-10-11).
+  They come last, so a declared deny holds on both paths
+  (`daemonHarnessSetEnvFor` in `agent-daemon.mjs`). Declared allows are not
+  added: every other shell or edit call still asks the daemon, which decides
+  by the resolved mode. A package with no such deny gets the shipped config
+  unchanged.
 - **Codex.** No permission rules are rendered for Codex. Its `env` is the
   `[shell_environment_policy.set]` table in the rendered config; whether a
   daemon turn reads that file depends on the soul's Codex tool home, which
