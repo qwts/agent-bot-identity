@@ -100,3 +100,16 @@ test('every malformed, foreign or out-of-time receipt refuses', () => {
   const late = issue({ ...base, iat: p1Exp - 30, exp: p1Exp + 1 });
   assert.throws(() => verifyOwnerDecisionReceipt(late, { ...inputs, nowMilliseconds: (p1Exp - 30) * 1000 }), refused('owner-receipt-binding'));
 });
+
+// The pin's keyId is recomputed from its public key: a receipt that names X
+// as brokerKey, correctly signed by the real key, still refuses when the pin
+// claims keyId X for that real key.
+test('a pin whose keyId is not its own key\'s refuses even when the receipt names that keyId', () => {
+  const c = issuer.cases[0];
+  const claimed = pinOf(generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64')).keyId;
+  const inputs = { ...caseInputs(c), trust: { ...trust, receiptKey: { alg: 'ed25519', publicKey: brokerPin.publicKey, keyId: claimed } } };
+  const token = issue({ ...c.payload, brokerKey: claimed });
+  assert.throws(() => verifyOwnerDecisionReceipt(token, inputs), refused('owner-receipt-trust'));
+  // With the honest pin, the same shape verifies.
+  assert.equal(verifyOwnerDecisionReceipt(issue({ ...c.payload, brokerKey: brokerPin.keyId }), { ...inputs, trust: { ...trust, receiptKey: brokerPin } }).payload.brokerKey, brokerPin.keyId);
+});
