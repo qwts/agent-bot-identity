@@ -297,7 +297,11 @@ function acquireLock(io, root) {
 // authority at all rather than an earlier key.
 // `allowPending` is only for explicit reconciliation, which must look at the
 // graph around an interrupted publication; readiness never sets it.
-function readGraph(io, root, { allowPending = false } = {}) {
+// The namespace part every reader shares: custody of the root and its
+// ancestors, the bounded top-level listing, and the flushed, validated
+// namespace record with its confirmation bytes (null when absent). It never
+// touches keys/.
+function readNamespacePart(io, root, { allowPending = false } = {}) {
   assertAncestors(io, root); ownedDirectory(io, root);
   const top = listBounded(io, root, ROOT_NAMES.size + 1).filter((name) => {
     if (name !== PENDING) return true;
@@ -310,14 +314,30 @@ function readGraph(io, root, { allowPending = false } = {}) {
     if (top.length !== 1) fail();
     fail('owner-trust-missing');
   }
-  const namespaceBytes = readFlushed(io, path.join(root, NAMESPACE), TRUST_LIMITS.record);
-  const namespace = decode(namespaceBytes);
-  if (!namespaceRecord(namespace)) fail();
-  const namespaceDigest = namespace.namespaceDigest;
-  const records = [{ subject: 'namespace', version: 0, bytes: namespaceBytes, value: namespace, digest: sha256(namespaceBytes) }];
+  const bytes = readFlushed(io, path.join(root, NAMESPACE), TRUST_LIMITS.record);
+  const value = decode(bytes);
+  if (!namespaceRecord(value)) fail();
+  const confirmation = top.includes(NAMESPACE_CONFIRMATION)
+    ? readFlushed(io, path.join(root, NAMESPACE_CONFIRMATION), TRUST_LIMITS.confirmation) : null;
+  return { top, record: { subject: 'namespace', version: 0, bytes, value, digest: sha256(bytes) }, confirmation };
+}
+
+// One record's confirmation must bind it exactly to its single audit line.
+function confirmed(record, confirmationBytes, lines, namespaceDigest) {
+  const value = decode(confirmationBytes);
+  if (!confirmationRecord(value) || value.subject !== record.subject || value.version !== record.version
+    || value.recordDigest !== record.digest || value.namespaceDigest !== namespaceDigest || value.auditId !== record.value.auditId
+    || lines.length !== 1 || lines[0].value.recordDigest !== record.digest || lines[0].value.auditId !== record.value.auditId
+    || lines[0].value.namespaceDigest !== namespaceDigest || value.auditLineDigest !== sha256(lines[0].bytes)) fail();
+}
+
+function readGraph(io, root, { allowPending = false } = {}) {
+  const { top, record: namespaceRecordEntry, confirmation: namespaceConfirmation } = readNamespacePart(io, root, { allowPending });
+  const namespaceDigest = namespaceRecordEntry.value.namespaceDigest;
+  const records = [namespaceRecordEntry];
   const confirmations = new Map();
   let active = null;
-  if (top.includes(NAMESPACE_CONFIRMATION)) confirmations.set('namespace:0', readFlushed(io, path.join(root, NAMESPACE_CONFIRMATION), TRUST_LIMITS.confirmation));
+  if (namespaceConfirmation) confirmations.set('namespace:0', namespaceConfirmation);
 
   if (top.includes(KEYS)) {
     const keys = path.join(root, KEYS);
@@ -373,10 +393,7 @@ function readGraph(io, root, { allowPending = false } = {}) {
     if (lines.length > 1) fail();
     const confirmation = confirmations.get(`${record.subject}:${record.version}`);
     if (!confirmation) { pending.push(record); continue; }
-    const value = decode(confirmation);
-    if (!confirmationRecord(value) || value.subject !== record.subject || value.version !== record.version
-      || value.recordDigest !== record.digest || value.namespaceDigest !== namespaceDigest || value.auditId !== record.value.auditId
-      || lines.length !== 1 || value.auditLineDigest !== sha256(lines[0].bytes)) fail();
+    confirmed(record, confirmation, lines, namespaceDigest);
   }
   return { namespaceDigest, records, active, audit, pending };
 }
@@ -453,27 +470,12 @@ export function readOwnerDecisionNamespace({ root, io = fs } = {}) {
   try { io.lstatSync(root); } catch (error) { if (error?.code === 'ENOENT') fail('owner-trust-missing'); fail('owner-trust-io'); }
   const lock = acquireLock(io, root);
   try {
-    assertAncestors(io, root); ownedDirectory(io, root);
-    const top = listBounded(io, root, ROOT_NAMES.size + 1);
-    if (top.includes(PENDING)) fail('owner-trust-pending');
-    if (!top.every((name) => ROOT_NAMES.has(name))) fail();
-    if (!top.includes(NAMESPACE)) {
-      if (top.length !== 1) fail();
-      fail('owner-trust-missing');
-    }
-    const bytes = readFlushed(io, path.join(root, NAMESPACE), TRUST_LIMITS.record), namespace = decode(bytes);
-    if (!namespaceRecord(namespace)) fail();
-    if (!top.includes(NAMESPACE_CONFIRMATION)) fail('owner-trust-audit-pending');
-    const confirmation = decode(readFlushed(io, path.join(root, NAMESPACE_CONFIRMATION), TRUST_LIMITS.confirmation));
-    const lines = top.includes(AUDIT) ? readAudit(io, root).filter(({ value }) => value.subject === 'namespace') : [];
+    const { top, record, confirmation } = readNamespacePart(io, root);
+    if (!confirmation) fail('owner-trust-audit-pending');
+    const lines = top.includes(AUDIT) ? readAudit(io, root).filter(({ value }) => value.subject === 'namespace' && value.version === 0) : [];
     flushDirectory(io, root);
-    const digest = sha256(bytes);
-    if (lines.length !== 1 || lines[0].value.version !== 0 || lines[0].value.recordDigest !== digest
-      || lines[0].value.namespaceDigest !== namespace.namespaceDigest || lines[0].value.auditId !== namespace.auditId
-      || !confirmationRecord(confirmation) || confirmation.subject !== 'namespace' || confirmation.version !== 0
-      || confirmation.recordDigest !== digest || confirmation.namespaceDigest !== namespace.namespaceDigest
-      || confirmation.auditId !== namespace.auditId || confirmation.auditLineDigest !== sha256(lines[0].bytes)) fail();
-    return { namespaceDigest: namespace.namespaceDigest };
+    confirmed(record, confirmation, lines, record.value.namespaceDigest);
+    return { namespaceDigest: record.value.namespaceDigest };
   } catch (error) { throw error?.reason ? error : trustError('owner-trust-io'); }
   finally { io.closeSync(lock); }
 }
