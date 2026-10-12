@@ -1,0 +1,1 @@
+- A cold turn started by a wake is now a child span of that `wake` event, so a sender's trace continues through the wake into the turn. The span is carried by async context beside the turn, never in its input, prompt, journal or report; turns started any other way keep their own trace (#1027).
