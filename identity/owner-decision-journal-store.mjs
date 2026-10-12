@@ -326,6 +326,20 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     } catch { return null; }
   }
 
+  // Re-verifies the stored d1 at entry with the existing verifier: its
+  // signature under the current receipt pin, the acceptance daemonKey, the
+  // exact saved challenge and the stored p1. The verifier's clock is the
+  // receipt's own `iat`, read structurally (the signature then covers it):
+  // this checks the receipt as issued without tightening entry, whose
+  // freshness bound is the gate's p1 re-verification on the daemon clock.
+  function reverifyReceipt(slots, acceptance, trust) {
+    const receiptToken = slots.receipt.toString('latin1');
+    let iat;
+    try { ({ iat } = JSON.parse(Buffer.from(receiptToken.split('.')[1], 'base64url').toString('utf8'))); } catch { iat = null; }
+    return verifyOwnerDecisionReceipt(receiptToken, { trust, daemonKey: acceptance.daemonKey, challengeBytes: slots['prepared-challenge'],
+      presenceToken: slots.presence.toString('latin1'), nowMilliseconds: Number.isSafeInteger(iat) ? iat * 1000 : NaN });
+  }
+
   function preEffectGraph(decode, saved) {
     const { slots, acceptance, action, preparation, preparationDigest, receiptDigest, typed } = evidence(decode, saved);
     // Nothing after entry can exist without it; pairs and the local outcome
@@ -353,7 +367,8 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
     const refusable = Object.freeze({ preparation, preparationDigest, receiptDigest: slots['successful-check'] ? receiptDigest : null });
     if (slots['successful-check']) {
       return { state: 'released', refusable, view: Object.freeze({ action, actionBytes: saved.action, acceptance, preparation, preparationDigest,
-        receiptDigest, receiptKeys: receiptKeyIds(slots.receipt), presenceToken: slots.presence.toString('latin1') }) };
+        receiptDigest, receiptKeys: receiptKeyIds(slots.receipt), presenceToken: slots.presence.toString('latin1'),
+        verifyReceipt: (trust) => reverifyReceipt(slots, acceptance, trust) }) };
     }
     // The saved authorization a successful check must name, once both
     // presence and receipt are present.

@@ -12,7 +12,11 @@
 //      also refuses a same-pair re-enroll in or after the preparation's
 //      second. A same-pair re-enroll stamped before preparedAt (a rollback)
 //      is not detected: that needs the trust version persisted at
-//      preparation, which is an owner decision;
+//      preparation, which is an owner decision. Then re-verify the stored
+//      d1 itself under the current receipt pin (signature, daemonKey, saved
+//      challenge, stored p1), on the receipt's own clock so entry is never
+//      tightened (validation-failed; a pin problem has already refused as
+//      trust-unavailable through the key binding above);
 //   2. require the presented p1 to be exactly the one stored for the request,
 //      and re-verify it against the active presence pin, the preparation's own
 //      nonce and the daemon's clock;
@@ -63,6 +67,10 @@ export function enterOwnerDecisionEffect({ requestId, presenceToken } = {}, {
       if (!view.receiptKeys || !brokerKey || !presenceKey
         || view.receiptKeys.brokerKey !== brokerKey || view.receiptKeys.presenceKey !== presenceKey) refuse('trust-unavailable');
       if (!Number.isSafeInteger(trust.enrolledAt) || trust.enrolledAt >= view.preparation.preparedAt) refuse('trust-unavailable');
+      // The stored d1 itself, re-verified under the current receipt pin, as
+      // issued: a planted receipt (bad signature, another challenge or p1)
+      // refuses even when it names the right key IDs.
+      try { view.verifyReceipt(trust); } catch { refuse('validation-failed'); }
       if (typeof presenceToken !== 'string' || presenceToken !== view.presenceToken) refuse('validation-failed');
       try {
         verifyOwnerDecisionPresence(presenceToken, { actionBytes: view.actionBytes, nonce: view.preparation.nonce, trust, nowMilliseconds });

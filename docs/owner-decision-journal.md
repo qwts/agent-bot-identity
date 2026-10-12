@@ -523,6 +523,20 @@ with soul's locked target resolution. There is no route.
      (or the stored receipt is unreadable);
    - the active pair was enrolled at or after this request's `preparedAt`
      (daemon wall-clock seconds; equality refuses).
+
+   Then the stored d1 itself is re-verified with `verifyOwnerDecisionReceipt`
+   under the current receipt pin: its signature, the acceptance `daemonKey`,
+   the exact saved challenge and the stored p1. A receipt planted in the
+   journal without passing intake (a bad or forger's signature, another
+   challenge, request or p1) refuses with `validation-failed`, even when it
+   names the right key IDs.
+
+   The verifier's clock is the receipt's own `iat`, so the receipt is checked
+   as it was issued. Entry is not tightened: the receipt's `exp` is at most
+   the p1's, and the p1's re-verification on the daemon clock (with its skew)
+   stays the only freshness bound. Checking the receipt against the daemon
+   clock would cut entry short, by the p1 skew or by a receipt that expires
+   before its p1.
 3. The presented p1 must be exactly the one stored for the request, so an
    alias with flipped signature bits refuses. It is re-verified against the
    active presence pin, the preparation's own nonce and the daemon's clock.
@@ -697,3 +711,9 @@ route. None is built here.
   `check.exp` is checked only against the daemon clock at intake. The gate's
   re-verification of p1 freshness at entry is what bounds the window in
   which a released request can enter.
+- **The successful check isn't re-verified at entry.** It's unsigned, so
+  there is nothing to re-verify; only the daemon's custody of its own journal
+  protects slot 6. Entry does re-verify the stored p1 and d1. A slot-6 check
+  planted next to a genuine p1 and d1 that the broker never released would
+  still enter. Authenticating the check's source at intake, the first item
+  above, is the only defence before wiring.
