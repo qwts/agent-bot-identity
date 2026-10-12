@@ -177,6 +177,22 @@ test('completion requires the live one-shot entry handle from the instance that 
   });
 });
 
+// The store-wide rule: an unknown entry in requests/ stays for inspection and
+// refuses every write. The refusal is a storage failure, so it poisons the
+// instance: the handle is not consumed, but the instance that holds it refuses
+// until reopened, and a reopened instance has no handle. The request stays
+// effect-uncertain even once the entry is gone.
+test('an unknown request entry refuses completion with a live handle, and the entry stays uncertain', darwin, (t) => {
+  const j = journal(t, 'cold-wake.set');
+  const unknown = path.join(j.root, 'requests', 'not-a-request');
+  fs.mkdirSync(unknown);
+  unchanged(j, () => j.complete(), { reason: 'owner-journal-corrupt', code: 'storage-failed' });
+  fs.rmdirSync(unknown);
+  unchanged(j, () => j.complete(), { reason: 'owner-journal-reopen-required' });
+  unchanged(j, () => j.open().completeEffect(j.entry, j.defaults), { reason: 'owner-journal-entry-required' });
+  assert.deepEqual(j.recover().outcome, { code: 'effect-uncertain', effectDigest: null });
+});
+
 test('completion is legal only while the entered record is the one the handle entered', darwin, async (t) => {
   await t.test('a damaged entered record', (tt) => {
     const j = journal(tt);

@@ -490,6 +490,8 @@ export function createDaemonJournalStore({ root, namespaceDigest, io = fs, fault
       if (!plain(result)) fail('invalid-owner-journal-record');
       const { requestId } = live, name = requestDirectoryName({ namespaceDigest, requestId });
       return locked(() => {
+        // An unknown or excess entry refuses every write, this one included.
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
         const graph = readGraph(name, requestId);
         if (!zeros(graph.bytes.get('completed.record'))) fail('owner-journal-conflict');
         if (!graph.awaiting || graph.awaiting.enteredDigest !== live.enteredDigest) fail('owner-journal-transition-refused');

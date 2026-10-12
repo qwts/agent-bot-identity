@@ -581,6 +581,11 @@ persisted format.
   - A cold-wake request is then `applied`. A revision stays `indeterminate`
     until its linked authoritative event is present, as the reader already
     requires. That event's writer is a separate slice.
+  - Like every writer, it refuses (`storage-failed`, `owner-journal-corrupt`)
+    while an unknown or excess entry is in `requests/`. That refusal is a
+    storage failure and poisons the instance. The handle is not consumed,
+    but the instance holding it refuses until reopened, and a reopened one
+    has no handle, so the request stays `effect-uncertain`.
   - It refuses (`conflict`) if `completed` already holds anything.
   - It refuses (`storage-failed`) if the `entered` record is damaged or
     changed, or a cold-wake request carries a linked event.
