@@ -7,6 +7,7 @@
 // owner commands (F8, in-process so presence prompts keep the terminal); and
 // what `agent-bot identity`, `principal` and `identity app` run in-process.
 
+export { sinceTime } from './agent-audit.mjs';
 export { readBindToken, readBinding } from './agent-binding.mjs';
 export { principalCommand } from './agent-principals.mjs';
 export { inspectAppCredentials, reconcileAppCredentials } from './credential-reconciler.mjs';

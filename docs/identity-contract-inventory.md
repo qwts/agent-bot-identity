@@ -637,8 +637,8 @@ regenerated from the import graph; contract files are included.
   - host: `agent-daemon.mjs:89`, `agent-mcp.mjs:30`, `telegram-adapter.mjs:49`
   - cli: `agent-approvals.mjs:19`, `cli/identity.mjs:13`, `cli/soul-dream.mjs:7`, `cli/soul-skill.mjs:9`, `readiness.mjs:37`
   - comms: `daemon-status.mjs:12`
-- **`identity-cli.mjs`** (10):
-  - cli: `agent-approvals.mjs:21`, `bootstrap.mjs:18`, `cli/identity-apps.mjs:8`, `cli/identity.mjs:17`, `cli/owner.mjs:10`, `cli/principal.mjs:7`, `cli/soul-dream.mjs:8`, `doctor.mjs:15`, `readiness.mjs:29`, `sync-hooks.mjs:27`
+- **`identity-cli.mjs`** (11):
+  - cli: `agent-approvals.mjs:21`, `bootstrap.mjs:18`, `cli/identity-apps.mjs:8`, `cli/identity.mjs:17`, `cli/owner.mjs:10`, `cli/principal.mjs:7`, `cli/soul-dream.mjs:8`, `diagnostics-cli.mjs:18`, `doctor.mjs:15`, `readiness.mjs:29`, `sync-hooks.mjs:27`
 - **`identity-format.mjs`** (67):
   - soul: `agent-population.mjs:32`, `agent-space-pack.mjs:22`, `agent-space.mjs:28`, `claude-worktree-create.mjs:38`, `cold-wake-settings.mjs:8`, `confinement.mjs:10`, `executor-contract.mjs:56`, `harness-auth.mjs:14`, `owner-action.mjs:24`, `sandbox-export.mjs:35`, `sandbox-remove.mjs:18`, `sandbox.mjs:34`, `setup-worktree.mjs:11`, `skill-dream-previews.mjs:8`, `skill-dream-scheduler.mjs:7`, `skill-install.mjs:13`, `skill-learning.mjs:9`, `skill-search.mjs:15`, `skill-status.mjs:9`, `skill-workspace.mjs:16`, `sop.mjs:24`, `soul-asides.mjs:37`, `soul-build.mjs:10`, `soul-coauthor.mjs:19`, `soul-comms.mjs:13`, `soul-computer-use.mjs:5`, `soul-credential-migration.mjs:16`, `soul-dir.mjs:4`, `soul-env-clean.mjs:22`, `soul-env-export.mjs:49`, `soul-env-migrate.mjs:26`, `soul-fork.mjs:32`, `soul-home.mjs:12`, `soul-join.mjs:35`, `soul-memory.mjs:19`, `soul-mode.mjs:8`, `soul-model.mjs:8`, `soul-package.mjs:10`, `soul-providers.mjs:20`, `soul-remove.mjs:21`, `soul-revisions.mjs:19`, `soul-runtimes.mjs:29`, `soul-secrets.mjs:18`, `soul-stop.mjs:6`, `soul-template-refresh.mjs:17`, `soul-threads.mjs:22`, `soul-tool-home.mjs:30`, `spaces-cutover.mjs:25`, `wake-resume.mjs:21`
   - host: `agent-daemon.mjs:79`, `agent-interaction.mjs:65`, `agent-jobs.mjs:33`, `daemon-mcp.mjs:51`, `daemon-supervisor.mjs:38`, `delegation-grants.mjs:42`, `grant-github.mjs:21`, `metrics.mjs:38`, `skill-dream-service.mjs:6`, `telegram-adapter.mjs:55`
@@ -649,5 +649,3 @@ regenerated from the import graph; contract files are included.
 - **`identity-soul.mjs`** (23):
   - soul: `agent-space-pack.mjs:24`, `claude-worktree-create.mjs:37`, `cold-wake-settings.mjs:13`, `confinement.mjs:18`, `owner-action.mjs:11`, `owner-action.mjs:19`, `owner-action.mjs:21`, `owner-action.mjs:23`, `owner-action.mjs:26`, `setup-worktree.mjs:10`, `sop.mjs:28`, `soul-asides.mjs:277`, `soul-coauthor.mjs:18`, `soul-computer-use.mjs:7`, `soul-credential-migration.mjs:154`, `soul-credential-migration.mjs:36`, `soul-env.mjs:18`, `soul-join.mjs:42`, `soul-secrets.mjs:20`, `soul-stop.mjs:8`, `soul-tool-home.mjs:31`, `turn-registry.mjs:5`
   - comms: `wake-listen.mjs:28`
-- **`identity/agent-audit.mjs`** (1):
-  - cli: `diagnostics-cli.mjs:18`

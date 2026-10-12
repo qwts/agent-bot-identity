@@ -15,7 +15,7 @@ import { writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sinceTime } from './identity/agent-audit.mjs';
+import { sinceTime } from './identity-cli.mjs';
 import { cleanStoredEvent, readDiagnostics, runtimeVersion } from './diagnostics.mjs';
 
 export const EXPORT_FORMAT = 'agent-bot-diagnostics-export';

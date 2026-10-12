@@ -537,6 +537,7 @@
         "readGitConfig",
         "reconcileAppCredentials",
         "resolveAgentSlug",
+        "sinceTime",
         "soulMarkers",
         "territoryHarness"
       ],
