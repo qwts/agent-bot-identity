@@ -164,6 +164,19 @@ The record of each owner action carries `authorization`: `{ method:
 "principal", principal }`, `{ method: "presence", via: "agent-bot-keyd" }` or
 `{ method: "consent" }`. The secret is never recorded.
 
+**Owner-decision records.** An owner decision applied through agent-comms#77
+(disabled; nothing passes it yet) records `authorization: { method:
+"owner-decision" }` and an optional top-level `ownerDecision`:
+`{ requestId, payloadDigest, receiptDigest, effectId, preparationDigest }`.
+- **Where.** Only approve, reject (its `decision` record), adopt and edit take
+  it, and never alongside another authorization. Any other writer refuses a
+  linkage.
+- **Size.** A record that would not fit the 16384-byte owner-decision journal
+  slot refuses before anything is written, so the local ceremony stays the
+  path for that change.
+- **Readers.** Records keep `schemaVersion: 1`, and existing readers ignore
+  the extra field.
+
 This is still a local mechanism boundary, not isolation against a process
 that can rewrite runtime files: a process running as the account that owns the
 journal can write it directly, and any process in the owner's account can

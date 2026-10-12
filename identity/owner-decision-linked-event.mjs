@@ -1,7 +1,8 @@
 // Disabled owner-decision linkage to the authoritative soul revision journal
 // (#1007, agent-comms#77): slot 13 `linked-authoritative-event`. Pure checks
-// only. The local revision writer is unchanged and does not emit the
-// `ownerDecision` field yet; until a reviewed adapter does, nothing validates.
+// only. The local revision writer emits the `ownerDecision` field when an
+// owner-decision operation passes it (soul-revisions.mjs); nothing passes it
+// yet.
 //
 // The slot retains the exact source-event bytes the revision journal wrote
 // (`JSON.stringify(record) + '\n'`), at most 16384 bytes. A cold-wake change

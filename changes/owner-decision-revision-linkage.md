@@ -1,0 +1,1 @@
+- Soul revision records for approve, reject, adopt and edit can carry the disabled owner-decision linkage (`ownerDecision`, with `authorization: {method: "owner-decision"}`) while staying `schemaVersion 1`, so an applied owner decision can be verified against its journal event (agent-comms#77).
