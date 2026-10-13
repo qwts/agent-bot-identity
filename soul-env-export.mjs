@@ -36,7 +36,7 @@
 // and read here with node's zlib and no dependency, so `tar -tzf` lists it.
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, constants, cpSync, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, constants, cpSync, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -77,6 +77,11 @@ const BLOCK = 512;
 const TAR_SIZE_MAX = 0o77777777777; // the 11-octal-digit ustar size field
 const MANIFEST_MAX_BYTES = 64 * 1024 * 1024;
 const UNTRACKED_MAX_BYTES = 64 * 1024 * 1024;
+// What an import leaves free on the souls root's filesystem after the archive
+// has expanded (#1070), so an import can never fill the disk the daemon, state
+// and credentials live on.
+export const IMPORT_FREE_BYTES_MARGIN = 256 * 1024 * 1024;
+export const IMPORT_FREE_INODES_MARGIN = 4096;
 const SHA256 = /^[a-f0-9]{64}$/;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
@@ -614,6 +619,37 @@ export async function readExportManifest(file) {
   return validateManifest(manifest);
 }
 
+/** What the archive's manifest says it expands to: `{ entries, bytes }`. */
+export function importFootprint(manifest) {
+  const listed = manifest.components.filter((c) => c.entry);
+  return { entries: listed.length, bytes: listed.reduce((sum, c) => sum + c.bytes, 0) };
+}
+
+// Refuses an import whose declared size would not fit with a margin to spare
+// on the filesystem that holds `directory` (#1070). The manifest's sizes are
+// binding: each entry must be exactly its declared size, so what extraction
+// writes never exceeds the footprint checked here. Checked before the owner is
+// asked and again before extracting. A filesystem that cannot report its free
+// space is not refused for that.
+export function checkImportCapacity(manifest, directory, { statfs = statfsSync } = {}) {
+  let at = path.resolve(directory);
+  while (!existsSync(at) && path.dirname(at) !== at) at = path.dirname(at);
+  let stats;
+  try { stats = statfs(at); } catch { return; }
+  const { entries, bytes } = importFootprint(manifest);
+  const free = Number(stats.bavail) * Number(stats.bsize);
+  if (Number.isFinite(free) && bytes + IMPORT_FREE_BYTES_MARGIN > free) {
+    fail('import-insufficient-space', `the archive expands to ${bytes} bytes; ${at} has ${free} bytes free and an import keeps ${IMPORT_FREE_BYTES_MARGIN} spare`,
+      { action: 'free some space, or import into a souls root on a larger disk' });
+  }
+  // Some filesystems (and Windows) report no inode counts; only a reported
+  // count is enforced.
+  if (Number(stats.files) > 0 && entries + IMPORT_FREE_INODES_MARGIN > Number(stats.ffree)) {
+    fail('import-insufficient-space', `the archive expands to ${entries} entries; ${at} has room for ${Number(stats.ffree)} more files and an import keeps ${IMPORT_FREE_INODES_MARGIN} spare`,
+      { action: 'free some space, or import into a souls root on a larger disk' });
+  }
+}
+
 // Where an archive entry lands in the staging: the soul root for `life/`,
 // `.soul-state/imports/<name>/` for a workspace's records, `.journal/` for
 // the revision journal (moved to the state directory once verified).
@@ -633,7 +669,7 @@ function stagingPath(staging, entry) {
  * hash that does not match or a listed entry that never arrives refuses
  * the import. Returns `{ manifest, files, bytes }`.
  */
-export async function extractSoulExport(file, staging) {
+export async function extractSoulExport(file, staging, { statfs = statfsSync } = {}) {
   let manifest = null;
   const expected = new Map();
   const seen = new Set();
@@ -648,6 +684,7 @@ export async function extractSoulExport(file, staging) {
       return { write: (b) => chunks.push(Buffer.from(b)), end: () => {
         try { manifest = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('import-manifest-invalid', 'manifest.json is not JSON'); }
         validateManifest(manifest);
+        checkImportCapacity(manifest, path.dirname(staging), { statfs });
         for (const component of manifest.components) if (component.entry) expected.set(component.entry, component);
       } };
     }
@@ -1005,7 +1042,7 @@ export async function soulEnvExportCommand(argv, { gate = ownerGate, readStdin =
  * soul runs, checked before and after the gate.
  */
 export async function soulEnvImportCommand(argv, { gate = ownerGate, readStdin = () => readFileSync(0, 'utf8'), write = (value) => process.stdout.write(value),
-  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, interaction = null, ...rest } = {}) {
+  env = process.env, home = env.HOME ?? homedir(), cwd = process.cwd(), now = () => new Date(), running = soulIsRunning, interaction = null, statfs = statfsSync, ...rest } = {}) {
   let archive = null, fork = false, replace = false, name = null, json = false, plan = false, presented = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -1038,20 +1075,24 @@ export async function soulEnvImportCommand(argv, { gate = ownerGate, readStdin =
     interaction: manifest.interaction ?? null };
   const emit = (result) => { write(json ? `${JSON.stringify(result)}\n` : formatImport(result)); return result; };
   if (plan) return emit(base);
+  const { root } = soulsHome({ env, home, ...(options.config === undefined ? {} : { config: options.config }) });
+  // Before the owner is asked: an archive that cannot fit is refused outright.
+  checkImportCapacity(manifest, root, { statfs });
+  const footprint = importFootprint(manifest);
   const refuseRunning = () => fail('soul-running', `${manifest.agentId} is running (a turn in flight or a warm harness); stop it before replacing its life`, { action: `agent-bot soul stop ${manifest.agentId}` });
   if (planned.decision === 'replace' && await running(manifest.agentId, { env, home })) refuseRunning();
   const what = planned.decision === 'fork' ? `import a fork of ${manifest.agentId}'s life from ${source}` : planned.decision === 'replace'
     ? `import ${manifest.agentId}'s life from ${source}, replacing the soul here` : `import ${manifest.agentId}'s life from ${source}`;
-  const authorization = await gate(what, { principal, env, cwd });
+  const asked = `${what} (${footprint.entries} entries, ${footprint.bytes} bytes)`;
+  const authorization = await gate(asked, { principal, env, cwd });
   // Decided again after the gate: the census may have changed meanwhile.
   const fresh = decide();
   if (fresh.decision === 'replace' && await running(manifest.agentId, { env, home })) refuseRunning();
-  const { root } = soulsHome({ env, home, ...(options.config === undefined ? {} : { config: options.config }) });
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const staging = path.join(root, `.import-${randomUUID()}`);
   let restored;
   try {
-    const extracted = await extractSoulExport(source, staging);
+    const extracted = await extractSoulExport(source, staging, { statfs });
     restored = await restoreSoul({ archive: source, staging, manifest: extracted.manifest, plan: fresh, env, home, file, stateDir, now, config: options.config, authorization, interaction });
   } catch (error) {
     // The archive is still there: the staging is ours and goes; nothing
