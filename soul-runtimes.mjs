@@ -914,7 +914,7 @@ async function installPython({ version, archive, catalogRelease = null }, target
     // Beside the staging directory, so it is never part of the install.
     const list = `${staging}.downloads.json`;
     writeFileSync(list, `${JSON.stringify(downloads)}\n`, { mode: 0o600 });
-    try { await runImpl(uvBin, ['python', 'install', version, '--install-dir', staging, '--no-bin', '--python-downloads-json-url', list], { env, timeout: INSTALL_TIMEOUT_MS }); }
+    try { await runImpl(uvBin, ['python', 'install', version, ...NO_CONFIG, '--install-dir', staging, '--no-bin', '--python-downloads-json-url', list], { env, timeout: INSTALL_TIMEOUT_MS }); }
     catch (error) { fail('runtime-install-failed', `${label}: uv could not install python ${version} (${String(error.stderr ?? error.message).trim().split('\n').pop()}); check the network and retry`, { runtime: label, action }); }
     const dirs = readdirSync(staging, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith('cpython-'));
     if (dirs.length !== 1) fail('runtime-install-failed', `${label}: uv installed ${dirs.length} interpreters, expected one`, { runtime: label, action });
@@ -945,6 +945,10 @@ async function installPython({ version, archive, catalogRelease = null }, target
 // install copies files and runs nothing, so uv is told never to build:
 // a package or dependency with no wheel for this platform fails the install.
 const NO_BUILD = Object.freeze(['--no-build']);
+// No uv.toml or pyproject.toml from the daemon's directory, the user's
+// config or the system's can redirect an install's index, mirror or build
+// settings (#1059): every install is decided by its arguments alone.
+const NO_CONFIG = Object.freeze(['--no-config']);
 
 // A uv tool's venv carries absolute paths, so it is installed in place
 // with an `.installing` marker beside it: a marked directory is incomplete
@@ -968,7 +972,7 @@ async function installUvTool({ name, install }, target, uvBin, { root, pythonDir
     const python = pythonExecutable ? ['--python', pythonExecutable, '--no-python-downloads'] : [];
     if (install.lock) await installLockedUvTool(install, target, uvBin, { env, python, runImpl, uvFailed, label, action });
     else {
-      try { await runImpl(uvBin, ['tool', 'install', ...python, ...NO_BUILD, `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
+      try { await runImpl(uvBin, ['tool', 'install', ...NO_CONFIG, ...python, ...NO_BUILD, `${install.package}==${install.version}`], { env, timeout: INSTALL_TIMEOUT_MS }); }
       catch (error) { uvFailed(error); }
     }
     if (!hasExecutable(path.join(target, 'bin'), install.bin, platform)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
@@ -990,8 +994,8 @@ async function installLockedUvTool(install, target, uvBin, { env, python, runImp
   try {
     // Only the soul's managed Python (or the owner's override): uv may not
     // fetch an interpreter of its own choosing for a locked tool (#617).
-    await runImpl(uvBin, ['venv', ...(python.length ? python : ['--no-python-downloads']), venv], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
-    await runImpl(uvBin, ['pip', 'install', '--python', path.join(venv, 'bin', 'python'), ...NO_BUILD, '--require-hashes', '-r', lockFile], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
+    await runImpl(uvBin, ['venv', ...NO_CONFIG, ...(python.length ? python : ['--no-python-downloads']), venv], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
+    await runImpl(uvBin, ['pip', 'install', ...NO_CONFIG, '--python', path.join(venv, 'bin', 'python'), ...NO_BUILD, '--require-hashes', '-r', lockFile], { env: venvEnv, timeout: INSTALL_TIMEOUT_MS });
   } catch (error) { uvFailed(error); }
   const source = path.join(venv, 'bin', install.bin);
   if (!executableFile(source)) fail('runtime-install-failed', `${label}: ${install.package} installed no ${install.bin} executable`, { runtime: label, action });
@@ -1165,6 +1169,32 @@ export async function provisionSoulRuntimes(id, { env = process.env, home = env.
   const state = await installSoulRuntimes(soulDir, { ...rest, only, agentId: soul.id, env, home });
   const overrides = inspectRuntimeOverrides(soulDir, { agentId: soul.id, platform: state.platform ?? process.platform });
   return report(soul, soulDir, state, overrides.rows);
+}
+
+/**
+ * What a team start (an agent-initiated launch) must have the owner approve
+ * before the daemon installs it (#1059): the soul's pending managed Python
+ * and uv-tool harnesses, bound to the soul's package revision and each tool's
+ * package, version and lock digest. `digest` covers all of it, so an approval
+ * is for exactly this set. Null when none of these is pending. Throws when
+ * the soul or its declaration cannot be read, which a caller refuses.
+ */
+export function runtimeApprovalSubject(id, options = {}) {
+  const state = soulRuntimesStatus(id, options);
+  if (state.invalid?.length) throw new Error(`${state.agentId}: soul.json runtime declarations are invalid`);
+  const overridden = new Set(state.overrides.filter((row) => row.status === 'selected').map((row) => row.runtime).filter(Boolean));
+  const items = [
+    ...state.runtimes.filter((row) => row.name === 'python' && row.status !== 'installed' && !overridden.has('python'))
+      .map((row) => ({ kind: 'python', version: row.version ?? row.declared ?? null })),
+    ...state.harnesses.filter((row) => row.kind === 'uv-tool' && row.status !== 'installed')
+      .map((row) => ({ kind: 'uv-tool', harness: row.name, package: row.package, version: row.version,
+        lockSha256: uvToolLockDigest({ kind: 'uv-tool', package: row.package, version: row.version, ...(row.lock ? { lock: row.lock } : {}) }) })),
+  ];
+  if (!items.length) return null;
+  const manifest = readSoulManifest(state.soulDir);
+  const revision = typeof manifest?.revision === 'string' ? manifest.revision : null;
+  const digest = createHash('sha256').update(JSON.stringify({ agentId: state.agentId, revision, items })).digest('hex');
+  return { agentId: state.agentId, revision, items, digest };
 }
 
 /** The names a launch of this soul still has to install, or [] (never throws). */

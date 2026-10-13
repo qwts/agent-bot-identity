@@ -393,6 +393,14 @@
       "kind": "failure",
       "registered": "0.10.64",
       "summary": "The wake outcome could not be reported to the broker."
+    },
+    {
+      "n": 50,
+      "code": "runtime-approval-required",
+      "component": "launch",
+      "kind": "refusal",
+      "registered": "0.10.64",
+      "summary": "A team start's Python or uv-tool installs were not approved by the owner, so nothing was installed."
     }
   ]
 }
