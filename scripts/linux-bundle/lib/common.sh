@@ -109,12 +109,23 @@ bundle_paths() {
 }
 
 # The generated shell text interpolates these paths, so a path that could close
-# a quote or re-expand is refused rather than silently written.
+# a quote or re-expand is refused rather than silently written. Any control
+# character is refused too: systemd ends a unit line at a carriage return as
+# well as a newline, so one could start a directive of its own (#1068). The
+# message leaves such a path out rather than echo it to the terminal.
 assert_safe_path() {
   case "$2" in
-    *'"'*|*'`'*|*'$'*|*'
-'*) die "$1 may not contain a quote, a dollar, or a newline: $2" ;;
+    *[[:cntrl:]]*) die "$1 may not contain a control character (a newline, carriage return, tab or the like)" ;;
+    *'"'*|*'`'*|*'$'*) die "$1 may not contain a quote, a backtick or a dollar: $2" ;;
   esac
+}
+
+# A path as sed replacement text for a value the unit template holds inside
+# double quotes (#1068). systemd unescapes \\ and expands %% there, so those
+# are escaped first; sed then gets \\, & and its | delimiter escaped, so no
+# path character can end the replacement or add a command of its own.
+unit_value() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/%/%%/g' -e 's/[\\&|]/\\&/g'
 }
 
 is_marked_wrapper() {
