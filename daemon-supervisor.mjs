@@ -218,12 +218,23 @@ function checkProgram({ executable, programArguments }) {
   return program;
 }
 
+// systemd ends a unit line at a carriage return as well as a newline, so a
+// control character in a word or value could start a directive of its own
+// (#1068). Every one is refused rather than escaped or dropped.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+
+function refuseControlCharacters(value, what) {
+  if (CONTROL_CHARACTER.test(value)) throw new Error(`${what} may not contain a control character`);
+}
+
 // systemd splits ExecStart on whitespace, honours quotes and C escapes, and
 // expands $ and % specifiers: quote every word and escape all of them.
 function systemdWord(arg) {
-  return `"${arg.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '$$$$').replaceAll('%', '%%')
-    .replaceAll('\n', '\\n')}"`;
+  return `"${arg.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '$$$$').replaceAll('%', '%%')}"`;
 }
+
+// A path made only of these characters means the same to systemd bare.
+const PLAIN_SYSTEMD_WORD = /^[A-Za-z0-9_./+:@,=-]+$/;
 
 function environmentEntries(environment = {}) {
   return Object.entries(environment).filter(([, value]) => typeof value === 'string' && value.length > 0);
@@ -264,20 +275,27 @@ ${program.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join('\n')}
 // systemd splits an unquoted Environment= line at whitespace, so a value
 // holding a space (a vault name may) is written as one
 // quoted assignment. A value with no whitespace, quote or backslash keeps
-// the line it had before.
+// the line it had before. Either way % starts a specifier, so it is doubled.
 function systemdEnvironment(key, value) {
-  if (!/[\s"\\]/.test(value)) return `Environment=${key}=${value}`;
-  return `Environment="${key}=${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+  const literal = value.replaceAll('%', '%%');
+  if (!/[\s"\\]/.test(value)) return `Environment=${key}=${literal}`;
+  return `Environment="${key}=${literal.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }
 
 export function renderSystemdUnit({ executable, programArguments, environment = {} }) {
-  checkProgram({ executable, programArguments });
-  // The default form is unchanged; a host's argument list is fully quoted.
+  for (const arg of checkProgram({ executable, programArguments })) refuseControlCharacters(arg, 'supervisor program');
+  const entries = environmentEntries(environment);
+  for (const [key, value] of entries) {
+    refuseControlCharacters(key, 'supervisor environment name');
+    refuseControlCharacters(value, `supervisor environment ${key}`);
+  }
+  // A plain default path keeps its bare form; anything else, and a host's
+  // argument list, is fully quoted and escaped.
   const execStart = programArguments
     ? programArguments.map(systemdWord).join(' ')
-    : `${executable.includes(' ') ? `"${executable.replaceAll('"', '\\"')}"` : executable} daemon run`;
-  const envLines = environmentEntries(environment)
-    .map(([key, value]) => systemdEnvironment(key, value.replaceAll('\n', '')))
+    : `${PLAIN_SYSTEMD_WORD.test(executable) ? executable : systemdWord(executable)} daemon run`;
+  const envLines = entries
+    .map(([key, value]) => systemdEnvironment(key, value))
     .join('\n');
   return `[Unit]
 Description=agent-bot identity daemon
