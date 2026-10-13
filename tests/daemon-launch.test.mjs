@@ -815,6 +815,55 @@ test('a declared runtime missing from the soul is installed at launch as its own
   }
 });
 
+// A team start is an agent choosing the template (#1059): its pending Python
+// and uv-tool installs wait on the owner, bound to the package revision and
+// lock digest, and fail closed. Gates here are injected; nothing prompts.
+test('a team start installs Python or uv tools only after the owner approves exactly that subject (#1059)', async (t) => {
+  const subject = { agentId, revision: `sha256:${'e'.repeat(64)}`, digest: 'd'.repeat(64),
+    items: [{ kind: 'uv-tool', harness: 'muse', package: 'goose-ai', version: '1.9.0', lockSha256: 'ab'.repeat(32) }, { kind: 'python', version: '3.12.8' }] };
+  const run = async ({ requestId, origin = 'team-start', approveRuntimes, subjects = [subject], subjectPort = true }) => {
+    const installs = [];
+    let n = 0;
+    const runtimes = { pending: async () => ['harness:muse', 'python'], install: async (args) => { installs.push(args); },
+      ...(subjectPort ? { subject: async () => { const next = subjects[Math.min(n++, subjects.length - 1)]; if (next instanceof Error) throw next; return next; } } : {}) };
+    const f = fixture(t, { joinSoul: async () => 'addr', runtimes, ...(approveRuntimes === undefined ? {} : { approveRuntimes }) });
+    await f.handler({ ...event, requestId }, { ...f.ports, ...(origin ? { origin } : {}) });
+    return { report: f.reports[0], installs, calls: f.calls };
+  };
+  const asked = [];
+  const approved = await run({ requestId: 'ok', approveRuntimes: async (action, context) => { asked.push([action, context.subject]); return { method: 'touch-id' }; } });
+  assert.equal(approved.report.status, 'launched');
+  assert.deepEqual(approved.installs, [{ agentId, harness: 'claude' }]);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0][1], subject);
+  for (const part of ['goose-ai==1.9.0', 'muse', `lock sha256:${'ab'.repeat(6)}`, 'Python 3.12.8', subject.revision, agentId, 'd'.repeat(12)]) {
+    assert.ok(asked[0][0].includes(part), `the owner is shown ${part}`);
+  }
+
+  const refusedBy = async (requestId, options) => {
+    const result = await run({ requestId, ...options });
+    assert.equal(result.report.status, 'failed', requestId);
+    assert.equal(result.report.code, 'runtime-approval-required', requestId);
+    assert.deepEqual(result.installs, [], `${requestId}: nothing is installed`);
+    assert.deepEqual(result.calls, [], `${requestId}: no turn ran`);
+    return result.report.detail;
+  };
+  assert.match(await refusedBy('declined', { approveRuntimes: async () => { throw new Error('the owner declined'); } }), /did not approve.*the owner declined/);
+  assert.match(await refusedBy('unwired', {}), /cannot ask/);
+  assert.match(await refusedBy('no-subject', { approveRuntimes: async () => ({}), subjectPort: false }), /could not be checked/);
+  assert.match(await refusedBy('unreadable', { approveRuntimes: async () => ({}), subjects: [new Error('soul.json unreadable')] }), /could not be checked \(soul.json unreadable\)/);
+  assert.match(await refusedBy('changed', { approveRuntimes: async () => ({}), subjects: [subject, { ...subject, digest: 'f'.repeat(64) }] }), /changed after the owner approved/);
+
+  // Nothing build-capable pending: the install runs without asking.
+  const quiet = await run({ requestId: 'node-only', approveRuntimes: async () => assert.fail('nothing to approve'), subjects: [null] });
+  assert.equal(quiet.report.status, 'launched');
+  assert.equal(quiet.installs.length, 1);
+  // A principal's launch is unchanged: no approval asked, even when wired.
+  const principal = await run({ requestId: 'principal', origin: null, approveRuntimes: async () => assert.fail('a principal launch is not gated here') });
+  assert.equal(principal.report.status, 'launched');
+  assert.equal(principal.installs.length, 1);
+});
+
 // Sandbox resolution at launch (#376). `sandboxFor` stands in for
 // sandbox.mjs's launchSandbox; the steps are the real plan for the checks.
 const READY = { supported: true, exists: true, standard: true, home: { path: '/Users/geniusbar-agent', exists: true }, devTools: true, paired: true, fleet: true, harnessSignIn: 'unknown' };

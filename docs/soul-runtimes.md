@@ -280,7 +280,19 @@ Python (or the owner's Python override) and fails rather than fetch an
 interpreter of its own. Locked or not, uv tools install with `--no-build`
 (#1059): only wheels are accepted, so no package's build backend runs as the
 daemon user, and a package or dependency with no wheel for the platform fails
-the install. The managed Python is digest-pinned unless it is a
+the install. Every uv call also passes `--no-config`, so no `uv.toml`,
+`pyproject.toml` or user config can change an install's index or build
+settings.
+
+A team start is an agent choosing the template, so the daemon doesn't install
+its managed Python or uv-tool harnesses until you approve them (#1059). The
+prompt (Touch ID, or the administrator dialog) names each package, version and
+lock digest (or "unlocked"), the Python version, and the soul's package
+revision. The approval is bound to a digest of exactly that set. If you
+decline, if nobody can be asked, or if the declaration changes after you
+approve, the launch fails with `runtime-approval-required` and nothing is
+installed. Your own launches, and `agent-bot soul runtimes install`, are
+unchanged. The managed Python is digest-pinned unless it is a
 receipt from before #617, which is labelled `unverified` (and reinstalled when
 the soul requires integrity). An owner override stays `unverified-external`:
 the catalog digest does not cover it. A

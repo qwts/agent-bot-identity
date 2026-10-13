@@ -118,7 +118,7 @@ import { createWebhookWaker } from './wake-webhook.mjs';
 import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath, opencodeDaemonConfig } from './acp-registry.mjs';
 import { computePackageRevision, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
-import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, soulRuntimeEnv } from './soul-runtimes.mjs';
+import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, runtimeApprovalSubject, soulRuntimeEnv } from './soul-runtimes.mjs';
 import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
 import { editSoulRevision, listSoulProposals, REVISION_PUBLICATION_UNCERTAIN, REVISION_STORAGE_FAILED, revisionCommand, revisionHistory,
   revisionPublicationUncertain } from './soul-revisions.mjs';
@@ -1994,6 +1994,8 @@ async function serveDaemon({
     // harnesses from their pinned downloads. Nothing lands on the host.
     runtimes: {
       pending: ({ agentId }) => pendingSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }) }),
+      // A team start's Python and uv-tool installs, for the owner to approve (#1059).
+      subject: ({ agentId }) => runtimeApprovalSubject(agentId, { env, home, config, file: populationFile({ env, home }) }),
       install: ({ agentId, harness }) => provisionSoulRuntimes(agentId, { env, home, config, file: populationFile({ env, home }), harness,
         log: (line) => process.stderr.write(`soul runtimes: ${line}\n`) }),
     },
@@ -2028,6 +2030,8 @@ async function serveDaemon({
     sandboxFor: ({ agentId, name = null, role = null, acceptStale = null }) => launchSandbox(agentId, { env, home, name, role, acceptStale }),
     // A principal's launch past a stale persona record asks the owner (#613).
     verifyOwner: (action) => confirmOwnerPresence(action, { env }),
+    // A team start's Python and uv-tool installs wait on the owner (#1059).
+    approveRuntimes: (action) => confirmOwnerPresence(action, { env }),
     joinSoul: async (soul) => {
       const address = await joinLaunchedSoul(soul, { env });
       // The census shows the launch name; every command shows it too (#429).
@@ -2069,7 +2073,7 @@ async function serveDaemon({
     identities: (agentId) => { try { return identities(agentId); } catch { return null; } },
     launch: (event) => new Promise((resolve, reject) => {
       const { parent, ...request } = event;
-      onLaunch(request, { account, parent, report: async (row) => resolve(row) }).catch(reject);
+      onLaunch(request, { account, parent, origin: 'team-start', report: async (row) => resolve(row) }).catch(reject);
     }),
     receipt: ({ agentId, decision, detail = null }) => appendAuditReceipt({ event: 'team-start', agentId, operation: 'start_soul', decision, detail }, { env, home, now }),
     limits: teamLimits(userConfig),

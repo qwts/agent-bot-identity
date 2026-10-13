@@ -90,6 +90,7 @@ const LAUNCHABLE = new Set(['package', 'installed']);
 export const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
   'persona-policy-unavailable', 'persona-policy-stale', 'persona-policy-requires-addon',
   'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed', 'runtime-override-invalid', 'runtime-override-unsupported-platform',
+  'runtime-approval-required',
   'tool-home-unwritable', 'tool-home-record-invalid',
   'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid',
   'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing',
@@ -100,7 +101,7 @@ export const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbo
 // which tests/error-codes.test.mjs holds them to.
 export const LAUNCH_REFUSALS = new Set(['soul-paused', 'sandbox-not-ready', 'sandbox-other-account',
   'persona-policy-stale', 'persona-policy-requires-addon', 'runtime-unsupported-platform', 'runtime-override-invalid',
-  'runtime-override-unsupported-platform', 'provider-secret-missing', 'provider-declaration-invalid',
+  'runtime-override-unsupported-platform', 'runtime-approval-required', 'provider-secret-missing', 'provider-declaration-invalid',
   'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing', 'policy-denied']);
 // The broker's launch-result detail budget, code prefix included.
 const DETAIL_MAX = 512;
@@ -123,6 +124,17 @@ const DETAIL_MAX = 512;
 // soul declares and lacks; `install` provisions it into the soul folder.
 // The `runtimes` stage is reported only when there is something to install,
 // and a failure is the coded runtime error with the command that fixes it.
+//
+// A team start (#1059) is an agent choosing the template, so its pending
+// managed Python and uv-tool installs are the owner's to approve before the
+// daemon runs them: `runtimes.subject({ agentId })` names them, bound to the
+// package revision and each lock digest (or null when none is pending), and
+// `approveRuntimes(action, { subject })` asks the owner (Touch ID or the
+// dialog) and throws on a decline or when nobody can be asked. A subject
+// that changes after the approval is refused, and so is a team start on a
+// handler without both ports: nothing wired is a refusal, never a pass. Any
+// refusal is `runtime-approval-required`, before anything is installed. A
+// principal's launch (no `origin`) is unchanged.
 //
 // `toolHomes` (#583 slice 2): `pending({ agentId, harness })` names the
 // tool home a routable harness gets (`tool-home:<harness>`); `prepare`
@@ -184,7 +196,7 @@ const DETAIL_MAX = 512;
 
 export function createLaunchHandler({ file, identities, spawnPackage, lookupBinding, provisionHome, discard = () => {}, onLaunched = () => {}, defaultHarness = () => null,
   isPaused = () => false, joinSoul = null, recordLaunch = null, locatePackage = null, forkCopy = null, identityFor = null, harnessProblem = null, sandboxFor = null, runtimes = null, toolHomes = null, providers = null, signIn = null,
-  souls = null, receipt = () => {}, verifyOwner = null, policy = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry(),
+  souls = null, receipt = () => {}, verifyOwner = null, approveRuntimes = null, policy = null, executorFor, turnTimeoutMs = 30 * 60_000, turns = createTurnRegistry(),
   diagnostics = null, nowMs = () => Date.now(),
   redactDetail = (detail) => redactDiagnostic(detail, { maxLength: DETAIL_MAX }) }) {
   let rows = [];
@@ -215,7 +227,33 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
     row.reported = true;
     save();
   };
-  const handle = async (event, { report, progress = null, account, parent: callerParent = null }) => {
+  const refuseRuntimes = (message) => Object.assign(new Error(message), { code: 'runtime-approval-required' });
+  const approveTeamRuntimes = async (agentId) => {
+    let subject;
+    try {
+      if (typeof runtimes.subject !== 'function') throw new Error('this daemon cannot name them');
+      subject = await runtimes.subject({ agentId });
+    } catch (error) {
+      throw refuseRuntimes(`a teammate's runtime installs need the owner's approval, and they could not be checked (${error.message}); nothing was installed`);
+    }
+    if (subject === null) return;
+    const what = subject.items.map((item) => (item.kind === 'python' ? `Python ${item.version}`
+      : `${item.package}==${item.version} for ${item.harness} (${item.lockSha256 ? `lock sha256:${item.lockSha256.slice(0, 12)}` : 'unlocked'})`)).join(', ');
+    const action = `install ${what} for teammate ${agentId} from package revision ${subject.revision ?? 'unknown'} [approval ${subject.digest.slice(0, 12)}]`;
+    if (typeof approveRuntimes !== 'function') {
+      throw refuseRuntimes(`a teammate's runtime installs need the owner's approval, and this daemon cannot ask (${what}); nothing was installed`);
+    }
+    try { await approveRuntimes(action, { subject }); }
+    catch (error) {
+      throw refuseRuntimes(`the owner did not approve installing ${what} for a teammate (${error.message}); nothing was installed`);
+    }
+    let after;
+    try { after = await runtimes.subject({ agentId }); } catch { after = undefined; }
+    if (!after || after.digest !== subject.digest) {
+      throw refuseRuntimes('the teammate\'s runtime declarations changed after the owner approved them; nothing was installed');
+    }
+  };
+  const handle = async (event, { report, progress = null, account, parent: callerParent = null, origin = null }) => {
     const { requestId } = event;
     if (typeof requestId !== 'string' || !requestId || requestId.length > 256) throw new Error('invalid launch requestId');
     const prior = requests.get(requestId);
@@ -384,7 +422,11 @@ export function createLaunchHandler({ file, identities, spawnPackage, lookupBind
       rollback.binding = binding;
       if (runtimes) {
         const pending = await runtimes.pending({ agentId: identity.id, harness });
-        if (pending.length) { await step('runtimes'); await runtimes.install({ agentId: identity.id, harness }); }
+        if (pending.length) {
+          await step('runtimes');
+          if (origin === 'team-start') await approveTeamRuntimes(identity.id);
+          await runtimes.install({ agentId: identity.id, harness });
+        }
       }
       if (toolHomes) {
         const pending = await toolHomes.pending({ agentId: identity.id, harness });

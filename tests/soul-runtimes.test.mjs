@@ -13,7 +13,7 @@ import { upsertSoul } from '../agent-population.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { RUNTIME_CATALOG, RUNTIME_NAMES, RUNTIME_PLATFORMS, SHA256_HEX, catalogPin, catalogReleaseHash, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, resolveCatalogPin, versionMatches } from '../runtime-catalog.mjs';
 import { computePackageRevision, PACKAGE_IGNORE_LIST, validateRuntimesDeclaration, validateSoulPackage } from '../soul-package.mjs';
-import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimeUpgrade, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, planRuntimeUpgrade, readJson, readRuntimePins, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
+import { INSTALL_STAMP, RUNTIME_ERROR_CODES, downloadCacheDir, fetchArchive, formatRuntimeUpgrade, formatRuntimes, inspectRuntimeOverrides, inspectSoulRuntimes, installSoulRuntimes, pendingSoulRuntimes, planRuntimeUpgrade, readJson, readRuntimePins, runtimeApprovalSubject, runtimeLaunchEnv, soulRuntimeEnv, soulRuntimesCommand, uvPythonDownloads } from '../soul-runtimes.mjs';
 import { createAcpExecutor } from '../acp-engine.mjs';
 import { createLaunchHandler } from '../daemon-launch.mjs';
 import { acpExecutorFor, coldTurnExecutor } from '../wake-plane.mjs';
@@ -308,7 +308,7 @@ test('an install lands atomically under .soul-state/runtimes with a stamp, is id
   assert.ok(existsSync(path.join(python.path, python.bin, 'python3')));
   const uvInstall = d.commands.find((c) => c.args[0] === 'python');
   assert.equal(uvInstall.command, 'uv');
-  assert.deepEqual(uvInstall.args.slice(0, 3), ['python', 'install', PYTHON.version]);
+  assert.deepEqual(uvInstall.args.slice(0, 4), ['python', 'install', PYTHON.version, '--no-config']);
   assert.ok(uvInstall.args.includes('--no-bin'), 'never ~/.local/bin');
   assert.ok(uvInstall.env.UV_PYTHON_INSTALL_DIR.startsWith(path.join(f.runtimes, 'python', '.installing-')), 'uv installs into the staging directory');
   assert.equal(uvInstall.env.UV_CACHE_DIR, path.join(f.runtimes, 'uv', 'cache'));
@@ -585,7 +585,7 @@ test('non-npm harnesses install from a pinned archive or as a uv tool into .soul
   assert.ok(existsSync(path.join(muse.path, 'bin', 'goose')));
   assert.ok(!existsSync(`${muse.path}.installing`), 'the in-place marker is gone');
   const tool = d.commands.find((c) => c.args[0] === 'tool');
-  assert.deepEqual(tool.args, ['tool', 'install', '--no-build', 'goose-ai==1.9.0'], 'wheels only: no build backend runs as the daemon (#1059)');
+  assert.deepEqual(tool.args, ['tool', 'install', '--no-config', '--no-build', 'goose-ai==1.9.0'], 'wheels only: no build backend runs as the daemon (#1059)');
   assert.equal(tool.env.UV_TOOL_DIR, path.join(muse.path, 'tools'));
   assert.equal(tool.env.UV_TOOL_BIN_DIR, path.join(muse.path, 'bin'));
   assert.equal(tool.env.UV_PYTHON_INSTALL_DIR, path.join(f.runtimes, 'python', PYTHON.version));
@@ -627,8 +627,8 @@ test('a locked uv tool installs into its own venv with uv pip --require-hashes a
   assert.deepEqual([muse.status, muse.bin], ['installed', 'bin']);
   assert.equal(d.commands.some((c) => c.args[0] === 'tool'), false, 'uv tool install cannot require hashes, so it is never used for a locked tool');
   const venv = d.commands.find((c) => c.args[0] === 'venv'), pip = d.commands.find((c) => c.args[0] === 'pip');
-  assert.deepEqual(venv.args, ['venv', '--no-python-downloads', path.join(muse.path, 'venv')], 'the venv uses the soul\'s installed Python and never downloads another');
-  assert.deepEqual(pip.args, ['pip', 'install', '--python', path.join(muse.path, 'venv', 'bin', 'python'), '--no-build', '--require-hashes', '-r', path.join(muse.path, 'requirements.lock.txt')], 'wheels only, even from a lock that lists an sdist hash (#1059)');
+  assert.deepEqual(venv.args, ['venv', '--no-config', '--no-python-downloads', path.join(muse.path, 'venv')], 'the venv uses the soul\'s installed Python and never downloads another');
+  assert.deepEqual(pip.args, ['pip', 'install', '--no-config', '--python', path.join(muse.path, 'venv', 'bin', 'python'), '--no-build', '--require-hashes', '-r', path.join(muse.path, 'requirements.lock.txt')], 'wheels only, even from a lock that lists an sdist hash (#1059)');
   assert.equal(pip.env.UV_PYTHON_PREFERENCE, 'only-managed');
   assert.equal(readFileSync(path.join(muse.path, 'requirements.lock.txt'), 'utf8'), `goose-ai==1.9.0 --hash=sha256:${A} --hash=sha256:${B}\nrequests==2.32.3 --hash=sha256:${B}\n`);
   assert.deepEqual(readdirSync(path.join(muse.path, 'bin')), ['goose'], 'only the declared executable is linked; pip and python stay in the venv');
@@ -1532,4 +1532,41 @@ test('readiness accepts internal executable links but refuses external links and
   await assert.rejects(installSoulRuntimes(escaped.dir, { ...escaped.options,
     fetchFn: () => { throw new Error('must not download'); } }), /installation path escapes/);
   assert.deepEqual(readdirSync(externalRoot), []);
+});
+
+test('a team start approval subject names pending Python and uv tools, bound to the revision and lock digest (#1059)', (t) => {
+  const A = 'a'.repeat(64);
+  const lock = [{ name: 'goose-ai', version: '1.9.0', sha256: [A] }];
+  const f = fixture(t, { manifest: { runtimes: { python: '3.12', node: '24' }, harnesses: { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose', lock } } } }, census: true });
+  const options = { ...f.options, file: f.env.AGENT_BOT_POPULATION_PATH };
+  const subject = runtimeApprovalSubject(ID, options);
+  assert.equal(subject.agentId, ID);
+  assert.equal(subject.revision, f.soul.revision);
+  assert.deepEqual(subject.items.map((item) => item.kind), ['python', 'uv-tool'], 'node is not a build-capable install, so it is not in the subject');
+  const tool = subject.items[1];
+  assert.deepEqual([tool.harness, tool.package, tool.version], ['muse', 'goose-ai', '1.9.0']);
+  assert.match(tool.lockSha256, /^[0-9a-f]{64}$/);
+  assert.match(subject.digest, /^[0-9a-f]{64}$/);
+  assert.equal(runtimeApprovalSubject(ID, options).digest, subject.digest, 'the same declaration gives the same digest');
+  // A changed lock, an unlocked tool or another revision is a different approval.
+  f.writeManifest((m) => { m.harnesses.muse.install.lock = [{ name: 'goose-ai', version: '1.9.0', sha256: ['b'.repeat(64)] }]; });
+  assert.notEqual(runtimeApprovalSubject(ID, options).digest, subject.digest);
+  f.writeManifest((m) => { delete m.harnesses.muse.install.lock; });
+  const unlocked = runtimeApprovalSubject(ID, options);
+  assert.equal(unlocked.items[1].lockSha256, null);
+  assert.notEqual(unlocked.digest, subject.digest);
+  f.writeManifest((m) => { m.revision = `sha256:${'1'.repeat(64)}`; });
+  assert.notEqual(runtimeApprovalSubject(ID, options).digest, unlocked.digest);
+  // Only node pending: nothing for the owner to approve.
+  f.writeManifest((m) => { m.runtimes = { node: '24' }; m.harnesses = {}; });
+  assert.equal(runtimeApprovalSubject(ID, options), null);
+});
+
+test('uv runs every install with --no-config, so no config file can redirect it (#1059)', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { python: '3.12' }, harnesses: { muse: { install: { kind: 'uv-tool', package: 'goose-ai', version: '1.9.0', bin: 'goose' } } } } });
+  const d = doubles({ archives: f.archives });
+  await installSoulRuntimes(f.dir, { ...f.options, fetchFn: d.fetchFn, runImpl: d.runImpl });
+  const uvCalls = d.commands.filter((c) => ['python', 'tool', 'venv', 'pip'].includes(c.args[0]));
+  assert.ok(uvCalls.length >= 2);
+  for (const call of uvCalls) assert.ok(call.args.includes('--no-config'), call.args.join(' '));
 });
