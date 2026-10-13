@@ -982,6 +982,7 @@ fn serve_connection(
     idle: Option<Duration>,
     limits: Limits,
     conn: &Conn,
+    slot: &Slot,
     handle: impl Fn(&Value) -> Option<Value>,
 ) {
     // SAFETY: getuid cannot fail.
@@ -1017,8 +1018,12 @@ fn serve_connection(
         }
         // Busy only from a whole message until its answer is written (#1103
         // review): the window in which closing the connection would lose a
-        // request keyd is acting on.
-        conn.busy.store(true, Ordering::SeqCst);
+        // request keyd is acting on. Marked under the registry lock eviction
+        // holds, so a connection is either evicted before it is busy, and its
+        // request is then dropped unanswered, or busy before eviction looks.
+        if !slot.claim(conn) {
+            return;
+        }
         let response = match serde_json::from_slice::<Value>(&line) {
             Ok(message) if message.is_object() => handle(&message),
             Ok(_) => Some(failure(&Value::Null, -32600, "batches are not supported")),
@@ -1038,6 +1043,18 @@ fn serve_connection(
 struct Slot {
     registry: Registry,
     id: u64,
+}
+
+impl Slot {
+    /// Marks `conn` busy unless it has already been evicted.
+    fn claim(&self, conn: &Conn) -> bool {
+        let connections = self.registry.lock().unwrap();
+        if !connections.contains_key(&self.id) {
+            return false;
+        }
+        conn.busy.store(true, Ordering::SeqCst);
+        true
+    }
 }
 
 impl Drop for Slot {
@@ -1115,8 +1132,7 @@ fn accept(
         // Spawn can fail under pressure; the slot is returned when the
         // closure (and with it the stream) is dropped.
         let _ = std::thread::Builder::new().spawn(move || {
-            let _slot = slot;
-            serve_connection(stream, idle, limits, &conn, handle);
+            serve_connection(stream, idle, limits, &conn, &slot, handle);
         });
     }
 }
@@ -1604,6 +1620,37 @@ mod tests {
         let mut all_busy = HashMap::from([(1, conn(true, 100)), (2, conn(true, 50))]);
         assert!(!evict_idle(&mut all_busy));
         assert_eq!(all_busy.len(), 2);
+    }
+
+    #[test]
+    fn busy_is_claimed_under_the_eviction_lock() {
+        let registry: Registry = Arc::default();
+        let conn = |id: u64| {
+            let (stream, _) = UnixStream::pair().unwrap();
+            let conn = Arc::new(Conn {
+                stream,
+                busy: AtomicBool::new(false),
+                last: Mutex::new(Instant::now()),
+            });
+            registry.lock().unwrap().insert(id, Arc::clone(&conn));
+            (
+                conn,
+                Slot {
+                    registry: Arc::clone(&registry),
+                    id,
+                },
+            )
+        };
+        // Claimed while registered: busy, and eviction then passes it over.
+        let (kept, kept_slot) = conn(1);
+        assert!(kept_slot.claim(&kept));
+        assert!(kept.busy.load(Ordering::SeqCst));
+        assert!(!evict_idle(&mut registry.lock().unwrap()));
+        // Evicted first: the claim fails and the request is not handled.
+        let (gone, gone_slot) = conn(2);
+        assert!(evict_idle(&mut registry.lock().unwrap()));
+        assert!(!gone_slot.claim(&gone));
+        assert!(!gone.busy.load(Ordering::SeqCst));
     }
 
     #[test]

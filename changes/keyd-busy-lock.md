@@ -1,0 +1,1 @@
+- agent-bot-keyd marks a connection busy under the same lock its eviction uses, so a request is never answered on a connection that eviction has already closed, and a connection being answered is never closed (#1095).
