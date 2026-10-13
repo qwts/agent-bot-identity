@@ -416,3 +416,15 @@ test('independent apply and record-only writers with one expected head have exac
   assert.equal(history.length, 2); assert.equal(history[1].parentRevision, f.initial); assert.equal(history[1].revision, winner.revision);
   assert.equal(readFileSync(join(f.directory, 'AGENTS.md'), 'utf8'), winners[0].apply ? 'Applying candidate' : 'Original instructions\n');
 });
+
+// #1069 review: --apply walks the destination soul's own tree, and does so
+// within the package limits. A sparse 4 GiB file makes an unbounded read fail
+// with ERR_FS_FILE_TOO_LARGE rather than the bounded refusal.
+test('--apply reads the destination within the package limits', async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.copy, 'AGENTS.md'), 'Customized\n');
+  writeFileSync(join(f.directory, 'big.bin'), '');
+  fs.truncateSync(join(f.directory, 'big.bin'), 4 * 1024 * 1024 * 1024);
+  await assert.rejects(revisionCommand(editArgs(f), editOptions(f)), (error) => error.code === 'soul-package-read-limit');
+  assert.equal(readFileSync(join(f.directory, 'AGENTS.md'), 'utf8'), 'Original instructions\n', 'nothing was applied');
+});

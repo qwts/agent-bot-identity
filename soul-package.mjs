@@ -302,7 +302,7 @@ export function validateSkill(bytes, directory) {
 // filtered as generated; ignored working state is never descended into.
 export const SOUL_PACKAGE_LIMITS = Object.freeze({ maxEntries: 8192, maxBytes: 64 * 1024 * 1024, maxFileBytes: 8 * 1024 * 1024, maxDepth: 32 });
 
-function boundedPackageReader(limits) {
+export function boundedPackageReader(limits = SOUL_PACKAGE_LIMITS) {
   if (!limits || Object.keys(limits).length !== 4
     || !['maxEntries', 'maxBytes', 'maxFileBytes', 'maxDepth'].every(key => Number.isSafeInteger(limits[key]) && limits[key] > 0)) {
     throw new Error('invalid package read limits');
@@ -452,11 +452,29 @@ export function computePackageRevision(packagePath, options) {
   return `sha256:${createHash('sha256').update(canonicalPackageBytes(packagePath, options)).digest('hex')}`;
 }
 
+// A soul directory's own soul.json, read the way the package reader reads it:
+// never through a link, only a regular file, at most the per-file limit.
+function readManifestText(file) {
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) throw Object.assign(new Error('soul.json is not a regular file'), { code: 'soul-package-unsupported-entry' });
+    if (opened.size > SOUL_PACKAGE_LIMITS.maxFileBytes) {
+      throw Object.assign(new Error(`package exceeds read limits: a file is larger than ${SOUL_PACKAGE_LIMITS.maxFileBytes} bytes`), { code: 'soul-package-read-limit' });
+    }
+    const buffer = Buffer.alloc(opened.size + 1);
+    let size = 0, count;
+    while (size < buffer.length && (count = readSync(fd, buffer, size, buffer.length - size, null))) size += count;
+    if (size > SOUL_PACKAGE_LIMITS.maxFileBytes) throw Object.assign(new Error('soul.json changed during read'), { code: 'soul-package-read-limit' });
+    return buffer.subarray(0, size).toString('utf8');
+  } finally { closeSync(fd); }
+}
+
 // A soul directory's comms setting from its soul.json: false only when the
 // manifest says so, true otherwise, null when there is no readable manifest.
 export function soulCommsSetting(directory) {
   let manifest;
-  try { manifest = JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')); }
+  try { manifest = JSON.parse(readManifestText(join(directory, 'soul.json'))); }
   catch { return null; }
   if (!object(manifest)) return null;
   return manifest.comms !== false;
@@ -471,7 +489,7 @@ export function soulCommsSetting(directory) {
 export function writeSoulComms(directory, comms) {
   if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
   const file = join(directory, 'soul.json');
-  const before = readFileSync(file, 'utf8');
+  const before = readManifestText(file);
   const manifest = JSON.parse(before);
   if (!object(manifest)) throw new Error('soul.json must be an object');
   if ((manifest.comms !== false) === comms) return null;
@@ -497,7 +515,7 @@ function publishManifestEdit(directory, file, next) {
 // still null. Every other caller keeps the lenient default.
 export function soulCredentialsDeclaration(directory, { strict = false } = {}) {
   let manifest;
-  try { manifest = JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')); }
+  try { manifest = JSON.parse(readManifestText(join(directory, 'soul.json'))); }
   catch (error) {
     if (strict && error?.code !== 'ENOENT') throw new Error('soul.json is unreadable');
     return null;
@@ -512,7 +530,7 @@ export function soulCredentialsDeclaration(directory, { strict = false } = {}) {
 export function writeSoulCredentialsDeclaration(directory, github) {
   validateCredentialsDeclaration({ github });
   const file = join(directory, 'soul.json');
-  const before = readFileSync(file, 'utf8');
+  const before = readManifestText(file);
   const manifest = JSON.parse(before);
   if (!object(manifest)) throw new Error('soul.json must be an object');
   const credentials = { ...(manifest.credentials ?? {}), github: { app: github.app, ...(github.store ? { store: github.store } : {}) } };

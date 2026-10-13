@@ -7,7 +7,7 @@ import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFi
   readdirSync, renameSync, rmSync, rmdirSync, writeFileSync, chmodSync, closeSync, constants, fsyncSync, openSync } from 'node:fs';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
+import { boundedPackageReader, canonicalJson, computePackageRevision, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { withLock } from './file-lock.mjs';
@@ -318,8 +318,10 @@ function prepareApply(directory, stored, inPlace) {
   const right = new Map(readSoulPackageEntries(stored.packagePath).entries.map((entry) => [entry.path, entry]));
   if ([...right.keys()].some(workingState)) throw new Error('apply cannot overwrite working state');
   const left = new Map();
-  function walk(folder, prefix = '') {
-    for (const name of readdirSync(folder)) {
+  // The destination is the soul's own tree: read within the package limits.
+  const reader = boundedPackageReader();
+  function walk(folder, prefix = '', depth = 0) {
+    for (const name of [...reader.names(folder, depth)].map((raw) => raw.toString('utf8'))) {
       const path = prefix + name;
       if (workingState(path)) continue; // Do not even stat working-state links.
       const file = join(folder, name), stat = lstatSync(file);
@@ -327,8 +329,8 @@ function prepareApply(directory, stored, inPlace) {
         throw new Error(`unsupported apply destination entry: ${path}`);
       }
       const mode = stat.isDirectory() ? '040000' : stat.mode & 0o111 ? '100755' : '100644';
-      left.set(path, { path, mode, bytes: stat.isDirectory() ? Buffer.alloc(0) : readFileSync(file) });
-      if (stat.isDirectory()) walk(file, `${path}/`);
+      left.set(path, { path, mode, bytes: stat.isDirectory() ? Buffer.alloc(0) : reader.read(file, stat) });
+      if (stat.isDirectory()) walk(file, `${path}/`, depth + 1);
     }
   }
   if (!lstatSync(directory).isDirectory()) throw new Error('apply destination must be a directory');
