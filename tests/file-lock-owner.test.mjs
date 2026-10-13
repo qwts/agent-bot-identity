@@ -30,13 +30,23 @@ test('a live owner with the same boot and start keeps its lock', () => {
     const probe = { platform, boot: BOOT, alive: () => true, startOf: () => '1000' };
     assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: BOOT }, probe), true, platform);
   }
-  // macOS: ps reports the fork, at or before node's start, however long a
-  // shell or launcher ran first; plus one second for ps truncating.
-  const darwin = (start) => lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => start });
-  assert.equal(darwin(1000), true);
-  assert.equal(darwin(1001), true, 'ps truncates while the token rounds');
-  assert.equal(darwin(997), true, 'forked 3 s before node started (sleep, then exec node)');
-  assert.equal(darwin(400), true, 'forked long before node started');
+});
+
+// macOS fails closed: with no kernel-sourced start, a live pid on the same (or
+// an unknown) boot keeps its lock whatever start time is recorded or seen.
+test('macOS never reclaims a live pid on a start time: clock rollback, a future start, reuse or a delayed exec', () => {
+  const darwin = (recorded, seen) => lockOwnerAlive({ pid: 7, start: recorded, boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => seen });
+  assert.equal(darwin('1000', 400), true, 'a wall-clock rollback after fork: the token looks later than the real start');
+  assert.equal(darwin('1000', 4600), true, 'the token looks earlier than the real start (rollback before load, or pid reuse)');
+  assert.equal(darwin('9999999999', 1000), true, 'a start recorded in the future');
+  assert.equal(darwin('1000', 997), true, 'forked before node started (sleep, then exec node)');
+  assert.equal(darwin(null, 1000), true, 'a macOS token records no start');
+  // A start reader is never consulted on macOS.
+  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true,
+    startOf: () => assert.fail('macOS reads no start time') }), true);
+  // Only a gone pid, or a known different boot, frees it.
+  assert.equal(lockOwnerAlive({ pid: 7, start: null, boot: null }, { platform: 'darwin', boot: null, alive: () => false }), false);
+  assert.equal(lockOwnerAlive({ pid: 7, start: null, boot: BOOT }, { platform: 'darwin', boot: OTHER_BOOT, alive: () => true }), false);
 });
 
 test('an owner from another boot is gone, even if its pid is alive again', () => {
@@ -45,9 +55,9 @@ test('an owner from another boot is gone, even if its pid is alive again', () =>
 
 test('an owner whose pid now has another start time is gone (pid reuse)', () => {
   assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: BOOT }, { platform: 'linux', boot: BOOT, alive: () => true, startOf: () => '2000' }), false);
-  // macOS: a reused pid was forked after the owner wrote its token, so later.
-  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => 1002 }), false);
-  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => 4600 }), false);
+  // Linux start ticks come from the kernel, so a clock rollback can't move
+  // them: an earlier or later recorded start both mean another process.
+  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: BOOT }, { platform: 'linux', boot: BOOT, alive: () => true, startOf: () => '999' }), false);
 });
 
 test('an owner whose pid is gone is gone; an unreadable pid is gone, as before', () => {
@@ -94,7 +104,7 @@ test('a stale lock whose live pid has a different start time is reclaimed', { sk
   // earlier than this process did: the owner died and its pid was reused.
   const own = parseLockOwner(lockOwnerToken());
   if (own.start === null) return t.skip('this platform records no start time');
-  const earlier = Number(own.start) - (process.platform === 'darwin' ? 3600 : 1);
+  const earlier = Number(own.start) - 1;
   staleLock(lock, `${process.pid}.${earlier}.${own.boot ?? '-'}.${UUID}`);
   let ran = false;
   withLock(lock, 'test store', () => { ran = true; }, { keepLiveOwners: true });
@@ -144,7 +154,7 @@ test('a directory fsync failure after the rename throws, but the new census is a
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).souls[ID].computerUse, false);
 });
 
-test('acquiring and releasing a lock never spawns; only the reclaim path may', async (t) => {
+test('acquiring, releasing and reclaiming a lock never spawns', async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'file-lock-owner-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const childProcess = (await import('node:child_process')).default;
@@ -155,6 +165,12 @@ test('acquiring and releasing a lock never spawns; only the reclaim path may', a
   try {
     for (let i = 0; i < 20; i += 1) withLock(path.join(dir, 'state.lock'), 'test store', () => {}, { keepLiveOwners: true });
     lockOwnerToken();
+    // The reclaim path too: a stale lock held by this live process (kept, on
+    // every platform), and one held by a pid that is gone (reclaimed).
+    staleLock(path.join(dir, 'live.lock'), lockOwnerToken());
+    assert.throws(() => withLock(path.join(dir, 'live.lock'), 'test store', () => {}, { keepLiveOwners: true }), /timed out/);
+    staleLock(path.join(dir, 'gone.lock'), `${2 ** 22 + 12345}.1000.-.${UUID}`);
+    withLock(path.join(dir, 'gone.lock'), 'test store', () => {}, { keepLiveOwners: true });
   } finally {
     childProcess.spawnSync = original;
     syncBuiltinESMExports();
