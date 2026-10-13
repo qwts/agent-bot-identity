@@ -444,6 +444,10 @@ const DENY_OPAQUE = [
   "find . -exec* sh -c 'touch PWNED' ';'", "find . -exe? sh -c 'touch PWNED' {} +",
   'find . -de*', "find . -e'xec' sh -c 'touch PWNED' {} +", 'find . -e"xec" sh -c x {} +',
   "find . '-exec' sh -c 'touch PWNED' {} +", 'ls *', 'cat ?', 'ls [a]', 'grep x *',
+  // diff -l / --paginate run `pr` from PATH; file -C / --compile writes
+  'diff -l a b', 'diff --paginate a b', 'diff --pag a b', 'diff -rl a b', 'diff -lr a b',
+  'diff -r -l a b', "diff '-l' a b", 'file -C', 'file -C -m ./magic', 'file --compile -m ./magic',
+  'file --comp -m m', 'file -bC x', "file '-C' -m m",
   // the node-based bootstrap forms are gone: node is an interpreter
   'node bootstrap.mjs --x y', 'node bootstrap.mjs --require ./evil.js', 'node bootstrap.mjs --import=./evil.mjs',
   'NODE_OPTIONS=--require=./e.js node bootstrap.mjs', 'node bootstrap.mjs --eval x',
@@ -470,6 +474,7 @@ const DENY_OPAQUE = [
 const ALLOW_SAFE = [
   'ls', 'ls -la', 'cat README.md', 'head -n 5 f', 'tail f', 'wc -l f', 'diff a b',
   'echo hi', 'pwd', 'which git', 'grep -rn node .', 'grep -i x f', 'egrep -v x f',
+  'diff -r a b', 'diff -u a b', 'diff --to-file=a b', 'file -b f', 'file -m ./magic f',
   'find . -name x', 'find . -type f -newer f', "find . -name '*.js'", "grep 'a*b' f", 'ls "[x]"', 'stat f', 'file f',
 ];
 

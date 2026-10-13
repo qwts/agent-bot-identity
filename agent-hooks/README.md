@@ -216,8 +216,10 @@ only**:
   redirection, substitution, `$`-expansion or backslash — whose first word is
   a bare name on a small read-only allowlist: `ls`, `cat`, `head`, `tail`,
   `grep`/`egrep`/`fgrep` with short options only, `find` without
-  `-exec`/`-ok`/`-delete`/`-fprint*`, `wc`, `diff`, `echo`, `pwd`, `which`,
-  `stat`, `file`;
+  `-exec`/`-ok`/`-delete`/`-rm`/`-fprint*`, `wc`, `diff` without
+  `-l`/`--paginate` (which run `pr`), `echo`, `pwd`, `which`, `stat`, `file`
+  without `-C`/`--compile` (which writes). Unquoted `*`, `?` and `[` are
+  refused, since the shell would expand them after this check;
 - anything, when both the git author and the authenticated `gh` login are in
   the unmanaged-author list.
 

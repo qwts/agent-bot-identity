@@ -633,6 +633,21 @@ const GREP_COMMANDS = new Set(["grep", "egrep", "fgrep"]);
 const FIND_UNSAFE = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-rm",
   "-fprint", "-fprint0", "-fprintf", "-fls"]);
 
+// Whether an argument list uses an option, by its short letter anywhere in a
+// short cluster (`-rl`) or by its long name or any prefix getopt_long would
+// accept for it (`--pag` for `--paginate`). Short clusters are matched
+// letter by letter without knowing which letters take a value, so a value
+// that happens to contain the letter is refused too: that errs closed.
+function usesOption(args, letter, long) {
+  return args.some((arg) => {
+    if (arg.startsWith("--")) {
+      const name = arg.split("=")[0];
+      return name.length > 2 && long.startsWith(name);
+    }
+    return arg.length > 1 && arg.startsWith("-") && arg.slice(1).includes(letter);
+  });
+}
+
 function isStructurallySafe(command) {
   if (!structurallySimple(command)) return false;
   const argv = tokenizeCommand(command);
@@ -647,6 +662,10 @@ function isStructurallySafe(command) {
   // apart from a `--pre`-style one is refused.
   if (GREP_COMMANDS.has(word)) return !argv.slice(1).some((arg) => arg.startsWith("--"));
   if (word === "find") return !argv.some((arg) => FIND_UNSAFE.has(arg));
+  // diff -l / --paginate pipes its output through `pr` found on PATH.
+  if (word === "diff") return !usesOption(argv.slice(1), "l", "--paginate");
+  // file -C / --compile writes a compiled magic file.
+  if (word === "file") return !usesOption(argv.slice(1), "C", "--compile");
   return true;
 }
 
@@ -736,6 +755,7 @@ const DETECT_SOURCE = [
   isHumanAttributedPublish,
   unmanagedPublishAllowed,
   structurallySimple,
+  usesOption,
   isStructurallySafe,
   unmanagedOpaqueAllowed,
   uninstalledDecision,
