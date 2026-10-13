@@ -14,7 +14,7 @@
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { unmanagedAuthors } from '../config.mjs';
@@ -574,60 +574,96 @@ function shellPayload(argv) {
   return null;
 }
 
-// Code that runs through a script, an interpreter, a task runner or a
-// wrapper is opaque here: it can run `git push --no-verify` or `gh` as the
-// human where this scan cannot see it (#1064). The executor list matches the
-// installed runner (identity/git-publish-scan.mjs) plus wrappers that run
-// another program.
-function opaqueExecutor(base) {
-  const executors = ["node", "nodejs", "python", "python2", "python3",
-    "perl", "ruby", "php", "lua", "make", "gmake", "just", "npm", "npx", "pnpm",
-    "yarn", "bun", "deno", "tsx", "ts-node", "gradle", "mvn", "ant", "rake",
-    "uv", "uvx", "pipx", "go", "cargo", "osascript", "eval", "source", ".",
-    "xargs", "sudo", "doas", "nohup", "timeout", "nice", "time", "watch", "parallel", "stdbuf"];
-  return executors.includes(base) || /^python\d+(?:\.\d+)?$/.test(base);
-}
+// A denylist of "opaque executors" is a losing game: wrapper flags
+// (`env -S`, `command -p`, `exec -a`), grouping and control flow, backslash
+// escapes, aliases, `$VAR` command words, shell functions, `git -c
+// alias…='!…'`, and the next interpreter not on the list all walk through it.
+// So uninstalled pre-command fails CLOSED by structure (#1064): only a bare,
+// simple command whose first word is a known read-only tool is allowed, plus
+// the checkout's own bootstrap launcher and anything an unmanaged author runs.
+// Everything else is denied, named or not.
 
-function isOpaqueExecution(command, depth) {
-  if (depth == null) depth = 0;
-  if (depth > 8) return true;
-  for (const segment of commandSegments(command)) {
-    const argv = tokenizeCommand(segment);
-    const i = skipEnvAndWrappers(argv);
-    const word = argv[i];
-    if (!word) continue;
-    const base = word.split("/").pop();
-    if (base === "git" || base === "gh") continue;
-    if (opaqueExecutor(base)) return true;
-    if (base === "find" && argv.some((arg) => arg === "-exec" || arg === "-execdir" || arg === "-ok" || arg === "-okdir")) return true;
-    if (["sh", "bash", "zsh", "dash", "ksh"].includes(base)) {
-      const nested = shellPayload(argv);
-      if (nested == null || isOpaqueExecution(nested, depth + 1)) return true;
+// The command is one simple command with no shell machinery: no chaining,
+// grouping, redirection, command/arithmetic substitution, process
+// substitution, expansion or escaping. `$` and backslash and backtick are
+// refused anywhere (a double-quoted `$x` or `` `…` `` still expands); the
+// chaining and grouping metacharacters are refused outside quotes; an
+// unterminated quote is refused. Newlines separate commands, so they are out.
+function structurallySimple(command) {
+  const text = String(command || "");
+  const single = String.fromCharCode(39);
+  const double = String.fromCharCode(34);
+  const backslash = String.fromCharCode(92);
+  const dollar = String.fromCharCode(36);
+  const backtick = String.fromCharCode(96);
+  const unquotedBad = [59, 124, 38, 60, 62, 40, 41, 123, 125, 10, 13].map((n) => String.fromCharCode(n));
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === backslash || ch === dollar || ch === backtick) return false;
+    if (quote) {
+      if (ch === quote) quote = null;
       continue;
     }
-    // An explicit path can be any program, a shell script included.
-    if (word.includes("/")) return true;
+    if (ch === single || ch === double) { quote = ch; continue; }
+    if (unquotedBad.includes(ch)) return false;
   }
-  for (const nested of commandSubstitutions(command)) {
-    if (isOpaqueExecution(nested, depth + 1)) return true;
-  }
-  return false;
+  return quote === null;
 }
 
-// The source bootstrap launcher, exactly: `./agent-bot bootstrap ...` or
-// `node bootstrap.mjs ...` with plain option words and nothing chained,
-// substituted or redirected. Bootstrap is how an uninstalled checkout leaves
-// this mode, so it stays runnable (#1064).
-function isSourceBootstrap(command) {
-  const text = String(command || "").trim();
-  if (!text || /[;&|<>$`()\n\\]/.test(text)) return false;
-  const argv = tokenizeCommand(text);
-  if (argv.some((arg) => !/^[A-Za-z0-9_.,@:\/=+-]+$/.test(arg))) return false;
-  let rest;
-  if (argv[0] === "./agent-bot" && argv[1] === "bootstrap") rest = argv.slice(2);
-  else if (argv[0] === "node" && (argv[1] === "bootstrap.mjs" || argv[1] === "./bootstrap.mjs")) rest = argv.slice(2);
-  else return false;
-  return rest.every((arg, k) => arg.startsWith("--") || (k > 0 && rest[k - 1].startsWith("--") && !arg.startsWith("-")));
+// Read-only tools that neither publish nor run code the scan cannot see. A
+// bare name only (no slash): an explicit path is a program of its own.
+const SAFE_COMMANDS = new Set(["ls", "cat", "head", "tail", "grep", "rg", "egrep", "fgrep",
+  "find", "wc", "diff", "echo", "pwd", "which", "true", "false", "stat", "file", "git"]);
+// `git` subcommands that only read. `config` is excluded: it writes, and
+// `config alias.x "!…"` arms an executing alias.
+const GIT_READONLY = new Set(["status", "log", "show", "diff", "rev-parse", "ls-files",
+  "ls-tree", "cat-file", "branch", "tag", "describe", "blame", "shortlog", "grep",
+  "remote", "reflog", "rev-list", "name-rev", "symbolic-ref", "for-each-ref", "whatchanged"]);
+// `find` actions that run a program or mutate the tree.
+const FIND_UNSAFE = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete",
+  "-fprint", "-fprint0", "-fprintf", "-fls"]);
+
+function isStructurallySafe(command) {
+  if (!structurallySimple(command)) return false;
+  const argv = tokenizeCommand(command);
+  if (!argv.length) return false;
+  const word = argv[0];
+  // A leading env assignment (`FOO=bar ls`) or a `/`-bearing path is not a
+  // plain safe command; neither is a wrapper (`env`, `command`, `sudo`),
+  // which is simply absent from the allowlist.
+  if (word.includes("/") || word.includes("=")) return false;
+  if (!SAFE_COMMANDS.has(word)) return false;
+  if (word === "git") {
+    // No global option before the subcommand, so `git -c …` and `git -C …`
+    // can never set a key or move the repo; the subcommand must be read-only.
+    const sub = argv[1];
+    if (!sub || sub.startsWith("-") || !GIT_READONLY.has(sub)) return false;
+    return true;
+  }
+  if (word === "find") return !argv.some((arg) => FIND_UNSAFE.has(arg));
+  return true;
+}
+
+// The checkout's own bootstrap launcher, the one way out of uninstalled mode.
+// Only `./agent-bot bootstrap …` with plain option words, and only when
+// `<cwd>/agent-bot` is a real file inside the checkout root (resolved by
+// realpath, not matched as a cwd-relative string). `node bootstrap.mjs …` is
+// gone: node is an interpreter, and its pre-script flags are exactly the
+// parsing this structure refuses to do.
+function isSourceBootstrap(command, cwd) {
+  if (!cwd || !structurallySimple(command)) return false;
+  const argv = tokenizeCommand(command);
+  if (argv[0] !== "./agent-bot" || argv[1] !== "bootstrap") return false;
+  const rest = argv.slice(2);
+  if (!rest.every((arg, k) => arg.startsWith("--") || (k > 0 && rest[k - 1].startsWith("--") && !arg.startsWith("-")))) return false;
+  try {
+    const root = realpathSync(cwd);
+    const target = realpathSync(`${root}/agent-bot`);
+    if (!statSync(target).isFile()) return false;
+    const slash = target.lastIndexOf("/");
+    return slash > 0 && target.slice(0, slash) === root;
+  } catch { return false; }
 }
 
 function unmanagedOpaqueAllowed(env, authors) {
@@ -650,7 +686,7 @@ export function isHumanAttributedPublish(command, depth) {
   return false;
 }
 
-export function uninstalledDecision({ event, command = "", env = {}, authors = unmanagedAuthorList(env) }) {
+export function uninstalledDecision({ event, command = "", env = {}, authors = unmanagedAuthorList(env), cwd = "" }) {
   if (event === "pre-commit") {
     if (authors.length && isUnmanagedGitAuthor(env, authors, command)) {
       return { decision: "allow", reason: "" };
@@ -663,17 +699,16 @@ export function uninstalledDecision({ event, command = "", env = {}, authors = u
     }
     return { decision: "deny", reason: UNINSTALLED_REASON };
   }
-  if (event === "pre-command" && isHumanAttributedPublish(command)) {
-    if (unmanagedPublishAllowed(command, env, authors)) {
-      return { decision: "allow", reason: "" };
-    }
-    return { decision: "deny", reason: UNINSTALLED_REASON };
-  }
-  if (event === "pre-command" && isOpaqueExecution(command) && !isSourceBootstrap(command)) {
-    if (unmanagedOpaqueAllowed(env, authors)) {
-      return { decision: "allow", reason: "" };
-    }
-    return { decision: "deny", reason: UNINSTALLED_OPAQUE_REASON };
+  if (event === "pre-command") {
+    const publish = isHumanAttributedPublish(command);
+    // An unmanaged author acts as themselves: a publish by the listed git
+    // author or gh actor, or any command when both identities are listed.
+    if (publish && unmanagedPublishAllowed(command, env, authors)) return { decision: "allow", reason: "" };
+    if (!publish && unmanagedOpaqueAllowed(env, authors)) return { decision: "allow", reason: "" };
+    // Otherwise only a structurally safe read-only command, or the bootstrap
+    // launcher in this checkout, is allowed; everything else fails closed.
+    if (!publish && (isStructurallySafe(command) || isSourceBootstrap(command, cwd))) return { decision: "allow", reason: "" };
+    return { decision: "deny", reason: publish ? UNINSTALLED_REASON : UNINSTALLED_OPAQUE_REASON };
   }
   return { decision: "allow", reason: "" };
 }
@@ -716,19 +751,26 @@ const DETECT_SOURCE = [
   shellPayload,
   isHumanAttributedPublish,
   unmanagedPublishAllowed,
-  opaqueExecutor,
-  isOpaqueExecution,
+  structurallySimple,
+  isStructurallySafe,
   isSourceBootstrap,
   unmanagedOpaqueAllowed,
   uninstalledDecision,
 ].map((fn) => fn.toString()).join('\n');
 
+// Constants the inlined functions close over, re-declared in the generated
+// program so its copies resolve them (they are not captured by toString()).
+const DETECT_CONSTS = `const SAFE_COMMANDS = ${JSON.stringify([...SAFE_COMMANDS])}.reduce((s, v) => s.add(v), new Set());
+const GIT_READONLY = ${JSON.stringify([...GIT_READONLY])}.reduce((s, v) => s.add(v), new Set());
+const FIND_UNSAFE = ${JSON.stringify([...FIND_UNSAFE])}.reduce((s, v) => s.add(v), new Set());`;
+
 function eventDecisionFallback(allow, deny, denyOpaque, event, snapshot) {
-  const program = `import { readFileSync } from "node:fs";
+  const program = `import { readFileSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 const UNINSTALLED_REASON = ${JSON.stringify(UNINSTALLED_REASON)};
 const UNINSTALLED_OPAQUE_REASON = ${JSON.stringify(UNINSTALLED_OPAQUE_REASON)};
+${DETECT_CONSTS}
 ${DETECT_SOURCE}
 const allow = ${JSON.stringify(allow)};
 const deny = ${JSON.stringify(deny)};
@@ -743,6 +785,7 @@ const verdict = uninstalledDecision({
   command: extractCommand(payload, process.env),
   env: process.env,
   authors: unmanagedAuthorList(process.env, ${JSON.stringify(snapshot)}),
+  cwd: process.cwd(),
 });
 const encoded = verdict.decision !== "deny" ? allow : verdict.reason === UNINSTALLED_OPAQUE_REASON ? denyOpaque : deny;
 if (encoded.stdout) process.stdout.write(encoded.stdout);
@@ -788,12 +831,13 @@ function sharedUnmanagedAuthors(env) {
   }
 }
 
-export function decideUninstalledHook({ dialectKey, event, payload = {}, env = process.env }) {
+export function decideUninstalledHook({ dialectKey, event, payload = {}, env = process.env, cwd = process.cwd() }) {
   const { decision, reason } = uninstalledDecision({
     event,
     command: extractCommand(payload, env),
     env,
     authors: sharedUnmanagedAuthors(env),
+    cwd,
   });
   return encodeDecision({ dialectKey, event, decision, reason });
 }

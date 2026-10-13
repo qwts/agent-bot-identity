@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
 import { renderConfig } from '../sync-hooks.mjs';
@@ -251,11 +253,14 @@ test('uninstalled allowlist permits matching ai9d and refuses everyone else', ()
     command: 'echo "$(git commit -m hidden)"',
     env: allowed,
   }).decision, 'allow');
+  // Single quotes make the substitution a literal string, so it is not a
+  // publish; but a `$` in the command still fails the structural allowlist,
+  // which is the safe answer in fail-closed mode (#1064).
   assert.equal(uninstalledDecision({
     event: 'pre-command',
     command: "echo '$(git commit -m hidden)'",
     env: human,
-  }).decision, 'allow');
+  }).decision, 'deny');
 });
 
 test('uninstalled decisions deny only commit, push, and pre-command publishes', () => {
@@ -388,56 +393,75 @@ test('generated adapters allow unmanaged publish only for an explicitly listed a
   }
 });
 
-// Scripts, interpreters, task runners and wrappers can run `git push
-// --no-verify` or `gh` as the human where the scan cannot see it (#1064).
-const OPAQUE = [
-  'node build.mjs',
-  'node --test tests/uninstalled-identity-hook.test.mjs',
-  'npm test',
-  'npx some-tool',
-  'make release',
-  'python3 publish.py',
-  'python3.12 publish.py',
-  './scripts/release.sh',
-  '/usr/local/bin/release',
-  'bash release.sh',
-  'cat release.sh | sh',
-  'sh -c "node build.mjs"',
-  'git status && npm run ship',
-  'echo "$(node build.mjs)"',
-  'FOO=1 node build.mjs',
-  'env node build.mjs',
-  'source ./env.sh',
-  '. ./env.sh',
-  'eval "$CMD"',
-  'xargs -n1 git push < remotes',
-  'find . -name x -exec sh {} ;',
-  './agent-bot doctor',
-  './agent-bot bootstrap; node x.mjs',
-  './agent-bot bootstrap --profile $(node x.mjs)',
-  'node bootstrap.mjs && npm test',
-  'node ./other.mjs',
-];
-
-const NOT_OPAQUE = [
-  'git status',
-  'ls -la',
-  'cat README.md',
-  'printf "hello" > /tmp/notes.md',
-  'gh pr view 122',
-  'bash -c "git status"',
-  'grep -rn node .',
-  './agent-bot bootstrap',
-  './agent-bot bootstrap --repair --machine-only --with-gh-shim',
+// Uninstalled pre-command fails CLOSED by structure (#1064): anything that is
+// not a bare, simple, read-only command is denied. These are the security
+// reviewer's bypass probes against a denylist — wrapper flags, grouping and
+// control flow, escapes, aliases, `$VAR`, functions, `git -c`, PATH-relative
+// names, other interpreters — plus the plain opaque commands. Every one denies.
+const DENY_OPAQUE = [
+  // plain interpreters and task runners
+  'node x.js', 'node build.mjs', 'npm test', 'npx some-tool', 'make release',
+  'pytest', 'python3.12 x.py', 'python3 publish.py', 'node2 x.js', 'node ./other.mjs',
+  // wrapper binaries and flags
+  'env node x.js', 'env -S "node x.js"', 'env -S node x.js', "env -S'node x.js'",
+  'env -Snode x.js', 'env -iS node x.js', 'env -u FOO node x.js', 'env -- node x.js',
+  'command node x.js', 'exec node x.js', 'nohup node x.js', 'time node x.js',
+  'builtin command node x.js', 'command -p node x.js', 'exec -a foo node x.js',
+  'command -p git push', 'exec -a x git push', 'env -- git push', 'env -S "git push"',
+  'caffeinate node x.js', 'arch -arm64 node x.js', 'sandbox-exec -p x node x.js',
+  'script -q /dev/null node x.js', 'launchctl submit -l x -- node x.js', 'ssh localhost ls',
+  'nice node x.js', 'timeout 5 node x.js', 'xargs -n1 git push < remotes', 'stdbuf -o0 node x.js',
+  // shells, here-strings, scripts, pipes
+  'bash -c "node x.js"', "bash -c 'echo hi; node x.js'", "bash -lc 'node x.js'",
+  'bash -c -- \'node x.js\'', "bash -o errexit -c 'node x.js'", 'bash -c -- \'git push\'',
+  'bash <<< "node x.js"', 'bash <<<"git status"', 'sh -s <<< "node x.js"', 'bash < script.sh',
+  'cat s.sh | bash', 'echo node x.js | sh', 'bash script.sh', 'sh ./s.sh', 'bash', 'sh -c "git status"',
+  // grouping and control flow
+  '{ node x.js; }', '(node x.js)', '(git push)', '{ git push; }',
+  'if true; then node x.js; fi', 'if true; then git push; fi', 'for i in 1; do node x.js; done',
+  // escapes, quotes-in-command-word, aliases, functions, variables
+  '\\node x.js', '\\git push', 'n\\ode x.js', '"no"de x.js', "n''ode x.js",
+  'alias n=node; n x.js', 'n x.js', 'NODE=node; $NODE x.js', 'PATH=.:$PATH a',
+  'hash -p ./evil git; git status', 'function git { node x.js; }; git status', 'git(){ node x.js; }; git status',
+  'trap "node x.js" EXIT', 'coproc node x.js', 'chmod +x a && a',
+  // git config / alias / -c injection, and non-read-only git
+  'git -c core.hooksPath=/dev/null commit -m x', 'git -c alias.p=!node\\ x.js p',
+  'git -c core.sshCommand=./evil fetch', 'git config alias.x "!node x.js"', 'git x',
+  'git -c core.editor=./e commit', 'git -c core.fsmonitor=./evil status', 'git -c diff.external=./evil diff',
+  'git -c alias.p=!git\\ push p', "git -c alias.p='!git push' p", "git -c core.fsmonitor='git push' status",
+  'git push', 'git commit -m x', 'git config alias.x y',
+  // gh is never read-only enough to allow here
+  'gh alias set x --shell "node x.js"', 'gh x', 'gh extension exec foo', 'gh pr view 122',
+  // other interpreters a denylist forgets
+  'swift x.swift', 'java -jar x.jar', 'awk \'BEGIN{system("echo hi")}\'', 'tclsh x',
+  'Rscript x.R', "vim -c '!ls'", 'open x.command', 'at now <<< "ls"', 'osascript -e x',
+  // explicit paths, redirects, substitutions
+  './scripts/release.sh', '/usr/local/bin/release', 'printf "hello" > /tmp/notes.md',
+  'echo "$(node build.mjs)"', 'source ./env.sh', '. ./env.sh', 'eval "$CMD"',
+  'find . -name x -exec sh {} ;', 'find . -delete',
+  // the node-based bootstrap forms are gone: node is an interpreter
+  'node bootstrap.mjs --x y', 'node bootstrap.mjs --require ./evil.js', 'node bootstrap.mjs --import=./evil.mjs',
+  'NODE_OPTIONS=--require=./e.js node bootstrap.mjs', 'node bootstrap.mjs --eval x',
   'node bootstrap.mjs --profile /tmp/organization-profile.json --machine-only',
+  // bootstrap with anything chained or substituted is not the bare launcher
+  './agent-bot bootstrap; node x.mjs', './agent-bot bootstrap --profile $(node x.mjs)',
+  './agent-bot doctor',
 ];
 
-test('uninstalled pre-command refuses opaque execution and keeps reads and the source bootstrap (#1064)', () => {
-  for (const command of OPAQUE) {
-    assert.deepEqual(uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [] }),
-      { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON }, `should deny: ${command}`);
+// Bare read-only commands the allowlist permits.
+const ALLOW_SAFE = [
+  'ls', 'ls -la', 'cat README.md', 'head -n 5 f', 'tail f', 'wc -l f', 'diff a b',
+  'echo hi', 'pwd', 'which git', 'grep -rn node .', 'rg pattern', 'find . -name x',
+  'git status', 'git log --oneline', 'git diff', 'git rev-parse HEAD', 'git show HEAD',
+  'git branch', 'stat f', 'file f',
+];
+
+test('uninstalled pre-command denies every denylist-bypass probe and allows bare read-only commands (#1064)', () => {
+  for (const command of DENY_OPAQUE) {
+    const d = uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [] });
+    assert.equal(d.decision, 'deny', `should deny: ${command}`);
   }
-  for (const command of NOT_OPAQUE) {
+  for (const command of ALLOW_SAFE) {
     assert.deepEqual(uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [] }),
       { decision: 'allow', reason: '' }, `should allow: ${command}`);
   }
@@ -445,17 +469,49 @@ test('uninstalled pre-command refuses opaque execution and keeps reads and the s
   assert.equal(uninstalledDecision({ event: 'pre-file-write', command: 'npm test', env: {}, authors: [] }).decision, 'allow');
 });
 
-test('opaque execution is allowed only when both the git author and the gh actor are unmanaged authors (#1064)', () => {
+test('the source bootstrap exemption resolves the launcher by realpath inside the checkout (#1064)', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'uninstalled-boot-')));
+  writeFileSync(join(root, 'agent-bot'), '#!/bin/sh\nexit 0\n');
+  const at = (command, cwd = root) => uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [], cwd }).decision;
+  assert.equal(at('./agent-bot bootstrap'), 'allow');
+  assert.equal(at('./agent-bot bootstrap --repair --machine-only --with-gh-shim'), 'allow');
+  // No launcher in this checkout, or none at all.
+  assert.equal(at('./agent-bot bootstrap', join(root, 'nope')), 'deny');
+  assert.equal(uninstalledDecision({ event: 'pre-command', command: './agent-bot bootstrap', env: {}, authors: [] }).decision, 'deny');
+  // A symlink escaping the checkout is not the checkout's launcher.
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'uninstalled-out-')));
+  writeFileSync(join(outside, 'agent-bot'), '#!/bin/sh\nexit 0\n');
+  const escRoot = realpathSync(mkdtempSync(join(tmpdir(), 'uninstalled-esc-')));
+  symlinkSync(join(outside, 'agent-bot'), join(escRoot, 'agent-bot'));
+  assert.equal(at('./agent-bot bootstrap', escRoot), 'deny');
+  // The node-based bootstrap form is gone even with a real bootstrap.mjs present.
+  writeFileSync(join(root, 'bootstrap.mjs'), '');
+  assert.equal(at('node bootstrap.mjs'), 'deny');
+  assert.equal(at('node bootstrap.mjs --machine-only'), 'deny');
+  rmSync(root, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+  rmSync(escRoot, { recursive: true, force: true });
+});
+
+test('an unmanaged author runs anything, including the builds a repo needs; the human does not (#1064)', () => {
+  // Both the git author and the gh actor must be listed.
   const both = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('ai9d', AI9D), authors: ['ai9d'] });
   assert.deepEqual(both, { decision: 'allow', reason: '' });
+  for (const command of ['node build.mjs', 'make', './scripts/x.sh', 'bash -c "npm run build"']) {
+    assert.equal(uninstalledDecision({ event: 'pre-command', command, env: actorEnv('ai9d', AI9D), authors: ['ai9d'] }).decision, 'allow', command);
+  }
   const humanGh = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('qwts', AI9D), authors: ['ai9d'] });
   assert.deepEqual(humanGh, { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
   const humanGit = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('ai9d', HUMAN), authors: ['ai9d'] });
   assert.deepEqual(humanGit, { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
 });
 
-test('generated adapters on a cold home refuse opaque execution in every dialect (#1064)', () => {
+test('generated adapters on a cold home deny opaque execution and allow the bootstrap launcher in every dialect (#1064)', () => {
   const home = mkdtempSync(join(tmpdir(), 'uninstalled-opaque-'));
+  // The adapter runs with the repo as cwd, and the repo root carries the
+  // launcher, so the bootstrap exemption resolves.
+  const launcher = join(ROOT, 'agent-bot');
+  assert.ok(existsSync(launcher), 'the toolkit checkout has its bootstrap launcher');
   try {
     for (const row of DIALECTS.filter((candidate) => candidate.file)) {
       const run = runGenerated(row.key, 'pre-command', {

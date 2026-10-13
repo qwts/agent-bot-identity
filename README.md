@@ -238,11 +238,13 @@ clone, begin with the source launcher. Do not require an installed
 CLI to install itself, and do not configure only the harness currently running.
 Opening this checkout before bootstrap, or a cloud / ephemeral session that
 cannot finish install, is the uninstalled class: committed hooks refuse
-human-attributed commits and GitHub writes, and scripts, interpreters and
-task runners other than the source bootstrap launcher (#1064), unless the actor is in
-`AGENT_BOT_UNMANAGED_AUTHORS`, else the config's `settings.unmanagedAuthors`
-(with neither selected, nobody is allowlisted). Reads and
-uncommitted edits are allowed. `doctor` reports `identity.class` and does
+human-attributed commits and GitHub writes, and allow a command only when it
+is a bare read-only command (`ls`, `cat`, `git status`, …), the checkout's
+own `./agent-bot bootstrap` launcher, or run by an actor in
+`AGENT_BOT_UNMANAGED_AUTHORS` (else the config's `settings.unmanagedAuthors`;
+with neither selected, nobody is allowlisted). Scripts, interpreters and task
+runners are denied by structure, so a denylist bypass can't publish as the
+human (#1064). Reads and uncommitted edits are allowed. `doctor` reports `identity.class` and does
 not install. Publishing as the bot still requires the durable-host journey
 below.
 For a governed organization, first obtain its explicit secret-free versioned
