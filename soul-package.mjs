@@ -454,7 +454,7 @@ export function computePackageRevision(packagePath, options) {
 
 // A soul directory's own soul.json, read the way the package reader reads it:
 // never through a link, only a regular file, at most the per-file limit.
-function readManifestText(file) {
+export function readManifestText(file) {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const opened = fstatSync(fd);
@@ -468,6 +468,16 @@ function readManifestText(file) {
     if (size > SOUL_PACKAGE_LIMITS.maxFileBytes) throw Object.assign(new Error('soul.json changed during read'), { code: 'soul-package-read-limit' });
     return buffer.subarray(0, size).toString('utf8');
   } finally { closeSync(fd); }
+}
+
+// The harnesses a package's soul.json prefers, or [] when it has no readable
+// manifest. The daemon asks this of a package launch that names no harness,
+// before the package is validated, so it reads through readManifestText.
+export function preferredHarnesses(directory) {
+  try {
+    const manifest = JSON.parse(readManifestText(join(directory, 'soul.json')));
+    return Array.isArray(manifest?.preferredHarnesses) ? manifest.preferredHarnesses : [];
+  } catch { return []; }
 }
 
 // A soul directory's comms setting from its soul.json: false only when the

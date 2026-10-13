@@ -11,7 +11,7 @@ import { packageManifest, populationFile, recordSoulDisplayName, registerSoulDir
 import { initSoulSpace } from './agent-space.mjs';
 import { isGateEnabled, loadConfig } from './config.mjs';
 import { computePackageRevision, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST,
-  readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
+  readManifestText, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { adoptSoulPackage, discardRevisionStaging, editSoulRevision, prepareRevisionEdit, revisionPackagePath } from './soul-revisions.mjs';
 import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
 import { soulsHome } from './souls-root.mjs';
@@ -43,7 +43,7 @@ export function bundledSouls({ env = process.env, root = dirname(fileURLToPath(i
     const directory = join(bundle, child.name);
     if (souls.includes(directory)) continue;
     try {
-      if (JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')).template === true) souls.push(directory);
+      if (JSON.parse(readManifestText(join(directory, 'soul.json'))).template === true) souls.push(directory);
     } catch { /* not a readable package; the validator reports it if a path names it */ }
   }
   return souls;
@@ -71,7 +71,7 @@ export function listSoulTemplates({ env = process.env, home = homedir() } = {}) 
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
       validateSoulPackage(directory);
-      if (source === 'souls-root' && JSON.parse(readFileSync(join(directory, 'soul.json'), 'utf8')).template !== true) return;
+      if (source === 'souls-root' && JSON.parse(readManifestText(join(directory, 'soul.json'))).template !== true) return;
       const manifest = packageManifest(directory);
       const preferredHarnesses = manifest.preferredHarnesses ?? [];
       directory = canonical;
@@ -155,7 +155,7 @@ export function resolveInstanceTemplate(manifest, { from = null, env = process.e
   const candidates = from !== null ? [resolve(from)] : bundledSouls({ env });
   for (const candidate of candidates) {
     let template;
-    try { template = JSON.parse(readFileSync(join(candidate, 'soul.json'), 'utf8')); } catch { if (from !== null) throw new Error(`${candidate} is not a soul package`); continue; }
+    try { template = JSON.parse(readManifestText(join(candidate, 'soul.json'))); } catch { if (from !== null) throw new Error(`${candidate} is not a soul package`); continue; }
     const names = templateNames(template);
     const templateName = instanceTemplateName(manifest, names);
     if (from === null && templateName === null) continue;
@@ -276,7 +276,7 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
 export function planTemplateRename(soulDir, { env = process.env } = {}) {
   const skipped = (note, extra = {}) => ({ status: 'skipped', note, from: null, to: null, templateName: { from: null, to: null }, template: null, ...extra });
   let manifest;
-  try { manifest = JSON.parse(readFileSync(join(soulDir, 'soul.json'), 'utf8')); }
+  try { manifest = JSON.parse(readManifestText(join(soulDir, 'soul.json'))); }
   catch (error) { throw Object.assign(new Error(`${soulDir}/soul.json cannot be read (${error.code ?? error.message})`), { code: 'soul-manifest-unreadable' }); }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw Object.assign(new Error(`${soulDir}/soul.json is not an object`), { code: 'soul-manifest-unreadable' });
   const from = typeof manifest.name === 'string' ? manifest.name : null;
@@ -308,7 +308,7 @@ export async function renameFromTemplate(id, soulDir, plan, { file = populationF
   let edited;
   try {
     const manifestPath = join(staged.staging, 'soul.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const manifest = JSON.parse(readManifestText(manifestPath));
     writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, name: plan.to, templateName: plan.templateName.to, nameSource: 'template' }, null, 2)}\n`);
     edited = await editSoulRevision(id, staged.staging, { ...revisionOptions, apply: true, reason: `Rename from template ${plan.templateName.from} to ${plan.templateName.to}` });
   } finally { try { discardRevisionStaging(staged.staging); } catch { /* temp under the soul; harmless */ } }

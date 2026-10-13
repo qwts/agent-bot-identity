@@ -16,7 +16,7 @@ import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
-import { readSoulPackageEntries, validateMaintainedDeclaration } from './soul-package.mjs';
+import { readManifestText, readSoulPackageEntries, validateMaintainedDeclaration } from './soul-package.mjs';
 import { discardRevisionStaging, editSoulRevision, prepareRevisionEdit } from './soul-revisions.mjs';
 import { knownTemplateName, resolveInstanceTemplate } from './soul-templates.mjs';
 
@@ -111,7 +111,7 @@ export async function refreshFromTemplate(id, soulDir, plan, { file = population
       chmodSync(target, entry.mode === '100755' ? 0o755 : 0o644);
     }
     const manifestPath = path.join(staging, 'soul.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const manifest = JSON.parse(readManifestText(manifestPath));
     writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, templateRevision: plan.template.revision,
       ...(typeof manifest.templateName === 'string' ? {} : { templateName: plan.template.name }) }, null, 2)}\n`);
     return await editSoulRevision(id, staging, { ...revisionOptions, apply: true,
@@ -176,7 +176,7 @@ export async function soulTemplateRefreshCommand(argv, { gate = ownerGate, readS
         detail: `${planned.template.name} ${planned.template.revision}: no maintained file differs` }, { env, home, now });
     }
   }
-  const current = JSON.parse(readFileSync(path.join(soulDir, 'soul.json'), 'utf8'));
+  const current = JSON.parse(readManifestText(path.join(soulDir, 'soul.json')));
   const result = { schemaVersion: REFRESH_SCHEMA_VERSION, soul: { agentId: soul.id, soulDir, revision: typeof current.revision === 'string' ? current.revision : null },
     template: report.template, templateRevision: revision, maintained: report.maintained,
     added: report.added, changed: report.changed, removed: report.removed, applied };

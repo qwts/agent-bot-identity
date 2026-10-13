@@ -9,7 +9,7 @@ import { buildHarnessFiles, harnessReport } from '../soul-builder.mjs';
 import { populationFile, upsertSoul, registerSoulDir } from '../agent-population.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { codexSkillsCheck } from '../readiness.mjs';
-import { computePackageRevision, readSoulPackageEntries, SOUL_PACKAGE_LIMITS, soulCommsSetting, writeSoulComms, GENERATED_HARNESS_MARKER as MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
+import { computePackageRevision, readSoulPackageEntries, SOUL_PACKAGE_LIMITS, preferredHarnesses, soulCommsSetting, writeSoulComms, GENERATED_HARNESS_MARKER as MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
 function fixture(t) {
@@ -361,4 +361,29 @@ test('soul.json helpers never read through a link', (t) => {
   assert.equal(soulCommsSetting(root), null);
   assert.throws(() => writeSoulComms(root, false), /ELOOP|symbolic link|soul\.json/);
   assert.equal(readFileSync(join(outside, 'soul.json'), 'utf8'), readFileSync(join(root, 'soul.json'), 'utf8'), 'the link target is untouched');
+});
+
+// #1069 re-review: a package launch that names no harness reads the package's
+// soul.json before the package is validated (agent-daemon's defaultHarness).
+// A FIFO there must not hang the daemon, and a link must not be followed.
+test('a package launch reads its preferred harnesses without blocking on a FIFO or following a link', (t) => {
+  const fifo = fixture(t);
+  rmSync(join(fifo, 'soul.json'));
+  const made = spawnSync('mkfifo', [join(fifo, 'soul.json')]);
+  if (made.status !== 0) { t.skip('mkfifo is not available'); return; }
+  const started = Date.now();
+  assert.deepEqual(preferredHarnesses(fifo), []);
+  assert.equal(soulCommsSetting(fifo), null);
+  assert.ok(Date.now() - started < 2000, 'nothing waited on the FIFO');
+
+  const linked = fixture(t), outside = mkdtempSync(join(tmpdir(), 'soul-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(join(outside, 'soul.json'), JSON.stringify({ preferredHarnesses: ['codex'] }));
+  rmSync(join(linked, 'soul.json'));
+  symlinkSync(join(outside, 'soul.json'), join(linked, 'soul.json'));
+  assert.deepEqual(preferredHarnesses(linked), []);
+
+  const plain = fixture(t);
+  writeFileSync(join(plain, 'soul.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(plain, 'soul.json'))), preferredHarnesses: ['codex'] }));
+  assert.deepEqual(preferredHarnesses(plain), ['codex']);
 });
