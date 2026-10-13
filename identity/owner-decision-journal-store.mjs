@@ -426,7 +426,8 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
     if (slots['pre-effect-refused']) {
       const refused = typed(() => bindEffect(decodeEffect(slots['pre-effect-refused']),
         { phase: 'refused', preparation, preparationDigest, receiptDigest, action }));
-      const terminal = Object.freeze({ finding: 'refused', acceptance, action, preparation, basisBytes: slots['pre-effect-refused'] });
+      const terminal = Object.freeze({ finding: 'refused', acceptance, action, preparation, basisBytes: slots['pre-effect-refused'],
+        preparationDigest, receiptDigest: slots.receipt ? receiptDigest : null });
       if (slots['terminal-pair']) typed(() => terminalPair(slots['terminal-pair'], terminal));
       return { ...effectOutcome(slots['pre-effect-refused']), refusalReason: refused.detail.code, terminal };
     }
@@ -524,7 +525,7 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
       });
       if (event.kind === 'revision' && event.revision !== completed.detail.afterRevision) fail();
     }
-    const terminal = Object.freeze({ finding: 'applied', acceptance, action, preparation, basisBytes: slots.completed });
+    const terminal = Object.freeze({ finding: 'applied', acceptance, action, preparation, basisBytes: slots.completed, preparationDigest, receiptDigest });
     if (slots['terminal-pair']) terminalPair(slots['terminal-pair'], terminal);
     // A record-only revision applied without its terminal pair yet: what an
     // explicit reconciliation may still add (the pair only). Only a revision

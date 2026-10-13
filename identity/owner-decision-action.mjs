@@ -23,9 +23,9 @@ const SOUL = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 const DIGEST = /^[0-9a-f]{64}$/;
 const REVISION = /^sha256:[0-9a-f]{64}$/;
 // `soul.computer-use.set` (agent-comms#250, first phase): proposed, not
-// adopted. Its shapes follow the scratch joint profile in
-// tests/fixtures/owner-decisions/computer-use-v1-draft.json, which is
-// replaced when agent-comms publishes the vectors. Disabled: no route.
+// adopted. Its shapes follow the agent-comms candidate vectors (PR #263),
+// vendored as tests/fixtures/owner-decisions/computer-use-candidate-v1.json
+// and still a draft until that PR merges. Disabled: no route.
 export const COMPUTER_USE_OPERATION = 'soul.computer-use.set';
 const OPERATIONS = new Set(['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set', COMPUTER_USE_OPERATION]);
 // The fixed native summaries for `soul.computer-use.set` (agent-comms PR

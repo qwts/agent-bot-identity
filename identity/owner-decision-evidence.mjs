@@ -394,7 +394,7 @@ export function bindEffect(r, { phase, preparation, preparationDigest, receiptDi
 //   when the action is an applying edit.
 // The reporting daemon key/epoch and the observed state are the reporting
 // ceremony's; this binds them to nothing else.
-export function bindReconciliationPair(pair, { finding, acceptance, action, preparation = null, basisBytes = null }) {
+export function bindReconciliationPair(pair, { finding, acceptance, action, preparation = null, basisBytes = null, preparationDigest, receiptDigest }) {
   const r = pair.record, p = pair.preimage;
   if (r.finding !== finding) fail('owner-evidence-binding');
   // The pair codec binds requestId to the frame's request.
@@ -408,6 +408,22 @@ export function bindReconciliationPair(pair, { finding, acceptance, action, prep
   const shape = p.kind === 'computer-use' ? 'computer-use' : Object.hasOwn(p, 'head') ? 'revision' : 'cold';
   if (kind !== shape) fail('owner-evidence-binding');
   const revisionShape = shape === 'revision';
+  // `soul.computer-use.set` (agent-comms #263 candidate): the basis is not
+  // just any bytes with that digest. It must be this request's own retained
+  // record: decoded, in the phase the finding names, for this request,
+  // payload, effect, preparation and receipt, and for applied exactly the
+  // prepared transition, with the observed boolean equal to its result. A
+  // foreign, recomputed or wrong-state proof refuses.
+  if (kind === 'computer-use' && r.finding !== 'indeterminate') {
+    let basis;
+    try { basis = decodeEffect(basisBytes); } catch { fail('owner-evidence-binding'); }
+    if (basis.phase !== (r.finding === 'applied' ? 'completed' : 'refused') || basis.requestId !== acceptance.requestId
+      || basis.payloadDigest !== acceptance.payloadDigest || !preparation || basis.effectId !== preparation.effectId
+      || typeof preparationDigest !== 'string' || basis.preparationDigest !== preparationDigest
+      || basis.receiptDigest !== (receiptDigest ?? null)) fail('owner-evidence-binding');
+    if (r.finding === 'applied' && (basis.detail.beforeEnabled !== preparation.expected.enabled
+      || basis.detail.afterEnabled !== action?.parameters?.enabled || p.enabled !== basis.detail.afterEnabled)) fail('owner-evidence-binding');
+  }
   if (revisionShape && (p.working !== null) !== (acceptance.operation === 'revision.edit' && action.parameters.apply === true)) {
     fail('owner-evidence-binding');
   }
@@ -420,12 +436,13 @@ export function bindReconciliationPair(pair, { finding, acceptance, action, prep
 // state after entry, from completion or, for record-only revision
 // operations, a linked authoritative event; otherwise indeterminate.
 export function reconciliationFinding({ operation, apply = false, entered, completed, linkedEvent, matchingState, ownerCeremony, durablePreEffectRefusal }) {
-  // `soul.computer-use.set`: applied only from the exact retained completed
-  // record. The current boolean is never proof either way (off→on→off
-  // returns to the same value), so it neither grants nor blocks a finding.
+  // `soul.computer-use.set` (agent-comms #263 candidate): applied needs the
+  // exact retained completed record and the owner ceremony observing its
+  // result. A matching current boolean alone never proves it (off→on→off
+  // returns to the same value), and no completion is never applied.
   if (operation === COMPUTER_USE_OPERATION) {
     if (durablePreEffectRefusal && !entered) return 'refused';
-    return ownerCeremony && entered && completed ? 'applied' : 'indeterminate';
+    return ownerCeremony && entered && completed && matchingState ? 'applied' : 'indeterminate';
   }
   const recordOnly = ['revision.approve', 'revision.reject', 'revision.adopt'].includes(operation) || (operation === 'revision.edit' && apply === false);
   if (durablePreEffectRefusal && !entered) return 'refused';
