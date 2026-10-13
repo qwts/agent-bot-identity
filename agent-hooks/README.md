@@ -202,7 +202,21 @@ The allowlist covers git author for
 commits (`--author` or `GIT_AUTHOR_*`, never committer identity; amend and
 reuse require `--reset-author` or an explicit `--author`), and the
 authenticated `gh` login for pushes and `gh` writes. Reads and uncommitted
-working-tree edits proceed. Cursor blocking events still print `{}` on
+working-tree edits proceed.
+
+Code this check can't read is refused too (#1064). Scripts, interpreters,
+task runners and wrappers can run `git push --no-verify` or `gh` as the human
+where the command text doesn't show it. In uninstalled mode, a pre-command
+running any of these is denied: `node`, `python3`, `npm`, `make` and the
+other executors the installed runner treats as opaque, a shell without a
+readable `-c` payload, an explicit executable path such as `./x.sh`,
+`source`/`.`, `eval`, and wrappers such as `xargs`, `sudo` and `find -exec`.
+It's allowed only when both the git author and the authenticated `gh` login
+are in the unmanaged-author list. One exception keeps bootstrap reachable:
+exactly `./agent-bot bootstrap [--option ...]` or
+`node bootstrap.mjs [--option ...]`, with nothing chained, substituted or
+redirected. A machine whose hook configs predate this rule gets it when
+`agent-bot sync-hooks` re-renders them. Cursor blocking events still print `{}` on
 allow so `failClosed` does not treat silence as a denial.
 
 That mode does not require `pass-cli`, a supervisor, or a finished durable

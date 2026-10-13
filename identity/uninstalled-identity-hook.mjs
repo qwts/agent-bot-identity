@@ -21,6 +21,7 @@ import { unmanagedAuthors } from '../config.mjs';
 import { encodeDecision } from '../hook-dialects.mjs';
 
 export const UNINSTALLED_REASON = 'uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot';
+export const UNINSTALLED_OPAQUE_REASON = 'uninstalled identity: refuse a script, interpreter or task runner, which could commit or push as the human where this hook cannot see it; finish durable bootstrap first, or run it as an unmanaged author';
 
 function extractCommand(payload, env = {}) {
   if (typeof env.AGENT_HOOK_TOOL_COMMAND === "string" && env.AGENT_HOOK_TOOL_COMMAND) {
@@ -573,6 +574,67 @@ function shellPayload(argv) {
   return null;
 }
 
+// Code that runs through a script, an interpreter, a task runner or a
+// wrapper is opaque here: it can run `git push --no-verify` or `gh` as the
+// human where this scan cannot see it (#1064). The executor list matches the
+// installed runner (identity/git-publish-scan.mjs) plus wrappers that run
+// another program.
+function opaqueExecutor(base) {
+  const executors = ["node", "nodejs", "python", "python2", "python3",
+    "perl", "ruby", "php", "lua", "make", "gmake", "just", "npm", "npx", "pnpm",
+    "yarn", "bun", "deno", "tsx", "ts-node", "gradle", "mvn", "ant", "rake",
+    "uv", "uvx", "pipx", "go", "cargo", "osascript", "eval", "source", ".",
+    "xargs", "sudo", "doas", "nohup", "timeout", "nice", "time", "watch", "parallel", "stdbuf"];
+  return executors.includes(base) || /^python\d+(?:\.\d+)?$/.test(base);
+}
+
+function isOpaqueExecution(command, depth) {
+  if (depth == null) depth = 0;
+  if (depth > 8) return true;
+  for (const segment of commandSegments(command)) {
+    const argv = tokenizeCommand(segment);
+    const i = skipEnvAndWrappers(argv);
+    const word = argv[i];
+    if (!word) continue;
+    const base = word.split("/").pop();
+    if (base === "git" || base === "gh") continue;
+    if (opaqueExecutor(base)) return true;
+    if (base === "find" && argv.some((arg) => arg === "-exec" || arg === "-execdir" || arg === "-ok" || arg === "-okdir")) return true;
+    if (["sh", "bash", "zsh", "dash", "ksh"].includes(base)) {
+      const nested = shellPayload(argv);
+      if (nested == null || isOpaqueExecution(nested, depth + 1)) return true;
+      continue;
+    }
+    // An explicit path can be any program, a shell script included.
+    if (word.includes("/")) return true;
+  }
+  for (const nested of commandSubstitutions(command)) {
+    if (isOpaqueExecution(nested, depth + 1)) return true;
+  }
+  return false;
+}
+
+// The source bootstrap launcher, exactly: `./agent-bot bootstrap ...` or
+// `node bootstrap.mjs ...` with plain option words and nothing chained,
+// substituted or redirected. Bootstrap is how an uninstalled checkout leaves
+// this mode, so it stays runnable (#1064).
+function isSourceBootstrap(command) {
+  const text = String(command || "").trim();
+  if (!text || /[;&|<>$`()\n\\]/.test(text)) return false;
+  const argv = tokenizeCommand(text);
+  if (argv.some((arg) => !/^[A-Za-z0-9_.,@:\/=+-]+$/.test(arg))) return false;
+  let rest;
+  if (argv[0] === "./agent-bot" && argv[1] === "bootstrap") rest = argv.slice(2);
+  else if (argv[0] === "node" && (argv[1] === "bootstrap.mjs" || argv[1] === "./bootstrap.mjs")) rest = argv.slice(2);
+  else return false;
+  return rest.every((arg, k) => arg.startsWith("--") || (k > 0 && rest[k - 1].startsWith("--") && !arg.startsWith("-")));
+}
+
+function unmanagedOpaqueAllowed(env, authors) {
+  if (!authors.length) return false;
+  return isUnmanagedGitAuthor(env, authors, "") && isUnmanagedGhActor(env, authors);
+}
+
 export function isHumanAttributedPublish(command, depth) {
   if (depth == null) depth = 0;
   if (depth > 8) return true;
@@ -606,6 +668,12 @@ export function uninstalledDecision({ event, command = "", env = {}, authors = u
       return { decision: "allow", reason: "" };
     }
     return { decision: "deny", reason: UNINSTALLED_REASON };
+  }
+  if (event === "pre-command" && isOpaqueExecution(command) && !isSourceBootstrap(command)) {
+    if (unmanagedOpaqueAllowed(env, authors)) {
+      return { decision: "allow", reason: "" };
+    }
+    return { decision: "deny", reason: UNINSTALLED_OPAQUE_REASON };
   }
   return { decision: "allow", reason: "" };
 }
@@ -648,17 +716,23 @@ const DETECT_SOURCE = [
   shellPayload,
   isHumanAttributedPublish,
   unmanagedPublishAllowed,
+  opaqueExecutor,
+  isOpaqueExecution,
+  isSourceBootstrap,
+  unmanagedOpaqueAllowed,
   uninstalledDecision,
 ].map((fn) => fn.toString()).join('\n');
 
-function eventDecisionFallback(allow, deny, event, snapshot) {
+function eventDecisionFallback(allow, deny, denyOpaque, event, snapshot) {
   const program = `import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 const UNINSTALLED_REASON = ${JSON.stringify(UNINSTALLED_REASON)};
+const UNINSTALLED_OPAQUE_REASON = ${JSON.stringify(UNINSTALLED_OPAQUE_REASON)};
 ${DETECT_SOURCE}
 const allow = ${JSON.stringify(allow)};
 const deny = ${JSON.stringify(deny)};
+const denyOpaque = ${JSON.stringify(denyOpaque)};
 let raw = "";
 try { if (!process.stdin.isTTY) raw = readFileSync(0, "utf8"); } catch {}
 let payload = {};
@@ -670,7 +744,7 @@ const verdict = uninstalledDecision({
   env: process.env,
   authors: unmanagedAuthorList(process.env, ${JSON.stringify(snapshot)}),
 });
-const encoded = verdict.decision === "deny" ? deny : allow;
+const encoded = verdict.decision !== "deny" ? allow : verdict.reason === UNINSTALLED_OPAQUE_REASON ? denyOpaque : deny;
 if (encoded.stdout) process.stdout.write(encoded.stdout);
 if (encoded.stderr) process.stderr.write(encoded.stderr + "\\n");
 process.exit(encoded.exitCode);
@@ -692,7 +766,8 @@ export function adapterFallback(dialectKey, event, snapshot = { sha256: null, au
     reason: UNINSTALLED_REASON,
   });
   if (event === 'pre-commit' || event === 'pre-push' || event === 'pre-command') {
-    return eventDecisionFallback(allow, deny, event, {
+    const denyOpaque = encodeDecision({ dialectKey, event, decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+    return eventDecisionFallback(allow, deny, denyOpaque, event, {
       sha256: typeof snapshot?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(snapshot.sha256) ? snapshot.sha256 : null,
       authors: Array.isArray(snapshot?.authors) ? snapshot.authors.filter((author) => typeof author === 'string' && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author)) : [],
     });

@@ -10,6 +10,7 @@ import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook
 import { renderConfig } from '../sync-hooks.mjs';
 import { unmanagedAuthorsSnapshot } from '../config.mjs';
 import {
+  UNINSTALLED_OPAQUE_REASON,
   UNINSTALLED_REASON,
   adapterFallback,
   decideUninstalledHook,
@@ -86,6 +87,8 @@ const DENY = [
   'echo `git push origin HEAD`',
 ];
 
+// Not publishes. Opaque executors among them (`node --test ...`) are refused
+// separately in uninstalled mode; see OPAQUE below (#1064).
 const ALLOW = [
   'git status',
   'git diff',
@@ -379,6 +382,99 @@ test('generated adapters allow unmanaged publish only for an explicitly listed a
       });
       assert.equal(unlisted.status, expectedDeny.exitCode, `${row.key} unlisted ai9d commit exit`);
       assert.equal(unlisted.stdout, expectedDeny.stdout, `${row.key} unlisted ai9d commit stdout`);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Scripts, interpreters, task runners and wrappers can run `git push
+// --no-verify` or `gh` as the human where the scan cannot see it (#1064).
+const OPAQUE = [
+  'node build.mjs',
+  'node --test tests/uninstalled-identity-hook.test.mjs',
+  'npm test',
+  'npx some-tool',
+  'make release',
+  'python3 publish.py',
+  'python3.12 publish.py',
+  './scripts/release.sh',
+  '/usr/local/bin/release',
+  'bash release.sh',
+  'cat release.sh | sh',
+  'sh -c "node build.mjs"',
+  'git status && npm run ship',
+  'echo "$(node build.mjs)"',
+  'FOO=1 node build.mjs',
+  'env node build.mjs',
+  'source ./env.sh',
+  '. ./env.sh',
+  'eval "$CMD"',
+  'xargs -n1 git push < remotes',
+  'find . -name x -exec sh {} ;',
+  './agent-bot doctor',
+  './agent-bot bootstrap; node x.mjs',
+  './agent-bot bootstrap --profile $(node x.mjs)',
+  'node bootstrap.mjs && npm test',
+  'node ./other.mjs',
+];
+
+const NOT_OPAQUE = [
+  'git status',
+  'ls -la',
+  'cat README.md',
+  'printf "hello" > /tmp/notes.md',
+  'gh pr view 122',
+  'bash -c "git status"',
+  'grep -rn node .',
+  './agent-bot bootstrap',
+  './agent-bot bootstrap --repair --machine-only --with-gh-shim',
+  'node bootstrap.mjs --profile /tmp/organization-profile.json --machine-only',
+];
+
+test('uninstalled pre-command refuses opaque execution and keeps reads and the source bootstrap (#1064)', () => {
+  for (const command of OPAQUE) {
+    assert.deepEqual(uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [] }),
+      { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON }, `should deny: ${command}`);
+  }
+  for (const command of NOT_OPAQUE) {
+    assert.deepEqual(uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [] }),
+      { decision: 'allow', reason: '' }, `should allow: ${command}`);
+  }
+  // Other events are not commands.
+  assert.equal(uninstalledDecision({ event: 'pre-file-write', command: 'npm test', env: {}, authors: [] }).decision, 'allow');
+});
+
+test('opaque execution is allowed only when both the git author and the gh actor are unmanaged authors (#1064)', () => {
+  const both = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('ai9d', AI9D), authors: ['ai9d'] });
+  assert.deepEqual(both, { decision: 'allow', reason: '' });
+  const humanGh = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('qwts', AI9D), authors: ['ai9d'] });
+  assert.deepEqual(humanGh, { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+  const humanGit = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('ai9d', HUMAN), authors: ['ai9d'] });
+  assert.deepEqual(humanGit, { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+});
+
+test('generated adapters on a cold home refuse opaque execution in every dialect (#1064)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'uninstalled-opaque-'));
+  try {
+    for (const row of DIALECTS.filter((candidate) => candidate.file)) {
+      const run = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'node build.mjs' },
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: '' }),
+      });
+      const expected = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+      assert.equal(run.status, expected.exitCode, `${row.key} opaque exit`);
+      if (expected.stdout) assert.equal(run.stdout, expected.stdout, `${row.key} opaque stdout`);
+
+      const bootstrap = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: './agent-bot bootstrap --machine-only' },
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: '' }),
+      });
+      const allow = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'allow' });
+      assert.equal(bootstrap.status, allow.exitCode, `${row.key} bootstrap exit`);
+      assert.equal(bootstrap.stdout, allow.stdout, `${row.key} bootstrap stdout`);
     }
   } finally {
     rmSync(home, { recursive: true, force: true });

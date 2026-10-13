@@ -238,7 +238,8 @@ clone, begin with the source launcher. Do not require an installed
 CLI to install itself, and do not configure only the harness currently running.
 Opening this checkout before bootstrap, or a cloud / ephemeral session that
 cannot finish install, is the uninstalled class: committed hooks refuse
-human-attributed commits and GitHub writes unless the actor is in
+human-attributed commits and GitHub writes, and scripts, interpreters and
+task runners other than the source bootstrap launcher (#1064), unless the actor is in
 `AGENT_BOT_UNMANAGED_AUTHORS`, else the config's `settings.unmanagedAuthors`
 (with neither selected, nobody is allowlisted). Reads and
 uncommitted edits are allowed. `doctor` reports `identity.class` and does
