@@ -666,20 +666,19 @@ export function declaredHooks(packageEntries) {
 }
 
 // The command each rendered entry runs. Nothing machine-specific: `agent-bot`
-// from PATH (as the MCP entry), and the soul's `hooks/` found from the project
-// root — Claude's CLAUDE_PROJECT_DIR, which only the claude row may trust (a
-// Codex launched from a Claude shell inherits it), else the git top level the
-// home is. A missing agent-bot fails closed on a blocking event, never open.
+// from PATH (as the MCP entry), and `--soul-hooks`, so the runner finds the
+// soul's own `hooks/` itself: the installed soul folder at or above the cwd
+// (or Claude's CLAUDE_PROJECT_DIR, which only the claude row trusts), never
+// the git top level of a checkout the soul is working in (#1089), and with
+// none found it runs nothing and denies a blocking event. A missing agent-bot
+// fails closed on a blocking event, never open.
 // The executable goes through `$B` and `--event` comes first so the command
 // never contains `agent-bot agent-hook` (MANAGED_MARKER) or
 // `agent-hook --dialect`: any sync-hooks, including an older install's, reads
 // those as its own lifecycle entries and would strip this one.
 export function soulHookCommand(dialectKey, event) {
-  const root = dialectKey === 'claude'
-    ? '${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}'
-    : '$(git rev-parse --show-toplevel 2>/dev/null || pwd)';
-  const prefix = `D="${root}"; B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul ${event} hooks did not run" >&2; exit ${isBlocking(event) ? 2 : 0}; }; `;
-  const run = `AGENT_BOT_HOOKS_DIR="$D/hooks" "$B" agent-hook --event ${event} --dialect ${dialectKey}`;
+  const prefix = `B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul ${event} hooks did not run" >&2; exit ${isBlocking(event) ? 2 : 0}; }; `;
+  const run = `"$B" agent-hook --event ${event} --dialect ${dialectKey} --soul-hooks`;
   if (dialectKey === 'qwen' && isBlocking(event)) {
     // The runner keeps the hook's stdin through fd 3: a shell without job
     // control gives an async command /dev/null first, and dash then reads
@@ -695,7 +694,7 @@ export function soulHookCommand(dialectKey, event) {
       + 'wait $p; s=$?; kill $w 2>/dev/null; wait $w 2>/dev/null; '
       + `[ $s -eq 0 ] || [ $s -eq 2 ] || { echo "agent-bot soul ${event} hooks failed closed (runner exit $s)" >&2; exit 2; }; exit $s # ${SOUL_HOOK_MARKER}`;
   }
-  return `${prefix}AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event ${event} --dialect ${dialectKey} # ${SOUL_HOOK_MARKER}`;
+  return `${prefix}exec ${run} # ${SOUL_HOOK_MARKER}`;
 }
 
 const isSoulHookEntry = (entry) => JSON.stringify(entry).includes(SOUL_HOOK_MARKER);

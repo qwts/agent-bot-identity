@@ -16,6 +16,7 @@ import { computePackageRevision, validateSoulPackage, PACKAGE_IGNORE_LIST, PRIOR
 import { isGeneratedPath } from '../soul-harness-contract.mjs';
 import { DIALECTS, SOUL_HOOK_MARKER } from '../hook-dialects.mjs';
 import { MANAGED_MARKER, renderConfig } from '../sync-hooks.mjs';
+import { upsertSoul } from '../agent-population.mjs';
 
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const runner = fileURLToPath(new URL('../agent-hook.mjs', import.meta.url));
@@ -31,6 +32,17 @@ const hooked = (extra) => [...base(extra), dir('hooks'), dir('hooks/pre-command'
   dir('hooks/session-start'), file('hooks/session-start/10-hello.sh', HELLO, '100755')];
 const json = (output, path) => JSON.parse(output.get(path).toString());
 const NAMES = ['pre-command/50-no-force-push', 'session-start/10-hello.sh'];
+
+// An installed soul at `soul`: its marker, and an active census row naming
+// that folder. The runner finds a soul's hooks/ only from such a folder.
+const SOUL_ID = 'agent_00000000-0000-4000-8000-0000000000aa';
+function installSoul(root, soul, { status = 'active', soulDir = soul } = {}) {
+  put(soul, '.soul-state/agent-id', `${SOUL_ID}\n`);
+  const census = join(root, 'population.json');
+  upsertSoul({ id: SOUL_ID, appSlug: null, parentId: null, status, spacePath: `/spaces/${SOUL_ID}`, transcriptLocator: null,
+    lastSeen: '2026-10-12T00:00:00.000Z', soulDir }, { file: census });
+  return { AGENT_BOT_POPULATION_PATH: census };
+}
 
 function put(root, path, bytes, mode = 0o644) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -93,13 +105,16 @@ test('the rendered command is portable, marked, and never spoofs a lifecycle ent
       // A blocking Qwen entry waits on the runner under a watchdog (#378).
       const watched = dialect === 'qwen' && SOUL_HOOK_EVENTS.includes(event) && ['prompt-submit', 'pre-tool-use', 'pre-command', 'pre-file-write', 'agent-stop'].includes(event);
       assert.ok(command.includes(`${watched ? '' : 'exec '}"$B" agent-hook --event ${event} --dialect ${dialect}`), `${dialect} ${event}`);
-      assert.ok(command.includes('AGENT_BOT_HOOKS_DIR="$D/hooks"'));
+      // The runner finds the soul's own hooks/ (#1089); the entry names no
+      // folder of its own, so nothing about the cwd's checkout reaches it.
+      assert.ok(command.includes(`--dialect ${dialect} --soul-hooks`), `${dialect} ${event}`);
+      assert.equal(/AGENT_BOT_HOOKS_DIR|show-toplevel|\bpwd\b|\$D\b/.test(command), false, `${dialect} ${event}`);
       // sync-hooks recognizes its own entries by these strings; ours carry neither.
       assert.equal(command.includes(MANAGED_MARKER), false);
       assert.equal(command.includes('agent-hook --dialect'), false);
       assert.equal(/\/Users\/|\/home\/|\$HOME/.test(command), false, 'no machine path');
-      // Only Claude's own row may trust CLAUDE_PROJECT_DIR.
-      assert.equal(command.includes('CLAUDE_PROJECT_DIR'), dialect === 'claude');
+      // Only the runner reads CLAUDE_PROJECT_DIR, and only for the claude row.
+      assert.equal(command.includes('CLAUDE_PROJECT_DIR'), false);
     }
   }
 });
@@ -108,9 +123,10 @@ test('the rendered entry runs the soul hook through the real runner, and fails c
   const root = mkdtempSync(join(tmpdir(), 'soul-hook-run-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   put(join(root, 'soul'), 'hooks/pre-command/50-no-force-push', DENY, 0o755);
+  const census = installSoul(root, join(root, 'soul'));
   put(root, 'bin/agent-bot', `#!/bin/sh\n[ "$1" = agent-hook ] && shift\nexec "${process.execPath}" "${runner}" "$@"\n`, 0o755);
   const command = json(buildHarnessFiles(hooked()), '.claude/settings.json').hooks.PreToolUse[0].hooks[0].command;
-  const env = { PATH: `${join(root, 'bin')}:/usr/bin:/bin`, HOME: root, CLAUDE_PROJECT_DIR: join(root, 'soul'), AGENT_BOT_CONFINEMENT: 'off' };
+  const env = { PATH: `${join(root, 'bin')}:/usr/bin:/bin`, HOME: root, CLAUDE_PROJECT_DIR: join(root, 'soul'), AGENT_BOT_CONFINEMENT: 'off', ...census };
   const payload = (cmd) => JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: cmd }, cwd: join(root, 'soul') });
   const denied = spawnSync('/bin/sh', ['-c', command], { input: payload('git push --force'), encoding: 'utf8', env, cwd: join(root, 'soul') });
   assert.equal(denied.status, 0, denied.stderr);
@@ -350,6 +366,7 @@ test('a Qwen entry runs the soul hook through the real runner and denies on a cr
   const soul = join(root, 'soul');
   put(soul, 'hooks/pre-command/50-no-force-push', DENY, 0o755);
   spawnSync('git', ['init', '--quiet', soul]);
+  const census = installSoul(root, soul);
   put(root, 'bin/agent-bot', `#!/bin/sh\n[ "$1" = agent-hook ] && shift\nexec "${process.execPath}" "${runner}" "$@"\n`, 0o755);
   put(root, 'crash/agent-bot', '#!/bin/sh\necho boom >&2\nexit 1\n', 0o755);
   // A hung runner that ignores SIGTERM too (SIG_IGN survives the exec).
@@ -358,7 +375,7 @@ test('a Qwen entry runs the soul hook through the real runner and denies on a cr
   const timers = join(root, 'timers');
   put(root, 'bin/sleep', `#!/bin/sh\necho $$ >> "${timers}"\nexec /bin/sleep "$@"\n`, 0o755);
   const command = qwenHooks(buildHarnessFiles(hooked())).PreToolUse[1].hooks[0].command;
-  const env = (bin) => ({ PATH: `${join(root, bin)}:/usr/bin:/bin`, HOME: root, AGENT_BOT_CONFINEMENT: 'off' });
+  const env = (bin) => ({ PATH: `${join(root, bin)}:/usr/bin:/bin`, HOME: root, AGENT_BOT_CONFINEMENT: 'off', ...census });
   const payload = (cmd) => JSON.stringify({ session_id: 'q', cwd: soul, hook_event_name: 'PreToolUse', tool_name: 'run_shell_command', tool_input: { command: cmd } });
   // dash gives an async command /dev/null before its own redirections, so it
   // is the shell that proves the payload still reaches the runner.
@@ -401,4 +418,101 @@ test('a Qwen entry runs the soul hook through the real runner and denies on a cr
   const start = soulHookCommand('qwen', 'session-start');
   assert.ok(start.includes('exec "$B" agent-hook --event session-start --dialect qwen'));
   assert.equal(spawnSync('/bin/sh', ['-c', start], { input: '{}', encoding: 'utf8', env: env('nowhere') }).status, 0);
+});
+
+// #1089: a soul works inside other repositories' checkouts (its worktrees/,
+// or anywhere else), and a harness runs a hook entry in its current folder.
+// The entry must run only the soul's own hooks/: never a hooks/ planted in
+// the checkout being worked in, even one carrying a soul marker, and never
+// from an inherited AGENT_BOT_HOOKS_DIR. With no soul folder to be found it
+// runs nothing and denies a blocking event.
+test('a soul hook entry never runs hooks/ from a checkout it is working in (#1089)', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'soul-hook-foreign-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const soul = join(root, 'Hooky.soul'), sentinel = join(root, 'planted-ran');
+  put(soul, 'hooks/pre-command/50-no-force-push', DENY, 0o755);
+  put(soul, 'hooks/session-start/10-hello.sh', HELLO, 0o755);
+  const census = installSoul(root, soul);
+  put(root, 'bin/agent-bot', `#!/bin/sh\n[ "$1" = agent-hook ] && shift\nexec "${process.execPath}" "${runner}" "$@"\n`, 0o755);
+  // A checkout with executable hooks/ that record running, and a planted
+  // marker naming the soul.
+  const plant = (repo) => {
+    spawnSync('git', ['init', '--quiet', repo]);
+    for (const event of ['pre-command', 'session-start']) put(repo, `hooks/${event}/10-planted`, `#!/bin/sh\necho ${event} >> "${sentinel}"\nexit 0\n`, 0o755);
+    put(repo, '.soul-state/agent-id', `${SOUL_ID}\n`);
+    put(repo, 'soul.json', soulJson());
+    return repo;
+  };
+  const nested = plant(join(soul, 'worktrees', 'other-repo'));
+  // A checkout named like a built home, but not the soul's .soul-state/home.
+  const lookalike = plant(join(soul, 'worktrees', 'home'));
+  const outside = plant(join(root, 'elsewhere', 'other-repo'));
+  const env = { PATH: `${join(root, 'bin')}:/usr/bin:/bin`, HOME: root, AGENT_BOT_CONFINEMENT: 'off', AGENT_BOT_HOOKS_DIR: join(outside, 'hooks'), ...census };
+  const payload = (cwd, cmd) => JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: cmd }, cwd });
+  const run = (dialect, event, cwd, cmd, extra = {}) => spawnSync('/bin/sh', ['-c', soulHookCommand(dialect, event)],
+    { input: event === 'pre-command' ? payload(cwd, cmd) : '{}', encoding: 'utf8', env: { ...env, ...extra }, cwd });
+  const denies = (result) => result.status === 2 || /deny/.test(result.stdout);
+  const planted = () => existsSync(sentinel);
+  for (const dialect of ['claude', 'codex']) {
+    // Inside the soul's own worktrees/: the soul's hooks run, the checkout's never.
+    assert.ok(denies(run(dialect, 'pre-command', nested, 'git push --force')), `${dialect}: the soul's own hook still runs from a nested checkout`);
+    const allowed = run(dialect, 'pre-command', nested, 'ls');
+    assert.equal(allowed.status, 0, `${dialect}: ${allowed.stderr}`);
+    assert.equal(allowed.stdout, '', `${dialect}: ${allowed.stdout}`);
+    assert.equal(run(dialect, 'session-start', nested).status, 0);
+    assert.equal(planted(), false, `${dialect}: a nested checkout's hooks/ ran`);
+    assert.equal(run(dialect, 'pre-command', lookalike, 'ls').stdout, '');
+    assert.equal(run(dialect, 'session-start', lookalike).status, 0);
+    assert.equal(planted(), false, `${dialect}: a checkout named home ran its hooks/`);
+    // Outside the soul: no soul folder, so nothing runs; a blocking event is denied.
+    const refused = run(dialect, 'pre-command', outside, 'ls');
+    assert.ok(denies(refused), `${dialect}: ${refused.status} ${refused.stdout}`);
+    assert.match(refused.stdout + refused.stderr, /could not find this soul's own folder/);
+    // A non-blocking event is never answered with a verdict.
+    const start = run(dialect, 'session-start', outside);
+    assert.equal(start.status, 0); assert.equal(start.stdout, '');
+    assert.equal(planted(), false, `${dialect}: an outside checkout's hooks/ ran`);
+  }
+  // Claude's project dir is trusted only when it is the soul's own folder.
+  assert.ok(denies(run('claude', 'pre-command', outside, 'ls', { CLAUDE_PROJECT_DIR: outside })));
+  assert.ok(denies(run('claude', 'pre-command', outside, 'git push --force', { CLAUDE_PROJECT_DIR: soul })));
+  const projectDir = run('claude', 'pre-command', outside, 'ls', { CLAUDE_PROJECT_DIR: soul });
+  assert.equal(projectDir.status, 0); assert.equal(projectDir.stdout, '');
+  // Only the claude row trusts it: a Codex launched from a Claude shell inherits it.
+  assert.ok(denies(run('codex', 'pre-command', outside, 'ls', { CLAUDE_PROJECT_DIR: soul })));
+  assert.equal(planted(), false);
+  // A soul whose registered folder is gone: a checkout carrying its marker
+  // is still not its folder.
+  const gone = installSoul(root, soul, { soulDir: join(root, 'Moved.soul') });
+  assert.ok(denies(run('codex', 'pre-command', outside, 'ls', gone)));
+  assert.equal(planted(), false, 'a planted marker made a checkout the soul\'s folder');
+  // A retired soul's own folder runs nothing either.
+  const retired = installSoul(root, soul, { status: 'retired' });
+  assert.ok(denies(run('codex', 'pre-command', soul, 'ls', retired)));
+});
+
+// The daemon launches a soul in its built home, `<soul>/.soul-state/home`
+// (a git repository of its own); the entry runs that home's hooks/, also
+// from a checkout inside it, and never the checkout's.
+test('a soul hook entry runs the built home\'s hooks/ from inside it (#1089)', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'soul-hook-home-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const soul = join(root, 'Hooky.soul'), home = join(soul, '.soul-state', 'home'), sentinel = join(root, 'planted-ran');
+  const census = installSoul(root, soul);
+  spawnSync('git', ['init', '--quiet', home]);
+  put(home, 'hooks/session-start/10-home', `#!/bin/sh\necho home >> "${sentinel}.home"\nexit 0\n`, 0o755);
+  const inside = join(home, 'other-repo');
+  spawnSync('git', ['init', '--quiet', inside]);
+  put(inside, 'hooks/session-start/10-planted', `#!/bin/sh\necho planted >> "${sentinel}"\nexit 0\n`, 0o755);
+  put(root, 'bin/agent-bot', `#!/bin/sh\n[ "$1" = agent-hook ] && shift\nexec "${process.execPath}" "${runner}" "$@"\n`, 0o755);
+  const env = { PATH: `${join(root, 'bin')}:/usr/bin:/bin`, HOME: root, AGENT_BOT_CONFINEMENT: 'off', ...census };
+  for (const [dialect, extra] of [['codex', {}], ['claude', {}], ['claude', { CLAUDE_PROJECT_DIR: home }]]) {
+    for (const cwd of [home, inside]) {
+      rmSync(`${sentinel}.home`, { force: true });
+      const result = spawnSync('/bin/sh', ['-c', soulHookCommand(dialect, 'session-start')], { input: '{}', encoding: 'utf8', env: { ...env, ...extra }, cwd });
+      assert.equal(result.status, 0, `${dialect} ${cwd}: ${result.stderr}`);
+      assert.equal(existsSync(`${sentinel}.home`), true, `${dialect} ${cwd}: the home's own hook did not run`);
+    }
+  }
+  assert.equal(existsSync(sentinel), false, 'a checkout inside the home ran its hooks/');
 });

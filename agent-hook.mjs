@@ -14,8 +14,8 @@
 
 import process from 'node:process';
 import { spawnSync, execFile, execFileSync } from 'node:child_process';
-import { existsSync, readSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { isatty } from 'node:tty';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -38,6 +38,7 @@ import {
 } from './identity-host.mjs';
 import { minimalChildEnv } from './child-env.mjs';
 import { confinementCheck } from './confinement.mjs';
+import { locateSoulDir, soulDirectory } from './agent-population.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -59,6 +60,41 @@ export function hooksDir(env = process.env, cwd = process.cwd()) {
   return join(ROOT, 'agent-hooks');
 }
 
+// A soul-declared hook entry (--soul-hooks, #1089) runs only its own soul's
+// hooks/. The soul's folder is never taken from the checkout being worked
+// in: a soul works inside other repositories' checkouts (its worktrees/),
+// and those checkouts' contents are not the soul's. Candidates are Claude's
+// CLAUDE_PROJECT_DIR (only the claude dialect trusts it; Devin shares that
+// row) and then the cwd and each folder above it. The first that is a soul's
+// own wins: an installed soul's folder (its marker names an active soul in
+// this census and it is that soul's folder, `soulDirectory`), or that
+// folder's built home, `.soul-state/home`, where the daemon launches it. A
+// checkout that plants hooks/ or even a soul marker is passed over. None:
+// null, and the caller fails closed.
+const realPath = (dir) => { try { return realpathSync(dir); } catch { return null; } };
+function installedSoulFolder(dir, env) {
+  try {
+    const found = locateSoulDir(dir, { env });
+    return found.status === 'installed' && realPath(soulDirectory(found.agentId, { env, readOnly: true })) === dir;
+  } catch { return false; }
+}
+const soulHookRoot = (dir, env) => installedSoulFolder(dir, env)
+  || (basename(dir) === 'home' && basename(dirname(dir)) === '.soul-state' && installedSoulFolder(dirname(dirname(dir)), env));
+export function soulHooksDir({ dialectKey, env = process.env, cwd = process.cwd() } = {}) {
+  const candidates = [];
+  if (dialectKey === 'claude' && env.CLAUDE_PROJECT_DIR) candidates.push(env.CLAUDE_PROJECT_DIR);
+  for (let dir = realPath(cwd); dir;) {
+    candidates.push(dir);
+    const up = dirname(dir);
+    dir = up === dir ? null : up;
+  }
+  for (const candidate of candidates) {
+    const dir = realPath(candidate);
+    if (dir && soulHookRoot(dir, env)) return join(dir, 'hooks');
+  }
+  return null;
+}
+
 function repoRoot(cwd) {
   try {
     const out = spawnSync('git', ['rev-parse', '--show-toplevel'], {
@@ -74,10 +110,12 @@ function repoRoot(cwd) {
 }
 
 export function parseArgs(argv) {
-  const parsed = { dialect: null, event: null };
+  const parsed = { dialect: null, event: null, soulHooks: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--dialect' || arg === '--event') {
+    if (arg === '--soul-hooks') {
+      parsed.soulHooks = true;
+    } else if (arg === '--dialect' || arg === '--event') {
       const value = argv[i + 1];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
       parsed[arg.slice(2)] = value;
@@ -499,13 +537,28 @@ export function main(argv = process.argv.slice(2), env = process.env) {
     process.stderr.write(`agent-hook: ${error.message}\n`);
     return 0;
   }
-  const { dialect: dialectKey, event } = parsed;
+  const { dialect: dialectKey, event, soulHooks } = parsed;
   const startedAt = now();
   // Reading stdin spends the run's budget, so stop waiting with a margin left
   // to answer in.
   const input = readStdin({
     deadline: startedAt + budgetMs(dialectKey, event, Number(env.AGENT_HOOK_TIMEOUT_MS) || 10000) - 250,
   });
+  // A soul hook entry runs its own soul's hooks/ and nothing else; an
+  // inherited AGENT_BOT_HOOKS_DIR does not apply to it (#1089). With no
+  // soul folder to be found, nothing runs and a blocking event is denied.
+  let dir = hooksDir(env);
+  if (soulHooks) {
+    dir = soulHooksDir({ dialectKey, env });
+    if (!dir) {
+      const reason = `agent-bot could not find this soul's own folder from ${process.cwd()}; soul ${event} hooks did not run`;
+      if (!isBlocking(event)) { process.stderr.write(`agent-hook: ${reason}\n`); return 0; }
+      const denied = encodeDecision({ dialectKey, event, decision: 'deny', reason });
+      if (denied.stdout) process.stdout.write(denied.stdout);
+      if (denied.stderr) process.stderr.write(`${denied.stderr}\n`);
+      return denied.exitCode;
+    }
+  }
   const refusal = input.oversize
     ? `hook input is larger than ${MAX_HOOK_INPUT_BYTES} bytes; refusing to evaluate it`
     : input.incomplete ? 'hook input did not finish arriving within the time budget' : null;
@@ -515,7 +568,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
       dialectKey,
       event,
       payload: parsePayload(input.text, { dialectKey, event }),
-      dir: hooksDir(env),
+      dir,
       env,
       startedAt,
     });
