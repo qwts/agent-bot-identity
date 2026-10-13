@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { listSouls, showSoul, upsertSoul } from '../agent-population.mjs';
 import { auditFile } from '../identity-format.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { CLASSIFICATIONS, classifyPath, retentionOf } from '../soul-env-contract.mjs';
-import { EXPORT_MANIFEST, IMPORTS_DIRECTORY, LIFE_IMPORT_STEP_ID, planSoulExport, readExportManifest, soulEnvExportCommand, soulEnvImportCommand, writeSoulExport } from '../soul-env-export.mjs';
+import { EXPORT_MANIFEST, IMPORT_FREE_BYTES_MARGIN, IMPORT_FREE_INODES_MARGIN, IMPORT_MAX_DEPTH, IMPORTS_DIRECTORY, importFootprint, LIFE_IMPORT_STEP_ID, planSoulExport, readExportManifest, soulEnvExportCommand, soulEnvImportCommand, writeSoulExport } from '../soul-env-export.mjs';
 import { ENV_CAPABILITIES, readSoulEnvironment } from '../soul-env.mjs';
 import { readMigrationStep } from '../soul-migration-journal.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
@@ -375,7 +376,9 @@ test('import round-trip on another host keeps the Agent ID and restores the life
 
   const { result } = await importIt(h, f.archive);
   assert.deepEqual([result.applied, result.decision, result.identity.agentId, result.journal, result.replaced], [true, 'imported', ID, 'restored', null]);
-  assert.deepEqual(h.gates, [[`import ${ID}'s life from ${f.archive}`, null]]);
+  assert.equal(h.gates.length, 1);
+  assert.match(h.gates[0][0], new RegExp(`^import ${ID}'s life from ${f.archive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(\\d+ entries, \\d+ bytes\\)$`));
+  assert.equal(h.gates[0][1], null);
   const dir = result.soulDir;
   assert.equal(dir, path.join(h.env.AGENT_BOT_SOULS_HOME, 'billy.soul'));
   // The census row, the identity record and the marker all name the kept ID.
@@ -465,7 +468,8 @@ test('--replace moves the active root aside (never deletes) once the soul is sto
   f.gates.length = 0;
   const { result } = await importIt({ options: f.options }, f.archive, ['--replace']);
   assert.deepEqual([result.decision, result.identity.decision, result.identity.agentId, result.soulDir, result.journal], ['replaced', 'replace', ID, f.dir, 'kept-local']);
-  assert.deepEqual(f.gates, [[`import ${ID}'s life from ${f.archive}, replacing the soul here`, null]]);
+  assert.equal(f.gates.length, 1);
+  assert.ok(f.gates[0][0].startsWith(`import ${ID}'s life from ${f.archive}, replacing the soul here (`), f.gates[0][0]);
   assert.equal(result.replaced, `${f.dir}.replaced-${NOW.toISOString().replace(/[:.]/g, '-')}`);
   assert.ok(statSync(result.replaced).isDirectory());
   assert.equal(readFileSync(path.join(result.replaced, '.soul-state', 'space', 'notes', 'later.md'), 'utf8'), 'written after the export\n', 'the previous root is aside, whole');
@@ -491,7 +495,8 @@ test('--fork mints a new Agent ID with its own identity, revision chain and spac
   const forked = result.identity.agentId;
   assert.notEqual(forked, ID);
   assert.match(forked, /^agent_/);
-  assert.deepEqual(f.gates, [[`import a fork of ${ID}'s life from ${f.archive}`, null]]);
+  assert.equal(f.gates.length, 1);
+  assert.ok(f.gates[0][0].startsWith(`import a fork of ${ID}'s life from ${f.archive} (`), f.gates[0][0]);
   assert.equal(result.soulDir, path.join(f.env.AGENT_BOT_SOULS_HOME, `billy-${forked.slice(-8)}.soul`), 'the default name is taken, so the folder carries the ID tail');
   const dir = result.soulDir;
   assert.equal(readFileSync(path.join(dir, '.soul-state', 'agent-id'), 'utf8'), `${forked}\n`);
@@ -755,4 +760,84 @@ test('an interaction directory naming another soul, or holding a stray or malfor
   writeFileSync(path.join(malformed, 'events', `${invocation.invocationId}.jsonl`), 'not json\n');
   refused(malformed, 'import-interaction-invalid');
   refused(write('future', { ...exported.document, schemaVersion: 2 }), 'import-interaction-invalid');
+});
+
+// #1070: an archive's declared expansion must fit, with a margin, on the souls
+// root's filesystem, checked before the owner is asked and again before a
+// byte is extracted.
+test('an import that would not fit on the souls root is refused before the owner is asked or anything is extracted', async (t) => {
+  const f = fixture(t);
+  await exportIt(f);
+  const h = host(t);
+  const roomy = { bsize: 4096, bavail: 1e9, files: 1e9, ffree: 1e9 };
+  const refused = async (statfs, pattern) => {
+    h.gates.length = 0;
+    await assert.rejects(soulEnvImportCommand([f.archive, '--json'], { ...h.options, statfs, write: () => {} }),
+      (error) => error.code === 'import-insufficient-space' && pattern.test(error.message));
+    assert.deepEqual(h.gates, [], 'the owner is not asked about an archive that cannot fit');
+    assert.ok(!existsSync(path.join(h.env.AGENT_BOT_SOULS_HOME, 'billy.soul')));
+  };
+  const spare = (IMPORT_FREE_BYTES_MARGIN) / 4096;
+  await refused(() => ({ ...roomy, bavail: spare }), /expands to \d+ bytes; .* bytes free/);
+  await refused(() => ({ ...roomy, ffree: IMPORT_FREE_INODES_MARGIN }), /expands to \d+ entries; .* more files/);
+
+  // Space that disappears after the owner agreed still stops extraction.
+  let calls = 0;
+  h.gates.length = 0;
+  await assert.rejects(soulEnvImportCommand([f.archive, '--json'], { ...h.options, write: () => {},
+    statfs: () => (calls++ === 0 ? roomy : { ...roomy, bavail: 1 }) }), (error) => error.code === 'import-insufficient-space');
+  assert.equal(h.gates.length, 1);
+  assert.deepEqual(readdirSync(h.env.AGENT_BOT_SOULS_HOME).filter((n) => n.startsWith('.import-')), [], 'no staging left');
+
+  // A filesystem that cannot report its free space is refused: nothing says
+  // the archive fits (#1070 review).
+  h.gates.length = 0;
+  await assert.rejects(soulEnvImportCommand([f.archive, '--json'], { ...h.options, write: () => {}, statfs: () => { throw Object.assign(new Error('nope'), { code: 'ENOSYS' }); } }),
+    (error) => error.code === 'import-insufficient-space' && /could not be read \(ENOSYS\)/.test(error.message));
+  assert.deepEqual(h.gates, []);
+  // A real-sized archive on a roomy disk imports.
+  const imported = await soulEnvImportCommand([f.archive, '--json'], { ...h.options, write: () => {}, statfs: () => roomy });
+  assert.equal(imported.decision, 'imported');
+});
+
+// #1070 review: extraction makes the parents of every listed file, so the
+// footprint counts them, and depth and entry count have a ceiling.
+test('the import footprint counts every directory extraction would create, and deep archives are refused', async (t) => {
+  const f = fixture(t);
+  await exportIt(f);
+  const h = host(t);
+  const empty = createHash('sha256').update('').digest('hex');
+  const bomb = path.join(h.home, 'bomb.tgz');
+  rewriteArchive(f.archive, bomb, (entries) => {
+    const m = entries[0];
+    const manifest = JSON.parse(m.body.toString());
+    const template = manifest.components.find((c) => c.kind === 'file' && c.area === 'root');
+    for (let i = 0; i < 50; i += 1) {
+      const relative = `bomb${i}/${'d/'.repeat(100)}f`;
+      manifest.components.push({ ...template, entry: `life/${relative}`, relative, bytes: 0, sha256: empty });
+      entries.push({ name: `life/${relative}`, type: '0', body: Buffer.alloc(0) });
+    }
+    m.body = Buffer.from(JSON.stringify(manifest));
+  });
+  const manifest = await readExportManifest(bomb);
+  const footprint = importFootprint(manifest);
+  assert.ok(footprint.directories >= 50 * 101, `unlisted parents are counted: ${footprint.directories}`);
+  assert.equal(footprint.entries, footprint.files + footprint.directories);
+  // Room for the listed entries but not for the directories they imply.
+  const listed = manifest.components.filter((c) => c.entry).length;
+  const statfs = () => ({ bsize: 4096, bavail: 1e9, files: 1e9, ffree: listed + IMPORT_FREE_INODES_MARGIN + 100 });
+  await assert.rejects(soulEnvImportCommand([bomb, '--json'], { ...h.options, statfs, write: () => {} }),
+    (error) => error.code === 'import-insufficient-space' && /entries/.test(error.message));
+  assert.deepEqual(h.gates, [], 'refused before the owner is asked');
+
+  const deep = path.join(h.home, 'deep.tgz');
+  rewriteArchive(f.archive, deep, (entries) => {
+    const m = entries[0];
+    const manifest = JSON.parse(m.body.toString());
+    const template = manifest.components.find((c) => c.kind === 'file' && c.area === 'root');
+    const relative = `${'d/'.repeat(IMPORT_MAX_DEPTH)}f`;
+    manifest.components.push({ ...template, entry: `life/${relative}`, relative, bytes: 0, sha256: empty });
+    m.body = Buffer.from(JSON.stringify(manifest));
+  });
+  await assert.rejects(readExportManifest(deep), (error) => error.code === 'import-unsafe-archive' && new RegExp(`deeper than ${IMPORT_MAX_DEPTH}`).test(error.message));
 });

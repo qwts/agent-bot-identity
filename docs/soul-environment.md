@@ -424,7 +424,15 @@ entry type, an absolute path, traversal, an entry the manifest does not
 name, a manifest component outside the root or with a non-durable
 classification, is `import-unsafe-archive` or `import-manifest-invalid`;
 a hash that does not match is `import-checksum-mismatch`; a listed entry
-that never arrives is `import-archive-incomplete`. Everything is extracted
+that never arrives is `import-archive-incomplete`. An archive that would
+create more than 1,000,000 files and directories, or nest deeper than 128,
+is `import-unsafe-archive`; directories count whether listed or only implied
+by a file's path. An archive whose size and entry count would not fit on the
+souls root's filesystem with 256 MiB and 4096 files to spare, or on one that
+cannot report its free space, is `import-insufficient-space`. The check runs
+before the owner is asked, again before extraction, and on the destination
+before a copy across filesystems, and extraction stops past the declared
+totals. The owner's prompt names both totals. Everything is extracted
 and verified in a private staging under the souls root
 (`.import-<uuid>`, removed on any failure) before a byte reaches a soul
 root or the census. Pointers are never recreated as links. A linked
