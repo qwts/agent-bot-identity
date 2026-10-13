@@ -6,6 +6,7 @@ import { chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, re
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { auditFile } from '../identity-format.mjs';
@@ -1569,4 +1570,48 @@ test('uv runs every install with --no-config, so no config file can redirect it 
   const uvCalls = d.commands.filter((c) => ['python', 'tool', 'venv', 'pip'].includes(c.args[0]));
   assert.ok(uvCalls.length >= 2);
   for (const call of uvCalls) assert.ok(call.args.includes('--no-config'), call.args.join(' '));
+
+// #1072: a digest pins an archive's bytes, not its size.
+test('a runtime download past the size cap is refused, by its stated length or as it streams, and leaves nothing', async (t) => {
+  const f = fixture(t);
+  const bytes = Buffer.alloc(4096, 1);
+  let pulled = 0;
+  const stated = async () => ({ ok: true, status: 200, headers: new Headers({ 'content-length': String(bytes.length) }),
+    body: new ReadableStream({ pull(controller) { pulled += 1; controller.enqueue(bytes); controller.close(); } }) });
+  await assert.rejects(fetchArchive({ url: 'https://example.test/big.tgz', sha256: sha(bytes) }, { cache: f.cache, label: 'x', fetchFn: stated, maxBytes: 1024 }),
+    (e) => e.code === 'runtime-download-failed' && /larger than 1024 bytes/.test(e.message));
+  assert.ok(pulled <= 1, 'the body is not read past the stated length');
+  const unstated = async () => ({ ok: true, status: 200, body: new ReadableStream({ start(controller) { for (let i = 0; i < 4; i += 1) controller.enqueue(bytes.subarray(i * 1024, (i + 1) * 1024)); controller.close(); } }) });
+  await assert.rejects(fetchArchive({ url: 'https://example.test/big.tgz', sha256: sha(bytes) }, { cache: f.cache, label: 'x', fetchFn: unstated, maxBytes: 2048 }),
+    (e) => e.code === 'runtime-download-failed' && /larger than 2048 bytes/.test(e.message));
+  assert.deepEqual(readdirSync(f.cache), [], 'no partial or cached file remains');
+  // At the cap exactly, it downloads.
+  assert.equal((await fetchArchive({ url: 'https://example.test/big.tgz', sha256: sha(bytes) }, { cache: f.cache, label: 'x', fetchFn: unstated, maxBytes: bytes.length })).reused, false);
+});
+
+test('an archive over the expansion budget is refused before tar runs', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const block = (prefix, name) => {
+    const header = Buffer.alloc(512);
+    header.write(name, 0, 100, 'utf8');
+    header.write(prefix, 345, 155, 'utf8');
+    for (const [at, value] of [[100, '0000644\0'], [108, '0000000\0'], [116, '0000000\0'], [124, '00000000000\0'], [136, '00000000000\0'], [148, '        ']]) header.write(value, at, value.length, 'ascii');
+    header.write('0', 156, 1, 'ascii');
+    header.write('ustar\0', 257, 6, 'ascii');
+    let sum = 0; for (const byte of header) sum += byte;
+    header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+    return header;
+  };
+  // One entry nested past the depth budget: a few hundred bytes compressed.
+  const segments = (n) => Array.from({ length: n }, () => 'd').join('/');
+  const deep = gzipSync(Buffer.concat([block(segments(35), segments(35)), Buffer.alloc(1024)]));
+  const bumped = structuredClone(f.catalog);
+  for (const source of Object.values(bumped.node[0].sources)) Object.assign(source, { url: 'https://example.test/deep.tgz', sha256: sha(deep) });
+  const d = doubles({ archives: { 'https://example.test/deep.tgz': deep } });
+  const error = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+  assert.ok(error, 'rejects');
+  assert.equal(error.code, 'runtime-install-failed');
+  assert.match(error.message, /deep\.tgz was not extracted: an entry is nested deeper than 64 directories/);
+  assert.deepEqual(d.commands.filter((c) => c.command === 'tar'), [], 'tar never ran');
+  assert.deepEqual(readdirSync(path.join(f.runtimes, 'node')).filter((n) => n.startsWith('.installing-')), [], 'no staging remains');
 });
