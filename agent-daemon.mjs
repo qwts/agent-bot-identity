@@ -116,7 +116,7 @@ import { createSoulHomes, installHarnesses, soulBindingForLaunch, soulHomePath, 
 import { harnessAuth } from './harness-auth.mjs';
 import { createWebhookWaker } from './wake-webhook.mjs';
 import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath, opencodeDaemonConfig } from './acp-registry.mjs';
-import { computePackageRevision, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
+import { computePackageRevision, preferredHarnesses, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, runtimeApprovalSubject, soulRuntimeEnv } from './soul-runtimes.mjs';
 import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
@@ -1980,9 +1980,9 @@ async function serveDaemon({
     // else a registry harness on PATH.
     defaultHarness: async ({ soul, package: packagePath }) => {
       if (soul) return identities(soul).harness ?? defaultHarnessFor([], { available: (cmd) => onPath(cmd, env) });
-      let preferred = [];
-      try { preferred = JSON.parse(readFileSync(path.join(packagePath, 'soul.json'), 'utf8')).preferredHarnesses ?? []; } catch {}
-      return defaultHarnessFor(Array.isArray(preferred) ? preferred : [], { available: (cmd) => onPath(cmd, env) });
+      // Read before spawnPackage validates the package: bounded and no-follow,
+      // so a FIFO or huge soul.json cannot hang the daemon (#1069).
+      return defaultHarnessFor(preferredHarnesses(packagePath), { available: (cmd) => onPath(cmd, env) });
     },
     // A principal launched this soul to talk to it, so later messages wake it.
     onLaunched: (agentId) => setColdWake(agentId, true, { env, home, now }),

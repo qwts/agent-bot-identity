@@ -4,7 +4,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync,
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildHarnessFiles, declaredHooks, harnessReport, hasGeneratedJsonMarker, HOOK_TARGETS, MCP_TARGETS, mergeableMcpServers, settingsTargets } from './soul-builder.mjs';
-import { readSoulPackageEntries } from './soul-package.mjs';
+import { boundedPackageReader, readSoulPackageEntries } from './soul-package.mjs';
 import { GENERATED_HARNESS_PATHS, GENERATED_HARNESS_MARKER, isGeneratedPath } from './soul-harness-contract.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { validateAgentId } from './identity-format.mjs';
@@ -59,23 +59,28 @@ function regularPath(root, relative, directory = false) {
   }
 }
 
+// The generated-harness subtrees as they stand, read within the package
+// limits (#1069): this runs before the package read, on a tree a soul wrote.
 function generatedInventory(root) {
   const files = new Map();
-  function walk(relative) {
+  const reader = boundedPackageReader();
+  function walk(relative, depth) {
     regularPath(root, relative, true);
     if (!stat(join(root, relative))) return;
-    for (const name of readdirSync(join(root, relative)).sort()) {
+    const names = [...reader.names(join(root, relative), depth)].map((name) => name.toString('utf8')).sort();
+    for (const name of names) {
       const child = `${relative}/${name}`;
       const info = stat(join(root, child));
-      if (info.isDirectory()) walk(child);
-      else { regularPath(root, child); files.set(child, readFileSync(join(root, child))); }
+      if (info.isDirectory()) walk(child, depth + 1);
+      else { regularPath(root, child); files.set(child, reader.read(join(root, child), info)); }
     }
   }
   for (const candidate of GENERATED_HARNESS_PATHS) {
-    if (candidate.endsWith('/')) walk(candidate.slice(0, -1));
+    if (candidate.endsWith('/')) walk(candidate.slice(0, -1), candidate.split('/').length - 1);
     else {
       regularPath(root, candidate);
-      if (stat(join(root, candidate))) files.set(candidate, readFileSync(join(root, candidate)));
+      const info = stat(join(root, candidate));
+      if (info) files.set(candidate, reader.read(join(root, candidate), info));
     }
   }
   return files;

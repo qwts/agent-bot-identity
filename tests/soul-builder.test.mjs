@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { buildHarnessFiles, harnessReport } from '../soul-builder.mjs';
 import { populationFile, upsertSoul, registerSoulDir } from '../agent-population.mjs';
 import { buildSoulDirectory } from '../soul-build.mjs';
 import { codexSkillsCheck } from '../readiness.mjs';
-import { computePackageRevision, readSoulPackageEntries, GENERATED_HARNESS_MARKER as MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
+import { computePackageRevision, readSoulPackageEntries, SOUL_PACKAGE_LIMITS, preferredHarnesses, soulCommsSetting, writeSoulComms, GENERATED_HARNESS_MARKER as MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST } from '../soul-package.mjs';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
 function fixture(t) {
@@ -333,4 +333,57 @@ test('default CLI path uses the current soul registered directory, not cwd', (t)
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(readFileSync(join(root, 'CLAUDE.md'), 'utf8'), `${MARKER}\n@AGENTS.md\n`);
+});
+
+// #1069 review: the build that launch runs (soul-home's buildSoulDirectory)
+// reads the generated-harness subtrees before the package, and must read
+// them within the package limits too. A sparse 4 GiB file makes the unbounded
+// read fail differently (ERR_FS_FILE_TOO_LARGE) from a bounded refusal.
+test('the build reads existing generated output within the package limits', (t) => {
+  const huge = fixture(t);
+  mkdirSync(join(huge, '.claude'), { recursive: true });
+  writeFileSync(join(huge, '.claude', 'big.bin'), '');
+  truncateSync(join(huge, '.claude', 'big.bin'), 4 * 1024 * 1024 * 1024);
+  assert.throws(() => buildSoulDirectory(huge), (error) => error.code === 'soul-package-read-limit' && /larger than/.test(error.message));
+
+  const many = fixture(t);
+  mkdirSync(join(many, '.claude', 'skills'), { recursive: true });
+  for (let i = 0; i <= SOUL_PACKAGE_LIMITS.maxEntries; i += 1) writeFileSync(join(many, '.claude', 'skills', `s${i}`), '');
+  assert.throws(() => buildSoulDirectory(many), (error) => error.code === 'soul-package-read-limit' && /entries/.test(error.message));
+});
+
+test('soul.json helpers never read through a link', (t) => {
+  const root = fixture(t), outside = mkdtempSync(join(tmpdir(), 'soul-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(join(outside, 'soul.json'), readFileSync(join(root, 'soul.json')));
+  rmSync(join(root, 'soul.json'));
+  symlinkSync(join(outside, 'soul.json'), join(root, 'soul.json'));
+  assert.equal(soulCommsSetting(root), null);
+  assert.throws(() => writeSoulComms(root, false), /ELOOP|symbolic link|soul\.json/);
+  assert.equal(readFileSync(join(outside, 'soul.json'), 'utf8'), readFileSync(join(root, 'soul.json'), 'utf8'), 'the link target is untouched');
+});
+
+// #1069 re-review: a package launch that names no harness reads the package's
+// soul.json before the package is validated (agent-daemon's defaultHarness).
+// A FIFO there must not hang the daemon, and a link must not be followed.
+test('a package launch reads its preferred harnesses without blocking on a FIFO or following a link', (t) => {
+  const fifo = fixture(t);
+  rmSync(join(fifo, 'soul.json'));
+  const made = spawnSync('mkfifo', [join(fifo, 'soul.json')]);
+  if (made.status !== 0) { t.skip('mkfifo is not available'); return; }
+  const started = Date.now();
+  assert.deepEqual(preferredHarnesses(fifo), []);
+  assert.equal(soulCommsSetting(fifo), null);
+  assert.ok(Date.now() - started < 2000, 'nothing waited on the FIFO');
+
+  const linked = fixture(t), outside = mkdtempSync(join(tmpdir(), 'soul-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(join(outside, 'soul.json'), JSON.stringify({ preferredHarnesses: ['codex'] }));
+  rmSync(join(linked, 'soul.json'));
+  symlinkSync(join(outside, 'soul.json'), join(linked, 'soul.json'));
+  assert.deepEqual(preferredHarnesses(linked), []);
+
+  const plain = fixture(t);
+  writeFileSync(join(plain, 'soul.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(plain, 'soul.json'))), preferredHarnesses: ['codex'] }));
+  assert.deepEqual(preferredHarnesses(plain), ['codex']);
 });
