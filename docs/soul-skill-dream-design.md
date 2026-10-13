@@ -143,8 +143,8 @@ a subsequently changed registration. CLI clients do not start an alternative
 scheduler when the daemon is unavailable.
 
 `cli/soul-dream.mjs` is a thin client of the daemon routes above. `SOUL` is an
-agent ID or census name. Controls send `--principal-stdin` to the daemon, which
-performs the owner verification; a caller with soul markers is refused before
+agent ID or census name. Controls go to the daemon, which asks the owner for
+presence (a `--principal-stdin` credential is refused for now, #1063); a caller with soul markers is refused before
 any request. Without a running daemon every action fails with
 `dream-daemon-unavailable`; nothing runs in process. Status and history show
 only the named soul's registration, runs, input receipts and events, and always

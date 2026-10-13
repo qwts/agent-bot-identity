@@ -76,8 +76,8 @@ account), the exact commands and a note:
 
 `sandbox on|off` writes `features.persona-accounts`; `sandbox account NAME`
 writes `sandbox.account` (a short macOS account name). Both are owner
-actions: they take the owner's principal on stdin (`--principal-stdin`) or
-the owner's presence, and a caller carrying a soul's markers is refused.
+actions: they take the owner's presence (`--principal-stdin` is refused with `owner-credential-required` for now, #1063), and a caller carrying a
+soul's markers is refused.
 
 `sandbox override <soul> sandboxed|unrestricted|inherit` records a per-soul
 override in the census; `inherit` removes it. A soul the SOP pack decides

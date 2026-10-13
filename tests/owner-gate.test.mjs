@@ -154,26 +154,24 @@ test('the CLI reads a presented principal from stdin and refuses an own-account 
   assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
 });
 
-test('a decision on a soul tool request asks for presence even when a principal verifies (#438)', async () => {
+test('a decision on a soul tool request asks for presence; a presented principal is refused (#438, #1063)', async () => {
   const broker = fakeBroker();
   const asked = [];
   const verifyPrincipal = (credential) => verifyPrincipalOwner(credential, { paths: { socket: '/broker.sock' }, clientFactory: broker.clientFactory });
   const consent = async (action) => { asked.push(action); return { method: 'presence', via: 'agent-bot-keyd' }; };
-  assert.deepEqual(await confirmOwnerPresence('approve Bash for Bill', { principal: owner(), verifyPrincipal, consent }),
-    { method: 'presence', via: 'agent-bot-keyd', principal: PRINCIPAL });
   assert.deepEqual(await confirmOwnerPresence('deny Bash for Bill', { verifyPrincipal, consent }),
     { method: 'presence', via: 'agent-bot-keyd' });
-  assert.deepEqual(asked, ['approve Bash for Bill', 'deny Bash for Bill']);
-  assert.equal(broker.calls.length, 1);
+  assert.deepEqual(asked, ['deny Bash for Bill']);
 
-  // A principal that does not verify refuses before anyone is asked; a
-  // refused presence refuses even with a verified principal.
+  // A decision names no soul target, so a principal the broker would pass on
+  // health alone is refused before the broker or the owner is asked (#1063);
+  // so is one that could never verify.
+  await assert.rejects(confirmOwnerPresence('approve Bash for Bill', { principal: owner(), verifyPrincipal, consent }),
+    (error) => error.code === 'owner-credential-required');
   await assert.rejects(confirmOwnerPresence('approve Bash for Bill', { principal: owner({ brokerUid: process.getuid() }), verifyPrincipal, consent }),
     /cannot vouch/);
-  assert.equal(asked.length, 2);
-  await assert.rejects(confirmOwnerPresence('approve Bash for Bill', {
-    principal: owner(), verifyPrincipal, consent: async () => { throw new Error('approve Bash for Bill was not approved: cancelled'); },
-  }), /not approved/);
+  assert.equal(asked.length, 1);
+  assert.equal(broker.calls.length, 0);
 });
 
 test('a worktree binding refuses every owner revision action with stripped env, before any owner proof', async (t) => {

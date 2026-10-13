@@ -122,11 +122,17 @@ never carries owner authority (#785, owner decision 2026-10-10). Each route
 belongs to one class:
 
 - **owner**: bearer plus the owner, asked by the daemon for this action. That's
-  presence through keyd (Touch ID, or the password), the admin dialog where
-  keyd can't ask, or a verified principal credential where the route accepts
-  one. A refusal changes nothing and is receipted.
+  presence through keyd (Touch ID, or the password), or the admin dialog where
+  keyd can't ask. A refusal changes nothing and is receipted. A `principal`
+  credential in the body is refused with `owner-credential-required` before
+  the broker or the owner is asked: these routes name no target for the
+  broker to check, and a broker accepts any principal it knows on a health
+  request, so it proves a login there, not the owner (#1063, owner decision
+  2026-10-12). Send the request without it and approve with presence. Scoped
+  broker owner grants are to bring principals back here action by action.
 - **owner-credential**: bearer plus the owner's agent-comms principal
-  credential. Presence isn't accepted (see above).
+  credential, checked by the broker for the request's Agent ID
+  (`principal-target-check`). Presence isn't accepted (see above).
 - **bearer**: bearer only. Reads, and infrastructure that bound sessions use.
 - **binding**: a soul's live binding (`x-agent-binding` or a proof), or a
   single-use bind token. The binding names the caller; the bearer isn't

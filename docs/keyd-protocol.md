@@ -235,7 +235,9 @@ Callers ([owner-gate.mjs](../owner-gate.mjs)):
 - `assertOwnerAction`, the ordinary owner gate (CLI owner actions,
   `soul revision`), first refuses a caller with soul markers. With a
   presented principal credential it returns once that verifies, and asks for
-  no presence. Without one it calls `presenceOrConsent`.
+  no presence. The broker verifies one only for an action with an Agent ID
+  target (revisions, cold wake); with no target it is refused (#1063).
+  Without one it calls `presenceOrConsent`.
 - `confirmOwnerPresence`, used by the daemon's decisions on a soul's waiting
   tool request (`POST /v0/approvals/decide` and
   `POST /v1/proposals/<id>/decision`), always calls `presenceOrConsent`; a

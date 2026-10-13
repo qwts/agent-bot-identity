@@ -47,8 +47,8 @@ agent-bot agent-space path <agentId>                                        # th
 agent-bot soul env migrate billy --space-into-soul
 ```
 
-One soul per run, owner-gated (`--principal-stdin` carries the principal
-JSON; the action named to the gate is `move <id>'s Agent Space into its
+One soul per run, owner-gated (presence; `--principal-stdin` is refused for
+now, #1063; the action named to the gate is `move <id>'s Agent Space into its
 soul folder`), refused with `space-migrate-busy` (action `agent-bot soul
 stop <id>`) while the soul has a turn in flight or a warm harness, checked
 before and after the gate so a turn cannot write into the space mid-copy.

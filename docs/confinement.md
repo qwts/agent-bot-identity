@@ -80,8 +80,7 @@ agent-bot soul confinement-report AGENT_ID --json
 Every mode change requires `assertOwnerAction`: any soul marker refuses, then
 the owner proves themselves through keyd's Touch ID or login-password prompt
 where GeniusBar's keyd is installed, the administrator consent dialog
-otherwise (#416), or presents a principal
-credential with `--principal-stdin`, verified by a broker in another account.
+otherwise (#416) (`--principal-stdin` is refused with `owner-credential-required` for now, #1063).
 The command never loads that credential for the caller. A soul cannot turn off
 or loosen its own confinement. `deny` is an explicit owner choice, accepted now
 but not the default. Modes are keyed by Agent ID in the private 0600
