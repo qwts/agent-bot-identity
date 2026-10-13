@@ -376,10 +376,11 @@ export function copySoulPackage(from, to, { limits } = {}) {
       const stat = lstatSync(file);
       if (stat.isSymbolicLink()) symlinkSync(readlinkSync(file), into);
       else if (stat.isDirectory()) {
-        // Writable while filling, then the package's own mode, as cpSync did.
-        mkdirSync(into, { mode: 0o700 });
+        // Directories are made 0755 whatever the package's mode, as the old
+        // cpSync left them: a read-only one would stop the failure cleanup
+        // from removing the half-made home (#1109 review).
+        mkdirSync(into, { mode: 0o755 });
         walk(file, into, depth + 1);
-        chmodSync(into, stat.mode & 0o777);
       }
       else if (stat.isFile()) writeFileSync(into, reader.read(file, stat), { flag: 'wx', mode: stat.mode & 0o777 });
       else throw new Error(`unsupported package entry: ${path.relative(from, file)}`);

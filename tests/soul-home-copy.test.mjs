@@ -31,9 +31,25 @@ test('the copy keeps files, modes, directories and links, and skips working stat
   assert.equal(readFileSync(path.join(to, 'skills', 'hello', 'SKILL.md'), 'utf8'), 'hi\n');
   assert.equal(statSync(path.join(to, 'run')).mode & 0o777, 0o755);
   assert.equal(readlinkSync(path.join(to, 'link')), 'AGENTS.md');
-  assert.equal(statSync(path.join(to, 'locked')).mode & 0o777, 0o555);
+  // A read-only package directory is copied writable (0755), as cpSync left
+  // it, so a failed launch can still remove the half-made home.
+  assert.equal(statSync(path.join(to, 'locked')).mode & 0o777, 0o755);
   assert.equal(readFileSync(path.join(to, 'locked', 'f'), 'utf8'), 'x');
-  for (const dir of [from, to]) chmodSync(path.join(dir, 'locked'), 0o755);
+  chmodSync(path.join(from, 'locked'), 0o755);
+});
+
+// #1109 review: a read-only directory copied before a refused entry must not
+// stop the cleanup from removing the half-made home, nor hide the refusal.
+test('a refused copy after a read-only directory leaves a home that cleanup removes', (t) => {
+  const { from, to } = dirs(t);
+  mkdirSync(path.join(from, 'aaa')); writeFileSync(path.join(from, 'aaa', 'f'), 'x'); chmodSync(path.join(from, 'aaa'), 0o555);
+  const made = spawnSync('mkfifo', [path.join(from, 'zzz')]);
+  if (made.status !== 0) { chmodSync(path.join(from, 'aaa'), 0o755); t.skip('mkfifo is not available'); return; }
+  assert.throws(() => copySoulPackage(from, to), /unsupported package entry: zzz/);
+  assert.deepEqual(readdirSync(to), ['aaa']);
+  rmSync(to, { recursive: true, force: true });
+  assert.equal(existsSync(to), false, 'the half-made home is gone');
+  chmodSync(path.join(from, 'aaa'), 0o755);
 });
 
 test('the copy stops at the package limits instead of copying everything first', (t) => {
