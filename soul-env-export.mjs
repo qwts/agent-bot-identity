@@ -52,7 +52,7 @@ import { minimalChildEnv } from './child-env.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { CLASSIFICATIONS, classifyPath, retentionOf } from './soul-env-contract.mjs';
 import { recordMigrationStep } from './soul-migration-journal.mjs';
-import { PACKAGE_IGNORE_LIST, computePackageRevision } from './soul-package.mjs';
+import { PACKAGE_IGNORE_LIST, computePackageRevision, readManifestText } from './soul-package.mjs';
 import { adoptSoulPackage, editSoulRevision, revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
 import { TOOL_HOME_REGISTRY, toolHomeEnv, toolHomeFiles } from './soul-tool-homes.mjs';
 import { soulsHome } from './souls-root.mjs';
@@ -904,7 +904,7 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
     // As `soul fork` does: the original's credentials declaration names
     // its GitHub App, so the fork drops it; the seed changes after genesis.
     let packageManifest = {};
-    try { packageManifest = JSON.parse(readFileSync(manifestPath, 'utf8')); } catch { fail('import-manifest-invalid', 'the exported soul.json cannot be read'); }
+    try { packageManifest = JSON.parse(readManifestText(manifestPath)); } catch { fail('import-manifest-invalid', 'the exported soul.json cannot be read'); }
     const { credentials: _original, ...kept } = packageManifest;
     const next = { ...kept, formatVersion: 2, ignore: PACKAGE_IGNORE_LIST, template: false, parentRevision: null, templateRevision: packageManifest.templateRevision ?? packageManifest.revision };
     const save = () => writeFileSync(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
@@ -918,7 +918,7 @@ async function restoreSoul({ archive, staging, manifest, plan, env, home, file, 
     next.displaySeed = agentId;
     save();
     const initialized = await editSoulRevision(agentId, staging, { ...revisionOptions, reason: 'Initialize display seed from imported identity' });
-    writeFileSync(manifestPath, readFileSync(path.join(revisionPackagePath(agentId, initialized.revision, revisionOptions), 'soul.json')));
+    writeFileSync(manifestPath, readManifestText(path.join(revisionPackagePath(agentId, initialized.revision, revisionOptions), 'soul.json')));
     journal = 'adopted';
     rmSync(journalStaging, { recursive: true, force: true });
   } else {

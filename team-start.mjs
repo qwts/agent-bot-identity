@@ -37,6 +37,7 @@ import { LAUNCH_NAME_MAX } from './daemon-launch.mjs';
 import { validateModelId } from './soul-model.mjs';
 import { PROVIDERS, declaredProviders, providerIds } from './soul-providers.mjs';
 import { bundledStarter } from './soul-templates.mjs';
+import { readManifestText } from './soul-package.mjs';
 
 export const TEAM_DEFAULTS = Object.freeze({ maxChildren: 5, maxDepth: 2 });
 // A parent chain longer than this is corrupt; refuse rather than walk it.
@@ -117,7 +118,7 @@ export async function defaultTeamTemplate({ config = {}, env = process.env,
  */
 export function templateProviderId(packagePath, harness) {
   try {
-    const manifest = JSON.parse(readFileSync(path.join(packagePath, 'soul.json'), 'utf8'));
+    const manifest = JSON.parse(readManifestText(path.join(packagePath, 'soul.json')));
     return declaredProviders(manifest).providers[harness]?.id ?? null;
   } catch { return null; }
 }

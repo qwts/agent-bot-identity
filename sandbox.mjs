@@ -36,6 +36,7 @@ import { SANDBOX_OVERRIDES, listSouls, populationFile, setSoulSandbox, showSoul,
 import { assertOwnerAction } from './owner-action.mjs';
 import { PERSONA_FILE, parseTomlSubset, readSopPersonaRecord } from './sop.mjs';
 import { formatSandboxRemovalResult, refuseSoulCaller, runSandboxRemoval } from './sandbox-remove.mjs';
+import { readManifestText } from './soul-package.mjs';
 
 export const SANDBOX_PROVIDER = 'standard_macos_account';
 export const DEFAULT_SANDBOX_ACCOUNT = 'geniusbar-agent';
@@ -255,7 +256,7 @@ function personaKey(text) {
 function soulRole(soul) {
   if (!soul?.soulDir) return null;
   try {
-    const role = JSON.parse(readFileSync(join(soul.soulDir, 'soul.json'), 'utf8'))?.role;
+    const role = JSON.parse(readManifestText(join(soul.soulDir, 'soul.json')))?.role;
     return typeof role === 'string' && role.trim() ? role : null;
   } catch { return null; }
 }

@@ -39,6 +39,7 @@ import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { listSouls, populationFile, showSoul, showSoulByName } from './agent-population.mjs';
 import { NO_REPLY, clip } from './soul-threads.mjs';
+import { readManifestText } from './soul-package.mjs';
 
 export const ASIDE_VIA = Object.freeze(['relay-prompt', 'thread-context', 'send_message', 'start_soul', 'final-reply', 'inbox-read', 'hook-inject']);
 const BODY_LIMIT = 2048;
@@ -148,7 +149,7 @@ export function teamOf(agentId, rows) {
 function soulLabel(row) {
   if (typeof row?.soulDir === 'string' && path.isAbsolute(row.soulDir)) {
     try {
-      const name = JSON.parse(readFileSync(path.join(row.soulDir, 'soul.json'), 'utf8'))?.name;
+      const name = JSON.parse(readManifestText(path.join(row.soulDir, 'soul.json')))?.name;
       if (typeof name === 'string' && name.trim() !== '' && name.length <= 128 && !/[\u0000-\u001f\u007f]/.test(name)) return name.trim();
     } catch { /* no readable soul.json */ }
   }
