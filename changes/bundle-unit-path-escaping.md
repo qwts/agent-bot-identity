@@ -1,0 +1,1 @@
+- The Linux bundle installer now escapes the install paths it writes into the systemd `--user` units, and the units quote them. Before, a `--prefix` or `AGENT_BUNDLE_PREFIX` containing `|` could add its own `sed` commands and rewrite `ExecStart`, and `%`, `\` or spaces changed what systemd ran. Every path character now reaches the unit as literal data (#1068).

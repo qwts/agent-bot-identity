@@ -117,6 +117,14 @@ assert_safe_path() {
   esac
 }
 
+# A path as sed replacement text for a value the unit template holds inside
+# double quotes (#1068). systemd unescapes \\ and expands %% there, so those
+# are escaped first; sed then gets \\, & and its | delimiter escaped, so no
+# path character can end the replacement or add a command of its own.
+unit_value() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/%/%%/g' -e 's/[\\&|]/\\&/g'
+}
+
 is_marked_wrapper() {
   grep -qxF "$WRAPPER_MARKER" "$1" 2>/dev/null
 }

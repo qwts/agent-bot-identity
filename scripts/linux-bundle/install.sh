@@ -181,12 +181,12 @@ else
     template="$SCRIPT_DIR/systemd/$template_unit.in"
     [ -f "$template" ] || die "the archive is incomplete: $template is missing"
     sed \
-      -e "s|@AGENT_BOT_NODE@|$BUNDLE_NODE|g" \
-      -e "s|@AGENT_BOT_ENTRY@|$BUNDLE_ROOT/lib/agent-bot/agent-bot.mjs|g" \
-      -e "s|@AGENT_BOT_COMMS_ENTRY@|$BUNDLE_COMMS_ENTRY|g" \
-      -e "s|@AGENT_BOT_BIN@|$BUNDLE_BIN|g" \
-      -e "s|@AGENT_BOT_BUNDLE_ROOT@|$BUNDLE_ROOT|g" \
-      -e "s|@AGENT_BOT_TOOL_PATH@|$BUNDLE_BIN|g" \
+      -e "s|@AGENT_BOT_NODE@|$(unit_value "$BUNDLE_NODE")|g" \
+      -e "s|@AGENT_BOT_ENTRY@|$(unit_value "$BUNDLE_ROOT/lib/agent-bot/agent-bot.mjs")|g" \
+      -e "s|@AGENT_BOT_COMMS_ENTRY@|$(unit_value "$BUNDLE_COMMS_ENTRY")|g" \
+      -e "s|@AGENT_BOT_BIN@|$(unit_value "$BUNDLE_BIN")|g" \
+      -e "s|@AGENT_BOT_BUNDLE_ROOT@|$(unit_value "$BUNDLE_ROOT")|g" \
+      -e "s|@AGENT_BOT_TOOL_PATH@|$(unit_value "$BUNDLE_BIN")|g" \
       "$template" > "$SYSTEMD_USER_DIR/$template_unit"
   done
   run_systemctl --user daemon-reload

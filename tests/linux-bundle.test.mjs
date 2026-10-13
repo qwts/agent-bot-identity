@@ -440,9 +440,9 @@ test('#337: install writes every wrapper with the GeniusBar marker and one PATH 
     assert.ok(calls.includes('systemctl --user enable --now agent-bot-daemon.service'));
     assert.ok(calls.includes('systemctl --user enable --now agent-comms-broker.service'));
     const unit = box.read('.config/systemd/user/agent-bot-daemon.service');
-    assert.match(unit, /^ExecStart=\S+\/bundle\/node\/bin\/node \S+\/bundle\/lib\/agent-bot\/agent-bot\.mjs daemon run$/mu);
+    assert.match(unit, /^ExecStart="\S+\/bundle\/node\/bin\/node" "\S+\/bundle\/lib\/agent-bot\/agent-bot\.mjs" daemon run$/mu);
     assert.doesNotMatch(unit, /@[A-Z_]+@/u);
-    assert.match(unit, /AGENT_BOT_TOOL_PATH=\S+\/bundle\/bin/u);
+    assert.match(unit, /^Environment="AGENT_BOT_TOOL_PATH=\S+\/bundle\/bin"$/mu);
 
     // The broker unit starts agent-comms the way agent-comms' own service
     // installer does (service-startup.mjs, single-account mode): the pinned
@@ -451,7 +451,7 @@ test('#337: install writes every wrapper with the GeniusBar marker and one PATH 
     const broker = box.read('.config/systemd/user/agent-comms-broker.service');
     assert.match(
       broker,
-      /^ExecStart=\S+\/bundle\/node\/bin\/node \S+\/bundle\/lib\/agent-comms\/bin\/agent-comms\.mjs broker run --single-account$/mu,
+      /^ExecStart="\S+\/bundle\/node\/bin\/node" "\S+\/bundle\/lib\/agent-comms\/bin\/agent-comms\.mjs" broker run --single-account$/mu,
     );
     assert.doesNotMatch(broker, /@[A-Z_]+@/u);
   } finally {
@@ -553,6 +553,86 @@ test('#337: --prefix and --bin-dir move the install without touching the default
     assert.equal(box.exists('.local/share/agent-bot'), false);
     // The PATH block names the directory the wrappers really went to.
     assert.match(box.read('.profile'), new RegExp(binDir.replaceAll('/', String.raw`\/`), 'u'));
+  } finally {
+    box.cleanup();
+  }
+});
+
+// Splits one unit-file value the way systemd does for ExecStart= and
+// Environment=: whitespace separates words, double quotes group them, a
+// backslash escape and a %% specifier each stand for one literal character.
+// Any other % specifier is returned as-is so a test can see it was not escaped.
+function systemdWords(value) {
+  const words = [];
+  let word = null;
+  let quoted = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === '\\') {
+      word = (word ?? '') + value[index + 1];
+      index += 1;
+    } else if (char === '%' && value[index + 1] === '%') {
+      word = (word ?? '') + '%';
+      index += 1;
+    } else if (char === '%') {
+      throw new Error(`unescaped specifier %${value[index + 1]} in ${value}`);
+    } else if (char === '"') {
+      quoted = !quoted;
+      word ??= '';
+    } else if (/\s/u.test(char) && !quoted) {
+      if (word !== null) words.push(word);
+      word = null;
+    } else {
+      word = (word ?? '') + char;
+    }
+  }
+  assert.equal(quoted, false, `unterminated quote in ${value}`);
+  if (word !== null) words.push(word);
+  return words;
+}
+
+function unitDirectives(unit, key) {
+  return [...unit.matchAll(new RegExp(`^${key}=(.*)$`, 'gmu'))].map((match) => match[1]);
+}
+
+// #1068: the prefix is written into the systemd units through sed. A prefix
+// holding sed's delimiter could add its own substitutions and rewrite
+// ExecStart, and systemd itself reads %, \, ; and spaces in a unit value.
+// Every such character must reach the unit as literal path data.
+test('#1068: a prefix with sed and systemd syntax stays literal in both units', () => {
+  const box = machine('install-hostile-prefix');
+  try {
+    const evil = join(box.root, 'evil');
+    for (const leaf of [
+      String.raw`p|g;s|ExecStart=.*|ExecStart=${evil}|;s|x`,
+      String.raw`a;b&c\d%h e%%f`,
+    ]) {
+      const prefix = join(box.root, leaf);
+      const result = box.install(['--prefix', prefix]);
+      assert.equal(result.status, 0, result.stderr);
+      const root = join(prefix, 'bundle');
+      const node = join(root, 'node', 'bin', 'node');
+      const expected = {
+        'agent-bot-daemon.service': [node, join(root, 'lib', 'agent-bot', 'agent-bot.mjs'), 'daemon', 'run'],
+        'agent-comms-broker.service': [node, join(root, 'lib', 'agent-comms', 'bin', 'agent-comms.mjs'), 'broker', 'run', '--single-account'],
+      };
+      for (const [name, argv] of Object.entries(expected)) {
+        const unit = box.read(`.config/systemd/user/${name}`);
+        const execs = unitDirectives(unit, 'ExecStart');
+        assert.equal(execs.length, 1, `${name}: ${execs.join('\n')}`);
+        assert.deepEqual(systemdWords(execs[0]), argv, name);
+        const environment = Object.fromEntries(
+          unitDirectives(unit, 'Environment').flatMap(systemdWords).map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]),
+        );
+        assert.deepEqual(environment, {
+          AGENT_BOT_NODE: node,
+          AGENT_BOT_TOOL_PATH: join(root, 'bin'),
+          AGENT_BOT_BUNDLE_ROOT: root,
+          PATH: `${join(root, 'bin')}:/usr/local/bin:/usr/bin:/bin`,
+        }, name);
+      }
+      assert.equal(box.uninstall(['--prefix', prefix]).status, 0);
+    }
   } finally {
     box.cleanup();
   }
@@ -969,7 +1049,7 @@ test('#337: the bundle ships POSIX sh, and every entry script is executable', ()
   // what runs the broker.
   assert.match(
     readFileSync(join(BUNDLE, 'systemd', 'agent-comms-broker.service.in'), 'utf8'),
-    /^ExecStart=@AGENT_BOT_NODE@ @AGENT_BOT_COMMS_ENTRY@ broker run --single-account$/mu,
+    /^ExecStart="@AGENT_BOT_NODE@" "@AGENT_BOT_COMMS_ENTRY@" broker run --single-account$/mu,
   );
 });
 

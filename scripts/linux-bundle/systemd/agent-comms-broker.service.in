@@ -1,5 +1,6 @@
 # agent-comms' broker unit for the headless-Linux bundle (ADR-0332 decision 2).
-# install.sh substitutes the placeholders below with this install's bundled
+# install.sh substitutes the placeholders below, escaped for systemd and
+# always inside double quotes, with this install's bundled
 # Node, agent-comms entry point, tool path and bundle root.
 #
 # The broker is the other half of the pair. Exactly one runs per OS user, and
@@ -16,11 +17,11 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=@AGENT_BOT_NODE@ @AGENT_BOT_COMMS_ENTRY@ broker run --single-account
-Environment=AGENT_BOT_NODE=@AGENT_BOT_NODE@
-Environment=AGENT_BOT_TOOL_PATH=@AGENT_BOT_TOOL_PATH@
-Environment=AGENT_BOT_BUNDLE_ROOT=@AGENT_BOT_BUNDLE_ROOT@
-Environment=PATH=@AGENT_BOT_BIN@:/usr/local/bin:/usr/bin:/bin
+ExecStart="@AGENT_BOT_NODE@" "@AGENT_BOT_COMMS_ENTRY@" broker run --single-account
+Environment="AGENT_BOT_NODE=@AGENT_BOT_NODE@"
+Environment="AGENT_BOT_TOOL_PATH=@AGENT_BOT_TOOL_PATH@"
+Environment="AGENT_BOT_BUNDLE_ROOT=@AGENT_BOT_BUNDLE_ROOT@"
+Environment="PATH=@AGENT_BOT_BIN@:/usr/local/bin:/usr/bin:/bin"
 Restart=always
 RestartSec=2
 NoNewPrivileges=true

@@ -125,12 +125,12 @@ echo "a foreign agent-comms"' ] || fail "$platform: the refused run touched the 
   # Both halves of the pair, started once each.
   unit="$home/.config/systemd/user/agent-bot-daemon.service"
   [ -f "$unit" ] || fail "$platform: no daemon unit"
-  grep -q '/bundle/node/bin/node .*daemon run' "$unit" || fail "$platform: the daemon unit does not exec the bundled runtime"
+  grep -q '/bundle/node/bin/node" .*daemon run' "$unit" || fail "$platform: the daemon unit does not exec the bundled runtime"
   broker="$home/.config/systemd/user/agent-comms-broker.service"
   [ -f "$broker" ] || fail "$platform: no broker unit"
   # The command agent-comms' own service installer builds (service-startup.mjs,
   # single-account mode), run on the bundled Node from the pinned entry.
-  grep -q '/bundle/lib/agent-comms/bin/agent-comms\.mjs broker run --single-account' "$broker" \
+  grep -q '/bundle/lib/agent-comms/bin/agent-comms\.mjs" broker run --single-account' "$broker" \
     || fail "$platform: the broker unit does not start agent-comms the way its own installer does"
   grep -qxF 'systemctl --user enable --now agent-comms-broker.service' "$home/systemctl.log" \
     || fail "$platform: the broker was never started"
