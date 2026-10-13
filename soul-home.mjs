@@ -6,7 +6,7 @@
 // only its own harness adapter from the package's pins (ADR-0276, #426).
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { validateAgentId } from './identity-format.mjs';
@@ -16,6 +16,7 @@ import { populationFile, recordSoulSighting, registerSoulDir, setSoulSpacePath, 
 import { initSoulSpace } from './agent-space.mjs';
 
 import { buildSoulDirectory } from './soul-build.mjs';
+import { boundedPackageReader } from './soul-package.mjs';
 import { minimalChildEnv } from './child-env.mjs';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN } from './acp-registry.mjs';
 import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
@@ -360,6 +361,33 @@ export async function installHarnesses(worktree, { env = process.env, node = pro
  * home when absent, binds it, and returns { worktree, file } like
  * `bindings.findAgent`.
  */
+// The package into a new worktree, within the package read limits (#1102):
+// the copy is the first thing launch does with a soul-authored tree, ahead
+// of the bounded build, so it walks and reads through the same bounded
+// reader instead of an unbounded recursive copy. Links are copied as links,
+// as before; anything but a file, directory or link is refused.
+export function copySoulPackage(from, to, { limits } = {}) {
+  const reader = boundedPackageReader(limits);
+  const walk = (source, target, depth) => {
+    for (const raw of reader.names(source, depth)) {
+      const name = raw.toString('utf8');
+      if (depth === 0 && ['.soul-state', 'worktrees', 'node_modules'].includes(name)) continue;
+      const file = path.join(source, name), into = path.join(target, name);
+      const stat = lstatSync(file);
+      if (stat.isSymbolicLink()) symlinkSync(readlinkSync(file), into);
+      else if (stat.isDirectory()) {
+        // Writable while filling, then the package's own mode, as cpSync did.
+        mkdirSync(into, { mode: 0o700 });
+        walk(file, into, depth + 1);
+        chmodSync(into, stat.mode & 0o777);
+      }
+      else if (stat.isFile()) writeFileSync(into, reader.read(file, stat), { flag: 'wx', mode: stat.mode & 0o777 });
+      else throw new Error(`unsupported package entry: ${path.relative(from, file)}`);
+    }
+  };
+  walk(from, to, 0);
+}
+
 export function createSoulHomes({ stateDir, bindings, install = installHarnesses, rename = renameSync,
   warn = (message) => process.stderr.write(`${message}\n`), ...options }) {
   // One creation per home at a time: a second launch of the same new soul
@@ -400,12 +428,7 @@ export function createSoulHomes({ stateDir, bindings, install = installHarnesses
   async function create(worktree, packagePath, harness, agentId) {
     mkdirSync(worktree, { recursive: true, mode: 0o700 });
     try {
-      if (packagePath) {
-        for (const name of readdirSync(packagePath)) {
-          if (['.soul-state', 'worktrees', 'node_modules'].includes(name)) continue;
-          cpSync(path.join(packagePath, name), path.join(worktree, name), { recursive: true, verbatimSymlinks: true, force: false });
-        }
-      }
+      if (packagePath) copySoulPackage(packagePath, worktree);
       if (existsSync(path.join(worktree, 'AGENTS.md'))) buildSoulDirectory(worktree);
       await provisionHarness(worktree, packagePath, harness, agentId);
       execFileSync('git', ['init', '-q'], { cwd: worktree, env: { PATH: process.env.PATH }, stdio: 'ignore' });
