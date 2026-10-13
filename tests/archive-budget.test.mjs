@@ -101,6 +101,47 @@ test('a zip is budgeted from its central directory', async () => {
   await refused(zip([{ name: 'p', mode: 0o010644 }]), /device or FIFO/);
 });
 
-test('a format this reader cannot budget is left to tar', async () => {
-  assert.deepEqual(await checkArchiveBudget(file(Buffer.from('{"json":"double"}')), limits), { format: null, entries: null, expandedBytes: null });
+test('anything but a gzip tar, ustar tar or zip is refused', async () => {
+  const unknown = /not a gzip tar, ustar tar or zip archive/;
+  await refused(Buffer.from('{"json":"double"}'), unknown);
+  await refused(Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 1, 2, 3]), unknown); // xz
+  await refused(Buffer.from('BZh91AY&SY'), unknown); // bzip2
+  await refused(Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0, 0, 0, 0]), unknown); // zstd
+  await refused(Buffer.from('070701' + '0'.repeat(200)), unknown); // cpio
+  // An old tar without the ustar magic, and a zip with bytes before it.
+  const old = tar([{ name: 'a', body: Buffer.from('x') }]);
+  old.fill(0, 257, 265);
+  await refused(old, unknown);
+  await refused(Buffer.concat([Buffer.from('#!/bin/sh\nexit 0\n'), zip([{ name: 'a', size: 1 }])]), unknown);
+});
+
+// Review of #1090: two reproduced bypasses.
+test('a link that carries data is refused, and a lone zero block does not end the scan', async () => {
+  const zeros = Buffer.alloc(70 * 1024);
+  await refused(gzipSync(tar([{ name: 'a' }, { name: 'link', type: '1', body: zeros }])), /link is a link or directory that carries data/);
+  await refused(gzipSync(tar([{ name: 'sym', type: '2', body: Buffer.from('x') }])), /carries data/);
+  // One zero block, then more entries: tar keeps reading, so the scan does.
+  const lone = Buffer.concat([header('a', 0), Buffer.alloc(512), header('b', zeros.length), zeros, Buffer.alloc(1024)]);
+  await refused(gzipSync(lone), /expands to more than 65536 bytes/);
+  // Bytes after a real end marker still count.
+  await refused(gzipSync(Buffer.concat([tar([{ name: 'a' }]), zeros])), /expands to more than 65536 bytes/);
+});
+
+test('a zip whose end record understates its central directory is refused', async () => {
+  const understate = (entries) => {
+    const bytes = zip(entries);
+    const end = bytes.length - 22;
+    bytes.writeUInt16LE(1, end + 8); bytes.writeUInt16LE(1, end + 10);
+    return bytes;
+  };
+  // Every entry in the directory is walked, whatever the end record says...
+  await refused(understate([{ name: 'a', size: 10 }, { name: 'big', size: 70 * 1024 }]), /expands to more than 65536 bytes/);
+  // ...and a count that disagrees with the directory is refused outright.
+  await refused(understate([{ name: 'a', size: 10 }, { name: 'b', size: 10 }]), /holds 2 entries, its end record says 1/);
+  const honest = zip([{ name: 'a', size: 10 }, { name: 'b', size: 10 }]);
+  const end = honest.length - 22;
+  // A directory size that does not reach the end record is refused too.
+  const short = Buffer.from(honest);
+  short.writeUInt32LE(short.readUInt32LE(end + 12) - 46 - 3, end + 12);
+  await refused(short, /not where its end record says/);
 });

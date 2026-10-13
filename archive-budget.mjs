@@ -104,6 +104,7 @@ async function scanTar(stream, limits) {
   let ended = false;
   for await (const chunk of stream) {
     budget.bytes(chunk.length);
+    if (ended) continue;
     buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk;
     for (;;) {
       if (ended) break;
@@ -117,8 +118,15 @@ async function scanTar(stream, limits) {
       }
       if (buffer.length < BLOCK) break;
       const header = buffer.subarray(0, BLOCK);
+      if (header.every((byte) => byte === 0)) {
+        // End of archive is two zero blocks. A lone zero block followed by
+        // more data is not an end tar would stop at, so parsing goes on.
+        if (buffer.length < 2 * BLOCK) break;
+        buffer = buffer.subarray(BLOCK);
+        if (buffer.subarray(0, BLOCK).every((byte) => byte === 0)) { ended = true; break; }
+        continue;
+      }
       buffer = buffer.subarray(BLOCK);
-      if (header.every((byte) => byte === 0)) { ended = true; break; }
       if (!checksumValid(header)) refuse('it is not a tar archive this installer can read');
       const type = String.fromCharCode(header[156] || 0x30);
       const ustar = header.subarray(257, 262).toString('ascii') === 'ustar';
@@ -151,11 +159,16 @@ async function scanTar(stream, limits) {
       if (type === '3' || type === '4' || type === '6') refuse(`${name} is a device or FIFO`);
       if (type === 'M' || type === 'N' || type === 'V') refuse(`${name} is a multi-volume or label entry`);
       budget.entry(name);
-      // Links and directories carry no body; everything else is skipped.
-      skip = type === '1' || type === '2' || type === '5' ? 0 : padded;
+      // A link or directory with a body is read differently by different tars
+      // (bsdtar extracts it, GNU tar takes it for the next header), so no
+      // single reading of it can be budgeted: it is refused.
+      if ((type === '1' || type === '2' || type === '5') && size !== 0) refuse(`${name} is a link or directory that carries data`);
+      skip = padded;
       if (!Number.isFinite(size)) refuse(`it expands to more than ${limits.maxExpandedBytes} bytes`);
     }
-    if (ended) break;
+    // Past the end marker nothing more is parsed, but every byte of the
+    // stream still counts against the budget.
+    if (ended) buffer = Buffer.alloc(0);
   }
   return { entries: budget.entries, expandedBytes: budget.expanded };
 }
@@ -195,11 +208,21 @@ function scanZip(file, limits) {
       directoryOffset = Number(record.readBigUInt64LE(48));
     }
     if (count > limits.maxEntries) refuse(`it has more than ${limits.maxEntries} entries`);
+    // tar walks the whole central directory, whatever the end record's count
+    // says, so the directory must sit directly before its end records and
+    // hold exactly `count` entries in exactly `directorySize` bytes.
+    const endAt = size - tailLength + eocd;
+    const zip64 = eocd >= 20 && tail.readUInt32LE(eocd - 20) === 0x07064b50;
+    const directoryEnd = zip64 ? Number(tail.readBigUInt64LE(eocd - 20 + 8)) : endAt;
+    if (directoryOffset + directorySize !== directoryEnd) refuse('its central directory is not where its end record says');
     if (directorySize > ZIP_DIRECTORY_MAX_BYTES) refuse(`its directory is larger than ${ZIP_DIRECTORY_MAX_BYTES} bytes`);
     const directory = readAt(fd, directoryOffset, directorySize);
+    if (directory.length !== directorySize) refuse('its central directory is not where its end record says');
     const budget = counter(limits);
     let at = 0;
-    for (let i = 0; i < count; i += 1) {
+    let walked = 0;
+    while (at < directory.length) {
+      walked += 1;
       if (at + 46 > directory.length || directory.readUInt32LE(at) !== 0x02014b50) refuse('it is not a zip archive this installer can read');
       let uncompressed = directory.readUInt32LE(at + 24);
       const nameLength = directory.readUInt16LE(at + 28);
@@ -221,6 +244,7 @@ function scanZip(file, limits) {
       budget.bytes(uncompressed);
       at += 46 + nameLength + extraLength + commentLength;
     }
+    if (at !== directory.length || walked !== count) refuse(`its central directory holds ${walked} entries, its end record says ${count}`);
     return { entries: budget.entries, expandedBytes: budget.expanded };
   } finally { closeSync(fd); }
 }
@@ -229,8 +253,7 @@ function scanZip(file, limits) {
  * What an archive expands to, checked against `limits` before anything is
  * extracted: `{ format, entries, expandedBytes }`. Throws ArchiveBudgetError
  * naming the limit for an archive over budget, a sparse file, a device or a
- * FIFO. Formats it cannot read in process (xz, bzip2, zstd) are left to
- * `tar` with only the download cap: `{ format: null }`.
+ * FIFO, and any archive that is not a gzip tar, ustar tar or zip.
  */
 export async function checkArchiveBudget(file, limits = RUNTIME_ARCHIVE_LIMITS) {
   const fd = openSync(file, 'r');
@@ -252,5 +275,8 @@ export async function checkArchiveBudget(file, limits = RUNTIME_ARCHIVE_LIMITS) 
     const source = createReadStream(file);
     try { return { format: 'tar', ...await scanTar(source, limits) }; } finally { source.destroy(); }
   }
-  return { format: null, entries: null, expandedBytes: null };
+  // Only formats this reader can budget are installed (owner decision on
+  // #1072): an old ustar-less tar, a zip with bytes before it, xz, bzip2,
+  // zstd, cpio, 7z and anything else are refused rather than left to tar.
+  refuse('it is not a gzip tar, ustar tar or zip archive, the only formats a runtime archive may use');
 }

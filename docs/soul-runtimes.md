@@ -35,7 +35,11 @@ implemented slice and its limits.
   `archive` takes a `version`, an https `url` (one template with
   `{version}` and `{platform}`, or a per-platform map), `sha256` per
   platform, and `bin` (the executable inside the archive; defaults to the
-  harness command). `uv-tool` takes a PyPI `package`, exact `version` and
+  harness command). The archive must be a gzip tar, ustar tar or zip of at
+  most 1 GiB that expands to at most 4 GiB in at most 200,000 entries, 64
+  directories deep, with no sparse files, devices, FIFOs or links that carry
+  data (`archive-budget.mjs`, #1072); anything else fails
+  `runtime-install-failed` before it is extracted. `uv-tool` takes a PyPI `package`, exact `version` and
   the `bin` it installs, and needs `runtimes.python`. It may add `lock`:
   every package the tool installs, itself included, as
   `{ "name", "version", "sha256": ["<hex>", ...] }` with each entry's

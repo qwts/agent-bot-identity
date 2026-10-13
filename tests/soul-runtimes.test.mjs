@@ -6,7 +6,7 @@ import { chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, re
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { auditFile } from '../identity-format.mjs';
@@ -31,8 +31,25 @@ const GO = resolveCatalogPin('go', '1');
 const UV = newestPin('uv');
 const PYTHON = resolveCatalogPin('python', '3.12');
 
-// A fake archive is JSON naming its files; the fake `tar` below unpacks it.
-const archive = (files) => Buffer.from(JSON.stringify(files));
+// A fake archive is a real gzip tar (the only kind of archive the installer
+// takes, #1072) holding one JSON entry naming its files; the fake `tar` below
+// unpacks that.
+const archive = (files) => {
+  const body = Buffer.from(JSON.stringify(files));
+  const header = Buffer.alloc(512);
+  header.write('fake-archive.json', 0, 100, 'utf8');
+  for (const [at, value] of [[100, '0000644\0'], [108, '0000000\0'], [116, '0000000\0'], [124, `${body.length.toString(8).padStart(11, '0')}\0`], [136, '00000000000\0'], [148, '        ']]) header.write(value, at, value.length, 'ascii');
+  header.write('0', 156, 1, 'ascii');
+  header.write('ustar\0', 257, 6, 'ascii');
+  header.write('00', 263, 2, 'ascii');
+  let sum = 0; for (const byte of header) sum += byte;
+  header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+  return gzipSync(Buffer.concat([header, body, Buffer.alloc((512 - (body.length % 512)) % 512), Buffer.alloc(1024)]));
+};
+const unpack = (file) => {
+  const tar = gunzipSync(readFileSync(file));
+  return JSON.parse(tar.subarray(512, 512 + parseInt(tar.subarray(124, 135).toString('ascii'), 8)).toString('utf8'));
+};
 const NODE_ARCHIVE = archive({ [`node-v${NODE.version}-darwin-arm64/bin/node`]: '#!/bin/sh\n', [`node-v${NODE.version}-darwin-arm64/bin/npm`]: '#!/bin/sh\n' });
 const GO_ARCHIVE = archive({ 'go/bin/go': '#!/bin/sh\n', 'go/VERSION': `go${GO.version}` });
 const UV_ARCHIVE = archive({ [`uv-aarch64-apple-darwin/uv`]: '#!/bin/sh\n', [`uv-aarch64-apple-darwin/uvx`]: '#!/bin/sh\n' });
@@ -67,7 +84,7 @@ function doubles({ archives, fail = {} } = {}) {
   const runImpl = async (command, args, options = {}) => {
     commands.push({ command: path.basename(command), args, env: options.env ?? null });
     if (command === 'tar') {
-      const files = JSON.parse(readFileSync(args[1], 'utf8'));
+      const files = unpack(args[1]);
       if (files.corrupt) throw Object.assign(new Error('tar failed'), { stderr: 'tar: Unrecognized archive format' });
       for (const [name, contents] of Object.entries(files)) put(path.join(args[3], name), contents);
       return { stdout: '', stderr: '' };
