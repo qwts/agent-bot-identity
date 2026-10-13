@@ -638,6 +638,35 @@ test('#1068: a prefix with sed and systemd syntax stays literal in both units', 
   }
 });
 
+// #1068: systemd ends a unit line at a carriage return as well as a newline,
+// so a control character in the prefix could start a directive of its own (a
+// second ExecStart= that replaces the first). Every control character is
+// refused before anything is installed.
+test('#1068: a prefix holding any control character is refused before installing', () => {
+  const box = machine('install-control-prefix');
+  try {
+    for (const leaf of [
+      'a\rExecStart=\rExecStart=/tmp/evil\r#',
+      'a\nExecStart=/tmp/evil',
+      'tab\there',
+      'bell\u0007',
+      'escape\u001b[0m',
+      'delete\u007f',
+    ]) {
+      const prefix = join(box.root, leaf);
+      const result = box.install(['--prefix', prefix]);
+      assert.notEqual(result.status, 0, JSON.stringify(leaf));
+      assert.match(result.stderr, /--prefix may not contain a control character/u, JSON.stringify(leaf));
+      assert.doesNotMatch(result.stderr, /\/tmp\/evil/u);
+      assert.equal(existsSync(prefix), false, JSON.stringify(leaf));
+      assert.equal(box.exists('.config/systemd/user/agent-bot-daemon.service'), false, JSON.stringify(leaf));
+      assert.equal(box.exists('.config/systemd/user/agent-comms-broker.service'), false, JSON.stringify(leaf));
+    }
+  } finally {
+    box.cleanup();
+  }
+});
+
 // ------------------------------------------------- foreign files and --replace
 
 test('#337: a foreign file at a wrapper path is never overwritten without --replace', () => {
@@ -1025,7 +1054,8 @@ test('#337: the bundle ships POSIX sh, and every entry script is executable', ()
   for (const script of ['install.sh', 'uninstall.sh', 'lib/common.sh']) {
     const body = readFileSync(join(BUNDLE, script), 'utf8');
     // Bashisms that dash and busybox ash reject.
-    assert.doesNotMatch(body, /\[\[|\bfunction\s+\w+\s*\(\)|\blocal\s+\w+=|\becho\s+-e\b|\bsource\s+/u);
+    // `[[` is bash's test; `[[:cntrl:]]` is a POSIX bracket class and allowed.
+    assert.doesNotMatch(body, /\[\[(?!:[a-z]+:\])|\bfunction\s+\w+\s*\(\)|\blocal\s+\w+=|\becho\s+-e\b|\bsource\s+/u);
     assert.doesNotMatch(body, /\bsudo\b/u, `${script} must never reach for root`);
   }
   // The two scripts a user runs start with the POSIX shebang; the helper is
