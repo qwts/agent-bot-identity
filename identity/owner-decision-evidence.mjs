@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../canonical-json.mjs';
 import { exactBytes } from './owner-decision-bytes.mjs';
+import { COMPUTER_USE_OPERATION, decodeOwnerDecisionAction, ownerDecisionCanonical } from './owner-decision-action.mjs';
 
 export const EVIDENCE_CAP = 4096;
 // The original action's cap (daemon slot 2).
@@ -20,6 +21,10 @@ const PRINCIPAL = /^principal_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a
 const SOUL = /^agent_[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const ACCOUNT = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const REVISION_OPERATIONS = ['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit'];
+// Operations whose completion is record-only with no linked event: a setting
+// change the daemon writes itself.
+export const SETTING_OPERATIONS = Object.freeze(['cold-wake.set', COMPUTER_USE_OPERATION]);
+export const isRevisionOperation = (operation) => REVISION_OPERATIONS.includes(operation);
 // Final pre-effect refusal reasons and their public outcome codes, per
 // agent-comms 77bb19c (#212). storage-refused is only ever emitted for a
 // durably recorded refusal; failing to record one stays storage-failed or
@@ -90,6 +95,9 @@ function expectedShape(operation, e) {
     return nullOr(e.destination, (d) => exact(d, ['rootDigest', 'beforeInventoryDigest']) && digest(d.rootDigest)
       && digest(d.beforeInventoryDigest) && operation === 'revision.edit');
   }
+  // The boolean captured at preparation (agent-comms#250, owner decision:
+  // boolean only, no counter or generation).
+  if (operation === COMPUTER_USE_OPERATION) return exact(e, ['kind', 'enabled']) && e.kind === 'computer-use' && typeof e.enabled === 'boolean';
   return operation === 'cold-wake.set' && exact(e, ['kind', 'setting', 'webhookDigest', 'resume']) && e.kind === 'cold-wake'
     && coldSetting(e.setting) && nullOr(e.webhookDigest, digest)
     && nullOr(e.resume, (r) => exact(r, ['harness', 'sessionDigest', 'toolHomeDigest', 'destinationDigest'])
@@ -144,28 +152,92 @@ export function bindPreparation(p, { acceptance, action }) {
     if (parameters.expectedRevision !== null || e.head !== null) fail('owner-evidence-binding');
   } else if (p.operation === 'revision.edit') {
     if (e.head.revision !== parameters.expectedRevision || (e.destination !== null) !== (parameters.apply === true)) fail('owner-evidence-binding');
-  } else {
+  } else if (p.operation === 'cold-wake.set') {
     // Resume context is bound exactly when the current or desired mode is resume.
     if (!coldSetting(desiredSetting(parameters)) || (e.resume !== null) !== (parameters.mode === 'resume' || e.setting.mode === 'resume')) {
       fail('owner-evidence-binding');
     }
-  }
+  } else if (p.operation === COMPUTER_USE_OPERATION) {
+    // The display digest the plan carries is verified, not merely well
+    // formed: the action is re-decoded from its canonical bytes, and both its
+    // payload digest and the digest of the exact text the owner's presence
+    // signs must be the preparation's. This operation only; the existing
+    // operations keep their unchanged binding.
+    let decoded;
+    try { decoded = decodeOwnerDecisionAction(Buffer.from(ownerDecisionCanonical(action), 'utf8')); } catch { fail('owner-evidence-binding'); }
+    if (decoded.payloadDigest !== p.payloadDigest || decoded.actionDigest !== p.actionDigest) fail('owner-evidence-binding');
+  } else fail('owner-evidence-binding');
   const deadlines = [p.acceptedAt + WINDOW, p.preparedAt + WINDOW, ...(p.stage ? [p.stage.expiresAt] : [])];
   if (!deadlines.every(Number.isSafeInteger) || p.exp !== Math.min(...deadlines)
     || p.preparedAt < Math.max(0, p.acceptedAt - 30)) fail('owner-evidence-binding');
   return p;
 }
 
+// The fixed effect behavior of `soul.computer-use.set` (agent-comms PR #260):
+// permission only. Copied exactly from the contract; part of the plan digest.
+export const COMPUTER_USE_BEHAVIOR = Object.freeze({
+  activeCalls: 'continue-authorized-or-running',
+  disabled: 'deny-later-computer-use-tool-calls',
+  permissionCheck: 'each-call-and-after-approval-wait',
+  stop: 'none',
+  turn: 'continue-current-turn',
+});
+
+// The effect plan of one `soul.computer-use.set` preparation, derived only
+// from the immutable preparation (slot 6) and the retained original action
+// (slot 2): its binding, both action digests, the captured expected boolean
+// and the desired boolean the signed action names. No field of it is stored
+// on its own; only its digest, inside the challenge.
+export function computerUsePlan(p, action) {
+  if (p.operation !== COMPUTER_USE_OPERATION || action?.operation !== COMPUTER_USE_OPERATION
+    || !exact(action.parameters, ['enabled']) || typeof action.parameters.enabled !== 'boolean') fail('owner-evidence-binding');
+  return {
+    v: 1, requestId: p.requestId, principal: p.principal, account: p.account, soul: p.soul, operation: p.operation,
+    payloadDigest: p.payloadDigest, actionDigest: p.actionDigest, expected: { kind: 'computer-use', enabled: p.expected.enabled },
+    desiredEnabled: action.parameters.enabled, behavior: { ...COMPUTER_USE_BEHAVIOR },
+  };
+}
+
+// SHA-256 of the plan's canonical bytes (the action's canonical rules).
+export function effectPlanDigest(plan) {
+  return sha256(Buffer.from(ownerDecisionCanonical(plan), 'utf8'));
+}
+
 // The exact challenge (slot 3) a preparation implies, given the original
 // action bytes: the daemon never stores a challenge that differs from it.
+// Only `soul.computer-use.set` adds `effectPlanDigest`, recomputed here from
+// the preparation and the action every time the challenge is: every journal
+// read byte-compares slot 3 with this, so a plan that diverges refuses at
+// check, receipt, release, entry and completion alike. Every other operation's
+// challenge is byte-identical to before.
 export function challengeFor(p, actionBytes) {
   // A private copy of the action's intrinsic bytes, within the action cap.
   const action = exactBytes(actionBytes, { max: ACTION_CAP }) ?? fail();
-  return Buffer.from(canonicalJson({
+  const challenge = {
     requestId: p.requestId, principal: p.principal, account: p.account, soul: p.soul, operation: p.operation,
     payloadDigest: p.payloadDigest, action: action.toString('base64url'), nonce: p.nonce,
     acceptedAt: p.acceptedAt, preparedAt: p.preparedAt, exp: p.exp, daemonKey: p.daemonKey, daemonEpoch: p.daemonEpoch, watchId: p.watchId,
-  }));
+  };
+  if (p.operation === COMPUTER_USE_OPERATION) {
+    let parsed;
+    try { parsed = JSON.parse(action.toString('utf8')); } catch { fail(); }
+    challenge.effectPlanDigest = effectPlanDigest(computerUsePlan(p, parsed));
+  }
+  return Buffer.from(canonicalJson(challenge));
+}
+
+// Whether saved slot-3 bytes are exactly the challenge the preparation and
+// action imply. The journal store checks this on every read; for
+// `soul.computer-use.set` it is where a divergent plan digest refuses.
+export function preparedChallengeMatches(challengeBytes, p, actionBytes) {
+  const saved = exactBytes(challengeBytes, { max: ACTION_CAP });
+  return saved !== null && saved.equals(challengeFor(p, actionBytes));
+}
+
+// The same check as a codec: the saved challenge, or an evidence refusal.
+export function bindPreparedChallenge(challengeBytes, p, actionBytes) {
+  if (!preparedChallengeMatches(challengeBytes, p, actionBytes)) fail('owner-evidence-binding');
+  return challengeBytes;
 }
 
 // --- the one live successful check (slot 7) ---
@@ -195,6 +267,12 @@ function coldDetail(d, phase) {
     && (phase === 'entered' || (digest(d.settingsDigest) && nullOr(d.webhookDigest, digest)));
 }
 
+// `soul.computer-use.set`: the same transition in both phases, record-only.
+function computerUseDetail(d) {
+  return exact(d, ['kind', 'beforeEnabled', 'afterEnabled']) && d.kind === 'computer-use'
+    && typeof d.beforeEnabled === 'boolean' && typeof d.afterEnabled === 'boolean';
+}
+
 export function decodeEffect(bytes) {
   const r = decodeCanonical(bytes);
   if (!exact(r, ['v', 'kind', 'requestId', 'payloadDigest', 'preparationDigest', 'receiptDigest', 'effectId', 'phase', 'at', 'detail'])
@@ -203,7 +281,7 @@ export function decodeEffect(bytes) {
   if (r.phase === 'refused') {
     if (!exact(r.detail, ['code']) || !REFUSAL_CODES.includes(r.detail.code)) fail();
   } else if (r.phase === 'entered' || r.phase === 'completed') {
-    if (r.receiptDigest === null || !(revisionDetail(r.detail, r.phase) || coldDetail(r.detail, r.phase))) fail();
+    if (r.receiptDigest === null || !(revisionDetail(r.detail, r.phase) || coldDetail(r.detail, r.phase) || computerUseDetail(r.detail))) fail();
   } else fail();
   return r;
 }
@@ -225,7 +303,9 @@ export function coldStateDigest({ setting, webhookDigest, resume }) {
 export function enteredRecordFor({ preparation, preparationDigest, receiptDigest, action, at }) {
   const e = preparation.expected, parameters = action.parameters;
   let detail;
-  if (preparation.operation === 'cold-wake.set') {
+  if (preparation.operation === COMPUTER_USE_OPERATION) {
+    detail = { kind: 'computer-use', beforeEnabled: e.enabled, afterEnabled: parameters.enabled };
+  } else if (preparation.operation === 'cold-wake.set') {
     const desired = desiredSetting(parameters);
     detail = { kind: 'cold-wake', beforeDigest: coldStateDigest(e),
       afterDigest: coldStateDigest({ setting: desired, webhookDigest: desired.mode === 'webhook' ? parameters.configurationDigest : null, resume: e.resume }) };
@@ -248,7 +328,9 @@ export function enteredRecordFor({ preparation, preparationDigest, receiptDigest
 export function completedRecordFor({ entered, action, at, journalSeq, journalRecordDigest, working }) {
   const d = entered.detail;
   let detail;
-  if (d.kind === 'cold-wake') {
+  if (d.kind === 'computer-use') {
+    detail = { kind: 'computer-use', beforeEnabled: d.beforeEnabled, afterEnabled: d.afterEnabled };
+  } else if (d.kind === 'cold-wake') {
     const desired = desiredSetting(action.parameters);
     detail = { kind: 'cold-wake', beforeDigest: d.beforeDigest, afterDigest: d.afterDigest, settingsDigest: sha256(canonicalJson(desired)),
       webhookDigest: desired.mode === 'webhook' ? action.parameters.configurationDigest : null };
@@ -282,6 +364,13 @@ export function bindEffect(r, { phase, preparation, preparationDigest, receiptDi
   if (r.receiptDigest !== receiptDigest) fail('owner-evidence-binding');
   const d = r.detail, e = preparation.expected, parameters = action?.parameters;
   if (!plain(parameters) || action.requestId !== preparation.requestId || action.operation !== preparation.operation) fail('owner-evidence-binding');
+  if (preparation.operation === COMPUTER_USE_OPERATION) {
+    // Entered is exactly the captured expected boolean to the desired one;
+    // completed repeats it.
+    if (d.kind !== 'computer-use' || d.beforeEnabled !== e.enabled || d.afterEnabled !== parameters.enabled) fail('owner-evidence-binding');
+    if (phase === 'completed' && (d.beforeEnabled !== entered.detail.beforeEnabled || d.afterEnabled !== entered.detail.afterEnabled)) fail('owner-evidence-binding');
+    return r;
+  }
   if (preparation.operation === 'cold-wake.set') {
     const desired = desiredSetting(parameters), webhookDigest = desired.mode === 'webhook' ? parameters.configurationDigest : null;
     if (d.kind !== 'cold-wake' || d.beforeDigest !== coldStateDigest(e)
@@ -290,6 +379,7 @@ export function bindEffect(r, { phase, preparation, preparationDigest, receiptDi
       || d.settingsDigest !== sha256(canonicalJson(desired)) || d.webhookDigest !== webhookDigest)) fail('owner-evidence-binding');
     return r;
   }
+  if (!REVISION_OPERATIONS.includes(preparation.operation)) fail('owner-evidence-binding');
   const named = ['revision.approve', 'revision.reject'].includes(preparation.operation) ? parameters.proposalId : null;
   if (d.kind !== 'revision' || d.beforeRevision !== (e.head?.revision ?? null) || d.beforeRevision !== (parameters.expectedRevision ?? null)
     || d.proposalId !== named || d.proposalId !== (e.proposal?.proposalId ?? null)) fail('owner-evidence-binding');
@@ -318,7 +408,7 @@ export function bindEffect(r, { phase, preparation, preparationDigest, receiptDi
 //   when the action is an applying edit.
 // The reporting daemon key/epoch and the observed state are the reporting
 // ceremony's; this binds them to nothing else.
-export function bindReconciliationPair(pair, { finding, acceptance, action, preparation = null, basisBytes = null }) {
+export function bindReconciliationPair(pair, { finding, acceptance, action, preparation = null, basisBytes = null, preparationDigest, receiptDigest }) {
   const r = pair.record, p = pair.preimage;
   if (r.finding !== finding) fail('owner-evidence-binding');
   // The pair codec binds requestId to the frame's request.
@@ -326,8 +416,28 @@ export function bindReconciliationPair(pair, { finding, acceptance, action, prep
   if (r.effectId !== (preparation ? preparation.effectId : null)) fail('owner-evidence-binding');
   if (r.finding === 'indeterminate' ? (r.basisDigest !== null || basisBytes !== null)
     : (basisBytes === null || r.basisDigest !== sha256(basisBytes))) fail('owner-evidence-binding');
-  const cold = acceptance.operation === 'cold-wake.set', revisionShape = Object.hasOwn(p, 'head');
-  if (cold === revisionShape) fail('owner-evidence-binding');
+  // The preimage kind the operation implies: a typed computer-use boolean, a
+  // cold state, or a revision observation.
+  const kind = acceptance.operation === COMPUTER_USE_OPERATION ? 'computer-use' : acceptance.operation === 'cold-wake.set' ? 'cold' : 'revision';
+  const shape = p.kind === 'computer-use' ? 'computer-use' : Object.hasOwn(p, 'head') ? 'revision' : 'cold';
+  if (kind !== shape) fail('owner-evidence-binding');
+  const revisionShape = shape === 'revision';
+  // `soul.computer-use.set` (agent-comms #263 candidate): the basis is not
+  // just any bytes with that digest. It must be this request's own retained
+  // record: decoded, in the phase the finding names, for this request,
+  // payload, effect, preparation and receipt, and for applied exactly the
+  // prepared transition, with the observed boolean equal to its result. A
+  // foreign, recomputed or wrong-state proof refuses.
+  if (kind === 'computer-use' && r.finding !== 'indeterminate') {
+    let basis;
+    try { basis = decodeEffect(basisBytes); } catch { fail('owner-evidence-binding'); }
+    if (basis.phase !== (r.finding === 'applied' ? 'completed' : 'refused') || basis.requestId !== acceptance.requestId
+      || basis.payloadDigest !== acceptance.payloadDigest || !preparation || basis.effectId !== preparation.effectId
+      || typeof preparationDigest !== 'string' || basis.preparationDigest !== preparationDigest
+      || basis.receiptDigest !== (receiptDigest ?? null)) fail('owner-evidence-binding');
+    if (r.finding === 'applied' && (basis.detail.beforeEnabled !== preparation.expected.enabled
+      || basis.detail.afterEnabled !== action?.parameters?.enabled || p.enabled !== basis.detail.afterEnabled)) fail('owner-evidence-binding');
+  }
   if (revisionShape && (p.working !== null) !== (acceptance.operation === 'revision.edit' && action.parameters.apply === true)) {
     fail('owner-evidence-binding');
   }
@@ -340,6 +450,14 @@ export function bindReconciliationPair(pair, { finding, acceptance, action, prep
 // state after entry, from completion or, for record-only revision
 // operations, a linked authoritative event; otherwise indeterminate.
 export function reconciliationFinding({ operation, apply = false, entered, completed, linkedEvent, matchingState, ownerCeremony, durablePreEffectRefusal }) {
+  // `soul.computer-use.set` (agent-comms #263 candidate): applied needs the
+  // exact retained completed record and the owner ceremony observing its
+  // result. A matching current boolean alone never proves it (off→on→off
+  // returns to the same value), and no completion is never applied.
+  if (operation === COMPUTER_USE_OPERATION) {
+    if (durablePreEffectRefusal && !entered) return 'refused';
+    return ownerCeremony && entered && completed && matchingState ? 'applied' : 'indeterminate';
+  }
   const recordOnly = ['revision.approve', 'revision.reject', 'revision.adopt'].includes(operation) || (operation === 'revision.edit' && apply === false);
   if (durablePreEffectRefusal && !entered) return 'refused';
   if (ownerCeremony && matchingState && entered && (completed || (recordOnly && linkedEvent))) return 'applied';

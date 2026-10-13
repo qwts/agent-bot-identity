@@ -187,6 +187,12 @@ function coldObservation(value) {
       && digest(resume.toolHomeDigest) && digest(resume.destinationDigest));
 }
 
+// `soul.computer-use.set` (agent-comms#250): the observed boolean, typed.
+// Matching it never proves an outcome; it records what the ceremony saw.
+function computerUseObservation(value) {
+  return exactKeys(value, ['v', 'kind', 'enabled']) && value.v === 1 && value.kind === 'computer-use' && typeof value.enabled === 'boolean';
+}
+
 const FINDINGS = Object.freeze({
   'observation-pair': (finding) => finding === 'indeterminate',
   'terminal-pair': (finding) => finding === 'applied' || finding === 'refused',
@@ -213,7 +219,8 @@ function checkPair(pair, slot, requestId) {
   const bytes = Buffer.from(canonicalJson(pair));
   if (record.length > PAIR_LIMITS.record || preimage.length > PAIR_LIMITS.preimage
     || bytes.length > PAIR_LIMITS.pair || bytes.length - record.length - preimage.length > PAIR_LIMITS.wrapper) fail();
-  if (!reconciliation(pair.record, finding) || !(revisionObservation(pair.preimage) || coldObservation(pair.preimage))) fail();
+  if (!reconciliation(pair.record, finding)
+    || !(revisionObservation(pair.preimage) || coldObservation(pair.preimage) || computerUseObservation(pair.preimage))) fail();
   if (pair.record.observedDigest !== hash(preimage).toString('hex')) fail();
   if (requestId !== undefined && pair.record.requestId !== requestId) fail();
   return bytes;

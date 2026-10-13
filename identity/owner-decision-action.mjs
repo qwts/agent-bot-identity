@@ -22,7 +22,19 @@ const ACCOUNT = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const SOUL = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 const REVISION = /^sha256:[0-9a-f]{64}$/;
-const OPERATIONS = new Set(['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set']);
+// `soul.computer-use.set` (agent-comms#250, first phase). Its shapes follow
+// the agent-comms candidate vectors merged in agent-comms
+// 9158689935083269f879ad9d93604ca8caa1f2d0 (PR #263), vendored byte for byte
+// as tests/fixtures/owner-decisions/computer-use-candidate-v1.json. Disabled:
+// no route, no wire adoption.
+export const COMPUTER_USE_OPERATION = 'soul.computer-use.set';
+const OPERATIONS = new Set(['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set', COMPUTER_USE_OPERATION]);
+// The fixed native summaries for `soul.computer-use.set` (agent-comms PR
+// #260): permission only, never a stop.
+export const COMPUTER_USE_SUMMARIES = Object.freeze({
+  false: 'enabled=false; deny future computer-use calls while off; current turn and authorized/running tool calls continue',
+  true: 'enabled=true; current turn continues',
+});
 // Scalars the owner's display refuses: every Unicode 17.0.0 Cc, Cf, Zl and Zp
 // code point (DerivedGeneralCategory.txt), as inclusive [first, last] ranges.
 // A frozen literal table, never an ambient \p{} property, so a runtime's
@@ -151,6 +163,14 @@ function summary(action) {
     reason(p.reason);
     return `package sha256:${p.packageDigest}; ${editing ? `apply=${p.apply}; ` : ''}reason=${JSON.stringify(p.reason)}`;
   }
+  if (action.operation === COMPUTER_USE_OPERATION) {
+    fields(p, ['enabled']);
+    if (typeof p.enabled !== 'boolean') fail();
+    return COMPUTER_USE_SUMMARIES[p.enabled];
+  }
+  // Every branch below is cold-wake's; any other operation refuses here,
+  // never falling through to a mode it doesn't have.
+  if (action.operation !== 'cold-wake.set') fail();
   if (p?.mode === 'on' || p?.mode === 'off') {
     fields(p, ['mode']);
     return `mode=${p.mode}`;
