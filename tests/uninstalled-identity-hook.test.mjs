@@ -448,6 +448,14 @@ const DENY_OPAQUE = [
   'diff -l a b', 'diff --paginate a b', 'diff --pag a b', 'diff -rl a b', 'diff -lr a b',
   'diff -r -l a b', "diff '-l' a b", 'file -C', 'file -C -m ./magic', 'file --compile -m ./magic',
   'file --comp -m m', 'file -bC x', "file '-C' -m m",
+  // zsh EXTENDED_GLOB `#`, `^`, `~`, zsh `=cmd`, and every other expansion:
+  // unquoted text is an allowlist of characters now, not a denylist (#1064)
+  "find . -exec# sh -c 'touch PWNED' ';'", "find . ^zz sh -c 'touch PWNED' ';'",
+  "find . -exec~x sh -c 'touch PWNED' ';'", 'ls =ls', 'cat =ls', 'ls ~+', 'ls ~', 'ls ~root',
+  'find ~ -maxdepth 0', 'ls {a,b}', 'ls -{exec,x}', 'ls **', 'ls !(x)', 'ls @(x)', 'ls !x',
+  "ls $'\\x2dexec'", "ls $'a'", 'find . -name=x*', 'find . -name x*', 'grep -r x*',
+  'ls a#b', 'ls a^b', 'ls a~b', 'ls a&', 'ls a;b', 'ls a|b', 'ls a>b', 'ls a<b', 'ls (a)',
+  'diff -ql a b', 'diff --p a b', 'file -zC x', 'file --comp x',
   // the node-based bootstrap forms are gone: node is an interpreter
   'node bootstrap.mjs --x y', 'node bootstrap.mjs --require ./evil.js', 'node bootstrap.mjs --import=./evil.mjs',
   'NODE_OPTIONS=--require=./e.js node bootstrap.mjs', 'node bootstrap.mjs --eval x',
@@ -475,7 +483,10 @@ const ALLOW_SAFE = [
   'ls', 'ls -la', 'cat README.md', 'head -n 5 f', 'tail f', 'wc -l f', 'diff a b',
   'echo hi', 'pwd', 'which git', 'grep -rn node .', 'grep -i x f', 'egrep -v x f',
   'diff -r a b', 'diff -u a b', 'diff --to-file=a b', 'file -b f', 'file -m ./magic f',
-  'find . -name x', 'find . -type f -newer f', "find . -name '*.js'", "grep 'a*b' f", 'ls "[x]"', 'stat f', 'file f',
+  'find . -name x', 'find . -type f -newer f', "find . -name '*.js'", "grep 'a*b' f", 'ls "[x]"',
+  'find . -name "*"', "find . -name '*'", "grep -r 'x*' .", "grep 'a#b' f", 'grep "^x" f',
+  "ls 'a~b'", 'ls a=b', 'ls --color=auto', 'ls\t-la', 'find . -name zz -print',
+  'stat -f %z f', 'ls a,b.c@d+e:f%g', 'stat f', 'file f',
 ];
 
 test('uninstalled pre-command denies every denylist-bypass probe and allows bare read-only commands (#1064)', () => {

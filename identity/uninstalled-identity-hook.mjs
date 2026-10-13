@@ -586,16 +586,18 @@ function shellPayload(argv) {
 // HEAD would mean trusting git against an agent-written config). Bootstrap is
 // for an unmanaged author, or the owner outside an agent session.
 
-// The command is one simple command with no shell machinery: no chaining,
-// grouping, redirection, command/arithmetic substitution, process
-// substitution, expansion or escaping. `$` and backslash and backtick are
-// refused anywhere (a double-quoted `$x` or `` `…` `` still expands); the
-// chaining and grouping metacharacters are refused outside quotes; an
-// unterminated quote is refused. Newlines separate commands, so they are out.
-// Unquoted glob characters (`*`, `?`, `[`) are refused too: arguments are
-// checked before the shell expands them, so with a file named `-exec` in the
-// directory, `find . -exe?` or `find . [-]exec` would become `-exec` after
-// this check had passed it.
+// The command is one simple command with no shell machinery, checked by an
+// allowlist of characters rather than a list of dangerous ones (#1064). Each
+// shell has its own expansions (bash globs, `{a,b}`, `~`; zsh EXTENDED_GLOB
+// `#`, `^`, `~`; ksh `@(…)`; zsh `=cmd`), and arguments are checked before
+// the shell expands them, so with a file named `-exec` in the directory any
+// of them can turn into `-exec` after this check. So:
+// - unquoted text may contain only `[A-Za-z0-9_./:=,+@%-]`, space and tab;
+// - anything else must sit inside single or double quotes;
+// - `$`, backtick and backslash are refused anywhere, quoted or not (a
+//   double-quoted `$x` or backtick still expands);
+// - an unquoted `=` may not start a word (zsh EQUALS turns `=ls` into a path);
+// - an unterminated quote is refused.
 function structurallySimple(command) {
   const text = String(command || "");
   const single = String.fromCharCode(39);
@@ -603,17 +605,22 @@ function structurallySimple(command) {
   const backslash = String.fromCharCode(92);
   const dollar = String.fromCharCode(36);
   const backtick = String.fromCharCode(96);
-  const unquotedBad = [59, 124, 38, 60, 62, 40, 41, 123, 125, 10, 13, 42, 63, 91].map((n) => String.fromCharCode(n));
+  const safeUnquoted = /^[A-Za-z0-9_.\/:=,+@%-]$/;
   let quote = null;
+  let wordStart = true;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
     if (ch === backslash || ch === dollar || ch === backtick) return false;
     if (quote) {
       if (ch === quote) quote = null;
+      wordStart = false;
       continue;
     }
-    if (ch === single || ch === double) { quote = ch; continue; }
-    if (unquotedBad.includes(ch)) return false;
+    if (ch === single || ch === double) { quote = ch; wordStart = false; continue; }
+    if (ch === " " || ch === "\t") { wordStart = true; continue; }
+    if (!safeUnquoted.test(ch)) return false;
+    if (ch === "=" && wordStart) return false;
+    wordStart = false;
   }
   return quote === null;
 }

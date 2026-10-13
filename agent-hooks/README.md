@@ -218,8 +218,10 @@ only**:
   `grep`/`egrep`/`fgrep` with short options only, `find` without
   `-exec`/`-ok`/`-delete`/`-rm`/`-fprint*`, `wc`, `diff` without
   `-l`/`--paginate` (which run `pr`), `echo`, `pwd`, `which`, `stat`, `file`
-  without `-C`/`--compile` (which writes). Unquoted `*`, `?` and `[` are
-  refused, since the shell would expand them after this check;
+  without `-C`/`--compile` (which writes). Unquoted text may contain only
+  letters, digits, space, tab and `_ . / : = , + @ % -`, and a word may not
+  start with `=`; anything else (globs, `~`, braces, zsh `#`/`^`) must be
+  inside quotes, since the shell would expand it after this check;
 - anything, when both the git author and the authenticated `gh` login are in
   the unmanaged-author list.
 
