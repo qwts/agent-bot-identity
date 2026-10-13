@@ -5,7 +5,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalJson, canonicalPackageBytes, computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, skillField, validateSkillsDeclaration, validateSoulPackage, PRIOR_PACKAGE_IGNORE_LISTS, isSupportedIgnoreList } from '../soul-package.mjs';
+import { canonicalJson, canonicalPackageBytes, computePackageRevision, expectedGeneratedFiles, readSoulPackageEntries, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, skillField, validateSkillsDeclaration, validateSoulPackage, PRIOR_PACKAGE_IGNORE_LISTS, isSupportedIgnoreList, SOUL_PACKAGE_LIMITS } from '../soul-package.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/soul-package/vectors.json', import.meta.url)));
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -386,3 +386,37 @@ for (const file of ['bin/run', 'workflows/review.md', 'sop/rules.md', 'agent-sop
     assert.notEqual(computePackageRevision(root), changed);
   });
 }
+
+// #1069: ordinary validation and revision computation are bounded by default,
+// not only the callers that opt in, and fail deterministically at each limit.
+test('default package reads fail at the entry, depth, per-file and aggregate limits', (t) => {
+  const limited = (root, pattern) => {
+    for (const run of [() => validateSoulPackage(root), () => computePackageRevision(root), () => readSoulPackageEntries(root)]) {
+      assert.throws(run, (error) => error.code === 'soul-package-read-limit' && pattern.test(error.message));
+    }
+  };
+  const many = fixture(t);
+  mkdirSync(join(many, 'notes'));
+  for (let i = 0; i <= SOUL_PACKAGE_LIMITS.maxEntries; i += 1) writeFileSync(join(many, 'notes', `n${i}`), '');
+  limited(many, new RegExp(`more than ${SOUL_PACKAGE_LIMITS.maxEntries} entries`));
+
+  const deep = fixture(t);
+  mkdirSync(join(deep, ...Array.from({ length: SOUL_PACKAGE_LIMITS.maxDepth + 1 }, (_, i) => `d${i}`)), { recursive: true });
+  limited(deep, new RegExp(`nested deeper than ${SOUL_PACKAGE_LIMITS.maxDepth}`));
+
+  const big = fixture(t);
+  writeFileSync(join(big, 'big.bin'), Buffer.alloc(SOUL_PACKAGE_LIMITS.maxFileBytes + 1));
+  limited(big, new RegExp(`a file is larger than ${SOUL_PACKAGE_LIMITS.maxFileBytes} bytes`));
+
+  const total = fixture(t);
+  const files = Math.ceil(SOUL_PACKAGE_LIMITS.maxBytes / SOUL_PACKAGE_LIMITS.maxFileBytes) + 1;
+  for (let i = 0; i < files; i += 1) writeFileSync(join(total, `part${i}.bin`), Buffer.alloc(SOUL_PACKAGE_LIMITS.maxFileBytes));
+  limited(total, new RegExp(`more than ${SOUL_PACKAGE_LIMITS.maxBytes} bytes read in total`));
+
+  // Just inside every limit still validates.
+  const fine = fixture(t);
+  writeFileSync(join(fine, 'ok.bin'), Buffer.alloc(SOUL_PACKAGE_LIMITS.maxFileBytes));
+  mkdirSync(join(fine, ...Array.from({ length: SOUL_PACKAGE_LIMITS.maxDepth - 1 }, (_, i) => `d${i}`)), { recursive: true });
+  const revision = seal(fine);
+  assert.equal(validateSoulPackage(fine).revision, revision);
+});

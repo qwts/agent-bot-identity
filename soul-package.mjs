@@ -293,24 +293,30 @@ export function validateSkill(bytes, directory) {
   if (skillField(front, 'description').length > 1024) throw new Error('skill description exceeds 1024 characters');
 }
 
-// Optional bounds apply to actual reads across both format-2 passes, including
-// entries later filtered as generated. No unbounded readdir/readFile allocation
-// is used in this mode. Existing package callers keep their original behavior.
+// Every package read is bounded (#1069): a package is authored by a soul and
+// read by the shared daemon, so a huge, sparse or deeply nested one must fail
+// deterministically instead of blocking or exhausting it. The defaults match
+// what skill status and skill search already apply to the same packages, and
+// sit far above real souls (tens of entries, well under a megabyte). Counts
+// cover actual reads across both format-2 passes, including entries later
+// filtered as generated; ignored working state is never descended into.
+export const SOUL_PACKAGE_LIMITS = Object.freeze({ maxEntries: 8192, maxBytes: 64 * 1024 * 1024, maxFileBytes: 8 * 1024 * 1024, maxDepth: 32 });
+
 function boundedPackageReader(limits) {
   if (!limits || Object.keys(limits).length !== 4
     || !['maxEntries', 'maxBytes', 'maxFileBytes', 'maxDepth'].every(key => Number.isSafeInteger(limits[key]) && limits[key] > 0)) {
     throw new Error('invalid package read limits');
   }
-  const exceeded = () => { throw Object.assign(new Error('package exceeds read limits'), { code: 'soul-package-read-limit' }); };
+  const exceeded = (detail) => { throw Object.assign(new Error(`package exceeds read limits: ${detail}`), { code: 'soul-package-read-limit' }); };
   let entries = 0, bytesRead = 0;
   return {
     *names(directory, depth) {
-      if (depth > limits.maxDepth) exceeded();
+      if (depth > limits.maxDepth) exceeded(`nested deeper than ${limits.maxDepth} directories`);
       const dir = opendirSync(directory, { encoding: 'buffer', bufferSize: 1 });
       try {
         let entry;
         while ((entry = dir.readSync())) {
-          if (++entries > limits.maxEntries) exceeded();
+          if (++entries > limits.maxEntries) exceeded(`more than ${limits.maxEntries} entries read`);
           yield entry.name;
         }
       } finally { dir.closeSync(); }
@@ -321,11 +327,13 @@ function boundedPackageReader(limits) {
         const opened = fstatSync(fd);
         if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== expected.dev || opened.ino !== expected.ino) throw new Error('unsafe or changed package file');
         const limit = Math.min(limits.maxFileBytes, limits.maxBytes - bytesRead);
-        if (opened.size > limit) exceeded();
+        const over = () => exceeded(limit === limits.maxFileBytes
+          ? `a file is larger than ${limits.maxFileBytes} bytes` : `more than ${limits.maxBytes} bytes read in total`);
+        if (opened.size > limit) over();
         const buffer = Buffer.alloc(opened.size + 1);
         let size = 0, count;
         while (size < buffer.length && (count = readSync(fd, buffer, size, buffer.length - size, null))) size += count;
-        if (size > limit) exceeded();
+        if (size > limit) over();
         const after = fstatSync(fd);
         if (after.nlink !== 1 || size !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) throw new Error('package changed during read');
         bytesRead += size;
@@ -335,8 +343,8 @@ function boundedPackageReader(limits) {
   };
 }
 
-export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: buildExpected = expectedGeneratedFiles, limits = null, requiredFormatVersion = null } = {}) {
-  const bounded = limits === null ? null : boundedPackageReader(limits);
+export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: buildExpected = expectedGeneratedFiles, limits = SOUL_PACKAGE_LIMITS, requiredFormatVersion = null } = {}) {
+  const bounded = boundedPackageReader(limits ?? SOUL_PACKAGE_LIMITS);
   const root = resolve(packagePath);
   if (!lstatSync(root).isDirectory()) throw new Error('package must be a directory, not a symlink or archive');
   const manifestPath = join(root, 'soul.json');
@@ -344,7 +352,7 @@ export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: bu
   const manifestStat = lstatSync(manifestPath);
   if (manifestStat.isSymbolicLink()) throw new Error('unsupported package entry: soul.json');
   if (!manifestStat.isFile()) throw new Error('missing required file: soul.json');
-  const manifestBytes = bounded ? bounded.read(manifestPath, manifestStat) : readFileSync(manifestPath);
+  const manifestBytes = bounded.read(manifestPath, manifestStat);
   const manifest = JSON.parse(utf8(manifestBytes, 'soul.json'));
   validateManifest(manifest);
   if (requiredFormatVersion !== null && manifest.formatVersion !== requiredFormatVersion) throw new Error('unsupported package format for this reader');
@@ -355,7 +363,7 @@ export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: bu
   const names = new Set();
   function walk(directory, prefix = '', expected = new Map(), depth = 0) {
     let skipped = false;
-    for (const rawName of bounded ? bounded.names(directory, depth) : readdirSync(directory, { encoding: 'buffer' })) {
+    for (const rawName of bounded.names(directory, depth)) {
       const name = utf8(rawName, 'path');
       if (/[\\\x00-\x1f\x7f]/.test(name)) throw new Error('package paths cannot contain backslashes or control characters');
       const path = `${prefix}${name.normalize('NFC')}`;
@@ -375,7 +383,7 @@ export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: bu
         if (omitted && entries.length === index + 1) entries.splice(index, 1);
         skipped ||= omitted;
       } else {
-        const bytes = bounded ? bounded.read(physical, stat) : readFileSync(physical);
+        const bytes = bounded.read(physical, stat);
         if (ignoresState && isGeneratedPath(path) && expected.get(path)?.equals(bytes)) {
           skipped = true;
           continue;
@@ -399,7 +407,7 @@ export function readSoulPackageEntries(packagePath, { expectedGeneratedFiles: bu
   }
   const files = new Map(entries.filter((entry) => entry.mode !== '040000').map((entry) => [entry.path, entry]));
   for (const required of ['soul.json', 'AGENTS.md']) if (!files.has(required)) throw new Error(`missing required file: ${required}`);
-  if (bounded && !files.get('soul.json').bytes.equals(manifestBytes)) throw new Error('package manifest changed during read');
+  if (!files.get('soul.json').bytes.equals(manifestBytes)) throw new Error('package manifest changed during read');
   utf8(files.get('AGENTS.md').bytes, 'AGENTS.md');
   const skills = entries.find((entry) => entry.path === 'skills');
   if (skills && skills.mode !== '040000') throw new Error('skills must be a directory');
@@ -514,8 +522,10 @@ export function writeSoulCredentialsDeclaration(directory, github) {
 }
 
 export function validateSoulPackage(packagePath) {
-  const { manifest } = readSoulPackageEntries(packagePath);
-  const revision = computePackageRevision(packagePath);
+  // One bounded snapshot, hashed as read, rather than a second walk.
+  const read = readSoulPackageEntries(packagePath);
+  const { manifest } = read;
+  const revision = computePackageRevisionFromEntries(read);
   if (revision !== manifest.revision) throw new Error(`revision mismatch: expected ${revision}, found ${manifest.revision}`);
   return { formatVersion: manifest.formatVersion, revision, parentRevision: manifest.parentRevision };
 }
