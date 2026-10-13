@@ -1,0 +1,1 @@
+- `agent-hook` now reads at most 16 MiB of harness input and starts its time budget before reading it. An oversized payload is denied on a blocking event instead of being read and parsed whole while the vendor's fail-open timer runs, and the time spent reading counts against the same deadline as the hooks (#1071).

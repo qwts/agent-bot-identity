@@ -2,7 +2,7 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { CANONICAL_EVENTS } from '../hook-dialects.mjs';
 import {
-  combine, discoverHooks, hooksDir as resolveHooksDir, readVerdict, runHooks,
+  MAX_HOOK_INPUT_BYTES, combine, discoverHooks, hooksDir as resolveHooksDir, readStdin, readVerdict, runHooks,
 } from '../agent-hook.mjs';
 
 const root = mkdtempSync(path.join(tmpdir(), 'agent-hook-'));
@@ -516,4 +516,60 @@ test('the git pre-push backstop allows branch cleanup but rejects rewrites and t
   const rewrite = run(`${line(second, first)}${line(first, second)}`);
   assert.equal(rewrite.status, 2);
   assert.match(rewrite.stderr, /may not rewrite/);
+});
+
+// #1071: stdin is read under a cap and the deadline starts before it is read,
+// so a huge payload can neither stall the runner past the vendor's window nor
+// let a blocking event through.
+test('an oversized payload is denied on a blocking event without running hooks', () => {
+  const dir = hooksDir({ 'pre-command/50-allow': ALLOW });
+  const big = JSON.stringify({ tool_input: { command: 'ls', pad: 'x'.repeat(MAX_HOOK_INPUT_BYTES) } });
+  const run = spawnSync(process.execPath, [runner, '--dialect', 'claude', '--event', 'pre-command'], {
+    input: big, encoding: 'utf8', maxBuffer: 1024 * 1024,
+    env: { ...process.env, AGENT_BOT_HOOKS_DIR: dir },
+  });
+  assert.equal(run.status, 0);
+  const out = JSON.parse(run.stdout).hookSpecificOutput;
+  assert.equal(out.permissionDecision, 'deny');
+  assert.match(out.permissionDecisionReason, /hook input is larger than \d+ bytes/);
+  // Exit-code dialects say no with their status.
+  const devin = spawnSync(process.execPath, [runner, '--dialect', 'devin-desktop', '--event', 'pre-command'], {
+    input: big, encoding: 'utf8', env: { ...process.env, AGENT_BOT_HOOKS_DIR: dir },
+  });
+  assert.equal(devin.status, 2);
+});
+
+test('an oversized payload on a non-blocking event still runs, with an empty payload', () => {
+  const dir = hooksDir({ 'session-start/50-allow': ALLOW });
+  const run = spawnSync(process.execPath, [runner, '--dialect', 'claude', '--event', 'session-start'], {
+    input: 'x'.repeat(MAX_HOOK_INPUT_BYTES + 1), encoding: 'utf8',
+    env: { ...process.env, AGENT_BOT_HOOKS_DIR: dir },
+  });
+  assert.equal(run.status, 0);
+  assert.equal(run.stdout, '');
+});
+
+test('readStdin stops at the cap instead of reading the whole input', () => {
+  const file = path.join(root, 'stdin-cap');
+  writeFileSync(file, 'y'.repeat(300 * 1024));
+  const fd = openSync(file, 'r');
+  try {
+    assert.deepEqual(readStdin({ fd, isTTY: false, limit: 100 * 1024 }), { text: '', oversize: true, incomplete: false });
+  } finally { closeSync(fd); }
+  const fd2 = openSync(file, 'r');
+  try {
+    const within = readStdin({ fd: fd2, isTTY: false, limit: 300 * 1024 });
+    assert.equal(within.oversize, false);
+    assert.equal(within.text.length, 300 * 1024);
+  } finally { closeSync(fd2); }
+});
+
+test('time spent before runHooks counts against the same deadline', () => {
+  const dir = hooksDir({ 'pre-command/50-allow': ALLOW });
+  const result = runHooks({
+    dialectKey: 'claude', event: 'pre-command', payload: {}, dir,
+    env: { ...process.env, AGENT_HOOK_TIMEOUT_MS: '1000' }, startedAt: Date.now() - 60_000,
+  });
+  assert.equal(result.decision, 'deny');
+  assert.match(result.reason, /budget exhausted/);
 });
