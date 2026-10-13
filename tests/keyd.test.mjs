@@ -545,3 +545,14 @@ test('keyd-client.mjs run directly points at agent-bot keyd and does nothing (#6
   assert.match(failure.stderr, /run agent-bot keyd/);
   assert.equal(failure.stdout, '');
 });
+
+// #1111: the grant key is read from the SPKI DER export, not a JWK export;
+// it is exactly the JWK x for an Ed25519 key, and any other key refuses,
+// including X25519, whose SPKI is also 44 bytes.
+test('the daemon grant key is the Ed25519 key\'s raw bytes, and only an Ed25519 key passes', () => {
+  const ed = generateKeyPairSync('ed25519');
+  assert.equal(daemonGrantPublicKey({ key: ed }), Buffer.from(ed.publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64'));
+  for (const other of [generateKeyPairSync('x25519'), generateKeyPairSync('ec', { namedCurve: 'P-256' })]) {
+    assert.throws(() => daemonGrantPublicKey({ key: other }), /the vouch key is not an Ed25519 key/);
+  }
+});

@@ -10,5 +10,8 @@ test('the raw Ed25519 key from SPKI DER is the JWK x, and other keys refuse', ()
     const { publicKey } = generateKeyPairSync('ed25519');
     assert.equal(rawEd25519(publicKey), publicKey.export({ format: 'jwk' }).x);
   }
-  assert.throws(() => rawEd25519(generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey), /not an Ed25519 SPKI public key/);
+  // Another key type refuses, including X25519, whose SPKI is also 44 bytes.
+  for (const pair of [generateKeyPairSync('ec', { namedCurve: 'P-256' }), generateKeyPairSync('x25519')]) {
+    assert.throws(() => rawEd25519(pair.publicKey), /not an Ed25519 SPKI public key/);
+  }
 });

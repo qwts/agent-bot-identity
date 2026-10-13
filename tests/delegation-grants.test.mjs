@@ -9,6 +9,7 @@ import { getProposal, operationDigest } from '../agent-jobs.mjs';
 import { auditFile } from '../identity-format.mjs';
 import { GRANT_OPERATIONS, createGrantLedger, grantOperation, grantPresenceAction } from '../delegation-grants.mjs';
 import { actionDigest, keydPresence } from '../owner-presence.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const SOUL = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER = 'agent_22222222-2222-4222-8222-222222222222';
@@ -186,7 +187,7 @@ test('missing owner presence is refused, with no fallback ceremony', async () =>
 
 test("keyd's assertion is bound to the grant's digest", async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
+  const raw = Buffer.from(rawEd25519(publicKey), 'base64url').toString('base64');
   const seconds = Math.floor(START / 1000);
   const assertion = (action, nonce) => {
     const segment = Buffer.from(JSON.stringify({ v: 1, aud: 'agent-bot-owner', kind: 'presence',

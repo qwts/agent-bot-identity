@@ -14,6 +14,7 @@ import {
 } from '../owner-statement.mjs';
 import { assertOwnerAction, ownerActionSummary, presenceOrConsent } from '../owner-action.mjs';
 import { attestedOwnerKeys, createPinsGenerationFloor, pinSetDigest } from '../owner-presence.mjs';
+import { rawEd25519 as rawPublicKey } from './helpers/ed25519-raw.mjs';
 
 const CLI = join(dirname(dirname(fileURLToPath(import.meta.url))), 'agent-bot.mjs');
 const NOW = Date.parse('2026-10-09T22:00:00Z');
@@ -55,7 +56,7 @@ const str = (value) => { const b = Buffer.isBuffer(value) ? value : Buffer.from(
 
 function rawEd25519() {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  return { privateKey, raw: Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url') };
+  return { privateKey, raw: Buffer.from(rawPublicKey(publicKey), 'base64url') };
 }
 
 // A FIDO sk-ssh-ed25519 key, signing the way OpenSSH's ssh-sk does

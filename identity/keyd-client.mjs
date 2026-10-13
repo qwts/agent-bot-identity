@@ -117,9 +117,13 @@ function vouchKey({ env, home }) {
 // a JWK export, which aborts Node 20.20.2 after enough calls (#1111).
 export function daemonGrantPublicKey({ env = process.env, home = homedir(), key = vouchKey({ env, home }) } = {}) {
   const der = key.publicKey.export({ type: 'spki', format: 'der' });
-  if (der.length !== 44) throw new Error('the vouch key is not an Ed25519 key');
+  if (der.length !== 44 || !der.subarray(0, 12).equals(ED25519_SPKI_PREFIX)) {
+    throw new Error('the vouch key is not an Ed25519 key');
+  }
   return der.subarray(12).toString('base64');
 }
+// Ed25519's fixed SPKI prefix (RFC 8410); any other 44-byte key refuses.
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 // `keyScope: 'app'` (#110) asks keyd to mint with the App-level key for
 // `app` instead of the soul's own. A soul grant leaves the field out, so its
