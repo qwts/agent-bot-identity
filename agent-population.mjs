@@ -13,6 +13,7 @@ import {
   cpSync,
   existsSync,
   fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -362,20 +363,54 @@ function ensurePrivateDirectory(directory) {
   }
 }
 
+// Every population writer holds this lock. A live holder is never
+// reclaimed, however long it holds (keepLiveOwners, as cold-wake and soul
+// revisions do): a waiter times out and refuses instead. Only a stale lock
+// whose recorded owner process is gone is taken over.
+function withPopulationLock(file, operation) {
+  return withLock(`${file}.lock`, 'population store', operation, { keepLiveOwners: true });
+}
+
+function syncDirectory(directory) {
+  if (process.platform === 'win32') return;
+  const fd = openSync(directory, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+// Durable replacement, as cold-wake-settings.mjs writes its file: the
+// temporary file is written and fsynced before the rename, the directory is
+// fsynced after it, and the file is read back and must be exactly what was
+// written. Any failure throws, so a caller never takes `written` as proof of
+// a write that isn't on disk. This is node's logical fsync: on Darwin it may
+// fall back from F_FULLFSYNC, so no physical flush is claimed.
 function writeDocument(file, souls) {
   const directory = path.dirname(file);
   ensurePrivateDirectory(directory);
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const document = { schemaVersion: SCHEMA_VERSION, souls };
+  const text = `${JSON.stringify(document, null, 2)}\n`;
   try {
-    writeFileSync(temporary, `${JSON.stringify(document, null, 2)}\n`, {
-      encoding: 'utf8',
-      flag: 'wx',
-      mode: 0o600,
-    });
+    const fd = openSync(temporary, 'wx', 0o600);
+    try {
+      writeFileSync(fd, text, 'utf8');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(temporary, file);
   } finally {
     rmSync(temporary, { force: true });
+  }
+  syncDirectory(directory);
+  let readBack;
+  try {
+    readBack = readFileSync(file, 'utf8');
+    JSON.parse(readBack);
+  } catch (error) {
+    throw Object.assign(new Error('population store could not be read back after writing'), { code: 'population-readback-failed', cause: error });
+  }
+  if (readBack !== text) {
+    throw Object.assign(new Error('population store read back differs from what was written'), { code: 'population-readback-failed' });
   }
 }
 
@@ -385,7 +420,7 @@ export function upsertSoul(
 ) {
   let candidate = normalizeSoul(record, { defaultLastSeen: now().toISOString() });
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) {
       throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
@@ -438,7 +473,7 @@ export function relocateSoulSpaces(
     throw new Error('toRoot must be an absolute path');
   }
   if (!existsSync(file)) return { moved: 0 };
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) {
       throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
@@ -473,7 +508,7 @@ function writeSoulStatus(id, status, { file, now, guard = null }) {
   const target = agentId(id);
   const nextStatus = printableText('status', status, { max: 80 });
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) {
       throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
@@ -499,7 +534,7 @@ function writeSoulStatus(id, status, { file, now, guard = null }) {
 function restoreSoulStatus(id, { previous, written }, { file }) {
   if (!previous || !written) return;
   const target = agentId(id);
-  withLock(`${file}.lock`, 'population store', () => {
+  withPopulationLock(file, () => {
     const current = readDocument(file);
     const row = current.souls[target];
     if (!row || row.status !== written.status) return;
@@ -540,7 +575,7 @@ function censusThenIdentity(id, status, { file, now, guard = null }, identityWri
 export function recordSoulSighting(id, { file = populationFile(), now = () => new Date() } = {}) {
   const target = agentId(id);
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) {
       throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
@@ -710,7 +745,7 @@ export function registerSoulDir(id, directory, { file = populationFile() } = {})
   const target = agentId(id);
   const dir = printableText('soulDir', directory, { max: 4096 });
   if (!path.isAbsolute(dir)) throw new Error('soulDir must be absolute');
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -739,7 +774,7 @@ export function recordSoulLaunch(id, { comms = true, brief } = {}, { file = popu
   if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
   if (brief !== undefined) brief = normalizeLaunchBrief(brief);
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -763,7 +798,7 @@ export function recordSoulLaunch(id, { comms = true, brief } = {}, { file = popu
 export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
   const targets = [...new Set(ids)].flatMap((id) => { try { return [agentId(id)]; } catch { return []; } });
   if (!targets.length || !existsSync(file)) return [];
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const souls = { ...current.souls };
@@ -787,13 +822,13 @@ export function backfillManagedSouls(ids, { file = populationFile() } = {}) {
 // the App this step wrote. Identity never restores a record a caller hands it.
 export function setSoulAppThen(id, app, { file = populationFile() } = {}, identityWrite) {
   const target = agentId(id), normalized = appSlug(app);
-  const previous = withLock(`${file}.lock`, 'population store', () => readDocument(file).souls[target]?.appSlug ?? null);
+  const previous = withPopulationLock(file, () => readDocument(file).souls[target]?.appSlug ?? null);
   const soul = setSoulApp(target, normalized, { file });
   try {
     return { soul, identity: identityWrite() };
   } catch (error) {
     try {
-      withLock(`${file}.lock`, 'population store', () => {
+      withPopulationLock(file, () => {
         const current = readDocument(file);
         const row = current.souls[target];
         if (!row || row.appSlug !== normalized) return;
@@ -808,7 +843,7 @@ export function setSoulAppThen(id, app, { file = populationFile() } = {}, identi
 
 export function setSoulApp(id, app, { file = populationFile() } = {}) {
   const target = agentId(id), normalized = appSlug(app);
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion');
     const existing = current.souls[target];
@@ -823,7 +858,7 @@ export function setSoulComputerUse(id, computerUse, { file = populationFile() } 
   const target = agentId(id);
   if (typeof computerUse !== 'boolean') throw new Error('computerUse must be a boolean');
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -846,7 +881,7 @@ export function compareAndSetSoulComputerUse(id, expected, desired, { file = pop
   const target = agentId(id);
   if (typeof expected !== 'boolean' || typeof desired !== 'boolean') throw new Error('expected and desired must be booleans');
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -872,7 +907,7 @@ export function setSoulSpacePath(id, spacePath, { file = populationFile() } = {}
   const target = agentId(id);
   const root = printableText('spacePath', spacePath, { max: 4096 });
   if (!path.isAbsolute(root)) throw new Error('spacePath must be absolute');
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -893,7 +928,7 @@ export function setSoulPaused(id, paused, { file = populationFile() } = {}) {
   const target = agentId(id);
   if (typeof paused !== 'boolean') throw new Error('paused must be a boolean');
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -921,7 +956,7 @@ export function setSoulComms(id, comms, { file = populationFile() } = {}) {
   const target = agentId(id);
   if (typeof comms !== 'boolean') throw new Error('comms must be a boolean');
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -943,7 +978,7 @@ export function setSoulParent(id, parent, { file = populationFile() } = {}) {
   const parentId = parent === null ? null : agentId(parent, 'parentId');
   if (parentId === target) throw new Error('a soul cannot be its own parent');
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -959,7 +994,7 @@ export function setSoulSandbox(id, sandbox, { file = populationFile() } = {}) {
   const target = agentId(id);
   if (!SANDBOX_OVERRIDES.includes(sandbox)) throw new Error(`sandbox must be one of ${SANDBOX_OVERRIDES.join(', ')}`);
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -976,7 +1011,7 @@ export function recordSoulDisplayName(id, name, { file = populationFile() } = {}
   const target = agentId(id);
   const value = printableText('displayName', name, { max: 128 });
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
@@ -994,7 +1029,7 @@ export function recordSoulDisplayName(id, name, { file = populationFile() } = {}
 export function recordHarnessAuth(id, value, { file = populationFile(), now = () => new Date(), only = null } = {}) {
   const target = agentId(id);
   ensurePrivateDirectory(path.dirname(file));
-  return withLock(`${file}.lock`, 'population store', () => {
+  return withPopulationLock(file, () => {
     const current = readDocument(file);
     if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
     const existing = current.souls[target];
