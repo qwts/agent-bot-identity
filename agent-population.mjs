@@ -834,6 +834,36 @@ export function setSoulComputerUse(id, computerUse, { file = populationFile() } 
   });
 }
 
+// Compare-and-set of a soul's computer-use setting, for an owner decision
+// bound to the state the owner saw (agent-comms#250, owner decision: a
+// boolean `expectedEnabled`, no revision counter, no new persisted field).
+// The effective value is what soulComputerUse reads: absent means on. Under
+// the population lock: an absent or retired soul refuses `soul-not-found`, a
+// current value other than `expected` refuses `stale-expected-state`, and
+// either writes nothing. Returns `{ before, after, written }`; `written` is
+// false when the value already equals `desired`.
+export function compareAndSetSoulComputerUse(id, expected, desired, { file = populationFile() } = {}) {
+  const target = agentId(id);
+  if (typeof expected !== 'boolean' || typeof desired !== 'boolean') throw new Error('expected and desired must be booleans');
+  ensurePrivateDirectory(path.dirname(file));
+  return withLock(`${file}.lock`, 'population store', () => {
+    const current = readDocument(file);
+    if (current.schemaVersion > SCHEMA_VERSION) throw new Error('population store uses a future schemaVersion; refusing to rewrite it');
+    const existing = current.souls[target];
+    if (!existing || existing.status === 'retired') {
+      throw Object.assign(new Error(`no active population record for ${target}`), { code: 'soul-not-found' });
+    }
+    const before = existing.computerUse !== false;
+    if (before !== expected) {
+      throw Object.assign(new Error(`${target} computer use is ${before ? 'on' : 'off'}, not the expected ${expected ? 'on' : 'off'}`),
+        { code: 'stale-expected-state' });
+    }
+    const written = before !== desired;
+    if (written) writeDocument(file, { ...current.souls, [target]: normalizeSoul({ ...existing, computerUse: desired }) });
+    return { before, after: desired, written };
+  });
+}
+
 // The census is authoritative for where a soul's memory is (ADR-0583
 // decision 8): the migration that moves the Agent Space into the soul
 // folder points the row at the new place once the copy is verified, and a
