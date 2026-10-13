@@ -158,17 +158,24 @@ test('an absent or retired soul before entry records target-unavailable', darwin
 test('a no-op writes nothing but flushes the existing census, reads back under the lock, spends and completes', darwin, (t) => {
   const r = released(t, { current: false, expected: false, desired: false });
   const before = fs.readFileSync(r.census);
-  // Which files are opened for reading and flushed during the call.
-  const opened = [], original = fs.openSync;
-  fs.openSync = (target, flags, ...rest) => { opened.push([String(target), flags]); return original(target, flags, ...rest); };
+  // Which files are opened during the call, and which descriptors are flushed.
+  const opened = [], synced = [], original = fs.openSync, fsync = fs.fsyncSync, byFd = new Map();
+  fs.openSync = (target, flags, ...rest) => {
+    const fd = original(target, flags, ...rest);
+    opened.push([String(target), flags]); byFd.set(fd, String(target));
+    return fd;
+  };
+  fs.fsyncSync = (fd, ...rest) => { synced.push(byFd.get(fd)); return fsync(fd, ...rest); };
   syncBuiltinESMExports();
   let result;
-  try { result = r.apply(); } finally { fs.openSync = original; syncBuiltinESMExports(); }
+  try { result = r.apply(); } finally { fs.openSync = original; fs.fsyncSync = fsync; syncBuiltinESMExports(); }
   assert.equal(result.state, 'applied', JSON.stringify(result));
   assert.deepEqual([result.before, result.after, result.written], [false, false, false]);
   assert.deepEqual(fs.readFileSync(r.census), before, 'nothing was written');
   assert.ok(opened.some(([target, flags]) => target === r.census && flags === 'r'), 'the existing census was opened to flush it');
   assert.ok(opened.some(([target]) => target === path.dirname(r.census)), 'and its directory');
+  assert.ok(synced.includes(r.census), 'the existing census file is fsynced');
+  assert.ok(synced.includes(path.dirname(r.census)), 'and so is its directory');
   assert.deepEqual(r.recover().outcome, { code: 'applied', effectDigest: result.completedDigest });
   assert.deepEqual(r.audits(), [], 'a no-op writes no audit line');
   assert.equal(r.apply().reason, 'owner-journal-consumed');
