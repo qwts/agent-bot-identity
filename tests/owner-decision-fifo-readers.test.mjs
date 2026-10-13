@@ -19,6 +19,7 @@ import { requestDirectoryName } from '../identity/owner-decision-journal-frame.m
 import { presencePinPath } from '../identity/owner-presence.mjs';
 import { commsCredentialFile } from '../comms-client.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust and journal locks are Darwin-only', timeout: 20000 };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -37,7 +38,7 @@ function fifoAt(file, body) {
   fs.rmSync(file, { force: true });
   mkfifo(file);
   try {
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `try { ${body}; console.log('read'); } catch (error) { console.log('refused'); }`],
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `try { ${body}; console.log('read'); } catch (error) { console.log(\`refused:\${error?.reason ?? error?.code ?? error?.message}\`); }`],
       { timeout: 5000, encoding: 'utf8' });
     return { hung: child.signal === 'SIGTERM' || child.error?.code === 'ETIMEDOUT', out: child.stdout.trim() };
   } finally {
@@ -45,12 +46,14 @@ function fifoAt(file, body) {
     assert.equal(fs.existsSync(file), false);
   }
 }
-const refusesAtOnce = (result) => { assert.equal(result.hung, false, 'the read blocked on a FIFO'); assert.equal(result.out, 'refused'); };
+// The read refuses at once, for its own custody reason (never a code error
+// in the child, such as a ReferenceError, passing as a refusal).
+const refusesAtOnce = (reason, result) => { assert.equal(result.hung, false, 'the read blocked on a FIFO'); assert.equal(result.out, `refused:${reason}`); };
 
 test('the vouch key read', { timeout: 20000 }, (t) => {
   const base = scratch(t), env = { XDG_STATE_HOME: path.join(base, 'state') };
   loadOrCreateVouchKey(vouchStateDir({ env }));
-  refusesAtOnce(fifoAt(vouchKeyPath(vouchStateDir({ env })),
+  refusesAtOnce('vouch key file is not a regular file owned by this account', fifoAt(vouchKeyPath(vouchStateDir({ env })),
     `const { vouchDaemonKey } = await import(${module('vouch.mjs')}); vouchDaemonKey({ env: ${JSON.stringify(env)} })`));
 });
 
@@ -59,7 +62,7 @@ test('the strict identity read', { timeout: 20000 }, (t) => {
   fs.mkdirSync(stateDir, { mode: 0o700 });
   mintAgentIdentity({ useGithub: false, gate: () => false, appSlug: null, harness: 'codex', transcript: { provider: 'codex', id: 't' },
     stateDir, idFactory: () => soul, now: () => new Date('2026-10-12T00:00:00.000Z') });
-  refusesAtOnce(fifoAt(path.join(stateDir, `${soul}.json`),
+  refusesAtOnce('could not read Agent ID agent_00000000-0000-4000-8000-000000000001: identity record is not a private single-link regular file owned by this account', fifoAt(path.join(stateDir, `${soul}.json`),
     `const { readAgentIdentity } = await import(${module('agent-identity.mjs')}); readAgentIdentity(${JSON.stringify(soul)}, { stateDir: ${JSON.stringify(stateDir)}, custody: 'strict' })`));
 });
 
@@ -67,7 +70,7 @@ test('the trust store reads', darwin, (t) => {
   const base = scratch(t), env = { XDG_STATE_HOME: path.join(base, 'state') }, root = path.join(base, 'trust');
   loadOrCreateVouchKey(vouchStateDir({ env }));
   createOwnerDecisionTrustWriter({ root, env, home: base, legacyPresenceKey: null }).enrollNamespace({ namespaceDigest: 'a'.repeat(64) });
-  refusesAtOnce(fifoAt(path.join(root, 'namespace.json'),
+  refusesAtOnce('owner-trust-custody', fifoAt(path.join(root, 'namespace.json'),
     `const { readOwnerDecisionNamespace } = await import(${module('owner-decision-trust.mjs')}); readOwnerDecisionNamespace({ root: ${JSON.stringify(root)} })`));
 });
 
@@ -82,7 +85,7 @@ test('the journal slot reads', darwin, (t) => {
     daemonKey: 'c'.repeat(64), daemonEpoch: 1, watchId: '11111111-1111-4111-8111-111111111111', reservationBytes: 524288 };
   createDaemonJournalStore({ root, namespaceDigest }).admit(action, Buffer.from(canonicalJson(acceptance)));
   const dir = path.join(root, 'requests', requestDirectoryName({ namespaceDigest, requestId }));
-  refusesAtOnce(fifoAt(path.join(dir, 'preparation.record'),
+  refusesAtOnce('owner-journal-corrupt', fifoAt(path.join(dir, 'preparation.record'),
     `const { createDaemonJournalStore } = await import(${module('owner-decision-journal-store.mjs')}); createDaemonJournalStore({ root: ${JSON.stringify(root)}, namespaceDigest: ${JSON.stringify(namespaceDigest)} }).recover(${JSON.stringify(requestId)})`));
 });
 
@@ -90,8 +93,8 @@ test('the versioned trust writer\'s vouch identity read', darwin, (t) => {
   const base = scratch(t), env = { XDG_STATE_HOME: path.join(base, 'state') }, root = path.join(base, 'trust');
   loadOrCreateVouchKey(vouchStateDir({ env }));
   createOwnerDecisionTrustWriter({ root, env, home: base, legacyPresenceKey: null }).enrollNamespace({ namespaceDigest: 'a'.repeat(64) });
-  refusesAtOnce(fifoAt(vouchKeyPath(vouchStateDir({ env })), `const { generateKeyPairSync } = await import('node:crypto');
-const key = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+  refusesAtOnce('owner-trust-no-vouch-key', fifoAt(vouchKeyPath(vouchStateDir({ env })), `const { generateKeyPairSync } = await import('node:crypto');
+const key = () => generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).subarray(12).toString('base64url');
 const { createOwnerDecisionTrustWriter } = await import(${module('owner-decision-trust.mjs')});
 createOwnerDecisionTrustWriter({ root: ${JSON.stringify(root)}, env: ${JSON.stringify(env)}, home: ${JSON.stringify(base)}, legacyPresenceKey: null })
   .enrollKeysV1({ receiptKey: key(), presenceKey: key(), brokerUid: ${process.getuid() + 1}, expectedObservationDigest: 'a'.repeat(64) })`));
@@ -105,7 +108,7 @@ test('keyd\'s presence pin cache: a FIFO is no pin, never a hang', darwin, (t) =
   fs.mkdirSync(path.dirname(cache), { recursive: true, mode: 0o700 });
   // Readiness reads the cache as a deny-list; with a FIFO there it reads no
   // pin and goes on (here to no active key), at once.
-  refusesAtOnce(fifoAt(cache, `const { readOwnerDecisionTrust } = await import(${module('owner-decision-trust.mjs')});
+  refusesAtOnce('owner-trust-no-active-key', fifoAt(cache, `const { readOwnerDecisionTrust } = await import(${module('owner-decision-trust.mjs')});
 readOwnerDecisionTrust({ root: ${JSON.stringify(root)}, env: ${JSON.stringify(env)}, home: ${JSON.stringify(base)} })`));
 });
 
@@ -113,13 +116,13 @@ test('the comms pairing credential read', { timeout: 20000 }, (t) => {
   const base = scratch(t), env = { XDG_STATE_HOME: path.join(base, 'state') };
   const file = commsCredentialFile({ env, home: base });
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  refusesAtOnce(fifoAt(file, `const { loadCommsCredential } = await import(${JSON.stringify(new URL('../comms-client.mjs', import.meta.url).href)});
+  refusesAtOnce('unpaired', fifoAt(file, `const { loadCommsCredential } = await import(${JSON.stringify(new URL('../comms-client.mjs', import.meta.url).href)});
 loadCommsCredential({ env: ${JSON.stringify(env)}, home: ${JSON.stringify(base)} })`));
 });
 
 test('the soul census read', { timeout: 20000 }, (t) => {
   const base = scratch(t), file = path.join(base, 'population.json');
-  refusesAtOnce(fifoAt(file, `const { listSouls } = await import(${JSON.stringify(new URL('../agent-population.mjs', import.meta.url).href)});
+  refusesAtOnce('population store could not be read', fifoAt(file, `const { listSouls } = await import(${JSON.stringify(new URL('../agent-population.mjs', import.meta.url).href)});
 listSouls({ file: ${JSON.stringify(file)} })`));
 });
 
@@ -188,7 +191,7 @@ test('the trust audit append refuses a changed audit file before writing', darwi
       writer.enrollNamespace({ namespaceDigest: 'a'.repeat(64) });
       const before = fs.readFileSync(audit);
       armed = true;
-      const key = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+      const key = () => rawEd25519(generateKeyPairSync('ed25519').publicKey);
       assert.throws(() => writer.enrollKeys({ receiptKey: key(), presenceKey: key(), brokerUid: process.getuid() + 1 }), { reason: 'owner-trust-custody' });
       assert.equal(armed, false, 'the audit append was not reached');
       // Nothing was appended to the file the append opened.

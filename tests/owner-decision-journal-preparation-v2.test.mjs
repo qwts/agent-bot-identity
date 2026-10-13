@@ -18,6 +18,7 @@ import { createOwnerDecisionTrustWriter, ownerDecisionTrustRoot, readOwnerDecisi
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 import { asDaemon } from './helpers/owner-decision-daemon-env.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const V2_URL = new URL('./fixtures/owner-decisions/effect-evidence-v2.json', import.meta.url);
 const V2_SHA256 = 'ff7385f661bb0b0bbc2b36f94634ba1fd1ebcc359dce130149db8a21257e2410';
@@ -110,7 +111,7 @@ test('every v2 transaction binds downstream to its v2 preparation, and the chall
 const namespaceDigest = 'a'.repeat(64);
 const template = byId('approve-preparation').record;
 const brokerUid = process.getuid() + 1;
-const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+const rawKey = () => rawEd25519(generateKeyPairSync('ed25519').publicKey);
 
 // An admitted request, and a scratch daemon trust store for its namespace
 // (vouch key, namespace and, unless `enrolled` is false, one key pair).

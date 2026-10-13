@@ -15,12 +15,13 @@ import {
 import { loadOrCreateVouchKey, vouchDaemonKey, vouchStateDir } from '../identity/vouch.mjs';
 import { presencePinPath } from '../identity/owner-presence.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const refused = (reason, code) => (error) => error.reason === reason && (code === undefined || error.code === code);
-const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+const rawKey = () => rawEd25519(generateKeyPairSync('ed25519').publicKey);
 // A scratch vouch key standing in for this daemon's (never the real one),
 // its derived key ID, and a broker service uid that is neither root nor the
 // owner running the tests.
@@ -51,7 +52,9 @@ function snapshot(root) {
 
 test('key pins are canonical 32-byte Ed25519 base64url with the agent-comms SPKI key ID', () => {
   const { publicKey } = generateKeyPairSync('ed25519');
-  const x = publicKey.export({ format: 'jwk' }).x;
+  const x = rawEd25519(publicKey);
+  // The pin spelling is the JWK `x` (one export, far below Node 20's abort, #1111).
+  assert.equal(x, publicKey.export({ format: 'jwk' }).x);
   const pin = ed25519KeyPin(x);
   assert.deepEqual(pin, { alg: 'ed25519', publicKey: x, keyId: sha256(publicKey.export({ type: 'spki', format: 'der' })) });
   assert.equal(pin.keyId, sha256(createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x }, format: 'jwk' }).export({ type: 'spki', format: 'der' })));
@@ -378,7 +381,7 @@ test('the broker service uid is never root or the owner, and no pin may be this 
     assert.throws(() => w.enrollKeys({ ...keys(), brokerUid: uid }), invalidInput, String(uid));
   }
   // Our own vouch key can be neither pin, whether or not the caller names it.
-  const ownKey = vouch.publicKey.export({ format: 'jwk' }).x;
+  const ownKey = rawEd25519(vouch.publicKey);
   assert.equal(ed25519KeyPin(ownKey).keyId, daemonKey);
   for (const extra of [{}, { daemonKey }]) {
     assert.throws(() => w.enrollKeys({ ...keys(), ...extra, receiptKey: ownKey }), refused('owner-trust-role', 'owner-decision-unsupported'));
@@ -405,7 +408,7 @@ test('an active pin that is this daemon\'s vouch key leaves no authority', darwi
   const other = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-trust-other-vouch-')));
   t.after(() => fs.rmSync(other, { recursive: true, force: true }));
   const otherEnv = { XDG_STATE_HOME: other }, otherVouch = loadOrCreateVouchKey(vouchStateDir({ env: otherEnv }));
-  w.enrollKeys({ ...keys(), receiptKey: otherVouch.publicKey.export({ format: 'jwk' }).x });
+  w.enrollKeys({ ...keys(), receiptKey: rawEd25519(otherVouch.publicKey) });
   assert.equal(read(root).state, 'ready');
   assert.throws(() => read(root, { env: otherEnv }), refused('owner-trust-role', 'owner-decision-unsupported'));
 });

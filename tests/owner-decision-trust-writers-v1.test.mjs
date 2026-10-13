@@ -14,12 +14,13 @@ import {
   createOwnerDecisionTrustWriter, ed25519KeyPin, observeOwnerDecisionTrust, ownerDecisionTrustRoot, readOwnerDecisionTrust,
 } from '../identity/owner-decision-trust.mjs';
 import { loadOrCreateVouchKey, vouchDaemonKeyPin, vouchKeyPath, vouchStateDir } from '../identity/vouch.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const namespaceDigest = 'a'.repeat(64);
 const brokerUid = process.getuid() + 1;
-const rawKey = (pair = generateKeyPairSync('ed25519')) => pair.publicKey.export({ format: 'jwk' }).x;
+const rawKey = (pair = generateKeyPairSync('ed25519')) => rawEd25519(pair.publicKey);
 const refused = (reason, code) => (error) => error.reason === reason && (code === undefined || error.code === code);
 
 function daemon(t) {

@@ -27,6 +27,7 @@ import { challengeFor, completedRecordFor, enteredRecordFor } from '../identity/
 import { useCeremony } from './helpers/reconcile-ceremony.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 import { asDaemonAsync } from './helpers/owner-decision-daemon-env.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const { reconcileOwnerDecisionRecordOnly } = await import('../owner-decision-reconcile.mjs');
 const darwin = { skip: process.platform !== 'darwin' && 'the journal and trust locks are Darwin-only' };
@@ -37,7 +38,7 @@ const template = byId('approve-preparation');
 const namespaceDigest = 'a'.repeat(64);
 const AT = 2_000_000_010, NOW = 2_000_000_020_000;
 const requestId = '11111111-1111-4111-8111-111111111111';
-const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+const rawKey = () => rawEd25519(generateKeyPairSync('ed25519').publicKey);
 
 // The soul's package directory, with a fresh revision each change. An edit's
 // package names its parent, as the stored snapshot will.

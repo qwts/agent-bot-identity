@@ -17,6 +17,7 @@ import {
   presenceSignerPath, verifyPinsAttestation, verifyPresence,
 } from '../owner-presence.mjs';
 import { ed25519KeyLine, parseSshPublicKey, sshFingerprint } from '../owner-statement.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const ID = 'agent_121b5b35-0000-4000-8000-000000000000';
 const NOW = Date.parse('2026-10-03T22:00:00Z');
@@ -27,7 +28,7 @@ const TEAM = 'ABCDE12345';
 // keyd's presence key, as the Rust side holds it.
 function presenceKey() {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
+  const raw = Buffer.from(rawEd25519(publicKey), 'base64url').toString('base64');
   const signed = (prefix, payload) => {
     const segment = Buffer.from(JSON.stringify(payload)).toString('base64url');
     return `${prefix}.${segment}.${sign(null, Buffer.from(segment), privateKey).toString('base64url')}`;

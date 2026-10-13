@@ -3,12 +3,13 @@
 // socket, no keychain, no prompt.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPrivateKey, generateKeyPairSync, sign, createPublicKey } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ed25519KeyLine, ownerCommand, parseSshPublicKey, readOwnerKeys, sshFingerprint, verifyStatement, writeOwnerKeys } from '../owner-statement.mjs';
 import { keydStatementStore, verifyStatementKeyRecord } from '../owner-presence.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 // Known vectors, shared with keyd/src/statement.rs (`matches_the_shared_vectors`).
 const SEED = Buffer.alloc(32, 7);
@@ -36,9 +37,9 @@ function home(t) {
 // `refuse` throws first. Every call goes to `calls`.
 function fakeKeyd({ statementSeed = SEED, refuse = () => {}, record = null } = {}) {
   const presence = generateKeyPairSync('ed25519');
-  const presenceRaw = Buffer.from(presence.publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
+  const presenceRaw = Buffer.from(rawEd25519(presence.publicKey), 'base64url').toString('base64');
   const statementKey = privateFromSeed(statementSeed);
-  const statementRaw = Buffer.from(statementKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
+  const statementRaw = Buffer.from(rawEd25519(createPublicKey(statementKey)), 'base64url').toString('base64');
   const calls = [];
   const keyRecord = (nonce, overrides = {}) => {
     const line = ed25519KeyLine(statementRaw);
@@ -64,7 +65,7 @@ const rpcError = (rpcCode, message = 'refused') => Object.assign(new Error(messa
 test('agent-bot reads the shared keyd vectors: key, fingerprint and signature', () => {
   const line = ed25519KeyLine(PUBLIC);
   assert.equal(sshFingerprint(parseSshPublicKey(line).blob), FINGERPRINT);
-  assert.equal(Buffer.from(privateFromSeed(SEED).export({ format: 'jwk' }).x, 'base64url').toString('base64'), PUBLIC);
+  assert.equal(Buffer.from(rawEd25519(createPublicKey(privateFromSeed(SEED))), 'base64url').toString('base64'), PUBLIC);
   assert.equal(sign(null, Buffer.from(SEGMENT, 'ascii'), privateFromSeed(SEED)).toString('base64url'), SIGNATURE);
   const pin = { name: 'mac', store: 'keyd', alg: 'ed25519', publicKey: line, fingerprint: FINGERPRINT, verifyRequired: false,
     softwareKey: false, pinnedAt: '2026-10-11T00:00:00.000Z' };

@@ -23,6 +23,7 @@ import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJou
 import { encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owner-decision-journal-frame.mjs';
 import { challengeFor } from '../identity/owner-decision-evidence.mjs';
 import { decodeOwnerDecisionAction } from '../identity/owner-decision-action.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the journal and trust locks are Darwin-only' };
 const evidence = JSON.parse(fs.readFileSync(new URL('./fixtures/owner-decisions/effect-evidence-v1.json', import.meta.url), 'utf8'));
@@ -31,7 +32,7 @@ const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const namespaceDigest = 'a'.repeat(64);
 const NOW = 2_000_000_010_000;
 const nonceOf = (byte) => Buffer.alloc(32, byte).toString('base64url');
-const rawKey = (keyPair) => keyPair.publicKey.export({ format: 'jwk' }).x;
+const rawKey = (keyPair) => rawEd25519(keyPair.publicKey);
 const keyIdOf = (keyPair) => sha256(keyPair.publicKey.export({ type: 'spki', format: 'der' }));
 
 function p1(signer, { actionText, nonce, iat = 2_000_000_000, exp = 2_000_000_060 }) {

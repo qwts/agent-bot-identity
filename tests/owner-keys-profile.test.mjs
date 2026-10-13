@@ -21,6 +21,7 @@ import { attestedOwnerKeys, createPinsGenerationFloor, pinSetDigest } from '../o
 import {
   SSHSIG_NAMESPACE, armorStatement, encodePayload, ownerCommand, parseSshPublicKey, signPayload, sshFingerprint, writeOwnerKeys,
 } from '../owner-statement.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const SCOPE = { repo: 'qwts/agent-bot-identity', number: 753 };
 const profile = (settings) => ({
@@ -55,7 +56,7 @@ const str = (value) => { const b = Buffer.isBuffer(value) ? value : Buffer.from(
 // signer standing in for the hardware (PROTOCOL.u2f).
 function ownerKey(home, name = 'yubikey') {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url');
+  const raw = Buffer.from(rawEd25519(publicKey), 'base64url');
   const type = 'sk-ssh-ed25519@openssh.com';
   const application = 'ssh:';
   const blob = Buffer.concat([str(type), str(raw), str(application)]);
@@ -78,7 +79,7 @@ function ownerKey(home, name = 'yubikey') {
 // `declared` is left to its default, the config under the caller's home.
 function keydRecording(pins, { generation = 1 } = {}) {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
+  const raw = Buffer.from(rawEd25519(publicKey), 'base64url').toString('base64');
   const floor = createPinsGenerationFloor();
   const seen = [];
   const attest = async (asked, options) => {

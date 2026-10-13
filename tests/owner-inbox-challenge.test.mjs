@@ -22,6 +22,7 @@ import { coldTurnExecutor } from '../wake-plane.mjs';
 import {
   SSHSIG_NAMESPACE, armorStatement, encodePayload, parseSshPublicKey, signChallenge, sshFingerprint, writeOwnerKeys,
 } from '../owner-statement.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OWNER = 'principal_00000000-0000-4000-8000-0000000000aa';
@@ -60,7 +61,7 @@ const str = (value) => { const b = Buffer.isBuffer(value) ? value : Buffer.from(
 // A FIDO sk-ssh-ed25519 owner key, signing the way OpenSSH's ssh-sk does.
 function ownerKey(root, name = 'yubikey') {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url');
+  const raw = Buffer.from(rawEd25519(publicKey), 'base64url');
   const type = 'sk-ssh-ed25519@openssh.com';
   const application = 'ssh:';
   const blob = Buffer.concat([str(type), str(raw), str(application)]);

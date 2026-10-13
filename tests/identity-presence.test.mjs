@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as published from '../identity-presence.mjs';
 import { actionDigest, verifyPresence } from '../owner-presence.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const now = 2_000_000_000_000;
 const seconds = now / 1000;
@@ -11,7 +12,7 @@ const action = 'Approve exact UTF-8: café 🐾';
 const nonce = 'saved-daemon-nonce';
 function fixture() {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const key = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64');
+  const key = Buffer.from(rawEd25519(publicKey), 'base64url').toString('base64');
   const payload = { v: 1, aud: 'agent-bot-owner', kind: 'presence', action: actionDigest(action), nonce,
     iat: seconds, exp: seconds + 120 };
   const signed = (text, padded = false) => {

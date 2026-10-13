@@ -17,6 +17,7 @@ import {
 import { loadOrCreateVouchKey, vouchDaemonKey, vouchDaemonKeyPin, vouchKeyPath, vouchStateDir } from '../identity/vouch.mjs';
 import * as host from '../identity-host.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const VECTORS_URL = new URL('./fixtures/owner-decisions/daemon-trust-observation-v1.json', import.meta.url);
 const VECTORS_SHA256 = '08c78eca8779c0eda2ff5092093170f03fd641e6d4d82c6bb6b4fb27c4aad689';
@@ -25,7 +26,7 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwin-only' };
 const namespaceDigest = 'a'.repeat(64);
 const brokerUid = process.getuid() + 1;
-const rawKey = (pair = generateKeyPairSync('ed25519')) => pair.publicKey.export({ format: 'jwk' }).x;
+const rawKey = (pair = generateKeyPairSync('ed25519')) => rawEd25519(pair.publicKey);
 const refused = (reason, code) => (error) => error.reason === reason && (code === undefined || error.code === code);
 
 test('the vendored vectors are the frozen copy and the validator reproduces every expectation', () => {
