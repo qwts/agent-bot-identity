@@ -271,6 +271,7 @@
     "soul-coauthor.mjs": "soul",
     "soul-comms.mjs": "soul",
     "soul-computer-use.mjs": "soul",
+    "soul-computer-use-effect.mjs": "soul",
     "soul-credential-migration.mjs": "soul",
     "soul-credentials.mjs": "identity",
     "identity/soul-credentials.mjs": "identity",
