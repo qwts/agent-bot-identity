@@ -200,3 +200,26 @@ test('unlisted parent directories count as entries', async () => {
   await refused(zip([{ name: 'a/b/c' }, { name: 'd/e' }]), /more than 4 entries/);
   assert.equal((await checkArchiveBudget(file(gzipSync(tar([{ name: 'a/b/c' }]))), limits)).entries, 3);
 });
+
+// Review of #1090, fourth round: a leftover pax size from one x header was
+// applied to the next header even when that was another extended header,
+// which bsdtar reads by its own size, so files and a FIFO were hidden.
+test('an extended header is read by its own size, and only one stands before an entry', async () => {
+  const fixture = (name) => fileURLToPath(new URL(`./fixtures/archive-budget/${name}`, import.meta.url));
+  for (const name of ['Q1_xx_hidden_files.tgz', 'Q2_xx_hidden_fifo.tgz', 'R3_xx_8000.tgz']) {
+    await assert.rejects(checkArchiveBudget(fixture(name)), (e) => e instanceof ArchiveBudgetError && /extended tar header following another/.test(e.message), name);
+  }
+  // Two x headers in a row, or an x then L, are refused outright.
+  await refused(gzipSync(tar([pax({ size: '0' }), pax({ path: 'a' }), { name: 'b' }])), /following another/);
+  await refused(gzipSync(tar([pax({ mtime: '1' }), { name: 'L', type: 'L', body: Buffer.from('x\0') }, { name: 'b' }])), /following another/);
+  // GNU's long link name and long name together still describe one entry.
+  const gnu = await checkArchiveBudget(file(gzipSync(tar([
+    { name: '././@LongLink', type: 'K', body: Buffer.from('target\0') },
+    { name: '././@LongLink', type: 'L', body: Buffer.from('long/name\0') },
+    { name: 'short', type: '2' },
+  ]))), limits);
+  assert.equal(gnu.entries, 2);
+  // An override applies to the entry it precedes and no further.
+  const one = await checkArchiveBudget(file(gzipSync(tar([pax({ path: 'p/q' }), { name: 'a' }, { name: 'b' }]))), limits);
+  assert.equal(one.entries, 3);
+});

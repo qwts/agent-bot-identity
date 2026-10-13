@@ -130,6 +130,7 @@ async function scanTar(stream, limits) {
   let skip = 0;          // body bytes still to discard
   let capture = null;    // { remaining, chunks, done } for a pax or long-name body
   let pending = {};      // overrides from a pax 'x' or GNU 'L' header for the next entry
+  const pendingTypes = new Set(); // the extended headers standing before that entry
   let ended = false;
   for await (const chunk of stream) {
     budget.bytes(chunk.length);
@@ -162,14 +163,27 @@ async function scanTar(stream, limits) {
       const type = String.fromCharCode(header[156] || 0x30);
       if (!TAR_TYPES.has(type)) refuse(`${cString(header, 0, 100)} has tar entry type ${JSON.stringify(type)}, which a runtime archive may not use`);
       const prefix = cString(header, 345, 155);
-      let name = pending.path ?? (prefix ? `${prefix}/${cString(header, 0, 100)}` : cString(header, 0, 100));
-      const size = pending.size ?? tarNumber(header, 124, 12);
-      pending = {};
+      const extended = type === 'x' || type === 'g' || type === 'L' || type === 'K';
+      if (extended) {
+        // An extended header's own body is read by its own ustar size: no
+        // override from an earlier header applies to it (#1090 review). And
+        // only one may stand before an entry, GNU's long link name with long
+        // name (K and L) excepted, because tars disagree on how a second one
+        // combines with the first.
+        if (pendingTypes.size && (type === 'x' || type === 'g' || pendingTypes.has('x') || pendingTypes.has(type))) {
+          refuse('it has an extended tar header following another before their entry');
+        }
+        pendingTypes.add(type);
+      }
+      // Overrides apply only to the real entry they precede.
+      const name = extended ? cString(header, 0, 100) : pending.path ?? (prefix ? `${prefix}/${cString(header, 0, 100)}` : cString(header, 0, 100));
+      const size = extended ? tarNumber(header, 124, 12) : pending.size ?? tarNumber(header, 124, 12);
+      if (!extended) { pending = {}; pendingTypes.clear(); }
       const padded = Math.ceil(size / BLOCK) * BLOCK;
       // A global pax header would apply its keys to every later entry; one
       // with any keys at all is refused.
       if (type === 'g' && size !== 0) refuse('it has a global pax header');
-      if (type === 'x' || type === 'g' || type === 'L' || type === 'K') {
+      if (extended) {
         const cap = type === 'L' || type === 'K' ? LONG_NAME_MAX_BYTES : PAX_MAX_BYTES;
         if (size > cap) refuse(`it has a ${type === 'L' || type === 'K' ? 'long-name' : 'pax'} header larger than ${cap} bytes`);
         skip = padded;
