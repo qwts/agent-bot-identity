@@ -34,16 +34,28 @@ const PAX_KEYS = new Set(['path', 'linkpath', 'size', 'mtime', 'uid', 'gid', 'un
 export class ArchiveBudgetError extends Error {}
 const refuse = (message) => { throw new ArchiveBudgetError(message); };
 
-function depthOf(name) {
-  return name.split('/').filter((part) => part && part !== '.').length;
-}
-
+// Entries count every file and directory extraction would create: a listed
+// entry, and each parent directory tar makes for it even when the archive
+// never lists it (#1090 review).
 function counter(limits) {
   let entries = 0, expanded = 0;
+  const directories = new Set();
+  const count = () => { if (++entries > limits.maxEntries) refuse(`it has more than ${limits.maxEntries} entries`); };
   return {
     entry(name) {
-      if (++entries > limits.maxEntries) refuse(`it has more than ${limits.maxEntries} entries`);
-      if (depthOf(name) > limits.maxDepth) refuse(`an entry is nested deeper than ${limits.maxDepth} directories`);
+      const parts = name.split('/').filter((part) => part && part !== '.');
+      if (parts.length > limits.maxDepth) refuse(`an entry is nested deeper than ${limits.maxDepth} directories`);
+      const path = parts.join('/');
+      if (!directories.has(path)) count();
+      // A listed directory is one entry; every ancestor is in the set once
+      // its child is, so the walk up stops at the first one already counted.
+      directories.add(path);
+      for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
+        const parent = parts.slice(0, depth).join('/');
+        if (directories.has(parent)) break;
+        directories.add(parent);
+        count();
+      }
     },
     bytes(count) {
       expanded += count;
@@ -84,17 +96,27 @@ function checksumValid(block) {
   return tarNumber(block, 148, 8) === sum;
 }
 
+// bsdtar reads pax lengths and sizes as plain decimal only; anything else
+// (0x…, 0b…, 1e3, a sign, spaces) is refused rather than read differently.
+const DECIMAL = /^[0-9]+$/;
+
 function paxRecords(body) {
   const records = {};
+  const malformed = () => refuse('it has a malformed pax header');
   let at = 0;
   while (at < body.length) {
     const space = body.indexOf(0x20, at);
-    if (space === -1) break;
-    const length = Number(body.subarray(at, space).toString('ascii'));
-    if (!Number.isSafeInteger(length) || length <= 0 || at + length > body.length) refuse('it has a malformed pax header');
+    if (space === -1) malformed();
+    const digits = body.subarray(at, space).toString('ascii');
+    if (!DECIMAL.test(digits)) malformed();
+    const length = Number(digits);
+    if (!Number.isSafeInteger(length) || at + length > body.length || space + 1 >= at + length) malformed();
+    // Each record ends with its newline, exactly where its length says.
+    if (body[at + length - 1] !== 0x0a) malformed();
     const record = body.subarray(space + 1, at + length - 1).toString('utf8');
     const equals = record.indexOf('=');
-    if (equals > 0) records[record.slice(0, equals)] = record.slice(equals + 1);
+    if (equals <= 0) malformed();
+    records[record.slice(0, equals)] = record.slice(equals + 1);
     at += length;
   }
   return records;
@@ -158,8 +180,9 @@ async function scanTar(stream, limits) {
             if (unknown !== undefined) refuse(`it has a pax header with ${JSON.stringify(unknown)}, which a runtime archive may not use`);
             if (records.path !== undefined) pending.path = records.path;
             if (records.size !== undefined) {
+              if (!DECIMAL.test(records.size)) refuse('it has a malformed pax size');
               const declared = Number(records.size);
-              if (!Number.isSafeInteger(declared) || declared < 0) refuse('it has a malformed pax size');
+              if (!Number.isSafeInteger(declared)) refuse('it has a malformed pax size');
               pending.size = declared;
             }
           } else if (type === 'L') pending.path = body.toString('utf8').replace(/\0+$/, '');

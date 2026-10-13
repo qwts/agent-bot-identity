@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { ArchiveBudgetError, RUNTIME_ARCHIVE_LIMITS, checkArchiveBudget } from '../archive-budget.mjs';
 
@@ -70,7 +71,8 @@ test('a tar.gz within budget reports its entries and expansion', async () => {
   const bytes = gzipSync(tar([{ name: 'go/', type: '5' }, { name: 'go/bin/go', body: Buffer.from('#!/bin/sh\n') }, { name: 'go/bin/gofmt', type: '2' }]));
   const result = await checkArchiveBudget(file(bytes), limits);
   assert.equal(result.format, 'tar.gz');
-  assert.equal(result.entries, 3);
+  // go/, the implied go/bin/, and the two entries in it.
+  assert.equal(result.entries, 4);
   // The uncompressed stream as read: at least every header and body block.
   assert.ok(result.expandedBytes >= 512 * 4 && result.expandedBytes <= 512 * 4 + 1024, String(result.expandedBytes));
   assert.equal((await checkArchiveBudget(file(tar([{ name: 'a', body: Buffer.from('x') }])), limits)).format, 'tar');
@@ -171,4 +173,30 @@ test('a zip whose end record understates its central directory is refused', asyn
   const short = Buffer.from(honest);
   short.writeUInt32LE(short.readUInt32LE(end + 12) - 46 - 3, end + 12);
   await refused(short, /not where its end record says/);
+});
+
+// Review of #1090, third round: pax numbers are plain decimal, every record
+// ends with its newline, and implied parent directories count.
+test('pax lengths and sizes must be plain decimal records', async () => {
+  const raw = (text) => ({ name: 'PaxHeader', type: 'x', body: Buffer.from(text) });
+  for (const size of ['0x10000', '0b101', '1e3', '+5', ' 5', '5 ']) {
+    const line = ` size=${size}\n`;
+    let length = line.length + 1;
+    while (`${length}${line}`.length !== length) length += 1;
+    await refused(gzipSync(tar([raw(`${length}${line}`), { name: 'a' }])), /malformed pax/);
+  }
+  await refused(gzipSync(tar([raw('0x12 path=abcdefgh\n'), { name: 'a' }])), /malformed pax header/);
+  // Exactly as long as it says, but not ending in its newline.
+  await refused(gzipSync(tar([raw('12 path=abcX'), { name: 'a' }])), /malformed pax header/);
+  await refused(gzipSync(tar([raw('11 path=abc\n trailing'), { name: 'a' }])), /malformed pax header/);
+  // The reviewer's PoC: a hex pax size hid 203 files, a FIFO and an 8 GiB
+  // sparse file from the scan while bsdtar extracted them.
+  const poc = new URL('./fixtures/archive-budget/N_hexsize_hides.tgz', import.meta.url);
+  await assert.rejects(checkArchiveBudget(fileURLToPath(poc)), (e) => e instanceof ArchiveBudgetError && /malformed pax/.test(e.message));
+});
+
+test('unlisted parent directories count as entries', async () => {
+  await refused(gzipSync(tar([{ name: 'a/b/c' }, { name: 'd/e' }])), /more than 4 entries/);
+  await refused(zip([{ name: 'a/b/c' }, { name: 'd/e' }]), /more than 4 entries/);
+  assert.equal((await checkArchiveBudget(file(gzipSync(tar([{ name: 'a/b/c' }]))), limits)).entries, 3);
 });
