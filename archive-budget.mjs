@@ -23,6 +23,13 @@ const BLOCK = 512;
 const PAX_MAX_BYTES = 1024 * 1024;
 const LONG_NAME_MAX_BYTES = 64 * 1024;
 const ZIP_DIRECTORY_MAX_BYTES = 64 * 1024 * 1024;
+// The tar entry types and pax keys a runtime archive may use, and nothing
+// else (#1090 review): anything outside them is refused rather than guessed
+// at, because tars disagree on what they mean (Solaris `X` is pax to bsdtar
+// and a file to this scanner; `SCHILY.realsize` and `GNU.sparse.*` declare
+// sparse files).
+const TAR_TYPES = new Set(['0', '1', '2', '5', 'x', 'g', 'L', 'K']);
+const PAX_KEYS = new Set(['path', 'linkpath', 'size', 'mtime', 'uid', 'gid', 'uname', 'gname', 'mode', 'atime', 'ctime']);
 
 export class ArchiveBudgetError extends Error {}
 const refuse = (message) => { throw new ArchiveBudgetError(message); };
@@ -128,14 +135,18 @@ async function scanTar(stream, limits) {
       }
       buffer = buffer.subarray(BLOCK);
       if (!checksumValid(header)) refuse('it is not a tar archive this installer can read');
+      // ustar (or GNU's \"ustar  \") on every header: an old tar is refused.
+      if (header.subarray(257, 262).toString('ascii') !== 'ustar') refuse('it is not a ustar tar archive');
       const type = String.fromCharCode(header[156] || 0x30);
-      const ustar = header.subarray(257, 262).toString('ascii') === 'ustar';
-      const prefix = ustar ? cString(header, 345, 155) : '';
+      if (!TAR_TYPES.has(type)) refuse(`${cString(header, 0, 100)} has tar entry type ${JSON.stringify(type)}, which a runtime archive may not use`);
+      const prefix = cString(header, 345, 155);
       let name = pending.path ?? (prefix ? `${prefix}/${cString(header, 0, 100)}` : cString(header, 0, 100));
       const size = pending.size ?? tarNumber(header, 124, 12);
-      const sparse = pending.sparse;
       pending = {};
       const padded = Math.ceil(size / BLOCK) * BLOCK;
+      // A global pax header would apply its keys to every later entry; one
+      // with any keys at all is refused.
+      if (type === 'g' && size !== 0) refuse('it has a global pax header');
       if (type === 'x' || type === 'g' || type === 'L' || type === 'K') {
         const cap = type === 'L' || type === 'K' ? LONG_NAME_MAX_BYTES : PAX_MAX_BYTES;
         if (size > cap) refuse(`it has a ${type === 'L' || type === 'K' ? 'long-name' : 'pax'} header larger than ${cap} bytes`);
@@ -143,7 +154,8 @@ async function scanTar(stream, limits) {
         capture = { remaining: size, chunks: [], done: (body) => {
           if (type === 'x') {
             const records = paxRecords(body);
-            if (Object.keys(records).some((key) => key.startsWith('GNU.sparse.'))) pending.sparse = true;
+            const unknown = Object.keys(records).find((key) => !PAX_KEYS.has(key));
+            if (unknown !== undefined) refuse(`it has a pax header with ${JSON.stringify(unknown)}, which a runtime archive may not use`);
             if (records.path !== undefined) pending.path = records.path;
             if (records.size !== undefined) {
               const declared = Number(records.size);
@@ -155,9 +167,6 @@ async function scanTar(stream, limits) {
         if (skip === 0) { capture.done(Buffer.alloc(0)); capture = null; }
         continue;
       }
-      if (sparse || type === 'S') refuse(`${name} is a sparse file`);
-      if (type === '3' || type === '4' || type === '6') refuse(`${name} is a device or FIFO`);
-      if (type === 'M' || type === 'N' || type === 'V') refuse(`${name} is a multi-volume or label entry`);
       budget.entry(name);
       // A link or directory with a body is read differently by different tars
       // (bsdtar extracts it, GNU tar takes it for the next header), so no
@@ -249,11 +258,26 @@ function scanZip(file, limits) {
   } finally { closeSync(fd); }
 }
 
+// Whether a zip end-of-central-directory record sits in the file's tail,
+// as a tar with a zip appended would have.
+function endsLikeZip(file) {
+  const fd = openSync(file, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, 22 + 0xffff);
+    const tail = readAt(fd, size - length, length);
+    for (let i = tail.length - 22; i >= 0; i -= 1) if (tail.readUInt32LE(i) === 0x06054b50) return true;
+    return false;
+  } finally { closeSync(fd); }
+}
+
 /**
  * What an archive expands to, checked against `limits` before anything is
  * extracted: `{ format, entries, expandedBytes }`. Throws ArchiveBudgetError
- * naming the limit for an archive over budget, a sparse file, a device or a
- * FIFO, and any archive that is not a gzip tar, ustar tar or zip.
+ * naming the limit for an archive over budget, a tar entry type or pax key
+ * outside the allowlists (so no sparse files, devices, FIFOs or Solaris
+ * headers), a file that reads as both tar and zip, and any archive that is
+ * not a gzip tar, ustar tar or zip.
  */
 export async function checkArchiveBudget(file, limits = RUNTIME_ARCHIVE_LIMITS) {
   const fd = openSync(file, 'r');
@@ -270,8 +294,15 @@ export async function checkArchiveBudget(file, limits = RUNTIME_ARCHIVE_LIMITS) 
       refuse(`it could not be read (${error.code ?? error.message})`);
     } finally { source.destroy(); gunzip.destroy(); }
   }
-  if (head.length >= 4 && head.readUInt32LE(0) === 0x04034b50) return { format: 'zip', ...scanZip(file, limits) };
+  // A file that reads as both a tar and a zip is read by tar as whichever it
+  // bids higher, so it is refused rather than budgeted as one of them.
+  const tarHeader = (() => { try { return head.length === BLOCK && checksumValid(head); } catch { return false; } })();
+  if (head.length >= 4 && head.readUInt32LE(0) === 0x04034b50) {
+    if (tarHeader) refuse('it reads as both a tar and a zip archive');
+    return { format: 'zip', ...scanZip(file, limits) };
+  }
   if (head.length === BLOCK && head.subarray(257, 262).toString('ascii') === 'ustar') {
+    if (endsLikeZip(file)) refuse('it reads as both a tar and a zip archive');
     const source = createReadStream(file);
     try { return { format: 'tar', ...await scanTar(source, limits) }; } finally { source.destroy(); }
   }

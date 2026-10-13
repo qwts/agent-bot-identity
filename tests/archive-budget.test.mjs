@@ -86,11 +86,38 @@ test('tar archives over the entry, depth or byte budget are refused before extra
 });
 
 test('sparse files, devices and FIFOs are refused', async () => {
-  await refused(gzipSync(tar([{ name: 'hole', type: 'S' }])), /hole is a sparse file/);
-  await refused(gzipSync(tar([pax({ 'GNU.sparse.major': '1' }), { name: 'hole' }])), /sparse file/);
-  await refused(gzipSync(tar([{ name: 'fifo', type: '6' }])), /fifo is a device or FIFO/);
-  await refused(gzipSync(tar([{ name: 'dev', type: '3' }])), /device or FIFO/);
+  await refused(gzipSync(tar([{ name: 'hole', type: 'S' }])), /hole has tar entry type "S"/);
+  await refused(gzipSync(tar([pax({ 'GNU.sparse.major': '1' }), { name: 'hole' }])), /pax header with "GNU\.sparse\.major"/);
+  await refused(gzipSync(tar([{ name: 'fifo', type: '6' }])), /fifo has tar entry type "6"/);
+  await refused(gzipSync(tar([{ name: 'dev', type: '3' }])), /tar entry type "3"/);
   await refused(gzipSync(Buffer.from('not a tar at all'.padEnd(1024, '!'))), /not a tar archive/);
+});
+
+// Review of #1090, second round: the reviewer's bsdtar probes.
+test('only allowlisted tar entry types and pax keys are read', async () => {
+  // Solaris X: pax to bsdtar, so it can hide the headers that follow.
+  await refused(gzipSync(tar([{ name: 'X', type: 'X', body: Buffer.alloc(0) }, { name: 'a' }])), /tar entry type "X"/);
+  await refused(gzipSync(tar([{ name: 'X', type: 'X', body: Buffer.from('30 SCHILY.realsize=53687091200\n') }, { name: 'a' }])), /tar entry type "X"/);
+  // Sparse declared by SCHILY.realsize in an ordinary pax header.
+  await refused(gzipSync(tar([pax({ 'SCHILY.realsize': '53687091200' }), { name: 'a' }])), /pax header with "SCHILY\.realsize"/);
+  // A global header with keys applies to every later entry.
+  await refused(gzipSync(tar([{ ...pax({ size: '1' }), type: 'g' }, { name: 'a' }])), /global pax header/);
+  // An old tar without the ustar magic, inside gzip.
+  const v7 = tar([{ name: 'a', body: Buffer.from('x') }]);
+  v7.fill(0, 257, 265);
+  let sum = 0; for (let i = 0; i < 512; i += 1) sum += i >= 148 && i < 156 ? 0x20 : v7[i];
+  v7.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+  await refused(gzipSync(v7), /not a ustar tar/);
+  // Allowed keys still pass.
+  assert.equal((await checkArchiveBudget(file(gzipSync(tar([pax({ path: 'a', mtime: '1', uid: '0' }), { name: 'x' }]))), limits)).entries, 1);
+});
+
+test('a file that reads as both tar and zip is refused', async () => {
+  // A tar whose first name begins with the zip magic, a zip appended.
+  const polyglot = Buffer.concat([tar([{ name: 'PK\x03\x04', body: Buffer.from('x') }]), zip([{ name: 'a', size: 1 }])]);
+  await refused(polyglot, /both a tar and a zip/);
+  // A ustar tar with a zip appended.
+  await refused(Buffer.concat([tar([{ name: 'a', body: Buffer.from('x') }]), zip([{ name: 'b', size: 1 }])]), /both a tar and a zip/);
 });
 
 test('a zip is budgeted from its central directory', async () => {

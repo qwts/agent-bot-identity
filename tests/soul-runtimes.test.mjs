@@ -1587,6 +1587,7 @@ test('uv runs every install with --no-config, so no config file can redirect it 
   const uvCalls = d.commands.filter((c) => ['python', 'tool', 'venv', 'pip'].includes(c.args[0]));
   assert.ok(uvCalls.length >= 2);
   for (const call of uvCalls) assert.ok(call.args.includes('--no-config'), call.args.join(' '));
+});
 
 // #1072: a digest pins an archive's bytes, not its size.
 test('a runtime download past the size cap is refused, by its stated length or as it streams, and leaves nothing', async (t) => {
