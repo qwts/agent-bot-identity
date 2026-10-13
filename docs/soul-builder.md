@@ -888,14 +888,25 @@ vendor-neutral runner over the soul's own folder, so each harness hands the
 script the same envelope and reads the same verdict:
 
 ```sh
-D="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul pre-command hooks did not run" >&2; exit 2; }; AGENT_BOT_HOOKS_DIR="$D/hooks" exec "$B" agent-hook --event pre-command --dialect claude # agent-bot soul hook
+B=agent-bot; command -v "$B" >/dev/null 2>&1 || { echo "agent-bot is not on PATH; soul pre-command hooks did not run" >&2; exit 2; }; exec "$B" agent-hook --event pre-command --dialect claude --soul-hooks # agent-bot soul hook
 ```
 
-Only the Claude row reads `CLAUDE_PROJECT_DIR` (another harness started from a
-Claude shell inherits it); the others use the git top level, which in a soul's
-home is the package root. `agent-bot` comes from PATH like the MCP entry, so the
-bytes are the same on every host. Without it, a blocking event exits 2 (deny)
-and a non-blocking one exits 0, so a missing runner never fails open. Entry
+`--soul-hooks` has the runner find the soul's own `hooks/` itself, never from
+the checkout the harness happens to be in (#1089). A soul works inside other
+repositories' checkouts (its `worktrees/`, or anywhere else), and a harness
+runs a hook entry in its current folder, so the git top level there can be a
+repository the soul is only working in. The runner takes the first of Claude's
+`CLAUDE_PROJECT_DIR` (the claude row only; another harness started from a
+Claude shell inherits it), then the current folder and each folder above it,
+that is the soul's own: an installed soul's folder (its `.soul-state/agent-id`
+marker names an active soul in this census, and the census says that folder
+is the soul's), or that folder's built home, `.soul-state/home`, where the
+daemon launches it. A checkout that plants `hooks/`, or even a soul marker,
+is passed over. With no soul folder found, nothing runs: a blocking event is
+denied and a non-blocking one exits 0 with a note. An inherited
+`AGENT_BOT_HOOKS_DIR` doesn't apply to soul entries. `agent-bot` comes from
+PATH like the MCP entry, so the bytes are the same on every host. Without it,
+a blocking event exits 2 (deny) and a non-blocking one exits 0, so a missing runner never fails open. Entry
 shapes, matchers, timeouts and Cursor's `failClosed` flag come from
 `nativeHookEntry` in `hook-dialects.mjs`, the same function `sync-hooks.mjs`
 uses for the lifecycle adapters.
