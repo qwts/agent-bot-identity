@@ -14,6 +14,7 @@ import { encodeDaemonJournalFrame, requestDirectoryName } from '../identity/owne
 import { acquireDaemonJournalLock, createDaemonJournalStore, initializeDaemonJournal } from '../identity/owner-decision-journal-store.mjs';
 import { challengeFor } from '../identity/owner-decision-evidence.mjs';
 import { decodeOwnerDecisionAction } from '../identity/owner-decision-action.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/owner-decisions/effect-evidence-v1.json', import.meta.url), 'utf8'));
 const template = fixture.records.find(({ id }) => id === 'approve-preparation').record;
@@ -25,7 +26,7 @@ const requestId = '11111111-1111-4111-8111-111111111111';
 const nonce = Buffer.alloc(32, 1).toString('base64url');
 const SLOTS = ['presence', 'receipt', 'successful-check', 'pre-effect-refused', 'entered'];
 
-const pin = (keyPair) => ({ alg: 'ed25519', publicKey: keyPair.publicKey.export({ format: 'jwk' }).x,
+const pin = (keyPair) => ({ alg: 'ed25519', publicKey: rawEd25519(keyPair.publicKey),
   keyId: sha256(keyPair.publicKey.export({ type: 'spki', format: 'der' })) });
 const signed = (prefix, payload, key) => {
   const segment = Buffer.from(typeof payload === 'string' ? payload : canonicalJson(payload)).toString('base64url');

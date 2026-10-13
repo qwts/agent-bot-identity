@@ -11,6 +11,7 @@ import process from 'node:process';
 import { createOwnerDecisionTrustWriter, readOwnerDecisionNamespace, readOwnerDecisionTrust } from '../identity/owner-decision-trust.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
 import { loadOrCreateVouchKey, vouchStateDir } from '../identity/vouch.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 // Scratch state and home for every writer and reader here, with a generated
 // scratch vouch key: never the real vouch-key.pem or keyd presence cache.
@@ -24,7 +25,7 @@ const darwin = { skip: process.platform !== 'darwin' && 'the trust lock is Darwi
 const namespaceDigest = 'a'.repeat(64);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const refused = (reason, code = 'storage-failed') => (error) => error.reason === reason && error.code === code;
-const rawKey = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+const rawKey = () => rawEd25519(generateKeyPairSync('ed25519').publicKey);
 
 function freshRoot(t) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'owner-namespace-reader-')));

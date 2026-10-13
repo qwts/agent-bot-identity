@@ -113,9 +113,12 @@ function vouchKey({ env, home }) {
 }
 
 // The daemon's grant key as keyd pins it: the raw Ed25519 public key, base64.
+// Read from the SPKI DER export (the 32 bytes after its 12-byte prefix), not
+// a JWK export, which aborts Node 20.20.2 after enough calls (#1111).
 export function daemonGrantPublicKey({ env = process.env, home = homedir(), key = vouchKey({ env, home }) } = {}) {
-  const { x } = key.publicKey.export({ format: 'jwk' });
-  return Buffer.from(x, 'base64url').toString('base64');
+  const der = key.publicKey.export({ type: 'spki', format: 'der' });
+  if (der.length !== 44) throw new Error('the vouch key is not an Ed25519 key');
+  return der.subarray(12).toString('base64');
 }
 
 // `keyScope: 'app'` (#110) asks keyd to mint with the App-level key for

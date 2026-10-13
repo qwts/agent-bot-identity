@@ -19,6 +19,7 @@ import { requestDirectoryName } from '../identity/owner-decision-journal-frame.m
 import { presencePinPath } from '../identity/owner-presence.mjs';
 import { commsCredentialFile } from '../comms-client.mjs';
 import { withCurrentObservation } from './helpers/owner-decision-trust-v1.mjs';
+import { rawEd25519 } from './helpers/ed25519-raw.mjs';
 
 const darwin = { skip: process.platform !== 'darwin' && 'the trust and journal locks are Darwin-only', timeout: 20000 };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -91,7 +92,7 @@ test('the versioned trust writer\'s vouch identity read', darwin, (t) => {
   loadOrCreateVouchKey(vouchStateDir({ env }));
   createOwnerDecisionTrustWriter({ root, env, home: base, legacyPresenceKey: null }).enrollNamespace({ namespaceDigest: 'a'.repeat(64) });
   refusesAtOnce(fifoAt(vouchKeyPath(vouchStateDir({ env })), `const { generateKeyPairSync } = await import('node:crypto');
-const key = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+const key = () => rawEd25519(generateKeyPairSync('ed25519').publicKey);
 const { createOwnerDecisionTrustWriter } = await import(${module('owner-decision-trust.mjs')});
 createOwnerDecisionTrustWriter({ root: ${JSON.stringify(root)}, env: ${JSON.stringify(env)}, home: ${JSON.stringify(base)}, legacyPresenceKey: null })
   .enrollKeysV1({ receiptKey: key(), presenceKey: key(), brokerUid: ${process.getuid() + 1}, expectedObservationDigest: 'a'.repeat(64) })`));
@@ -188,7 +189,7 @@ test('the trust audit append refuses a changed audit file before writing', darwi
       writer.enrollNamespace({ namespaceDigest: 'a'.repeat(64) });
       const before = fs.readFileSync(audit);
       armed = true;
-      const key = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }).x;
+      const key = () => rawEd25519(generateKeyPairSync('ed25519').publicKey);
       assert.throws(() => writer.enrollKeys({ receiptKey: key(), presenceKey: key(), brokerUid: process.getuid() + 1 }), { reason: 'owner-trust-custody' });
       assert.equal(armed, false, 'the audit append was not reached');
       // Nothing was appended to the file the append opened.

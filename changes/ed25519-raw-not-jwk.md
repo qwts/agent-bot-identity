@@ -1,0 +1,1 @@
+- `daemonGrantPublicKey` and the owner-decision tests now read a raw Ed25519 public key from its SPKI DER export instead of exporting JWK. On Node 20.20.2 a JWK export of a generated Ed25519 key aborts the process (SIGABRT, no message) after enough calls without a GC in between, which crashed `owner-decision-journal-trust.test.mjs` intermittently in CI (#1111).
