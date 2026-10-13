@@ -592,6 +592,10 @@ function shellPayload(argv) {
 // refused anywhere (a double-quoted `$x` or `` `…` `` still expands); the
 // chaining and grouping metacharacters are refused outside quotes; an
 // unterminated quote is refused. Newlines separate commands, so they are out.
+// Unquoted glob characters (`*`, `?`, `[`) are refused too: arguments are
+// checked before the shell expands them, so with a file named `-exec` in the
+// directory, `find . -exe?` or `find . [-]exec` would become `-exec` after
+// this check had passed it.
 function structurallySimple(command) {
   const text = String(command || "");
   const single = String.fromCharCode(39);
@@ -599,7 +603,7 @@ function structurallySimple(command) {
   const backslash = String.fromCharCode(92);
   const dollar = String.fromCharCode(36);
   const backtick = String.fromCharCode(96);
-  const unquotedBad = [59, 124, 38, 60, 62, 40, 41, 123, 125, 10, 13].map((n) => String.fromCharCode(n));
+  const unquotedBad = [59, 124, 38, 60, 62, 40, 41, 123, 125, 10, 13, 42, 63, 91].map((n) => String.fromCharCode(n));
   let quote = null;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
@@ -624,8 +628,9 @@ function structurallySimple(command) {
 const SAFE_COMMANDS = new Set(["ls", "cat", "head", "tail", "grep", "egrep", "fgrep",
   "find", "wc", "diff", "echo", "pwd", "which", "true", "false", "stat", "file"]);
 const GREP_COMMANDS = new Set(["grep", "egrep", "fgrep"]);
-// `find` actions that run a program or write.
-const FIND_UNSAFE = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete",
+// `find` actions that run a program or write. bfs, which some harnesses
+// use as `find`, also takes `-rm` as `-delete`.
+const FIND_UNSAFE = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-rm",
   "-fprint", "-fprint0", "-fprintf", "-fls"]);
 
 function isStructurallySafe(command) {

@@ -437,7 +437,13 @@ const DENY_OPAQUE = [
   // explicit paths, redirects, substitutions
   './scripts/release.sh', '/usr/local/bin/release', 'printf "hello" > /tmp/notes.md',
   'echo "$(node build.mjs)"', 'source ./env.sh', '. ./env.sh', 'eval "$CMD"',
-  'find . -name x -exec sh {} ;', 'find . -delete',
+  'find . -name x -exec sh {} ;', 'find . -delete', 'find . -rm', 'find . -name x -rm',
+  // globs expand after this check: with a file named `-exec` in the directory
+  // these become `-exec` (re-review, #1064); quoted `';'` must not help either
+  "find . -exe? sh -c 'touch PWNED' ';'", "find . [-]exec sh -c 'touch PWNED' ';'",
+  "find . -exec* sh -c 'touch PWNED' ';'", "find . -exe? sh -c 'touch PWNED' {} +",
+  'find . -de*', "find . -e'xec' sh -c 'touch PWNED' {} +", 'find . -e"xec" sh -c x {} +',
+  "find . '-exec' sh -c 'touch PWNED' {} +", 'ls *', 'cat ?', 'ls [a]', 'grep x *',
   // the node-based bootstrap forms are gone: node is an interpreter
   'node bootstrap.mjs --x y', 'node bootstrap.mjs --require ./evil.js', 'node bootstrap.mjs --import=./evil.mjs',
   'NODE_OPTIONS=--require=./e.js node bootstrap.mjs', 'node bootstrap.mjs --eval x',
@@ -464,7 +470,7 @@ const DENY_OPAQUE = [
 const ALLOW_SAFE = [
   'ls', 'ls -la', 'cat README.md', 'head -n 5 f', 'tail f', 'wc -l f', 'diff a b',
   'echo hi', 'pwd', 'which git', 'grep -rn node .', 'grep -i x f', 'egrep -v x f',
-  'find . -name x', 'find . -type f -newer f', 'stat f', 'file f',
+  'find . -name x', 'find . -type f -newer f', "find . -name '*.js'", "grep 'a*b' f", 'ls "[x]"', 'stat f', 'file f',
 ];
 
 test('uninstalled pre-command denies every denylist-bypass probe and allows bare read-only commands (#1064)', () => {
