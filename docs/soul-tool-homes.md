@@ -231,8 +231,8 @@ template was renamed and is described in
 share the journal `.soul-state/migration.json` and the `soul-env-migrate`
 receipt.
 
-- Owner action, gated like `soul runtimes install` (`--principal-stdin`
-  carries the principal JSON). The action named to the gate is
+- Owner action, gated like `soul runtimes install`: presence
+  (`--principal-stdin` is refused with `owner-credential-required` for now, #1063). The action named to the gate is
   `adopt the host's <harnesses> sign-in into <id>'s soul folder`.
 - Copies only the files the registry names for that harness, from the host
   store to the soul's tool home: the sign-in file, and for Claude the

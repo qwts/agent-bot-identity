@@ -1,6 +1,7 @@
 // Route authorization (#785): the daemon bearer proves only a process in this
 // account, so every owner-level route also asks the owner (presence through
-// keyd or the dialog, or a verified principal credential). The table in
+// keyd or the dialog; a principal credential only where a target is checked,
+// #1063). The table in
 // docs/daemon-api.md classifies every route; this test keeps the two in step
 // and checks that a bearer-only caller is refused on each owner route.
 
@@ -13,6 +14,9 @@ import path from 'node:path';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { setSoulPaused, showSoul, upsertSoul } from '../agent-population.mjs';
 import { readSandboxStatus } from '../sandbox.mjs';
+import { assertOwnerAction, confirmOwnerPresence, verifyPrincipalOwner } from '../owner-action.mjs';
+import { principalCommand } from '../identity-cli.mjs';
+import { listPrincipals } from '../identity-host.mjs';
 
 const root = path.join(import.meta.dirname, '..');
 const ID = 'agent_78578578-5785-4785-8785-785785785785';
@@ -184,4 +188,83 @@ test('the owner resume asks for presence; a soul binding is refused before it is
     assert.equal((await f.post(`/v0/soul/${action}`, { agentId: ID })).status, 200);
   }
   assert.equal(f.asked.length, 1);
+});
+
+// #1063: a principal the broker accepts proves a login there, not the owner.
+// The broker below accepts every request, health and target checks alike, so
+// it stands for any valid principal that is not the owner. Each targetless
+// owner mutation must refuse it before the broker or the owner is asked, and
+// change nothing. Presence is a refusing stub: nothing here reaches keyd or a
+// dialog.
+test('a broker principal is not owner proof on any targetless owner mutation (#1063)', async (t) => {
+  const home = mkdtempSync(path.join(tmpdir(), 'route-principal-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home, PATH: process.env.PATH, XDG_STATE_HOME: path.join(home, 'state'),
+    XDG_CONFIG_HOME: path.join(home, 'config'),
+    AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json'), AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction'),
+    AGENT_BOT_PRINCIPALS_PATH: path.join(home, 'principals.json') };
+  upsertSoul({ id: ID, name: 'route-principal', status: 'active', spacePath: home }, { file: env.AGENT_BOT_POPULATION_PATH });
+  setSoulPaused(ID, true, { file: env.AGENT_BOT_POPULATION_PATH });
+  const credential = { principal: 'principal_10631063-1063-4063-8063-106310631063', secret: 's'.repeat(64),
+    brokerUid: process.getuid() + 1, mode: 'group' };
+  const brokerCalls = [];
+  const asked = [];
+  const verifyPrincipal = (presented, context = {}) => verifyPrincipalOwner(presented, { ...context, env,
+    clientFactory: () => ({ request: async (request) => {
+      brokerCalls.push(request.op);
+      return { uptimeMs: 1, principal: presented.principal, agentId: request.agentId, account: null };
+    } }) });
+  const consent = async (action) => {
+    asked.push(action);
+    throw Object.assign(new Error('the owner is not present'), { code: 'owner-credential-required' });
+  };
+  const server = createDaemonServer({ env, home, config: {},
+    ownerGate: (action, { principal }) => confirmOwnerPresence(action, { env, principal, verifyPrincipal, consent }),
+    settingGate: (action, { principal }) => assertOwnerAction(action, { env, cwd: home, detect: false, principal, verifyPrincipal, consent }) });
+  const controls = [];
+  server.dream = { control: (request) => { controls.push(request); return { status: 'paused' }; }, status: () => ({}), history: () => ({}) };
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const post = (route, body) => fetch(`http://127.0.0.1:${server.address().port}${route}`, { method: 'POST',
+    headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  const waiting = server.interaction.requestTurnApproval({ agentId: ID, operation: OPERATION, summary: 'push', tool: 'Bash' });
+  waiting.catch(() => {});
+  const [proposal] = server.interaction.listProposalsForOwner().proposals;
+  const sandboxBefore = readSandboxStatus({ env, home });
+  const soulBefore = showSoul(ID, { file: env.AGENT_BOT_POPULATION_PATH });
+  const routes = {
+    'POST /v0/approvals/decide': { proposalId: proposal.proposalId, decision: 'approve', digest: proposal.operationDigest },
+    'POST /v0/sandbox': { enabled: true },
+    'POST /v0/sandbox/override': { agentId: ID, override: 'unrestricted' },
+    'POST /v0/soul/computer-use': { agentId: ID, enabled: true },
+    'POST /v0/soul/resume': { agentId: ID },
+    'POST /v0/soul/dream/register': { agentId: ID, schedule: 'PT24H' },
+    'POST /v0/soul/dream/pause': { agentId: ID },
+    'POST /v0/soul/dream/unschedule': { agentId: ID },
+    'POST /v0/soul/dream/run-now': { agentId: ID },
+    'POST /v0/soul/dream/cancel': { runId: '10631063-1063-4063-8063-106310631063' },
+    'POST /v0/soul/dream/ack-notice': { agentId: ID, noticeId: `ntc_${'7'.repeat(24)}` },
+    'POST /v0/identity/apps/addon': { name: 'github-identity', enabled: true },
+  };
+  for (const [route, body] of Object.entries(routes)) {
+    const res = await post(route.slice(5), { ...body, principal: credential });
+    assert.ok([403, 409].includes(res.status), `${route} refused a broker principal (HTTP ${res.status})`);
+  }
+
+  // The principal ACL is a CLI mutation, gated the same way.
+  for (const argv of [['enroll', '--label', 'intruder'], ['allow', credential.principal, '--soul', ID]]) {
+    await assert.rejects(principalCommand([...argv, '--principal-stdin'], { env, home, cwd: home,
+      readStdin: () => JSON.stringify(credential), write: () => {},
+      gate: (action, { principal }) => assertOwnerAction(action, { env, cwd: home, detect: false, principal, verifyPrincipal, consent }) }),
+    (error) => error.code === 'owner-credential-required', `principal ${argv[0]} refused a broker principal`);
+  }
+
+  assert.deepEqual(brokerCalls, [], 'the broker is never asked for a targetless owner action');
+  assert.deepEqual(asked, [], 'a presented principal never turns into a prompt');
+  assert.equal(controls.length, 0, 'no dream control ran');
+  assert.deepEqual(showSoul(ID, { file: env.AGENT_BOT_POPULATION_PATH }), soulBefore);
+  assert.deepEqual(readSandboxStatus({ env, home }), sandboxBefore);
+  assert.deepEqual(server.interaction.listProposalsForOwner().proposals.map((row) => row.status), ['open']);
+  assert.deepEqual(listPrincipals({ file: env.AGENT_BOT_PRINCIPALS_PATH, env, home }), []);
 });

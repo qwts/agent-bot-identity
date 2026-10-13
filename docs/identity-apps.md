@@ -4,8 +4,8 @@ The `github-identity` add-on must be enabled. With it off, list returns an
 empty array; mutations other than `addon` return `identity-app-disabled`. No
 SOP is required.
 Naming and persona policy come from the caller. Mutations use the owner gate:
-a soul cannot authorize them, and the owner must present a principal with
-`--principal-stdin` or approve the native consent prompt.
+a soul cannot authorize them, and the owner approves with Touch ID or the
+native consent prompt (`--principal-stdin` is refused with `owner-credential-required` for now, #1063).
 
 ```sh
 agent-bot identity apps list --json

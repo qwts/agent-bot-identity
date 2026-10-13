@@ -71,9 +71,16 @@ function fixture(t, { scenario = null, configured = true, executorFor: customFac
 
 async function serverFixture(t, options = {}) {
   const f = fixture(t, options), verified = [];
+  // Owner presence is a stub, off until a test turns it on: nothing here may
+  // reach keyd or a dialog. A principal names no target on these routes, so
+  // the wired verifier refuses it before the broker is asked (#1063).
+  let present = false;
   const server = createDaemonServer({ env: f.env, home: f.root, config: {}, turns: f.turns,
     settingGate: (action, { principal: credential }) => assertOwnerAction(action, { env: f.env, cwd: f.root, detect: false,
-      principal: credential, consent: () => { throw ownerCredentialRequired('fixture has no owner ceremony'); },
+      principal: credential, consent: () => {
+        if (!present) throw ownerCredentialRequired('fixture owner is not present');
+        return { method: 'presence', via: 'fixture' };
+      },
       verifyPrincipal: input => verifyPrincipalOwner(input, { env: f.env, clientFactory: () => ({ request: async request => {
         verified.push(request);
         if (request.auth.secret !== principal.secret) throw new Error('invalid fixture principal');
@@ -91,7 +98,7 @@ async function serverFixture(t, options = {}) {
     });
     return { status: response.status, body: await response.json() };
   };
-  return { ...f, server, call, verified };
+  return { ...f, server, call, verified, present: (value) => { present = value; } };
 }
 
 test('daemon dream controls require owner verification, reject bindings and validate every mutation', posix, async t => {
@@ -101,20 +108,23 @@ test('daemon dream controls require owner verification, reject bindings and vali
     const body = action === 'cancel' ? { runId: '12345678-1234-4234-8234-123456789abc' } : { agentId: ID, ...(action === 'register' ? { schedule: 'PT1H' } : {}) };
     assert.equal((await f.call(`/${action}`, body)).status, 403, 'bearer alone cannot authorize a control');
     assert.equal((await f.call(`/${action}`, { ...body, principal: { ...principal, secret: 'bad' } })).status, 403);
+    assert.equal((await f.call(`/${action}`, { ...body, principal })).status, 403, 'a broker principal is not owner proof (#1063)');
     for (const header of ['x-agent-binding', PROOF_HEADER]) assert.equal((await f.call(`/${action}`, { ...body, principal }, { [header]: '' })).status, 403);
     assert.equal((await f.call(`/${action}`, { ...body, principal, path: '/outside' })).status, 400);
   }
   assert.equal(f.service.status().revision, 0); assert.deepEqual(f.resolutions, []);
-  assert.equal((await f.call('/register', { agentId: ID, schedule: 'PT1H', principal })).status, 200);
+  f.present(true);
+  assert.equal((await f.call('/register', { agentId: ID, schedule: 'PT1H', principal })).status, 403, 'presence does not rescue a presented principal');
+  assert.equal((await f.call('/register', { agentId: ID, schedule: 'PT1H' })).status, 200);
   assert.equal(f.service.status().registrations.length, 1);
-  assert.equal((await f.call('/pause', { agentId: ID, principal })).status, 200);
-  assert.equal((await f.call('/run-now', { agentId: ID, principal })).body.result.reason, 'paused');
-  assert.equal((await f.call('/unschedule', { agentId: ID, principal })).body.result.removed, true);
+  assert.equal((await f.call('/pause', { agentId: ID })).status, 200);
+  assert.equal((await f.call('/run-now', { agentId: ID })).body.result.reason, 'paused');
+  assert.equal((await f.call('/unschedule', { agentId: ID })).body.result.removed, true);
   assert.equal((await f.call('/history?limit=1')).body.records.length, 1);
   assert.equal((await f.call('/history?limit=1&limit=2')).status, 400);
   assert.equal((await f.call('/history?limit=17')).status, 409);
   assert.equal((await f.call('?agentId=' + ID)).status, 400);
-  assert.ok(f.verified.length > 0);
+  assert.deepEqual(f.verified, [], 'the broker is never asked for a targetless owner action');
   assert.equal(JSON.stringify(f.service.status()).includes(principal.secret), false);
 });
 
@@ -122,9 +132,10 @@ test('dream audit retains authorization before a failed control and distinguishe
   const f = await serverFixture(t, { configured: false });
   const receipts = () => readFileSync(auditFile({ env: f.env, home: f.root }), 'utf8').trim().split('\n').map(JSON.parse)
     .filter(row => row.event.startsWith('dream-control'));
-  const request = { agentId: ID, schedule: 'PT1H', principal };
-  assert.equal((await f.call('/register', { ...request, principal: null })).status, 403);
+  const request = { agentId: ID, schedule: 'PT1H' };
+  assert.equal((await f.call('/register', request)).status, 403);
   assert.deepEqual(receipts().map(row => row.decision), ['owner-refused']);
+  f.present(true);
   const control = f.service.control;
   let calls = 0;
   f.server.dream = { ...f.service, control(input) {
@@ -137,18 +148,18 @@ test('dream audit retains authorization before a failed control and distinguishe
   assert.deepEqual(receipts().slice(-2).map(row => [row.event, row.decision]), [
     ['dream-control', 'authorized'], ['dream-control-outcome', 'failed'],
   ]);
-  assert.equal((await f.call('/unschedule', { agentId: ID, principal })).status, 200);
+  assert.equal((await f.call('/unschedule', { agentId: ID })).status, 200);
   assert.deepEqual(receipts().slice(-2).map(row => [row.event, row.decision]), [
     ['dream-control', 'authorized'], ['dream-control-outcome', 'returned'],
   ]);
   assert.ok(receipts().every(row => row.agentId === ID));
-  assert.equal(JSON.stringify(receipts()).includes(principal.secret), false);
 });
 
 test('owner run-now uses configured ACP and keeps its unverified reply separate from execution facts', posix, async t => {
   const f = await serverFixture(t, { scenario: 'need-permission' });
-  await f.call('/register', { agentId: ID, schedule: 'PT1H', principal });
-  const result = await f.call('/run-now', { agentId: ID, principal });
+  f.present(true);
+  await f.call('/register', { agentId: ID, schedule: 'PT1H' });
+  const result = await f.call('/run-now', { agentId: ID });
   assert.equal(result.status, 202); assert.equal(result.body.result.status, 'started');
   assert.equal(Object.hasOwn(result.body.result, 'done'), false);
   await f.service.idle();
@@ -446,14 +457,15 @@ test('post-control audit failure preserves the applied result, while pre-control
     renameSync(file, `${file}.saved`); mkdirSync(file); // real outcome append fails after the control applied
     return result;
   } };
-  const response = await f.call('/register', { agentId: ID, schedule: 'PT1H', principal });
+  f.present(true);
+  const response = await f.call('/register', { agentId: ID, schedule: 'PT1H' });
   assert.equal(response.status, 200); assert.equal(response.body.result.agentId, ID);
   assert.deepEqual(response.body.audit, { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' });
   assert.equal(f.service.status().registrations.length, 1); assert.equal(calls, 1);
   const receipt = JSON.parse(readFileSync(`${file}.saved`, 'utf8').trim().split('\n').at(-1));
   assert.equal(receipt.decision, 'authorized', 'authorization receipt precedes the applied action');
   assert.equal(JSON.stringify(response.body).includes(file), false, 'filesystem errors are not exposed');
-  const second = await f.call('/pause', { agentId: ID, principal });
+  const second = await f.call('/pause', { agentId: ID });
   assert.notEqual(second.status, 200); assert.equal(calls, 1, 'a missing authorization receipt still prevents execution');
   assert.equal(f.service.status().registrations[0].paused, false);
 });

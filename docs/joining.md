@@ -75,8 +75,7 @@ are delivered to its inbox but nothing wakes it.
    soul being changed (name and Agent ID), or says a new soul is created.
    The wake is turned on before agent-comms registers the soul, so a message
    delivered meanwhile wakes it; a failed registration restores the old setting. The owner approves with
-   `--principal-stdin` (the agent-comms principal on stdin, accepted only
-   from a broker in another account) or the macOS approval dialog. The
+   Touch ID or the macOS approval dialog (`--principal-stdin` is refused with `owner-credential-required` for now, #1063). The
    dialog asks for an administrator's password: that is the gate's proof
    that a person, not a soul, approved. No launch agent or system setting
    is involved.

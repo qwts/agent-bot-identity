@@ -118,9 +118,9 @@ agent-bot soul secret billy clear github-models
   value or one with control characters is refused (`secret-value-invalid`).
 - `set` and `clear` are owner actions, gated like `soul revision edit`: a
   soul-marked caller is refused, the owner's presence or consent is asked
-  otherwise. With `--principal-stdin`, stdin carries one JSON object
-  `{ "principal": …, "value": "…" }` for `set` and the principal credential
-  alone for `clear`, since stdin carries one thing.
+  otherwise. `--principal-stdin` (stdin then carries one JSON object
+  `{ "principal": …, "value": "…" }` for `set`, the credential alone for
+  `clear`) is refused with `owner-credential-required` for now (#1063).
 - The value goes to the declared store under a service and account
   namespaced by soul id and secret name: Keychain service
   `agent-bot.soul.<agentId>`, account `secret/<name>`; file store

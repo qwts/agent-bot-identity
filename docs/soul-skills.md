@@ -402,7 +402,8 @@ record. It is owner only, and it never holds the skill in a temporary folder:
 Both commands stage a `soul revision prepare` copy and record it through the
 existing revision path; the soul needs an adopted revision. A caller with no
 soul marker is the owner: the change is an owner-gated `soul revision edit
---apply` (Touch ID through keyd, the consent dialog, or `--principal-stdin`)
+--apply` (Touch ID through keyd, the consent dialog, or `--principal-stdin`,
+which the broker checks for that soul's Agent ID)
 and is live at once. A soul caller may target only its own Agent ID and
 produces a proposal under its `policy.json` (`ask`, `auto` or `never`); the
 live package changes only when that revision is applied. The staging is
@@ -453,7 +454,8 @@ description). Owner direction on #603 (2026-10-09): such a location needs a
 clear reason the skill must always be loaded, and the default is not to put
 it there. So a global load is never implied by install or load, `--reason`
 (one line, at most 200 characters) is required, and the owner approves every
-one: through the owner gate (`--principal-stdin`, or Touch ID / consent) when
+one: through the owner gate (Touch ID or consent; `--principal-stdin` is
+refused for now, #1063) when
 the owner runs it, and when a soul asks for its own Agent ID, through keyd's
 Touch ID or login-password prompt showing the reason, with no signed-challenge
 or administrator-dialog fallback, as for the daemon's other loosenings. A soul cannot present the owner's principal or ask for another soul.

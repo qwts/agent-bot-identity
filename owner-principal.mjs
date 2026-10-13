@@ -9,8 +9,11 @@ import { isAgentId, ownerCredentialRequired } from './identity-format.mjs';
 const PRINCIPAL = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ACCOUNT = /^[A-Za-z0-9._-]{1,64}$/;
 
-// Targeted commands check the broker's current target grant. Other callers
-// retain their existing health check; this does not grant new owner powers.
+// Targeted commands check the broker's current target grant. A credential
+// with no target proves nothing about the owner: the broker's health request
+// accepts any principal it knows, so it is refused before the broker is
+// asked (#1063, owner decision 2026-10-12). Those actions take presence until
+// scoped broker owner grants cover them.
 export async function verifyPrincipalOwner(credential, {
   env = process.env,
   paths = commsPaths({ env }),
@@ -26,21 +29,23 @@ export async function verifyPrincipalOwner(credential, {
   if ((credential.mode ?? 'group') !== 'group' || credential.brokerUid === uid) {
     throw new Error('a broker in this account cannot vouch for the owner; approve with the consent dialog instead');
   }
+  if (target === undefined) {
+    throw ownerCredentialRequired('a principal credential authorizes only targeted owner actions; approve this one with presence');
+  }
   const principal = credential.principal;
   const auth = { principal, secret: credential.secret };
   // Snapshot before any asynchronous request. Target comes from the command,
   // never the credential JSON, action display text, or caller's OS account.
   const agentId = target?.agentId;
-  if (target !== undefined && (!target || typeof target !== 'object' || Array.isArray(target)
-    || Object.keys(target).length !== 1 || !isAgentId(agentId))) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)
+    || Object.keys(target).length !== 1 || !isAgentId(agentId)) {
     throw ownerCredentialRequired('the owner action target is invalid');
   }
   const client = clientFactory({ socketPath: paths.socket, brokerUid: credential.brokerUid, mode: 'group' });
   try {
-    const result = await client.request(target === undefined ? { op: 'health', auth }
-      : { op: 'principal-target-check', agentId, auth }, { paths });
-    if (target !== undefined && (result?.principal !== principal || result.agentId !== agentId
-      || (result.account !== null && (typeof result.account !== 'string' || !ACCOUNT.test(result.account))))) {
+    const result = await client.request({ op: 'principal-target-check', agentId, auth }, { paths });
+    if (result?.principal !== principal || result.agentId !== agentId
+      || (result.account !== null && (typeof result.account !== 'string' || !ACCOUNT.test(result.account)))) {
       throw new Error('target check response does not match');
     }
   } catch {
