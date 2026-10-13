@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { listSouls, showSoul, upsertSoul } from '../agent-population.mjs';
 import { auditFile } from '../identity-format.mjs';
 import { initAgentSpace } from '../agent-space.mjs';
 import { CLASSIFICATIONS, classifyPath, retentionOf } from '../soul-env-contract.mjs';
-import { EXPORT_MANIFEST, IMPORT_FREE_BYTES_MARGIN, IMPORT_FREE_INODES_MARGIN, IMPORTS_DIRECTORY, LIFE_IMPORT_STEP_ID, planSoulExport, readExportManifest, soulEnvExportCommand, soulEnvImportCommand, writeSoulExport } from '../soul-env-export.mjs';
+import { EXPORT_MANIFEST, IMPORT_FREE_BYTES_MARGIN, IMPORT_FREE_INODES_MARGIN, IMPORT_MAX_DEPTH, IMPORTS_DIRECTORY, importFootprint, LIFE_IMPORT_STEP_ID, planSoulExport, readExportManifest, soulEnvExportCommand, soulEnvImportCommand, writeSoulExport } from '../soul-env-export.mjs';
 import { ENV_CAPABILITIES, readSoulEnvironment } from '../soul-env.mjs';
 import { readMigrationStep } from '../soul-migration-journal.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
@@ -788,8 +789,55 @@ test('an import that would not fit on the souls root is refused before the owner
   assert.equal(h.gates.length, 1);
   assert.deepEqual(readdirSync(h.env.AGENT_BOT_SOULS_HOME).filter((n) => n.startsWith('.import-')), [], 'no staging left');
 
-  // A filesystem that reports no free space at all is not refused for that,
-  // and a real-sized archive on a roomy disk imports.
-  const imported = await soulEnvImportCommand([f.archive, '--json'], { ...h.options, write: () => {}, statfs: () => { throw new Error('ENOSYS'); } });
+  // A filesystem that cannot report its free space is refused: nothing says
+  // the archive fits (#1070 review).
+  h.gates.length = 0;
+  await assert.rejects(soulEnvImportCommand([f.archive, '--json'], { ...h.options, write: () => {}, statfs: () => { throw Object.assign(new Error('nope'), { code: 'ENOSYS' }); } }),
+    (error) => error.code === 'import-insufficient-space' && /could not be read \(ENOSYS\)/.test(error.message));
+  assert.deepEqual(h.gates, []);
+  // A real-sized archive on a roomy disk imports.
+  const imported = await soulEnvImportCommand([f.archive, '--json'], { ...h.options, write: () => {}, statfs: () => roomy });
   assert.equal(imported.decision, 'imported');
+});
+
+// #1070 review: extraction makes the parents of every listed file, so the
+// footprint counts them, and depth and entry count have a ceiling.
+test('the import footprint counts every directory extraction would create, and deep archives are refused', async (t) => {
+  const f = fixture(t);
+  await exportIt(f);
+  const h = host(t);
+  const empty = createHash('sha256').update('').digest('hex');
+  const bomb = path.join(h.home, 'bomb.tgz');
+  rewriteArchive(f.archive, bomb, (entries) => {
+    const m = entries[0];
+    const manifest = JSON.parse(m.body.toString());
+    const template = manifest.components.find((c) => c.kind === 'file' && c.area === 'root');
+    for (let i = 0; i < 50; i += 1) {
+      const relative = `bomb${i}/${'d/'.repeat(100)}f`;
+      manifest.components.push({ ...template, entry: `life/${relative}`, relative, bytes: 0, sha256: empty });
+      entries.push({ name: `life/${relative}`, type: '0', body: Buffer.alloc(0) });
+    }
+    m.body = Buffer.from(JSON.stringify(manifest));
+  });
+  const manifest = await readExportManifest(bomb);
+  const footprint = importFootprint(manifest);
+  assert.ok(footprint.directories >= 50 * 101, `unlisted parents are counted: ${footprint.directories}`);
+  assert.equal(footprint.entries, footprint.files + footprint.directories);
+  // Room for the listed entries but not for the directories they imply.
+  const listed = manifest.components.filter((c) => c.entry).length;
+  const statfs = () => ({ bsize: 4096, bavail: 1e9, files: 1e9, ffree: listed + IMPORT_FREE_INODES_MARGIN + 100 });
+  await assert.rejects(soulEnvImportCommand([bomb, '--json'], { ...h.options, statfs, write: () => {} }),
+    (error) => error.code === 'import-insufficient-space' && /entries/.test(error.message));
+  assert.deepEqual(h.gates, [], 'refused before the owner is asked');
+
+  const deep = path.join(h.home, 'deep.tgz');
+  rewriteArchive(f.archive, deep, (entries) => {
+    const m = entries[0];
+    const manifest = JSON.parse(m.body.toString());
+    const template = manifest.components.find((c) => c.kind === 'file' && c.area === 'root');
+    const relative = `${'d/'.repeat(IMPORT_MAX_DEPTH)}f`;
+    manifest.components.push({ ...template, entry: `life/${relative}`, relative, bytes: 0, sha256: empty });
+    m.body = Buffer.from(JSON.stringify(manifest));
+  });
+  await assert.rejects(readExportManifest(deep), (error) => error.code === 'import-unsafe-archive' && new RegExp(`deeper than ${IMPORT_MAX_DEPTH}`).test(error.message));
 });
