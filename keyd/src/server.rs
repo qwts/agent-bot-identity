@@ -25,11 +25,12 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::VerifyingKey;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -904,22 +905,51 @@ enum Frame {
     Closed,
 }
 
-/// One newline-terminated message. With no message under way the wait is
-/// `idle` (`None`: indefinitely); once a byte of one arrives, the rest must
-/// follow within `frame`.
+/// A live connection as its channel sees it (#1095): a handle to shut it down,
+/// whether a message is arriving or being answered, and when it last finished
+/// one.
+struct Conn {
+    stream: UnixStream,
+    busy: AtomicBool,
+    last: Mutex<Instant>,
+}
+
+impl Conn {
+    fn finished(&self) {
+        *self.last.lock().unwrap() = Instant::now();
+        self.busy.store(false, Ordering::SeqCst);
+    }
+}
+
+type Registry = Arc<Mutex<HashMap<u64, Arc<Conn>>>>;
+
+/// One newline-terminated message. With no message under way the wait runs to
+/// `idle_until` (`None`: indefinitely); once a byte of one arrives, the
+/// connection is busy and the rest must follow within `frame`.
 fn read_frame(
     reader: &mut BufReader<UnixStream>,
-    idle: Option<Duration>,
+    idle_until: Option<Instant>,
     frame: Duration,
+    conn: &Conn,
 ) -> Frame {
     let mut line = Vec::new();
     let mut started: Option<Instant> = None;
     loop {
+        let left = |deadline: Instant| match deadline.checked_duration_since(Instant::now()) {
+            Some(left) if !left.is_zero() => Some(left),
+            _ => None,
+        };
         let wait = match started {
-            None => idle,
-            Some(at) => match frame.checked_sub(at.elapsed()) {
-                Some(left) if !left.is_zero() => Some(left),
-                _ => return Frame::Closed,
+            None => match idle_until {
+                None => None,
+                Some(deadline) => match left(deadline) {
+                    Some(left) => Some(left),
+                    None => return Frame::Closed,
+                },
+            },
+            Some(at) => match left(at + frame) {
+                Some(left) => Some(left),
+                None => return Frame::Closed,
             },
         };
         if reader.get_ref().set_read_timeout(wait).is_err() {
@@ -929,9 +959,10 @@ fn read_frame(
             Ok([]) => return Frame::Closed,
             Ok(buf) => buf,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            // Idle past `idle`, a frame past its deadline, or a failed read.
+            // Idle past its deadline, a frame past its deadline, or a failed read.
             Err(_) => return Frame::Closed,
         };
+        conn.busy.store(true, Ordering::SeqCst);
         let (take, done) = match available.iter().position(|&b| b == b'\n') {
             Some(at) => (at + 1, true),
             None => (available.len(), false),
@@ -952,6 +983,7 @@ fn serve_connection(
     stream: UnixStream,
     idle: Option<Duration>,
     limits: Limits,
+    conn: &Conn,
     handle: impl Fn(&Value) -> Option<Value>,
 ) {
     // SAFETY: getuid cannot fail.
@@ -966,8 +998,11 @@ fn serve_connection(
         return;
     };
     let mut reader = BufReader::new(stream);
+    // The idle deadline runs from the last message that asked for something
+    // (#1095): a blank line keeps nothing alive.
+    let mut idle_until = idle.map(|idle| Instant::now() + idle);
     loop {
-        let line = match read_frame(&mut reader, idle, limits.frame) {
+        let line = match read_frame(&mut reader, idle_until, limits.frame, conn) {
             Frame::Line(line) => line,
             Frame::Closed => return,
             Frame::TooLarge => {
@@ -980,6 +1015,7 @@ fn serve_connection(
             }
         };
         if line.trim_ascii().is_empty() {
+            conn.busy.store(false, Ordering::SeqCst);
             continue;
         }
         let response = match serde_json::from_slice::<Value>(&line) {
@@ -992,31 +1028,72 @@ fn serve_connection(
                 return;
             }
         }
+        conn.finished();
+        idle_until = idle.map(|idle| Instant::now() + idle);
     }
 }
 
-/// A connection's place in its channel's budget, given back when it ends.
-struct Slot(Arc<AtomicUsize>);
+/// A connection's place in its channel's registry, given back when it ends.
+struct Slot {
+    registry: Registry,
+    id: u64,
+}
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.registry.lock().unwrap().remove(&self.id);
     }
 }
 
-/// Accepts on `listener` within `capacity` connections. One past it is told
-/// so and closed at once, without a thread of its own.
+/// Makes room on a full channel by closing its least recently active idle
+/// connection, if it has one. A connection with a message arriving or being
+/// answered is never chosen.
+fn evict_idle(connections: &mut HashMap<u64, Arc<Conn>>) -> bool {
+    let oldest = connections
+        .iter()
+        .filter(|(_, conn)| !conn.busy.load(Ordering::SeqCst))
+        .min_by_key(|(_, conn)| *conn.last.lock().unwrap())
+        .map(|(id, _)| *id);
+    let Some(id) = oldest else {
+        return false;
+    };
+    if let Some(conn) = connections.remove(&id) {
+        let _ = conn.stream.shutdown(std::net::Shutdown::Both);
+    }
+    true
+}
+
+/// Accepts on `listener` within `capacity` connections. When the channel is
+/// full, `evict` makes room by closing the least recently active idle
+/// connection (#1095): a soul holding connections open cannot keep every other
+/// soul out. Failing that, the newcomer is told so and closed at once, without
+/// a thread of its own.
 fn accept(
     listener: UnixListener,
     capacity: usize,
     idle: Option<Duration>,
+    evict: bool,
     limits: Limits,
     handle: impl Fn(&Value) -> Option<Value> + Clone + Send + 'static,
 ) {
-    let active = Arc::new(AtomicUsize::new(0));
+    let registry: Registry = Arc::default();
+    let next = AtomicU64::new(0);
     for stream in listener.incoming().flatten() {
-        if active.fetch_add(1, Ordering::SeqCst) >= capacity {
-            active.fetch_sub(1, Ordering::SeqCst);
+        let admitted = (|| {
+            let mut connections = registry.lock().unwrap();
+            if connections.len() >= capacity && !(evict && evict_idle(&mut connections)) {
+                return None;
+            }
+            let conn = Arc::new(Conn {
+                stream: stream.try_clone().ok()?,
+                busy: AtomicBool::new(false),
+                last: Mutex::new(Instant::now()),
+            });
+            let id = next.fetch_add(1, Ordering::SeqCst);
+            connections.insert(id, Arc::clone(&conn));
+            Some((id, conn))
+        })();
+        let Some((id, conn)) = admitted else {
             let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
             let _ = writeln!(
                 &stream,
@@ -1028,14 +1105,17 @@ fn accept(
                 )
             );
             continue;
-        }
-        let slot = Slot(Arc::clone(&active));
+        };
+        let slot = Slot {
+            registry: Arc::clone(&registry),
+            id,
+        };
         let handle = handle.clone();
         // Spawn can fail under pressure; the slot is returned when the
         // closure (and with it the stream) is dropped.
         let _ = std::thread::Builder::new().spawn(move || {
             let _slot = slot;
-            serve_connection(stream, idle, limits, handle);
+            serve_connection(stream, idle, limits, &conn, handle);
         });
     }
 }
@@ -1113,6 +1193,7 @@ pub fn serve_with(keyd: Arc<Keyd>, listeners: Listeners, limits: Limits) {
             owner,
             limits.owner_connections,
             Some(limits.owner_idle),
+            false,
             limits,
             move |m| owner_keyd.handle_owner(m),
         )
@@ -1121,6 +1202,7 @@ pub fn serve_with(keyd: Arc<Keyd>, listeners: Listeners, limits: Limits) {
         listeners.soul,
         limits.soul_connections,
         None,
+        true,
         limits,
         move |m| keyd.handle_soul(m),
     );
@@ -1447,15 +1529,41 @@ mod tests {
     }
 
     #[test]
-    fn a_full_soul_channel_refuses_more_while_the_owner_channel_still_answers() {
+    fn a_full_soul_channel_closes_its_oldest_idle_connection_for_a_newcomer() {
         let (dir, paths) = serving("cap", QUICK);
-        let held: Vec<UnixStream> = (0..QUICK.soul_connections)
+        let oldest = client(&paths.socket);
+        assert_eq!(ask(&oldest, "ping")["result"], json!({}));
+        std::thread::sleep(Duration::from_millis(20));
+        let newer = client(&paths.socket);
+        assert_eq!(ask(&newer, "ping")["result"], json!({}));
+        // Full: the newcomer is admitted and the least recently active idle
+        // connection makes room (#1095).
+        let newcomer = client(&paths.socket);
+        assert_eq!(ask(&newcomer, "ping")["result"], json!({}));
+        assert!(closed(&oldest), "the oldest idle connection was closed");
+        assert_eq!(ask(&newer, "ping")["result"], json!({}));
+        // The owner's budget is its own.
+        let owner = client(&paths.owner_socket);
+        assert!(ask(&owner, "owner/status").get("result").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_soul_channel_full_of_busy_connections_refuses_a_newcomer() {
+        // Long frames, so the partial messages below stay in flight.
+        let limits = Limits {
+            frame: Duration::from_secs(5),
+            ..QUICK
+        };
+        let (dir, paths) = serving("busy", limits);
+        let busy: Vec<UnixStream> = (0..limits.soul_connections)
             .map(|_| {
                 let stream = client(&paths.socket);
-                assert_eq!(ask(&stream, "ping")["result"], json!({}));
+                write!(&stream, "{{\"jsonrpc\":").unwrap();
                 stream
             })
             .collect();
+        std::thread::sleep(Duration::from_millis(200));
         let extra = client(&paths.socket);
         let mut line = String::new();
         BufReader::new(&extra).read_line(&mut line).unwrap();
@@ -1466,21 +1574,40 @@ mod tests {
             .unwrap()
             .contains("too many open connections"));
         assert!(closed(&extra));
-        // The owner's budget is its own.
-        let owner = client(&paths.owner_socket);
-        assert!(ask(&owner, "owner/status").get("result").is_some());
-        // A closed soul connection gives its place back.
-        drop(held);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let again = client(&paths.socket);
-            let answer = ask(&again, "ping");
-            if answer.get("result") == Some(&json!({})) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "the slots were not released");
-            std::thread::sleep(Duration::from_millis(20));
+        // A connection with a message in flight is never the one evicted:
+        // each can still finish its message and be answered.
+        for stream in &busy {
+            writeln!(&*stream, "\"2.0\",\"id\":1,\"method\":\"ping\"}}").unwrap();
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["result"],
+                json!({})
+            );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blank_lines_do_not_keep_an_owner_connection_open() {
+        let (dir, paths) = serving("blank", QUICK);
+        let owner = client(&paths.owner_socket);
+        let writer = owner.try_clone().unwrap();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            while started.elapsed() < Duration::from_secs(3) {
+                if writeln!(&writer).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+        assert!(closed(&owner), "the owner connection was closed");
+        assert!(
+            started.elapsed() < QUICK.owner_idle * 4,
+            "blank lines kept it open for {:?}",
+            started.elapsed()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

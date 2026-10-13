@@ -43,11 +43,16 @@ which is a cooperative hook, not an OS boundary
 
 Each socket admits a bounded number of connections: 256 on the soul socket
 and 32 on the owner socket. The owner's budget is its own, so souls holding
-connections cannot crowd out an owner request. A connection past the budget is
-answered with JSON-RPC error `-32000` ("too many open connections") and closed.
-Once a message's first byte arrives, the whole line (at most 1 MiB) must
-follow within 10 seconds. An owner connection idle for 30 seconds is closed,
-because its clients send one request and leave. A soul connection may idle
+connections cannot crowd out an owner request. When the soul socket is full,
+a new connection is admitted by closing the least recently active idle soul
+connection, so no soul can hold every slot (#1095). A connection with a message
+arriving or being answered is never closed this way. When there is no idle
+connection to close, and always on the owner socket, a connection past the
+budget is answered with JSON-RPC error `-32000` ("too many open connections")
+and closed. Once a message's first byte arrives, the whole line (at most 1 MiB)
+must follow within 10 seconds. An owner connection is closed 30 seconds after
+it connected or after its last non-blank message, because its clients send one
+request and leave; blank lines do not keep it open. A soul connection may idle
 between messages, because the MCP relay (`agent-bot-keyd mcp`) holds one
 open for a whole harness session. Writes give up after 10 seconds, so a client
 that never reads its answers cannot hold a thread either. The limits are
