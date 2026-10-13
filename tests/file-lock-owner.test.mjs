@@ -30,8 +30,13 @@ test('a live owner with the same boot and start keeps its lock', () => {
     const probe = { platform, boot: BOOT, alive: () => true, startOf: () => '1000' };
     assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: BOOT }, probe), true, platform);
   }
-  // macOS compares whole seconds within a small tolerance.
-  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => 1002 }), true);
+  // macOS: ps reports the fork, at or before node's start, however long a
+  // shell or launcher ran first; plus one second for ps truncating.
+  const darwin = (start) => lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => start });
+  assert.equal(darwin(1000), true);
+  assert.equal(darwin(1001), true, 'ps truncates while the token rounds');
+  assert.equal(darwin(997), true, 'forked 3 s before node started (sleep, then exec node)');
+  assert.equal(darwin(400), true, 'forked long before node started');
 });
 
 test('an owner from another boot is gone, even if its pid is alive again', () => {
@@ -40,7 +45,9 @@ test('an owner from another boot is gone, even if its pid is alive again', () =>
 
 test('an owner whose pid now has another start time is gone (pid reuse)', () => {
   assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: BOOT }, { platform: 'linux', boot: BOOT, alive: () => true, startOf: () => '2000' }), false);
-  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => 1003 }), false);
+  // macOS: a reused pid was forked after the owner wrote its token, so later.
+  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => 1002 }), false);
+  assert.equal(lockOwnerAlive({ pid: 7, start: '1000', boot: null }, { platform: 'darwin', boot: null, alive: () => true, startOf: () => 4600 }), false);
 });
 
 test('an owner whose pid is gone is gone; an unreadable pid is gone, as before', () => {
@@ -83,10 +90,12 @@ test('a stale lock whose live pid has a different start time is reclaimed', { sk
   const dir = mkdtempSync(path.join(tmpdir(), 'file-lock-owner-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const lock = path.join(dir, 'state.lock');
-  // This process's pid is alive, but it started at another time: a reused pid.
+  // This process's pid is alive, but the token says its owner started
+  // earlier than this process did: the owner died and its pid was reused.
   const own = parseLockOwner(lockOwnerToken());
   if (own.start === null) return t.skip('this platform records no start time');
-  staleLock(lock, `${process.pid}.${Number(own.start) + 3600}.${own.boot ?? '-'}.${UUID}`);
+  const earlier = Number(own.start) - (process.platform === 'darwin' ? 3600 : 1);
+  staleLock(lock, `${process.pid}.${earlier}.${own.boot ?? '-'}.${UUID}`);
   let ran = false;
   withLock(lock, 'test store', () => { ran = true; }, { keepLiveOwners: true });
   assert.equal(ran, true);
@@ -151,4 +160,33 @@ test('acquiring and releasing a lock never spawns; only the reclaim path may', a
     syncBuiltinESMExports();
   }
   assert.equal(spawns, 0);
+});
+
+// A holder whose node starts well after its process was forked: a shell runs
+// first, then execs node (as Claude's worktree-create hook command does). It
+// must stay live; reclaiming it would break the lock it holds.
+test('a live holder started through a delayed exec is never reclaimed', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'file-lock-owner-'));
+  const lock = path.join(dir, 'state.lock');
+  const lockModule = new URL('../file-lock.mjs', import.meta.url).href;
+  const holder = path.join(dir, 'holder.mjs');
+  writeFileSync(holder, `import { mkdirSync, writeFileSync, utimesSync } from 'node:fs';
+import path from 'node:path';
+const { lockOwnerToken } = await import(${JSON.stringify(lockModule)});
+const lock = process.argv[2];
+mkdirSync(lock); writeFileSync(path.join(lock, 'owner'), lockOwnerToken());
+const then = (Date.now() - 31_000) / 1000; utimesSync(lock, then, then);
+console.log('ready');
+setTimeout(() => {}, 30_000);
+`);
+  const { spawn } = await import('node:child_process');
+  const child = spawn('/bin/sh', ['-c', `sleep 2.5; exec "${process.execPath}" "${holder}" "${lock}"`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => { child.kill(); rmSync(dir, { recursive: true, force: true }); });
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', (chunk) => { if (String(chunk).includes('ready')) resolve(); });
+    child.on('exit', () => reject(new Error('holder exited early')));
+  });
+  assert.equal(child.exitCode, null, 'the holder is alive');
+  assert.throws(() => withLock(lock, 'test store', () => assert.fail('a live holder was reclaimed'), { keepLiveOwners: true }), /timed out waiting for test store/);
+  assert.ok(fs.existsSync(lock));
 });

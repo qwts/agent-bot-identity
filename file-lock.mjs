@@ -43,7 +43,7 @@ const STALE_TAKEOVER_MS = 5_000;
 // token records `pid.start.boot.uuid`:
 // - `start`: the owner's process start. On Linux the start time in clock ticks
 //   since boot (/proc/<pid>/stat field 22), compared exactly. On macOS whole
-//   wall-clock seconds, compared within START_TOLERANCE_SECONDS.
+//   wall-clock seconds, compared one-sidedly (see lockOwnerAlive).
 // - `boot`: on Linux the kernel boot ID (/proc/sys/kernel/random/boot_id,
 //   hyphens removed). macOS has no in-process boot ID, so it records `-`; a
 //   pid reused after a reboot has a later start time anyway.
@@ -55,7 +55,14 @@ const STALE_TAKEOVER_MS = 5_000;
 // Our own values are read once, in-process, at load: acquiring a lock never
 // spawns. Only the reclaim path, and only on macOS, runs a bounded `ps` for
 // another process's start time, which can't prompt.
-const START_TOLERANCE_SECONDS = 2;
+// On macOS our own start is when node started (now minus process.uptime()),
+// while `ps -o lstart` reports when the kernel forked the process, which an
+// exec doesn't change. A shell or launcher that runs before `exec node` puts
+// the fork earlier than node's start by any amount, so the same live process
+// always shows a ps start at or before its token's start. A reused pid is a
+// process forked after the owner wrote its token, so it shows a later one.
+// One second covers ps truncating to whole seconds while the token rounds.
+const START_SLACK_SECONDS = 1;
 const PS_TIMEOUT_MS = 1000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -134,7 +141,9 @@ export function lockOwnerAlive(owner, probe = {}) {
   if (owner.start === null) return true;
   const start = startOf(owner.pid);
   if (start === null || start === undefined) return true;
-  if (platform === 'darwin') return Math.abs(Number(start) - Number(owner.start)) <= START_TOLERANCE_SECONDS;
+  // One-sided on macOS: only a process that started after the token is
+  // another process. Any delay between fork and node starting is the owner's.
+  if (platform === 'darwin') return Number(start) <= Number(owner.start) + START_SLACK_SECONDS;
   return String(start) === owner.start;
 }
 
