@@ -214,16 +214,24 @@ only**:
 
 - a single, simple command — no chaining, grouping, control flow,
   redirection, substitution, `$`-expansion or backslash — whose first word is
-  a bare name on a small read-only allowlist (`ls`, `cat`, `head`, `tail`,
-  `grep`, `rg`, `find` without `-exec`/`-delete`, `wc`, `diff`, `echo`,
-  `pwd`, `which`, `stat`, `file`, and `git` with a read-only subcommand only —
-  never `config`, and never a `-c`/`-C` global option);
-- the checkout's own bootstrap launcher: exactly `./agent-bot bootstrap
-  [--option ...]`, when `<cwd>/agent-bot` resolves by realpath to a real file
-  inside the checkout (the `node bootstrap.mjs` form is gone — node is an
-  interpreter);
+  a bare name on a small read-only allowlist: `ls`, `cat`, `head`, `tail`,
+  `grep`/`egrep`/`fgrep` with short options only, `find` without
+  `-exec`/`-ok`/`-delete`/`-fprint*`, `wc`, `diff`, `echo`, `pwd`, `which`,
+  `stat`, `file`;
 - anything, when both the git author and the authenticated `gh` login are in
   the unmanaged-author list.
+
+`git` and `rg` are not on the allowlist. `.git/config` is writable by the
+agent, so a `core.fsmonitor`, `diff.external`, textconv driver or alias
+planted there runs on the next `git status`, and subcommands like
+`git grep -O`, `git log --output=` or `git tag -s` run or write on their own;
+no git subcommand is reliably read-only. `rg --pre=` runs a program per file.
+
+The source bootstrap launcher (`./agent-bot bootstrap`) is not exempt either:
+it is a file in the checkout the agent can rewrite, and binding it to `HEAD`
+would mean trusting git against that same agent-writable `.git`. In an
+uninstalled agent session, bootstrap runs only for an unmanaged author; the
+owner bootstraps from their own terminal, where no agent hook applies.
 
 Everything else is denied. A machine whose hook configs predate this rule
 gets it when `agent-bot sync-hooks` re-renders them. Cursor blocking events still print `{}` on

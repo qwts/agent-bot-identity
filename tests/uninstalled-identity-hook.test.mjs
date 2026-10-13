@@ -1,12 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
 import { renderConfig } from '../sync-hooks.mjs';
@@ -276,7 +275,7 @@ test('uninstalled decisions deny only commit, push, and pre-command publishes', 
     decision: 'deny',
     reason: UNINSTALLED_REASON,
   });
-  assert.deepEqual(uninstalledDecision({ event: 'pre-command', command: 'git status' }), {
+  assert.deepEqual(uninstalledDecision({ event: 'pre-command', command: 'ls' }), {
     decision: 'allow',
     reason: '',
   });
@@ -312,7 +311,7 @@ test('generated adapters on a cold home deny publish and allow file edits, in ev
 
       const allow = runGenerated(row.key, 'pre-command', {
         home,
-        payload: { tool_input: { command: 'git status' } },
+        payload: { tool_input: { command: 'ls' } },
       });
       const expectedAllow = encodeDecision({
         dialectKey: row.key,
@@ -443,17 +442,29 @@ const DENY_OPAQUE = [
   'node bootstrap.mjs --x y', 'node bootstrap.mjs --require ./evil.js', 'node bootstrap.mjs --import=./evil.mjs',
   'NODE_OPTIONS=--require=./e.js node bootstrap.mjs', 'node bootstrap.mjs --eval x',
   'node bootstrap.mjs --profile /tmp/organization-profile.json --machine-only',
-  // bootstrap with anything chained or substituted is not the bare launcher
+  // the source bootstrap launcher is content the agent can rewrite: refused
+  './agent-bot bootstrap', './agent-bot bootstrap --x y', './agent-bot bootstrap --repair --machine-only',
   './agent-bot bootstrap; node x.mjs', './agent-bot bootstrap --profile $(node x.mjs)',
   './agent-bot doctor',
+  // re-review (#1064): git and rg run code or write on their own, and
+  // .git/config is agent-writable, so no git subcommand is read-only here
+  "git grep -O'touch /tmp/pwned' x", "git grep --open-files-in-pager='touch /tmp/pwned' x",
+  'git log --format=x --output=.git/config', 'git log --output=agent-bot', 'git diff --output=agent-bot',
+  'git status', 'git log --oneline', 'git diff', 'git show HEAD', 'git rev-parse HEAD',
+  'git diff --ext-diff', 'git log -p --textconv', 'git show --textconv HEAD',
+  'git tag -s v1', 'git tag -a v1 -m x', 'git branch -f main HEAD', 'git branch --edit-description',
+  'git remote add x https://example.invalid/x', 'git remote update', 'git symbolic-ref HEAD refs/heads/x',
+  'git reflog expire --all', 'git branch', 'git tag',
+  'rg --pre=sh x', 'rg --pre sh x', 'rg pattern', 'rg -z x',
+  // grep takes short options only
+  'grep --pre=sh x .', 'grep --include=x y .', 'egrep --color=always x f',
 ];
 
 // Bare read-only commands the allowlist permits.
 const ALLOW_SAFE = [
   'ls', 'ls -la', 'cat README.md', 'head -n 5 f', 'tail f', 'wc -l f', 'diff a b',
-  'echo hi', 'pwd', 'which git', 'grep -rn node .', 'rg pattern', 'find . -name x',
-  'git status', 'git log --oneline', 'git diff', 'git rev-parse HEAD', 'git show HEAD',
-  'git branch', 'stat f', 'file f',
+  'echo hi', 'pwd', 'which git', 'grep -rn node .', 'grep -i x f', 'egrep -v x f',
+  'find . -name x', 'find . -type f -newer f', 'stat f', 'file f',
 ];
 
 test('uninstalled pre-command denies every denylist-bypass probe and allows bare read-only commands (#1064)', () => {
@@ -469,28 +480,23 @@ test('uninstalled pre-command denies every denylist-bypass probe and allows bare
   assert.equal(uninstalledDecision({ event: 'pre-file-write', command: 'npm test', env: {}, authors: [] }).decision, 'allow');
 });
 
-test('the source bootstrap exemption resolves the launcher by realpath inside the checkout (#1064)', () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'uninstalled-boot-')));
-  writeFileSync(join(root, 'agent-bot'), '#!/bin/sh\nexit 0\n');
-  const at = (command, cwd = root) => uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [], cwd }).decision;
-  assert.equal(at('./agent-bot bootstrap'), 'allow');
-  assert.equal(at('./agent-bot bootstrap --repair --machine-only --with-gh-shim'), 'allow');
-  // No launcher in this checkout, or none at all.
-  assert.equal(at('./agent-bot bootstrap', join(root, 'nope')), 'deny');
-  assert.equal(uninstalledDecision({ event: 'pre-command', command: './agent-bot bootstrap', env: {}, authors: [] }).decision, 'deny');
-  // A symlink escaping the checkout is not the checkout's launcher.
-  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'uninstalled-out-')));
-  writeFileSync(join(outside, 'agent-bot'), '#!/bin/sh\nexit 0\n');
-  const escRoot = realpathSync(mkdtempSync(join(tmpdir(), 'uninstalled-esc-')));
-  symlinkSync(join(outside, 'agent-bot'), join(escRoot, 'agent-bot'));
-  assert.equal(at('./agent-bot bootstrap', escRoot), 'deny');
-  // The node-based bootstrap form is gone even with a real bootstrap.mjs present.
-  writeFileSync(join(root, 'bootstrap.mjs'), '');
-  assert.equal(at('node bootstrap.mjs'), 'deny');
-  assert.equal(at('node bootstrap.mjs --machine-only'), 'deny');
-  rmSync(root, { recursive: true, force: true });
-  rmSync(outside, { recursive: true, force: true });
-  rmSync(escRoot, { recursive: true, force: true });
+test('the source bootstrap launcher is refused in uninstalled mode, genuine or modified, unless an unmanaged author runs it (#1064)', () => {
+  // A launcher in the checkout is content the agent can rewrite (`git log
+  // --output=agent-bot` did exactly that), so the hook does not exempt it.
+  const root = mkdtempSync(join(tmpdir(), 'uninstalled-boot-'));
+  try {
+    writeFileSync(join(root, 'agent-bot'), '#!/bin/sh\nexec node bootstrap.mjs "$@"\n');
+    chmodSync(join(root, 'agent-bot'), 0o755);
+    const run = (command, env = {}, authors = []) => uninstalledDecision({ event: 'pre-command', command, env, authors }).decision;
+    assert.equal(run('./agent-bot bootstrap'), 'deny', 'a genuine-looking launcher');
+    writeFileSync(join(root, 'agent-bot'), '#!/bin/sh\ntouch /tmp/pwned\n');
+    assert.equal(run('./agent-bot bootstrap'), 'deny', 'a modified launcher');
+    assert.equal(run('./agent-bot bootstrap --machine-only'), 'deny');
+    // An unmanaged author (both identities listed) may run it.
+    assert.equal(run('./agent-bot bootstrap', actorEnv('ai9d', AI9D), ['ai9d']), 'allow');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('an unmanaged author runs anything, including the builds a repo needs; the human does not (#1064)', () => {
@@ -506,12 +512,8 @@ test('an unmanaged author runs anything, including the builds a repo needs; the 
   assert.deepEqual(humanGit, { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
 });
 
-test('generated adapters on a cold home deny opaque execution and allow the bootstrap launcher in every dialect (#1064)', () => {
+test('generated adapters on a cold home deny opaque execution, git and the launcher, and allow ls, in every dialect (#1064)', () => {
   const home = mkdtempSync(join(tmpdir(), 'uninstalled-opaque-'));
-  // The adapter runs with the repo as cwd, and the repo root carries the
-  // launcher, so the bootstrap exemption resolves.
-  const launcher = join(ROOT, 'agent-bot');
-  assert.ok(existsSync(launcher), 'the toolkit checkout has its bootstrap launcher');
   try {
     for (const row of DIALECTS.filter((candidate) => candidate.file)) {
       const run = runGenerated(row.key, 'pre-command', {
@@ -523,14 +525,24 @@ test('generated adapters on a cold home deny opaque execution and allow the boot
       assert.equal(run.status, expected.exitCode, `${row.key} opaque exit`);
       if (expected.stdout) assert.equal(run.stdout, expected.stdout, `${row.key} opaque stdout`);
 
-      const bootstrap = runGenerated(row.key, 'pre-command', {
+      for (const command of ['./agent-bot bootstrap --machine-only', 'git status', 'rg --pre=sh x']) {
+        const refused = runGenerated(row.key, 'pre-command', {
+          home,
+          payload: { command },
+          env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: '' }),
+        });
+        assert.equal(refused.status, expected.exitCode, `${row.key} ${command} exit`);
+        if (expected.stdout) assert.equal(refused.stdout, expected.stdout, `${row.key} ${command} stdout`);
+      }
+
+      const ls = runGenerated(row.key, 'pre-command', {
         home,
-        payload: { command: './agent-bot bootstrap --machine-only' },
+        payload: { command: 'ls' },
         env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: '' }),
       });
       const allow = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'allow' });
-      assert.equal(bootstrap.status, allow.exitCode, `${row.key} bootstrap exit`);
-      assert.equal(bootstrap.stdout, allow.stdout, `${row.key} bootstrap stdout`);
+      assert.equal(ls.status, allow.exitCode, `${row.key} ls exit`);
+      assert.equal(ls.stdout, allow.stdout, `${row.key} ls stdout`);
     }
   } finally {
     rmSync(home, { recursive: true, force: true });
