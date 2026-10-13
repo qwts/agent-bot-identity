@@ -1,7 +1,10 @@
 // Directory locks with stale-lock reclaim, shared by every module that guards
 // a state file (#645, owner decision D1). Moved unchanged from
-// agent-identity.mjs; it reads no credential and imports only node built-ins.
+// agent-identity.mjs; it reads no credential and imports only node built-ins
+// (since #1115 that includes child_process, for `/bin/ps` on the macOS
+// reclaim path only).
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -31,6 +34,110 @@ const STALE_TAKEOVER_MS = 5_000;
 // reclaim — both of which hold it. That makes a reclaimer's stat→rename window
 // safe: while it holds the mutex nothing can release the lock, so nothing can
 // replace it, so what it renames is what it inspected. See issue #15.
+// --- who holds a lock (#1115) ---
+//
+// A live-owner lock (keepLiveOwners) is reclaimed only from an owner that is
+// gone. `process.kill(pid, 0)` alone can't tell a crashed owner from an
+// unrelated process that reuses its pid later, notably after a reboot, which
+// would keep the lock held until someone removed it by hand. So the owner
+// token records `pid.start.boot.uuid`:
+// - `start`: the owner's process start. On Linux the start time in clock ticks
+//   since boot (/proc/<pid>/stat field 22), compared exactly. On macOS whole
+//   wall-clock seconds, compared within START_TOLERANCE_SECONDS.
+// - `boot`: on Linux the kernel boot ID (/proc/sys/kernel/random/boot_id,
+//   hyphens removed). macOS has no in-process boot ID, so it records `-`; a
+//   pid reused after a reboot has a later start time anyway.
+// Either is `-` where it can't be read, and on Windows both are, so liveness
+// falls back to the pid check alone, as before. A token from before this
+// change (`pid.uuid`) is read the same way. The pid stays first, so an older
+// binary still reads it.
+//
+// Our own values are read once, in-process, at load: acquiring a lock never
+// spawns. Only the reclaim path, and only on macOS, runs a bounded `ps` for
+// another process's start time, which can't prompt.
+const START_TOLERANCE_SECONDS = 2;
+const PS_TIMEOUT_MS = 1000;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function readLinuxBootId() {
+  try {
+    const id = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim().replaceAll('-', '').toLowerCase();
+    return /^[0-9a-f]{32}$/.test(id) ? id : null;
+  } catch { return null; }
+}
+
+// Field 22 of /proc/<pid>/stat, counted after the command name, which may
+// itself hold spaces or parentheses.
+function readLinuxStart(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const start = fields[19];
+    return /^\d+$/.test(start ?? '') ? start : null;
+  } catch { return null; }
+}
+
+// Another process's start in whole UTC seconds, from `ps` in the C locale and
+// UTC, bounded by a short timeout; null if it can't be read.
+function readDarwinStart(pid) {
+  try {
+    const run = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+      env: { PATH: '/bin:/usr/bin', TZ: 'UTC0', LC_ALL: 'C' }, encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'], timeout: PS_TIMEOUT_MS,
+    });
+    if (run.status !== 0 || run.error) return null;
+    const match = /^[A-Z][a-z]{2} ([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/.exec(run.stdout.trim());
+    const month = match ? MONTHS.indexOf(match[1]) : -1;
+    if (month < 0) return null;
+    return Date.UTC(Number(match[6]), month, Number(match[2]), Number(match[3]), Number(match[4]), Number(match[5])) / 1000;
+  } catch { return null; }
+}
+
+// This process's own `start` and `boot`, read once at load.
+const OWN = (() => {
+  if (process.platform === 'linux') return { start: readLinuxStart(process.pid), boot: readLinuxBootId() };
+  if (process.platform === 'darwin') return { start: String(Math.round(Date.now() / 1000 - process.uptime())), boot: null };
+  return { start: null, boot: null };
+})();
+
+export function lockOwnerToken() {
+  return `${process.pid}.${OWN.start ?? '-'}.${OWN.boot ?? '-'}.${randomUUID()}`;
+}
+
+// A recorded owner, or null when even the pid can't be read.
+export function parseLockOwner(token) {
+  if (typeof token !== 'string') return null;
+  const current = /^(\d+)\.(\d+|-)\.([0-9a-f]{32}|-)\.[0-9a-f-]{36}$/.exec(token);
+  if (current) {
+    return { pid: Number(current[1]), start: current[2] === '-' ? null : current[2], boot: current[3] === '-' ? null : current[3] };
+  }
+  const pid = Number(/^(\d+)\./.exec(token)?.[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? { pid, start: null, boot: null } : null;
+}
+
+// Whether the recorded owner may still be running. `probe` is for tests:
+// `{ alive(pid), startOf(pid), boot, platform }`, each defaulting to the real
+// source. Unknown answers keep the owner live, as the pid check did.
+export function lockOwnerAlive(owner, probe = {}) {
+  const platform = probe.platform ?? process.platform;
+  const boot = Object.hasOwn(probe, 'boot') ? probe.boot : OWN.boot;
+  const alive = probe.alive ?? ((pid) => {
+    try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+  });
+  const startOf = probe.startOf ?? ((pid) => (platform === 'linux' ? readLinuxStart(pid) : platform === 'darwin' ? readDarwinStart(pid) : null));
+  if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
+  // Windows keeps the pid check alone, unchanged.
+  if (platform === 'win32') return alive(owner.pid);
+  // Another boot: whatever runs under that pid now is not the owner.
+  if (owner.boot !== null && boot !== null && owner.boot !== boot) return false;
+  if (!alive(owner.pid)) return false;
+  if (owner.start === null) return true;
+  const start = startOf(owner.pid);
+  if (start === null || start === undefined) return true;
+  if (platform === 'darwin') return Math.abs(Number(start) - Number(owner.start)) <= START_TOLERANCE_SECONDS;
+  return String(start) === owner.start;
+}
+
 function ownerToken(lock) {
   try {
     return readFileSync(path.join(lock, 'owner'), 'utf8');
@@ -87,17 +194,9 @@ export function reclaimStaleLock(lock, observed, { keepLiveOwners = false } = {}
     }
     if (current.ino !== observed.ino) return;
     if (Date.now() - current.mtimeMs <= STALE_LOCK_MS) return;
-    if (keepLiveOwners) {
-      const pid = Number(/^(\d+)\./.exec(ownerToken(lock) ?? '')?.[1]);
-      if (Number.isSafeInteger(pid) && pid > 0) {
-        try {
-          process.kill(pid, 0);
-          return;
-        } catch (error) {
-          if (error.code !== 'ESRCH') return;
-        }
-      }
-    }
+    // A live owner keeps its lock; one that is gone, or whose pid now
+    // belongs to another process or another boot, does not (#1115).
+    if (keepLiveOwners && lockOwnerAlive(parseLockOwner(ownerToken(lock)))) return;
 
     const stale = `${lock}.stale.${process.pid}.${randomUUID()}`;
     renameSync(lock, stale);
@@ -123,7 +222,7 @@ export function reclaimStaleLock(lock, observed, { keepLiveOwners = false } = {}
 }
 
 export function withLock(lock, label, operation, { keepLiveOwners = false } = {}) {
-  const token = `${process.pid}.${randomUUID()}`;
+  const token = lockOwnerToken();
   let acquired = false;
   for (let attempt = 0; attempt < 200; attempt++) {
     try {

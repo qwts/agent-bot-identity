@@ -383,6 +383,14 @@ function syncDirectory(directory) {
 // written. Any failure throws, so a caller never takes `written` as proof of
 // a write that isn't on disk. This is node's logical fsync: on Darwin it may
 // fall back from F_FULLFSYNC, so no physical flush is claimed.
+//
+// A throw is not a rollback (#1115). A failure before the rename leaves the
+// old file in place. A failure after it (the directory fsync, or the read-back
+// with `population-readback-failed`) means the new file may already be the
+// census: the write just isn't proven durable. A caller must not assume
+// nothing changed, and must not restore the old value or retry the change as
+// if it never happened. An owner-decision effect that gets this error after
+// it has entered stays indeterminate.
 function writeDocument(file, souls) {
   const directory = path.dirname(file);
   ensurePrivateDirectory(directory);
