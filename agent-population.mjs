@@ -907,6 +907,92 @@ export function compareAndSetSoulComputerUse(id, expected, desired, { file = pop
   });
 }
 
+// --- the computer-use owner decision (agent-comms#250, first phase) ---
+//
+// A remote owner decision sets one soul's computer use, permission only:
+// disabling denies its later computer-use calls (the executor re-reads the
+// setting per call) and never stops a turn. The local POST
+// /v0/soul/computer-use route is separate and unchanged.
+//
+// Everything below runs under one held population lock, in this fixed order:
+//   0. read the released request (its soul, the boolean captured at
+//      preparation and the one the action asks for), so the comparison and
+//      the request's own state are read together;
+//   1. compare the current value with the captured boolean;
+//   2. refuse before entry, recording the mapped reason: an absent or retired
+//      soul (target-unavailable), a different value (expected-state-changed),
+//      or an unreadable census (storage-unavailable);
+//   3. enter: the owner-decision gate's durable entered record spends the
+//      request;
+//   4. write durably with read-back (writeDocument), or for a no-op flush
+//      the existing file and its directory, then read the value back under
+//      the lock;
+//   5. complete: the journal's record-only completed record.
+// Any error after step 3 is indeterminate and is never retried here.
+//
+// The owner-decision steps (read, refuse, enter, complete) come from one seam,
+// sealed once by the host adapter (owner-decision-computer-use.mjs) when it
+// loads, as the journal's record-only reconciliation is sealed: not a
+// callback any caller passes, and a second seal refuses.
+let computerUseOwnerDecisionSeam = null;
+export function sealComputerUseOwnerDecision(seam) {
+  if (computerUseOwnerDecisionSeam !== null || seam === null || typeof seam !== 'object'
+    || !['read', 'refuse', 'enter', 'complete'].every((step) => typeof seam[step] === 'function')) {
+    throw Object.assign(new Error('the computer-use owner-decision seam is already sealed or malformed'), { code: 'computer-use-seam-refused' });
+  }
+  computerUseOwnerDecisionSeam = Object.freeze({ read: seam.read, refuse: seam.refuse, enter: seam.enter, complete: seam.complete });
+}
+
+// The existing census, made durable for a no-op that writes nothing: the
+// file and its directory are flushed (node's logical fsync only).
+function flushExistingDocument(file) {
+  const fd = openSync(file, 'r');
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+  syncDirectory(path.dirname(file));
+}
+
+export function runComputerUseOwnerDecision(context, { file = populationFile() } = {}) {
+  const seam = computerUseOwnerDecisionSeam;
+  if (seam === null) throw Object.assign(new Error('the computer-use owner-decision seam is not sealed'), { code: 'computer-use-seam-unsealed' });
+  ensurePrivateDirectory(path.dirname(file));
+  return withPopulationLock(file, () => {
+    // 0. The request, read under this lock: anything that isn't one released
+    // computer-use request comes back as the seam's own answer, unrecorded.
+    const request = seam.read(context);
+    if (request?.state !== 'request') return request;
+    const { expectedEnabled, desiredEnabled } = request;
+    const target = agentId(request.agentId);
+    // 1-2. Compare, and refuse before anything is entered.
+    let current;
+    try {
+      current = readDocument(file);
+      if (current.schemaVersion > SCHEMA_VERSION) throw new Error('future schemaVersion');
+    } catch {
+      return seam.refuse(context, 'storage-unavailable');
+    }
+    const row = current.souls[target];
+    if (!row || row.status === 'retired') return seam.refuse(context, 'target-unavailable');
+    const before = row.computerUse !== false;
+    if (before !== expectedEnabled) return seam.refuse(context, 'expected-state-changed');
+    // 3. Enter: the request is spent once this returns entered.
+    const entered = seam.enter(context);
+    if (entered?.state !== 'entered') return entered;
+    // 4-5. After entry nothing is retried: any error is indeterminate.
+    const written = before !== desiredEnabled;
+    try {
+      if (written) writeDocument(file, { ...current.souls, [target]: normalizeSoul({ ...row, computerUse: desiredEnabled }) });
+      else flushExistingDocument(file);
+      const back = readDocument(file).souls[target];
+      if (!back || (back.computerUse !== false) !== desiredEnabled) throw new Error('the census read back another value');
+      const completed = seam.complete(context, entered);
+      return Object.freeze({ ...completed, agentId: target, before, after: desiredEnabled, written });
+    } catch (error) {
+      return Object.freeze({ state: 'indeterminate', requestId: entered.requestId, effectId: entered.effectId, before, after: desiredEnabled, written,
+        reason: typeof error?.code === 'string' ? error.code : 'effect-uncertain' });
+    }
+  });
+}
+
 // The census is authoritative for where a soul's memory is (ADR-0583
 // decision 8): the migration that moves the Agent Space into the soul
 // folder points the row at the new place once the copy is verified, and a

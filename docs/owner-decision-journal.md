@@ -741,6 +741,23 @@ route. None is built here.
   the reconciler names `sealRecordOnlyReconciliation` (the store defines it
   and the identity-host facades only re-export it). That's a source check,
   not a runtime guarantee: the seal stays first-come in process.
+- **Seal the computer-use owner-decision seam at start.** The census's
+  computer-use owner-decision steps (`read`, `refuse`, `enter`, `complete`)
+  are sealed by whichever module calls `sealComputerUseOwnerDecision` first
+  (agent-comms#250). A module that sealed it with an `enter` skipping
+  `enterOwnerDecisionEffect` could write the census with no trust, presence
+  or target check. Wiring must import `owner-decision-computer-use.mjs` at
+  daemon start, before any other host code runs, and treat a failed seal
+  (the import throwing) as fatal. `tests/module-boundaries.test.mjs` fails if
+  any runtime file other than that adapter names `sealComputerUseOwnerDecision`
+  (`agent-population.mjs` defines it). That's a source check, not a runtime
+  guarantee: the seal stays first-come in process.
+- **Authenticate the computer-use caller.** The adapter records a pre-entry
+  refusal (`expected-state-changed`, `target-unavailable`,
+  `storage-unavailable`, `validation-failed`) before the gate verifies
+  presence, trust or the target, which only entry does. A route must
+  authenticate its caller before calling `applyComputerUseOwnerDecision`, or
+  anyone who can reach it could refuse another principal's released request.
 - **Authenticate the check's source.** The slot-7 successful check is unsigned
   JSON from the caller. Before calling `recordSuccessfulCheck`, wiring must
   authenticate its source as the broker, by its peer uid on the connection.

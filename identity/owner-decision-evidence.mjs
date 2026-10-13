@@ -14,6 +14,8 @@ import { COMPUTER_USE_OPERATION, decodeOwnerDecisionAction, ownerDecisionCanonic
 export const EVIDENCE_CAP = 4096;
 // The original action's cap (daemon slot 2).
 const ACTION_CAP = 32768;
+// The saved prepared challenge's cap (daemon slot 3).
+const CHALLENGE_CAP = 32768;
 const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const REVISION = /^sha256:[a-f0-9]{64}$/;
@@ -230,7 +232,7 @@ export function challengeFor(p, actionBytes) {
 // action imply. The journal store checks this on every read; for
 // `soul.computer-use.set` it is where a divergent plan digest refuses.
 export function preparedChallengeMatches(challengeBytes, p, actionBytes) {
-  const saved = exactBytes(challengeBytes, { max: ACTION_CAP });
+  const saved = exactBytes(challengeBytes, { max: CHALLENGE_CAP });
   return saved !== null && saved.equals(challengeFor(p, actionBytes));
 }
 

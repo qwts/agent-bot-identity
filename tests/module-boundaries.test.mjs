@@ -526,6 +526,49 @@ test('only the record-only reconciler names the reconciliation seal', () => {
   assert.match(maskSource(readFileSync(path.join(ROOT, SEAL_CALLER), 'utf8')).code, new RegExp(`\\b${SEAL}\\s*\\(`, 'u'));
 });
 
+// agent-comms#250: the census's computer-use owner-decision seam is sealed
+// once, by whichever module calls sealComputerUseOwnerDecision first, and an
+// `enter` that skipped the owner-decision gate could write the census with no
+// trust, presence or target check. So the computer-use adapter must be its
+// only caller (the daemon imports it at start; see docs/owner-decision-
+// journal.md, Before wiring). Besides it, only agent-population.mjs, which
+// defines it, may name it, in code or in a string; it has no facades.
+const CU_SEAL = 'sealComputerUseOwnerDecision';
+const CU_SEAL_CALLER = 'owner-decision-computer-use.mjs';
+const CU_SEAL_DEFINITION = 'agent-population.mjs';
+
+function computerUseSealReferences(files, read) {
+  const problems = [];
+  for (const file of files) {
+    const { code, strings } = maskSource(read(file));
+    const named = new RegExp(`\\b${CU_SEAL}\\b`, 'u').test(code) || strings.some((value) => value.includes(CU_SEAL));
+    if (named && file !== CU_SEAL_CALLER && file !== CU_SEAL_DEFINITION) problems.push(`${file}: names ${CU_SEAL}; only ${CU_SEAL_CALLER} may import it`);
+  }
+  return problems;
+}
+
+test('only the computer-use adapter names the computer-use owner-decision seal', () => {
+  assert.deepEqual(computerUseSealReferences(runtimeFiles(), (file) => readFileSync(path.join(ROOT, file), 'utf8')), []);
+  // The one caller does import and call it.
+  assert.match(maskSource(readFileSync(path.join(ROOT, CU_SEAL_CALLER), 'utf8')).code, new RegExp(`\\b${CU_SEAL}\\s*\\(`, 'u'));
+});
+
+test('the computer-use seal guard flags any other importer, a namespace or string reference, and a re-export', () => {
+  const sources = {
+    [CU_SEAL_CALLER]: `import { ${CU_SEAL} } from './agent-population.mjs';\n${CU_SEAL}({});\n`,
+    [CU_SEAL_DEFINITION]: `export function ${CU_SEAL}() {}\n`,
+    'other.mjs': `import { ${CU_SEAL} } from './agent-population.mjs';\n${CU_SEAL}({ enter: () => ({ state: 'entered' }) });\n`,
+    'named.mjs': `import * as population from './agent-population.mjs';\npopulation['${CU_SEAL}']({});\n`,
+    'facade.mjs': `export { ${CU_SEAL} } from './agent-population.mjs';\n`,
+    'commented.mjs': `// ${CU_SEAL} is mentioned only here.\nexport const x = 1;\n`,
+  };
+  assert.deepEqual(computerUseSealReferences(Object.keys(sources), (file) => sources[file]), [
+    `other.mjs: names ${CU_SEAL}; only ${CU_SEAL_CALLER} may import it`,
+    `named.mjs: names ${CU_SEAL}; only ${CU_SEAL_CALLER} may import it`,
+    `facade.mjs: names ${CU_SEAL}; only ${CU_SEAL_CALLER} may import it`,
+  ]);
+});
+
 test('the seal guard flags any other importer, a string reference, and a facade call', () => {
   const sources = {
     [SEAL_CALLER]: `import { ${SEAL} } from './identity-host.mjs';\n${SEAL}(() => null);\n`,
