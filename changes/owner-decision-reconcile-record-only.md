@@ -1,1 +1,0 @@
-- Add the disabled owner-local, record-only owner-decision reconciliation (agent-comms#77): after a crash between the linked event and the completed record, an owner ceremony can write the missing completed record and terminal pair for an approve, reject, adopt or record-only edit. It's never automatic, and it has no route yet.

@@ -1,1 +1,0 @@
-- Retiring and finalizing a soul now update the population census first and the identity record last, through identity's record entry; if the identity write fails, the census row is put back. Finalize no longer rewrites a retired census row even briefly (#645).

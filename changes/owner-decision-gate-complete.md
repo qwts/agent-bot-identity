@@ -1,1 +1,0 @@
-- The disabled owner-decision effect-entry gate now returns a one-shot `complete(result)` bound to the store instance that entered, so only the caller that entered an effect can record its completion; a crash leaves it effect-uncertain (agent-comms#77).

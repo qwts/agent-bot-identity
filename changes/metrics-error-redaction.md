@@ -1,1 +1,0 @@
-- `agent-bot metrics` no longer keeps raw error messages: a collector error stored in `latest.json` or printed to stderr now has credentials, token-shaped strings and home-directory paths (such as the session log's path) redacted, and is one bounded line. This is the first part of local-first engine diagnostics (#983).

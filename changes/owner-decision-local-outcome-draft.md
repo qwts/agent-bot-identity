@@ -1,1 +1,0 @@
-- Draft the disabled owner-decision daemon slot-14 local lifecycle outcome validation: the exact outcome record, bound to the request, this daemon and its journal graph's evidence, with positive and negative semantic vectors for the agent-comms coordinator (agent-comms#77).

@@ -1,1 +1,0 @@
-- The module map assigns `cli/mint-token.mjs` and `cli/mint-output.mjs` to identity; `agent-bot mint-token` is unchanged (#645, F13 step 2).

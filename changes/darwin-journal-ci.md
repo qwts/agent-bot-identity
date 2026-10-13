@@ -1,1 +1,0 @@
-- CI runs the owner-decision journal tests on a hosted macOS runner, where their Darwin-only storage, lock and recovery cases execute instead of skipping (#1007).

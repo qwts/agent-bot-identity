@@ -1,1 +1,0 @@
-- `soul.json` `harness.sandbox` (or `harnesses.codex.sandbox`) sets Codex's workspace-write sandbox: `networkAccess`, `writableRoots`, `excludeTmpdirEnvVar` and `excludeSlashTmp` render as `[sandbox_workspace_write]` in `.codex/config.toml`, checked against Codex rust-v0.157.0. Other harnesses report it as unsupported (#379).

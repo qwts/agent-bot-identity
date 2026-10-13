@@ -1,1 +1,0 @@
-- A soul's declared OpenCode deny rules (`Bash(…)`, `Edit`, `Write`, `MultiEdit`) now hold on daemon turns too: the daemon appends them to its OpenCode agent's rules, which OpenCode applies last, so they win over the agent's ask-everything default (#379).

@@ -1,1 +1,0 @@
-- Add the disabled owner-decision check intake: under the journal lock, verify the owner's p1 and the broker's d1 for a prepared request and record them, then record the one successful check, each only from a legal phase and with no new persisted format (agent-comms#77).

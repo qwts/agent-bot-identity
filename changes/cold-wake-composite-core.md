@@ -1,1 +1,0 @@
-- Serialize cold-wake settings and webhook changes/readers under one synchronous core, retain existing owner gates, and report partial publication or durability failures explicitly.

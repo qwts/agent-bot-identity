@@ -1,1 +1,0 @@
-- The module-boundaries fixture for a carriage-return line comment now starts with a valid re-export, so it fails if comment masking stops at LF only (#645).

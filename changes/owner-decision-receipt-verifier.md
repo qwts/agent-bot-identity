@@ -1,1 +1,0 @@
-- Add disabled daemon-side verification of owner-decision d1 receipts against the pinned trust keys, the saved challenge and the delivered p1, checked against the shared agent-comms issuer vectors (agent-comms#77).

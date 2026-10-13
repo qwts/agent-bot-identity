@@ -1,1 +1,0 @@
-- Local soul revision edits keep snapshotting and recording in one synchronous lock; hosts can bind approve/reject to an expected head. POSIX package snapshots and journal publication synchronize before success or file application, while ordinary local stale rejection remains supported (#985).

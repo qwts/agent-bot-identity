@@ -1,1 +1,0 @@
-- Owner-decision actions refuse any Unicode 17.0.0 control, format, line- or paragraph-separator character in a reason or the owner's display text, using a frozen table that matches the shared agent-comms policy (agent-comms#77).

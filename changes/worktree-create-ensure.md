@@ -1,1 +1,0 @@
-- The Claude Code worktree-create hook ensures the soul's identity through identity's record entry instead of importing `agent-identity.mjs`; behavior is unchanged (#645).

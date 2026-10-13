@@ -1,1 +1,0 @@
-- A failed launch's detail sent to the broker (and on to GeniusBar or other principals) is now redacted: credentials, token-shaped strings and paths under any home directory are replaced and it fits the broker's 512-character budget, while the code prefix and the fix-it command stay. The local launch journal keeps the full detail (#983).

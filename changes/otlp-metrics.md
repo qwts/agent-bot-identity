@@ -1,1 +1,0 @@
-- When OTLP export is configured, the daemon also sends two cumulative counters to `/v1/metrics`: `agent_bot.operations` (finished operations by component, operation, outcome and code; at most 256 series) and `agent_bot.export.dropped`. No trace ID, agent hash or detail is part of a metric (#983).

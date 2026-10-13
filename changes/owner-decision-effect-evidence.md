@@ -1,1 +1,0 @@
-- Validate the disabled owner-decision journal's later phases with typed effect evidence: preparation, check, refusal, entry and completion records checked against the shared agent-comms vectors, `applied` only from a fully validated completion (agent-comms#77).
