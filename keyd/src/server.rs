@@ -25,11 +25,12 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::VerifyingKey;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -904,22 +905,50 @@ enum Frame {
     Closed,
 }
 
-/// One newline-terminated message. With no message under way the wait is
-/// `idle` (`None`: indefinitely); once a byte of one arrives, the rest must
-/// follow within `frame`.
+/// A live connection as its channel sees it (#1095): a handle to shut it down,
+/// whether a whole message is being answered, and when it last finished one.
+struct Conn {
+    stream: UnixStream,
+    busy: AtomicBool,
+    last: Mutex<Instant>,
+}
+
+impl Conn {
+    fn finished(&self) {
+        *self.last.lock().unwrap() = Instant::now();
+        self.busy.store(false, Ordering::SeqCst);
+    }
+}
+
+type Registry = Arc<Mutex<HashMap<u64, Arc<Conn>>>>;
+
+/// One newline-terminated message. With no message under way the wait runs to
+/// `idle_until` (`None`: indefinitely); once a byte of one arrives, the rest
+/// must follow within `frame`. A message still arriving does not make the
+/// connection busy, so a partial message cannot shield it from eviction.
 fn read_frame(
     reader: &mut BufReader<UnixStream>,
-    idle: Option<Duration>,
+    idle_until: Option<Instant>,
     frame: Duration,
 ) -> Frame {
     let mut line = Vec::new();
     let mut started: Option<Instant> = None;
     loop {
+        let left = |deadline: Instant| match deadline.checked_duration_since(Instant::now()) {
+            Some(left) if !left.is_zero() => Some(left),
+            _ => None,
+        };
         let wait = match started {
-            None => idle,
-            Some(at) => match frame.checked_sub(at.elapsed()) {
-                Some(left) if !left.is_zero() => Some(left),
-                _ => return Frame::Closed,
+            None => match idle_until {
+                None => None,
+                Some(deadline) => match left(deadline) {
+                    Some(left) => Some(left),
+                    None => return Frame::Closed,
+                },
+            },
+            Some(at) => match left(at + frame) {
+                Some(left) => Some(left),
+                None => return Frame::Closed,
             },
         };
         if reader.get_ref().set_read_timeout(wait).is_err() {
@@ -929,7 +958,7 @@ fn read_frame(
             Ok([]) => return Frame::Closed,
             Ok(buf) => buf,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            // Idle past `idle`, a frame past its deadline, or a failed read.
+            // Idle past its deadline, a frame past its deadline, or a failed read.
             Err(_) => return Frame::Closed,
         };
         let (take, done) = match available.iter().position(|&b| b == b'\n') {
@@ -952,6 +981,7 @@ fn serve_connection(
     stream: UnixStream,
     idle: Option<Duration>,
     limits: Limits,
+    conn: &Conn,
     handle: impl Fn(&Value) -> Option<Value>,
 ) {
     // SAFETY: getuid cannot fail.
@@ -966,8 +996,11 @@ fn serve_connection(
         return;
     };
     let mut reader = BufReader::new(stream);
+    // The idle deadline runs from the last message that asked for something
+    // (#1095): a blank line keeps nothing alive.
+    let mut idle_until = idle.map(|idle| Instant::now() + idle);
     loop {
-        let line = match read_frame(&mut reader, idle, limits.frame) {
+        let line = match read_frame(&mut reader, idle_until, limits.frame) {
             Frame::Line(line) => line,
             Frame::Closed => return,
             Frame::TooLarge => {
@@ -982,6 +1015,10 @@ fn serve_connection(
         if line.trim_ascii().is_empty() {
             continue;
         }
+        // Busy only from a whole message until its answer is written (#1103
+        // review): the window in which closing the connection would lose a
+        // request keyd is acting on.
+        conn.busy.store(true, Ordering::SeqCst);
         let response = match serde_json::from_slice::<Value>(&line) {
             Ok(message) if message.is_object() => handle(&message),
             Ok(_) => Some(failure(&Value::Null, -32600, "batches are not supported")),
@@ -992,31 +1029,72 @@ fn serve_connection(
                 return;
             }
         }
+        conn.finished();
+        idle_until = idle.map(|idle| Instant::now() + idle);
     }
 }
 
-/// A connection's place in its channel's budget, given back when it ends.
-struct Slot(Arc<AtomicUsize>);
+/// A connection's place in its channel's registry, given back when it ends.
+struct Slot {
+    registry: Registry,
+    id: u64,
+}
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.registry.lock().unwrap().remove(&self.id);
     }
 }
 
-/// Accepts on `listener` within `capacity` connections. One past it is told
-/// so and closed at once, without a thread of its own.
+/// Makes room on a full channel by closing its least recently active idle
+/// connection, if it has one. A connection whose request keyd is answering is
+/// never chosen; one that has only sent part of a message is idle.
+fn evict_idle(connections: &mut HashMap<u64, Arc<Conn>>) -> bool {
+    let oldest = connections
+        .iter()
+        .filter(|(_, conn)| !conn.busy.load(Ordering::SeqCst))
+        .min_by_key(|(_, conn)| *conn.last.lock().unwrap())
+        .map(|(id, _)| *id);
+    let Some(id) = oldest else {
+        return false;
+    };
+    if let Some(conn) = connections.remove(&id) {
+        let _ = conn.stream.shutdown(std::net::Shutdown::Both);
+    }
+    true
+}
+
+/// Accepts on `listener` within `capacity` connections. When the channel is
+/// full, `evict` makes room by closing the least recently active idle
+/// connection (#1095): a soul holding connections open cannot keep every other
+/// soul out. Failing that, the newcomer is told so and closed at once, without
+/// a thread of its own.
 fn accept(
     listener: UnixListener,
     capacity: usize,
     idle: Option<Duration>,
+    evict: bool,
     limits: Limits,
     handle: impl Fn(&Value) -> Option<Value> + Clone + Send + 'static,
 ) {
-    let active = Arc::new(AtomicUsize::new(0));
+    let registry: Registry = Arc::default();
+    let next = AtomicU64::new(0);
     for stream in listener.incoming().flatten() {
-        if active.fetch_add(1, Ordering::SeqCst) >= capacity {
-            active.fetch_sub(1, Ordering::SeqCst);
+        let admitted = (|| {
+            let mut connections = registry.lock().unwrap();
+            if connections.len() >= capacity && !(evict && evict_idle(&mut connections)) {
+                return None;
+            }
+            let conn = Arc::new(Conn {
+                stream: stream.try_clone().ok()?,
+                busy: AtomicBool::new(false),
+                last: Mutex::new(Instant::now()),
+            });
+            let id = next.fetch_add(1, Ordering::SeqCst);
+            connections.insert(id, Arc::clone(&conn));
+            Some((id, conn))
+        })();
+        let Some((id, conn)) = admitted else {
             let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
             let _ = writeln!(
                 &stream,
@@ -1028,14 +1106,17 @@ fn accept(
                 )
             );
             continue;
-        }
-        let slot = Slot(Arc::clone(&active));
+        };
+        let slot = Slot {
+            registry: Arc::clone(&registry),
+            id,
+        };
         let handle = handle.clone();
         // Spawn can fail under pressure; the slot is returned when the
         // closure (and with it the stream) is dropped.
         let _ = std::thread::Builder::new().spawn(move || {
             let _slot = slot;
-            serve_connection(stream, idle, limits, handle);
+            serve_connection(stream, idle, limits, &conn, handle);
         });
     }
 }
@@ -1113,6 +1194,7 @@ pub fn serve_with(keyd: Arc<Keyd>, listeners: Listeners, limits: Limits) {
             owner,
             limits.owner_connections,
             Some(limits.owner_idle),
+            false,
             limits,
             move |m| owner_keyd.handle_owner(m),
         )
@@ -1121,6 +1203,7 @@ pub fn serve_with(keyd: Arc<Keyd>, listeners: Listeners, limits: Limits) {
         listeners.soul,
         limits.soul_connections,
         None,
+        true,
         limits,
         move |m| keyd.handle_soul(m),
     );
@@ -1447,40 +1530,102 @@ mod tests {
     }
 
     #[test]
-    fn a_full_soul_channel_refuses_more_while_the_owner_channel_still_answers() {
+    fn a_full_soul_channel_closes_its_oldest_idle_connection_for_a_newcomer() {
         let (dir, paths) = serving("cap", QUICK);
-        let held: Vec<UnixStream> = (0..QUICK.soul_connections)
-            .map(|_| {
-                let stream = client(&paths.socket);
-                assert_eq!(ask(&stream, "ping")["result"], json!({}));
-                stream
-            })
-            .collect();
-        let extra = client(&paths.socket);
-        let mut line = String::new();
-        BufReader::new(&extra).read_line(&mut line).unwrap();
-        let refusal: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(refusal["error"]["code"], -32000);
-        assert!(refusal["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("too many open connections"));
-        assert!(closed(&extra));
+        let oldest = client(&paths.socket);
+        assert_eq!(ask(&oldest, "ping")["result"], json!({}));
+        std::thread::sleep(Duration::from_millis(20));
+        let newer = client(&paths.socket);
+        assert_eq!(ask(&newer, "ping")["result"], json!({}));
+        // Full: the newcomer is admitted and the least recently active idle
+        // connection makes room (#1095).
+        let newcomer = client(&paths.socket);
+        assert_eq!(ask(&newcomer, "ping")["result"], json!({}));
+        assert!(closed(&oldest), "the oldest idle connection was closed");
+        assert_eq!(ask(&newer, "ping")["result"], json!({}));
         // The owner's budget is its own.
         let owner = client(&paths.owner_socket);
         assert!(ask(&owner, "owner/status").get("result").is_some());
-        // A closed soul connection gives its place back.
-        drop(held);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let again = client(&paths.socket);
-            let answer = ask(&again, "ping");
-            if answer.get("result") == Some(&json!({})) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "the slots were not released");
-            std::thread::sleep(Duration::from_millis(20));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_partial_message_does_not_shield_a_connection_from_eviction() {
+        // Long frames, so the trailing partial messages stay open.
+        let limits = Limits {
+            frame: Duration::from_secs(5),
+            ..QUICK
+        };
+        let (dir, paths) = serving("partial", limits);
+        // Each holder answers a request and then leaves a `{` hanging, the
+        // review's way of keeping a slot looking busy (#1103).
+        let holders: Vec<UnixStream> = (0..limits.soul_connections)
+            .map(|_| {
+                let stream = client(&paths.socket);
+                assert_eq!(ask(&stream, "ping")["result"], json!({}));
+                write!(&stream, "{{").unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+                stream
+            })
+            .collect();
+        std::thread::sleep(Duration::from_millis(100));
+        for _ in 0..3 {
+            let newcomer = client(&paths.socket);
+            assert_eq!(
+                ask(&newcomer, "ping")["result"],
+                json!({}),
+                "a newcomer is admitted"
+            );
         }
+        assert!(
+            closed(&holders[0]),
+            "a holder with only a partial message was evicted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_connection_being_answered_is_never_evicted() {
+        let conn = |busy: bool, age: u64| {
+            let (stream, _) = UnixStream::pair().unwrap();
+            Arc::new(Conn {
+                stream,
+                busy: AtomicBool::new(busy),
+                last: Mutex::new(Instant::now() - Duration::from_secs(age)),
+            })
+        };
+        let mut connections = HashMap::from([(1, conn(true, 100)), (2, conn(false, 10))]);
+        assert!(evict_idle(&mut connections));
+        assert!(
+            connections.contains_key(&1),
+            "the busy, older connection stays"
+        );
+        assert!(!connections.contains_key(&2));
+        let mut all_busy = HashMap::from([(1, conn(true, 100)), (2, conn(true, 50))]);
+        assert!(!evict_idle(&mut all_busy));
+        assert_eq!(all_busy.len(), 2);
+    }
+
+    #[test]
+    fn blank_lines_do_not_keep_an_owner_connection_open() {
+        let (dir, paths) = serving("blank", QUICK);
+        let owner = client(&paths.owner_socket);
+        let writer = owner.try_clone().unwrap();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            while started.elapsed() < Duration::from_secs(3) {
+                if writeln!(&writer).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+        assert!(closed(&owner), "the owner connection was closed");
+        assert!(
+            started.elapsed() < QUICK.owner_idle * 4,
+            "blank lines kept it open for {:?}",
+            started.elapsed()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
