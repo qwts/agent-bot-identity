@@ -390,6 +390,34 @@ test('host program arguments stay literal in launchd and systemd units', () => {
   assert.throws(() => renderSystemdUnit({ programArguments: ['/node', ''] }), /non-empty/);
 });
 
+// #1068: systemd ends a unit line at \r as well as \n, so a control character
+// in a word or value could add a directive (a second ExecStart= replaces the
+// first). They are refused, not stripped; % and \ stay literal everywhere.
+test('systemd units refuse control characters and keep % and \\ literal', () => {
+  for (const bad of ['\r', '\n', '\t', '\u0007', '\u001b', '\u007f']) {
+    const shown = JSON.stringify(bad);
+    assert.throws(() => renderSystemdUnit({ executable: `/opt/a${bad}ExecStart=/tmp/evil` }), /control character/, shown);
+    assert.throws(() => renderSystemdUnit({ programArguments: ['/node', `/x${bad}ExecStart=/tmp/evil`, 'daemon', 'run'] }), /control character/, shown);
+    assert.throws(() => renderSystemdUnit({
+      executable: '/u/.local/bin/agent-bot',
+      environment: { AGENT_BOT_CREDENTIAL_VAULT: `vault${bad}ExecStart=/tmp/evil` },
+    }), /supervisor environment AGENT_BOT_CREDENTIAL_VAULT may not contain a control character/, shown);
+  }
+  assert.throws(() => renderSystemdUnit({ executable: '/u/agent-bot', environment: { 'A\rB': 'x' } }), /control character/);
+
+  const unit = renderSystemdUnit({
+    executable: '/opt/50%h/a\\b $HOME/agent-bot',
+    environment: { AGENT_BOT_DAEMON_STATE_PATH: '/tmp/50%h.json', AGENT_BOT_CREDENTIAL_VAULT: 'My %u Vault\\x' },
+  });
+  const lines = unit.split('\n');
+  assert.deepEqual(lines.filter((line) => line.startsWith('ExecStart=')),
+    ['ExecStart="/opt/50%%h/a\\\\b $$HOME/agent-bot" daemon run']);
+  assert.ok(lines.includes('Environment=AGENT_BOT_DAEMON_STATE_PATH=/tmp/50%%h.json'));
+  assert.ok(lines.includes('Environment="AGENT_BOT_CREDENTIAL_VAULT=My %%u Vault\\\\x"'));
+  // A plain path keeps its bare form, so existing units are not rewritten.
+  assert.match(renderSystemdUnit({ executable: '/home/user/.local/bin/agent-bot' }), /^ExecStart=\/home\/user\/\.local\/bin\/agent-bot daemon run$/m);
+});
+
 test('install-style ensure rewrites only on change and reports it', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-bot-supervisor-install-'));
   const execs = [];
