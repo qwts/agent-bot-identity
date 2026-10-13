@@ -14,6 +14,8 @@
 import { canonicalJson } from '../canonical-json.mjs';
 import { DAEMON_JOURNAL_SLOTS } from './owner-decision-journal-frame.mjs';
 import { validateDaemonAdmission } from './owner-decision-journal-store.mjs';
+import { challengeFor } from './owner-decision-evidence.mjs';
+import { COMPUTER_USE_OPERATION, decodeOwnerDecisionAction } from './owner-decision-action.mjs';
 
 export const PREPARE_WINDOW_SECONDS = 180;
 export const CLOCK_SKEW_SECONDS = 30;
@@ -56,7 +58,12 @@ function bindStage(action, stage) {
 
 // `nonce` is the 32 random bytes generated once from the original prepare
 // event (canonical unpadded base64url); `preparedAt` and `now` are seconds.
-export function composeOwnerDecisionPrepared({ actionBytes, acceptanceBytes, namespaceDigest, stage = null, nonce, preparedAt, now } = {}) {
+// `expected` is the daemon's own state captured for the action: for
+// `soul.computer-use.set` exactly `{kind:'computer-use', enabled:<boolean>}`
+// (agent-comms#250), and null for every other operation. The challenge is
+// built by the same challengeFor the journal recomputes it with, so the
+// computer-use `effectPlanDigest` is identical at every boundary.
+export function composeOwnerDecisionPrepared({ actionBytes, acceptanceBytes, namespaceDigest, stage = null, nonce, preparedAt, now, expected = null } = {}) {
   let saved;
   try { saved = validateDaemonAdmission(actionBytes, acceptanceBytes, namespaceDigest); } catch { refuse('owner-prepare-admission'); }
   const acceptance = saved.record;
@@ -73,12 +80,20 @@ export function composeOwnerDecisionPrepared({ actionBytes, acceptanceBytes, nam
   const exp = Math.min(acceptedDeadline, preparedDeadline, ...(bound ? [bound.expiresAt] : []));
   if (now >= exp) refuse('owner-prepare-stale');
 
-  const challenge = {
+  // Only computer use carries an expected state into the challenge; its
+  // display digest comes from re-decoding the retained action, never input.
+  let actionDigest = null;
+  if (action.operation === COMPUTER_USE_OPERATION) {
+    if (!plain(expected) || Object.keys(expected).length !== 2 || expected.kind !== 'computer-use' || typeof expected.enabled !== 'boolean') refuse('owner-prepare-expected');
+    try { actionDigest = decodeOwnerDecisionAction(saved.action).actionDigest; } catch { refuse('owner-prepare-admission'); }
+  } else if (expected !== null) refuse('owner-prepare-expected');
+  const challengeBytes = challengeFor({
     requestId: acceptance.requestId, principal: acceptance.principal, account: acceptance.account, soul: acceptance.soul,
-    operation: acceptance.operation, payloadDigest: acceptance.payloadDigest, action: saved.action.toString('base64url'),
-    nonce, acceptedAt, preparedAt, exp, daemonKey: acceptance.daemonKey, daemonEpoch: acceptance.daemonEpoch, watchId: acceptance.watchId,
-  };
-  const challengeBytes = Buffer.from(canonicalJson(challenge));
+    operation: acceptance.operation, payloadDigest: acceptance.payloadDigest, nonce, acceptedAt, preparedAt, exp,
+    daemonKey: acceptance.daemonKey, daemonEpoch: acceptance.daemonEpoch, watchId: acceptance.watchId,
+    ...(actionDigest === null ? {} : { actionDigest, expected: { kind: 'computer-use', enabled: expected.enabled } }),
+  }, saved.action);
+  const challenge = JSON.parse(challengeBytes.toString('utf8'));
   // Check both caps before anything could be published.
   if (challengeBytes.length > CHALLENGE_CAP
     || Buffer.byteLength(canonicalJson({ challenge, stage: bound, v: 1 })) > PREPARED_WRAPPER_CAP) refuse('owner-prepare-bounds');

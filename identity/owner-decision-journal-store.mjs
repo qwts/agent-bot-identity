@@ -15,8 +15,9 @@ import {
 } from './owner-decision-journal-frame.mjs';
 import {
   bindEffect, bindPreparation, bindReconciliationPair, challengeFor, completedRecordFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
-  effectOutcome, enteredRecordFor, refusedRecordFor,
+  effectOutcome, enteredRecordFor, isRevisionOperation, refusedRecordFor, SETTING_OPERATIONS,
 } from './owner-decision-evidence.mjs';
+import { COMPUTER_USE_OPERATION } from './owner-decision-action.mjs';
 import { LINKED_EVENT_CAP, verifyLinkedEvent } from './owner-decision-linked-event.mjs';
 import { exactBytes } from './owner-decision-bytes.mjs';
 import { readOwnerDecisionTrust } from './owner-decision-trust.mjs';
@@ -64,7 +65,7 @@ const DIGEST = /^[a-f0-9]{64}$/;
 const SOUL = /^agent_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PRINCIPAL = /^principal_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ACCOUNT = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
-const OPERATIONS = new Set(['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set']);
+const OPERATIONS = new Set(['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set', COMPUTER_USE_OPERATION]);
 const matches = (pattern, value) => typeof value === 'string' && pattern.exec(value)?.[0] === value;
 const plain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => plain(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -508,7 +509,9 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
     const { slots, action, preparation, preparationDigest, receiptDigest, acceptance, entered } = enteredPrefix(decode, saved);
     if (!slots.completed) fail();
     const completed = bindEffect(decodeEffect(slots.completed), { phase: 'completed', preparation, preparationDigest, receiptDigest, action, entered });
-    if (preparation.operation === 'cold-wake.set') {
+    // A setting change (cold wake, computer use) completes record-only and
+    // never has a linked event; a revision always does.
+    if (SETTING_OPERATIONS.includes(preparation.operation)) {
       if (slots['linked-authoritative-event']) fail();
     } else {
       if (!slots['linked-authoritative-event']) fail();
@@ -665,7 +668,9 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
         if (!graph.awaiting || graph.awaiting.enteredDigest !== live.enteredDigest) fail('owner-journal-transition-refused');
         recoveryFlush(graph);
         const { entered, action, preparation, preparationDigest, receiptDigest } = graph.awaiting;
-        const revision = preparation.operation !== 'cold-wake.set';
+        // Only a revision reports a linked event; a setting change (cold wake,
+        // computer use) completes from its entered record and `at` alone.
+        const revision = isRevisionOperation(preparation.operation);
         const { at, journalSeq, working } = result;
         if (Object.hasOwn(result, 'journalRecordDigest')) fail('invalid-owner-journal-record');
         let linked = null, journalRecordDigest;

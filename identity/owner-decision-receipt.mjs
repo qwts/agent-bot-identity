@@ -28,7 +28,9 @@ const UUID4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{
 const PRINCIPAL = /^principal_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const SOUL = /^agent_[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const ACCOUNT = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
-const OPERATIONS = ['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set'];
+// `soul.computer-use.set` (agent-comms#250, proposed): the d1 payload itself is
+// unchanged; its nonce binds the challenge, which carries the plan digest.
+const OPERATIONS = ['revision.approve', 'revision.reject', 'revision.adopt', 'revision.edit', 'cold-wake.set', 'soul.computer-use.set'];
 const matches = (pattern, value) => typeof value === 'string' && pattern.exec(value)?.[0] === value;
 const seconds = (value) => Number.isSafeInteger(value) && value >= 0;
 const plain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);

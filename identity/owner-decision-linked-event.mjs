@@ -35,8 +35,11 @@ function linkage(value) {
   return value;
 }
 
+// Setting changes complete record-only: cold wake and computer use never
+// have a linked event.
 function kindFor(operation) {
   if (operation === 'cold-wake.set') refuse('owner-decision-cold-has-no-linked-event');
+  if (operation === 'soul.computer-use.set') refuse('owner-decision-computer-use-has-no-linked-event');
   return LINKED_OPERATIONS[operation] ?? refuse('owner-decision-operation-invalid');
 }
 
@@ -95,7 +98,7 @@ export function verifyLinkedEvent(payloadBytes, { operation, journalBytes, journ
 // The slot's required state for an operation: cold-wake changes keep it
 // all-zero; linked revision operations require it once completed.
 export function linkedEventRequired(operation) {
-  if (operation === 'cold-wake.set') return false;
+  if (operation === 'cold-wake.set' || operation === 'soul.computer-use.set') return false;
   kindFor(operation);
   return true;
 }

@@ -1,0 +1,1360 @@
+{
+  "status": "scratch joint-conformance profile; all new shapes are proposals only; no parser, route, authority, crypto signature, or runtime activation",
+  "sourceSnapshot": {
+    "repo": "agent-comms",
+    "mergedHead": "86a04d0402c3ddf10b042d46b892da6f81506a10",
+    "tree": "a493c2e1b17180ed3fefc1d4852a042f69af570c",
+    "localReadHead": "b731631b6a5e69464e40a20d67b89df468062c2a",
+    "localReadTree": "a493c2e1b17180ed3fefc1d4852a042f69af570c",
+    "equivalence": "The exact merged commit object was not present in this local object database. The local published candidate has the same tree hash, so the cited document bytes are tree-identical.",
+    "mergedCommitAvailability": "Exact merge commit object is unavailable in this local object database; root supplied merged HEAD 86a04d0402c3ddf10b042d46b892da6f81506a10. This checkout is b731631b6a5e69464e40a20d67b89df468062c2a with exactly the same tree a493c2e1b17180ed3fefc1d4852a042f69af570c."
+  },
+  "canonicalization": "UTF-8 JSON; recursively lexicographically sorted object keys; compact separators; no BOM; payloadDigest hashes original canonical action bytes. actionDigest hashes the exact UTF-8 display actionText, not canonical action bytes.",
+  "displayLimitsProof": {
+    "source": "/tmp/comms250-display-size-proof.json",
+    "falseScalars": 389,
+    "falseUtf8Bytes": 389,
+    "trueScalars": 313,
+    "trueUtf8Bytes": 313,
+    "limitsScalars": 400,
+    "limitsUtf8Bytes": 500
+  },
+  "bindingNotes": [
+    "p1 candidate uses existing verifyPresence action=actionDigest and challenge nonce; this profile does not produce a p1 token or signature.",
+    "d1 existing fields remain byte-identical and bind request/principal/account/soul/operation/payloadDigest/nonce; effectPlanDigest is conditionally added only within the challenge for this operation, not as a duplicate prepared-wrapper field.",
+    "Plan includes actionDigest and payloadDigest as separately named digests with their distinct preimages."
+  ],
+  "vectors": [
+    {
+      "name": "disable",
+      "desiredEnabled": false,
+      "expectedEnabled": true,
+      "action": {
+        "object": {
+          "v": 1,
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "parameters": {
+            "enabled": false
+          }
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"operation\":\"soul.computer-use.set\",\"parameters\":{\"enabled\":false},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "bytes": 255,
+        "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+        "displaySummary": "enabled=false; deny future computer-use calls while off; current turn and authorized/running tool calls continue",
+        "actionText": "Owner decision soul.computer-use.set for qwts/agent_00000000-0000-4000-8000-000000000001: enabled=false; deny future computer-use calls while off; current turn and authorized/running tool calls continue; request 00000000-0000-4000-8000-000000000103; payload sha256:4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+        "actionTextScalars": 329,
+        "actionTextUtf8Bytes": 329,
+        "actionDigest": "f54e9f40397622f4adb7b3e6c7663b9b54fb9c952c61bcb6497675133c2d02c8"
+      },
+      "plan": {
+        "object": {
+          "account": "qwts",
+          "actionDigest": "f54e9f40397622f4adb7b3e6c7663b9b54fb9c952c61bcb6497675133c2d02c8",
+          "behavior": {
+            "activeCalls": "continue-authorized-or-running",
+            "disabled": "deny-later-computer-use-tool-calls",
+            "permissionCheck": "each-call-and-after-approval-wait",
+            "stop": "none",
+            "turn": "continue-current-turn"
+          },
+          "desiredEnabled": false,
+          "expected": {
+            "enabled": true,
+            "kind": "computer-use"
+          },
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "v": 1
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"actionDigest\":\"f54e9f40397622f4adb7b3e6c7663b9b54fb9c952c61bcb6497675133c2d02c8\",\"behavior\":{\"activeCalls\":\"continue-authorized-or-running\",\"disabled\":\"deny-later-computer-use-tool-calls\",\"permissionCheck\":\"each-call-and-after-approval-wait\",\"stop\":\"none\",\"turn\":\"continue-current-turn\"},\"desiredEnabled\":false,\"expected\":{\"enabled\":true,\"kind\":\"computer-use\"},\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "effectPlanDigest": "df416aaa3de6d4db63d39e89043052fe8360134ed5946753f955d5b56e7d978a"
+      },
+      "preparationCandidate": {
+        "object": {
+          "v": 2,
+          "kind": "preparation",
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+          "effectId": "00000000-0000-4000-8000-000000000105",
+          "actionDigest": "f54e9f40397622f4adb7b3e6c7663b9b54fb9c952c61bcb6497675133c2d02c8",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "acceptedAt": 1900000000,
+          "preparedAt": 1900000000,
+          "exp": 1900000180,
+          "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "daemonEpoch": 7,
+          "watchId": "00000000-0000-4000-8000-000000000104",
+          "stage": null,
+          "expected": {
+            "enabled": true,
+            "kind": "computer-use"
+          },
+          "trustVersion": 1
+        },
+        "canonicalUtf8": "{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"actionDigest\":\"f54e9f40397622f4adb7b3e6c7663b9b54fb9c952c61bcb6497675133c2d02c8\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"exp\":1900000180,\"expected\":{\"enabled\":true,\"kind\":\"computer-use\"},\"kind\":\"preparation\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"stage\":null,\"trustVersion\":1,\"v\":2,\"watchId\":\"00000000-0000-4000-8000-000000000104\"}",
+        "bytes": 803,
+        "preparationDigest": "dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf",
+        "status": "proposed new strict union; unsupported by current bot codec"
+      },
+      "challengeCandidate": {
+        "object": {
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+          "action": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTAzIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "acceptedAt": 1900000000,
+          "preparedAt": 1900000000,
+          "exp": 1900000180,
+          "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "daemonEpoch": 7,
+          "watchId": "00000000-0000-4000-8000-000000000104",
+          "effectPlanDigest": "df416aaa3de6d4db63d39e89043052fe8360134ed5946753f955d5b56e7d978a"
+        },
+        "canonicalUtf8": "{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"action\":\"eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTAzIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectPlanDigest\":\"df416aaa3de6d4db63d39e89043052fe8360134ed5946753f955d5b56e7d978a\",\"exp\":1900000180,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"watchId\":\"00000000-0000-4000-8000-000000000104\"}",
+        "digest": "c3094ab78a782ae1207a79e4143daf7ac3fa6c55b999a9581b5fe4b1a99c6697",
+        "effectPlanDigestOnlyHere": true,
+        "bytes": 1002,
+        "existingChallengeBytes": 916,
+        "addedBytes": 86,
+        "challengeDigest": "c3094ab78a782ae1207a79e4143daf7ac3fa6c55b999a9581b5fe4b1a99c6697"
+      },
+      "preparedWrapperCandidate": {
+        "object": {
+          "v": 1,
+          "challenge": {
+            "requestId": "00000000-0000-4000-8000-000000000103",
+            "principal": "principal_00000000-0000-4000-8000-000000000002",
+            "account": "qwts",
+            "soul": "agent_00000000-0000-4000-8000-000000000001",
+            "operation": "soul.computer-use.set",
+            "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+            "action": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTAzIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+            "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            "acceptedAt": 1900000000,
+            "preparedAt": 1900000000,
+            "exp": 1900000180,
+            "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "daemonEpoch": 7,
+            "watchId": "00000000-0000-4000-8000-000000000104",
+            "effectPlanDigest": "df416aaa3de6d4db63d39e89043052fe8360134ed5946753f955d5b56e7d978a"
+          },
+          "stage": null
+        },
+        "canonicalUtf8": "{\"challenge\":{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"action\":\"eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTAzIiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectPlanDigest\":\"df416aaa3de6d4db63d39e89043052fe8360134ed5946753f955d5b56e7d978a\",\"exp\":1900000180,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"watchId\":\"00000000-0000-4000-8000-000000000104\"},\"stage\":null,\"v\":1}",
+        "bytes": 1035,
+        "keys": [
+          "challenge",
+          "stage",
+          "v"
+        ],
+        "existingWrapperBytes": 949,
+        "addedBytes": 86
+      },
+      "d1PayloadCandidate": {
+        "object": {
+          "v": 1,
+          "aud": "agent-comms-owner-decision",
+          "brokerKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "presenceKey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "presenceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "iat": 1900000000,
+          "exp": 1900000060
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"aud\":\"agent-comms-owner-decision\",\"brokerKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"exp\":1900000060,\"iat\":1900000000,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"presenceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"presenceKey\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "bytes": 674,
+        "unchangedExistingFields": true,
+        "signatureOmitted": true
+      },
+      "effectCandidates": {
+        "entered": {
+          "object": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000103",
+            "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+            "preparationDigest": "dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "entered",
+            "at": 1900000001,
+            "detail": {
+              "kind": "computer-use",
+              "beforeEnabled": true,
+              "afterEnabled": false
+            }
+          },
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"afterEnabled\":false,\"beforeEnabled\":true,\"kind\":\"computer-use\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"phase\":\"entered\",\"preparationDigest\":\"dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1}",
+          "bytes": 486,
+          "digest": "3242902d43a62c89a6f0f1dbafd3ef2be0b2bec20fa278341b6f089f1858e52d"
+        },
+        "completed": {
+          "object": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000103",
+            "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+            "preparationDigest": "dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "completed",
+            "at": 1900000002,
+            "detail": {
+              "kind": "computer-use",
+              "beforeEnabled": true,
+              "afterEnabled": false
+            }
+          },
+          "canonicalUtf8": "{\"at\":1900000002,\"detail\":{\"afterEnabled\":false,\"beforeEnabled\":true,\"kind\":\"computer-use\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"phase\":\"completed\",\"preparationDigest\":\"dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1}",
+          "bytes": 488,
+          "digest": "c0e7aecbb6a07ed1540504eadc4394d82b6b0524b5bd2c74df8daaf0a8540ac9",
+          "effectDigest": "c0e7aecbb6a07ed1540504eadc4394d82b6b0524b5bd2c74df8daaf0a8540ac9"
+        }
+      },
+      "reconciliationCandidates": {
+        "observation": {
+          "object": {
+            "v": 1,
+            "kind": "computer-use",
+            "enabled": false
+          },
+          "canonicalUtf8": "{\"enabled\":false,\"kind\":\"computer-use\",\"v\":1}",
+          "digest": "6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd"
+        },
+        "indeterminatePair": {
+          "object": {
+            "v": 1,
+            "preimage": {
+              "v": 1,
+              "kind": "computer-use",
+              "enabled": false
+            },
+            "record": {
+              "v": 1,
+              "kind": "reconciliation",
+              "requestId": "00000000-0000-4000-8000-000000000103",
+              "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+              "effectId": "00000000-0000-4000-8000-000000000105",
+              "auditId": "00000000-0000-4000-8000-000000000106",
+              "originalDaemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "originalDaemonEpoch": 7,
+              "reportingDaemonKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "reportingDaemonEpoch": 8,
+              "at": 1900000003,
+              "finding": "indeterminate",
+              "basisDigest": null,
+              "observedDigest": "6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd"
+            }
+          },
+          "canonicalUtf8": "{\"preimage\":{\"enabled\":false,\"kind\":\"computer-use\",\"v\":1},\"record\":{\"at\":1900000003,\"auditId\":\"00000000-0000-4000-8000-000000000106\",\"basisDigest\":null,\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"finding\":\"indeterminate\",\"kind\":\"reconciliation\",\"observedDigest\":\"6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd\",\"originalDaemonEpoch\":7,\"originalDaemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"reportingDaemonEpoch\":8,\"reportingDaemonKey\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1},\"v\":1}",
+          "bytes": 707,
+          "recordBytes": 633,
+          "preimageBytes": 45
+        },
+        "appliedPairWithRetainedCompletion": {
+          "object": {
+            "v": 1,
+            "preimage": {
+              "v": 1,
+              "kind": "computer-use",
+              "enabled": false
+            },
+            "record": {
+              "v": 1,
+              "kind": "reconciliation",
+              "requestId": "00000000-0000-4000-8000-000000000103",
+              "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+              "effectId": "00000000-0000-4000-8000-000000000105",
+              "auditId": "00000000-0000-4000-8000-000000000106",
+              "originalDaemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "originalDaemonEpoch": 7,
+              "reportingDaemonKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "reportingDaemonEpoch": 8,
+              "at": 1900000003,
+              "finding": "applied",
+              "basisDigest": "c0e7aecbb6a07ed1540504eadc4394d82b6b0524b5bd2c74df8daaf0a8540ac9",
+              "observedDigest": "6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd"
+            }
+          },
+          "canonicalUtf8": "{\"preimage\":{\"enabled\":false,\"kind\":\"computer-use\",\"v\":1},\"record\":{\"at\":1900000003,\"auditId\":\"00000000-0000-4000-8000-000000000106\",\"basisDigest\":\"c0e7aecbb6a07ed1540504eadc4394d82b6b0524b5bd2c74df8daaf0a8540ac9\",\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"finding\":\"applied\",\"kind\":\"reconciliation\",\"observedDigest\":\"6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd\",\"originalDaemonEpoch\":7,\"originalDaemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"reportingDaemonEpoch\":8,\"reportingDaemonKey\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1},\"v\":1}",
+          "bytes": 763,
+          "basisDigest": "c0e7aecbb6a07ed1540504eadc4394d82b6b0524b5bd2c74df8daaf0a8540ac9",
+          "recordBytes": 689,
+          "preimageBytes": 45
+        }
+      },
+      "refusalCandidates": [
+        {
+          "domain": "stale-expected-state",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000103",
+            "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+            "preparationDigest": "dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "expected-state-changed"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"expected-state-changed\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"phase\":\"refused\",\"preparationDigest\":\"dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1}",
+          "bytes": 454,
+          "effectDigest": "6f3b1ae5ee794ed7d719bd935b853cfc4d02557029be84227c221b9bafac6ea6"
+        },
+        {
+          "domain": "soul-not-found",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000103",
+            "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+            "preparationDigest": "dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "target-unavailable"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"target-unavailable\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"phase\":\"refused\",\"preparationDigest\":\"dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1}",
+          "bytes": 450,
+          "effectDigest": "62466a768569c7575e86da988ca7de020e149195b25938a8714a1eb28f96c3e6"
+        },
+        {
+          "domain": "invalid-request",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000103",
+            "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+            "preparationDigest": "dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "validation-failed"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"validation-failed\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"phase\":\"refused\",\"preparationDigest\":\"dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1}",
+          "bytes": 449,
+          "effectDigest": "e0e3c7bd947180d1138fed51c5cd51991c1e87b9acc5aef536aa69e7efd14141"
+        },
+        {
+          "domain": "pre-effect-io-durable-refusal",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000103",
+            "payloadDigest": "4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8",
+            "preparationDigest": "dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "storage-unavailable"
+            }
+          },
+          "publicOutcome": "storage-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"storage-unavailable\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"4935bd70b4857cc910c7c295a9d85eb67c94c3ad3bba107acc4a7fcfb69e83e8\",\"phase\":\"refused\",\"preparationDigest\":\"dd83987a8a04604de77af069439f2bd4531d10988c5b6990bacb713755a92bcf\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000103\",\"v\":1}",
+          "bytes": 451,
+          "effectDigest": "da56d3f5e5a94d678cab5c784addd1134e7ffb294347e7dbc5be28ed35953aa9"
+        }
+      ],
+      "p1BindingCandidate": {
+        "action": "f54e9f40397622f4adb7b3e6c7663b9b54fb9c952c61bcb6497675133c2d02c8",
+        "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signatureGenerated": false
+      }
+    },
+    {
+      "name": "enable",
+      "desiredEnabled": true,
+      "expectedEnabled": false,
+      "action": {
+        "object": {
+          "v": 1,
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "parameters": {
+            "enabled": true
+          }
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"operation\":\"soul.computer-use.set\",\"parameters\":{\"enabled\":true},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "bytes": 254,
+        "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+        "displaySummary": "enabled=true; current turn continues",
+        "actionText": "Owner decision soul.computer-use.set for qwts/agent_00000000-0000-4000-8000-000000000001: enabled=true; current turn continues; request 00000000-0000-4000-8000-000000000107; payload sha256:676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+        "actionTextScalars": 253,
+        "actionTextUtf8Bytes": 253,
+        "actionDigest": "f5caf2ea861e98164cdd25a4170fff3523fb44f3477dab652b7f3e0a3226784a"
+      },
+      "plan": {
+        "object": {
+          "account": "qwts",
+          "actionDigest": "f5caf2ea861e98164cdd25a4170fff3523fb44f3477dab652b7f3e0a3226784a",
+          "behavior": {
+            "activeCalls": "continue-authorized-or-running",
+            "disabled": "deny-later-computer-use-tool-calls",
+            "permissionCheck": "each-call-and-after-approval-wait",
+            "stop": "none",
+            "turn": "continue-current-turn"
+          },
+          "desiredEnabled": true,
+          "expected": {
+            "enabled": false,
+            "kind": "computer-use"
+          },
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "v": 1
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"actionDigest\":\"f5caf2ea861e98164cdd25a4170fff3523fb44f3477dab652b7f3e0a3226784a\",\"behavior\":{\"activeCalls\":\"continue-authorized-or-running\",\"disabled\":\"deny-later-computer-use-tool-calls\",\"permissionCheck\":\"each-call-and-after-approval-wait\",\"stop\":\"none\",\"turn\":\"continue-current-turn\"},\"desiredEnabled\":true,\"expected\":{\"enabled\":false,\"kind\":\"computer-use\"},\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "effectPlanDigest": "7e7918443930f1b4155346336ef9a3371ddaaacc7f931ca64126a8c5d20a0cf5"
+      },
+      "preparationCandidate": {
+        "object": {
+          "v": 2,
+          "kind": "preparation",
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+          "effectId": "00000000-0000-4000-8000-000000000105",
+          "actionDigest": "f5caf2ea861e98164cdd25a4170fff3523fb44f3477dab652b7f3e0a3226784a",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "acceptedAt": 1900000000,
+          "preparedAt": 1900000000,
+          "exp": 1900000180,
+          "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "daemonEpoch": 7,
+          "watchId": "00000000-0000-4000-8000-000000000104",
+          "stage": null,
+          "expected": {
+            "enabled": false,
+            "kind": "computer-use"
+          },
+          "trustVersion": 1
+        },
+        "canonicalUtf8": "{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"actionDigest\":\"f5caf2ea861e98164cdd25a4170fff3523fb44f3477dab652b7f3e0a3226784a\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"exp\":1900000180,\"expected\":{\"enabled\":false,\"kind\":\"computer-use\"},\"kind\":\"preparation\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"stage\":null,\"trustVersion\":1,\"v\":2,\"watchId\":\"00000000-0000-4000-8000-000000000104\"}",
+        "bytes": 804,
+        "preparationDigest": "d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c",
+        "status": "proposed new strict union; unsupported by current bot codec"
+      },
+      "challengeCandidate": {
+        "object": {
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+          "action": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6dHJ1ZX0sInByaW5jaXBhbCI6InByaW5jaXBhbF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJyZXF1ZXN0SWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAxMDciLCJzb3VsIjoiYWdlbnRfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6MX0",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "acceptedAt": 1900000000,
+          "preparedAt": 1900000000,
+          "exp": 1900000180,
+          "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "daemonEpoch": 7,
+          "watchId": "00000000-0000-4000-8000-000000000104",
+          "effectPlanDigest": "7e7918443930f1b4155346336ef9a3371ddaaacc7f931ca64126a8c5d20a0cf5"
+        },
+        "canonicalUtf8": "{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"action\":\"eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6dHJ1ZX0sInByaW5jaXBhbCI6InByaW5jaXBhbF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJyZXF1ZXN0SWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAxMDciLCJzb3VsIjoiYWdlbnRfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6MX0\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectPlanDigest\":\"7e7918443930f1b4155346336ef9a3371ddaaacc7f931ca64126a8c5d20a0cf5\",\"exp\":1900000180,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"watchId\":\"00000000-0000-4000-8000-000000000104\"}",
+        "digest": "35b6d75b2e8e2879cd1c9be59f16c55d343be1cbdb325f25d6f57b9a926c9baf",
+        "effectPlanDigestOnlyHere": true,
+        "bytes": 1001,
+        "existingChallengeBytes": 915,
+        "addedBytes": 86,
+        "challengeDigest": "35b6d75b2e8e2879cd1c9be59f16c55d343be1cbdb325f25d6f57b9a926c9baf"
+      },
+      "preparedWrapperCandidate": {
+        "object": {
+          "v": 1,
+          "challenge": {
+            "requestId": "00000000-0000-4000-8000-000000000107",
+            "principal": "principal_00000000-0000-4000-8000-000000000002",
+            "account": "qwts",
+            "soul": "agent_00000000-0000-4000-8000-000000000001",
+            "operation": "soul.computer-use.set",
+            "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+            "action": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6dHJ1ZX0sInByaW5jaXBhbCI6InByaW5jaXBhbF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJyZXF1ZXN0SWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAxMDciLCJzb3VsIjoiYWdlbnRfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6MX0",
+            "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            "acceptedAt": 1900000000,
+            "preparedAt": 1900000000,
+            "exp": 1900000180,
+            "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "daemonEpoch": 7,
+            "watchId": "00000000-0000-4000-8000-000000000104",
+            "effectPlanDigest": "7e7918443930f1b4155346336ef9a3371ddaaacc7f931ca64126a8c5d20a0cf5"
+          },
+          "stage": null
+        },
+        "canonicalUtf8": "{\"challenge\":{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"action\":\"eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6dHJ1ZX0sInByaW5jaXBhbCI6InByaW5jaXBhbF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJyZXF1ZXN0SWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAxMDciLCJzb3VsIjoiYWdlbnRfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6MX0\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectPlanDigest\":\"7e7918443930f1b4155346336ef9a3371ddaaacc7f931ca64126a8c5d20a0cf5\",\"exp\":1900000180,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"watchId\":\"00000000-0000-4000-8000-000000000104\"},\"stage\":null,\"v\":1}",
+        "bytes": 1034,
+        "keys": [
+          "challenge",
+          "stage",
+          "v"
+        ],
+        "existingWrapperBytes": 948,
+        "addedBytes": 86
+      },
+      "d1PayloadCandidate": {
+        "object": {
+          "v": 1,
+          "aud": "agent-comms-owner-decision",
+          "brokerKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "presenceKey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "presenceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "iat": 1900000000,
+          "exp": 1900000060
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"aud\":\"agent-comms-owner-decision\",\"brokerKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"exp\":1900000060,\"iat\":1900000000,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"presenceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"presenceKey\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "bytes": 674,
+        "unchangedExistingFields": true,
+        "signatureOmitted": true
+      },
+      "effectCandidates": {
+        "entered": {
+          "object": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000107",
+            "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+            "preparationDigest": "d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "entered",
+            "at": 1900000001,
+            "detail": {
+              "kind": "computer-use",
+              "beforeEnabled": false,
+              "afterEnabled": true
+            }
+          },
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"afterEnabled\":true,\"beforeEnabled\":false,\"kind\":\"computer-use\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"phase\":\"entered\",\"preparationDigest\":\"d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1}",
+          "bytes": 486,
+          "digest": "8992592b53d64dd3a6de5a6333956b5b852f6a6be58c76cacb4734938579e156"
+        },
+        "completed": {
+          "object": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000107",
+            "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+            "preparationDigest": "d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "completed",
+            "at": 1900000002,
+            "detail": {
+              "kind": "computer-use",
+              "beforeEnabled": false,
+              "afterEnabled": true
+            }
+          },
+          "canonicalUtf8": "{\"at\":1900000002,\"detail\":{\"afterEnabled\":true,\"beforeEnabled\":false,\"kind\":\"computer-use\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"phase\":\"completed\",\"preparationDigest\":\"d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1}",
+          "bytes": 488,
+          "digest": "cf70f64ce43bd1a2f7383cd90383d78c2a3522de08890cff5e57973e8f1d9ffb",
+          "effectDigest": "cf70f64ce43bd1a2f7383cd90383d78c2a3522de08890cff5e57973e8f1d9ffb"
+        }
+      },
+      "reconciliationCandidates": {
+        "observation": {
+          "object": {
+            "v": 1,
+            "kind": "computer-use",
+            "enabled": true
+          },
+          "canonicalUtf8": "{\"enabled\":true,\"kind\":\"computer-use\",\"v\":1}",
+          "digest": "5cbd99c314e639dee1a684b672152e72f8d8e7e4877b67d721bb5d6287a9993b"
+        },
+        "indeterminatePair": {
+          "object": {
+            "v": 1,
+            "preimage": {
+              "v": 1,
+              "kind": "computer-use",
+              "enabled": true
+            },
+            "record": {
+              "v": 1,
+              "kind": "reconciliation",
+              "requestId": "00000000-0000-4000-8000-000000000107",
+              "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+              "effectId": "00000000-0000-4000-8000-000000000105",
+              "auditId": "00000000-0000-4000-8000-000000000106",
+              "originalDaemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "originalDaemonEpoch": 7,
+              "reportingDaemonKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "reportingDaemonEpoch": 8,
+              "at": 1900000003,
+              "finding": "indeterminate",
+              "basisDigest": null,
+              "observedDigest": "5cbd99c314e639dee1a684b672152e72f8d8e7e4877b67d721bb5d6287a9993b"
+            }
+          },
+          "canonicalUtf8": "{\"preimage\":{\"enabled\":true,\"kind\":\"computer-use\",\"v\":1},\"record\":{\"at\":1900000003,\"auditId\":\"00000000-0000-4000-8000-000000000106\",\"basisDigest\":null,\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"finding\":\"indeterminate\",\"kind\":\"reconciliation\",\"observedDigest\":\"5cbd99c314e639dee1a684b672152e72f8d8e7e4877b67d721bb5d6287a9993b\",\"originalDaemonEpoch\":7,\"originalDaemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"reportingDaemonEpoch\":8,\"reportingDaemonKey\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1},\"v\":1}",
+          "bytes": 706,
+          "recordBytes": 633,
+          "preimageBytes": 44
+        },
+        "appliedPairWithRetainedCompletion": {
+          "object": {
+            "v": 1,
+            "preimage": {
+              "v": 1,
+              "kind": "computer-use",
+              "enabled": true
+            },
+            "record": {
+              "v": 1,
+              "kind": "reconciliation",
+              "requestId": "00000000-0000-4000-8000-000000000107",
+              "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+              "effectId": "00000000-0000-4000-8000-000000000105",
+              "auditId": "00000000-0000-4000-8000-000000000106",
+              "originalDaemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "originalDaemonEpoch": 7,
+              "reportingDaemonKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "reportingDaemonEpoch": 8,
+              "at": 1900000003,
+              "finding": "applied",
+              "basisDigest": "cf70f64ce43bd1a2f7383cd90383d78c2a3522de08890cff5e57973e8f1d9ffb",
+              "observedDigest": "5cbd99c314e639dee1a684b672152e72f8d8e7e4877b67d721bb5d6287a9993b"
+            }
+          },
+          "canonicalUtf8": "{\"preimage\":{\"enabled\":true,\"kind\":\"computer-use\",\"v\":1},\"record\":{\"at\":1900000003,\"auditId\":\"00000000-0000-4000-8000-000000000106\",\"basisDigest\":\"cf70f64ce43bd1a2f7383cd90383d78c2a3522de08890cff5e57973e8f1d9ffb\",\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"finding\":\"applied\",\"kind\":\"reconciliation\",\"observedDigest\":\"5cbd99c314e639dee1a684b672152e72f8d8e7e4877b67d721bb5d6287a9993b\",\"originalDaemonEpoch\":7,\"originalDaemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"reportingDaemonEpoch\":8,\"reportingDaemonKey\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1},\"v\":1}",
+          "bytes": 762,
+          "basisDigest": "cf70f64ce43bd1a2f7383cd90383d78c2a3522de08890cff5e57973e8f1d9ffb",
+          "recordBytes": 689,
+          "preimageBytes": 44
+        }
+      },
+      "refusalCandidates": [
+        {
+          "domain": "stale-expected-state",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000107",
+            "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+            "preparationDigest": "d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "expected-state-changed"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"expected-state-changed\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"phase\":\"refused\",\"preparationDigest\":\"d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1}",
+          "bytes": 454,
+          "effectDigest": "0351f7e9637ee39fe16b62ec07f0fd6a5953cf6ffb0ae6b738ce892f786a109d"
+        },
+        {
+          "domain": "soul-not-found",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000107",
+            "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+            "preparationDigest": "d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "target-unavailable"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"target-unavailable\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"phase\":\"refused\",\"preparationDigest\":\"d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1}",
+          "bytes": 450,
+          "effectDigest": "de883e0dbf37f55a63a6fb51df3d8c37b7caadb4856746c157ca1efe2b43bc54"
+        },
+        {
+          "domain": "invalid-request",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000107",
+            "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+            "preparationDigest": "d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "validation-failed"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"validation-failed\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"phase\":\"refused\",\"preparationDigest\":\"d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1}",
+          "bytes": 449,
+          "effectDigest": "48a6ad3f3097ce2bacf887c9a458daffe29f30254c2a04cc93449040205059e3"
+        },
+        {
+          "domain": "pre-effect-io-durable-refusal",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000107",
+            "payloadDigest": "676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54",
+            "preparationDigest": "d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "storage-unavailable"
+            }
+          },
+          "publicOutcome": "storage-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"storage-unavailable\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"676410d800f9b4c2bb8c5782aba9e26be6d0197bdc8ef9b26dbb3698906c2d54\",\"phase\":\"refused\",\"preparationDigest\":\"d1c15637fd0bdeecf02eb9f91dcab6d2753f1f79a642692ab03b29a5febb8e7c\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000107\",\"v\":1}",
+          "bytes": 451,
+          "effectDigest": "d8dbef7f04e9a5f1a50be6e1d0d0b696b13a571326e35bfa9ca3c51ab7136f21"
+        }
+      ],
+      "p1BindingCandidate": {
+        "action": "f5caf2ea861e98164cdd25a4170fff3523fb44f3477dab652b7f3e0a3226784a",
+        "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signatureGenerated": false
+      }
+    },
+    {
+      "name": "noop-disabled",
+      "desiredEnabled": false,
+      "expectedEnabled": false,
+      "action": {
+        "object": {
+          "v": 1,
+          "requestId": "00000000-0000-4000-8000-000000000108",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "parameters": {
+            "enabled": false
+          }
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"operation\":\"soul.computer-use.set\",\"parameters\":{\"enabled\":false},\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "bytes": 255,
+        "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+        "displaySummary": "enabled=false; deny future computer-use calls while off; current turn and authorized/running tool calls continue",
+        "actionText": "Owner decision soul.computer-use.set for qwts/agent_00000000-0000-4000-8000-000000000001: enabled=false; deny future computer-use calls while off; current turn and authorized/running tool calls continue; request 00000000-0000-4000-8000-000000000108; payload sha256:2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+        "actionTextScalars": 329,
+        "actionTextUtf8Bytes": 329,
+        "actionDigest": "34d8b315b5fbec9e652c5129c80bb9fdb7e52907cff70cb449a39d05b27f4cfb"
+      },
+      "plan": {
+        "object": {
+          "account": "qwts",
+          "actionDigest": "34d8b315b5fbec9e652c5129c80bb9fdb7e52907cff70cb449a39d05b27f4cfb",
+          "behavior": {
+            "activeCalls": "continue-authorized-or-running",
+            "disabled": "deny-later-computer-use-tool-calls",
+            "permissionCheck": "each-call-and-after-approval-wait",
+            "stop": "none",
+            "turn": "continue-current-turn"
+          },
+          "desiredEnabled": false,
+          "expected": {
+            "enabled": false,
+            "kind": "computer-use"
+          },
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "requestId": "00000000-0000-4000-8000-000000000108",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "v": 1
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"actionDigest\":\"34d8b315b5fbec9e652c5129c80bb9fdb7e52907cff70cb449a39d05b27f4cfb\",\"behavior\":{\"activeCalls\":\"continue-authorized-or-running\",\"disabled\":\"deny-later-computer-use-tool-calls\",\"permissionCheck\":\"each-call-and-after-approval-wait\",\"stop\":\"none\",\"turn\":\"continue-current-turn\"},\"desiredEnabled\":false,\"expected\":{\"enabled\":false,\"kind\":\"computer-use\"},\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "effectPlanDigest": "8201431192aec0377bf49e6b846892cea4d923211e982f6c022b7d7bca20baf6"
+      },
+      "preparationCandidate": {
+        "object": {
+          "v": 2,
+          "kind": "preparation",
+          "requestId": "00000000-0000-4000-8000-000000000108",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+          "effectId": "00000000-0000-4000-8000-000000000105",
+          "actionDigest": "34d8b315b5fbec9e652c5129c80bb9fdb7e52907cff70cb449a39d05b27f4cfb",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "acceptedAt": 1900000000,
+          "preparedAt": 1900000000,
+          "exp": 1900000180,
+          "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "daemonEpoch": 7,
+          "watchId": "00000000-0000-4000-8000-000000000104",
+          "stage": null,
+          "expected": {
+            "enabled": false,
+            "kind": "computer-use"
+          },
+          "trustVersion": 1
+        },
+        "canonicalUtf8": "{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"actionDigest\":\"34d8b315b5fbec9e652c5129c80bb9fdb7e52907cff70cb449a39d05b27f4cfb\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"exp\":1900000180,\"expected\":{\"enabled\":false,\"kind\":\"computer-use\"},\"kind\":\"preparation\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"stage\":null,\"trustVersion\":1,\"v\":2,\"watchId\":\"00000000-0000-4000-8000-000000000104\"}",
+        "bytes": 804,
+        "preparationDigest": "d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60",
+        "status": "proposed new strict union; unsupported by current bot codec"
+      },
+      "challengeCandidate": {
+        "object": {
+          "requestId": "00000000-0000-4000-8000-000000000108",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+          "action": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA4Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "acceptedAt": 1900000000,
+          "preparedAt": 1900000000,
+          "exp": 1900000180,
+          "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "daemonEpoch": 7,
+          "watchId": "00000000-0000-4000-8000-000000000104",
+          "effectPlanDigest": "8201431192aec0377bf49e6b846892cea4d923211e982f6c022b7d7bca20baf6"
+        },
+        "canonicalUtf8": "{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"action\":\"eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA4Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectPlanDigest\":\"8201431192aec0377bf49e6b846892cea4d923211e982f6c022b7d7bca20baf6\",\"exp\":1900000180,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"watchId\":\"00000000-0000-4000-8000-000000000104\"}",
+        "digest": "14c27c90c69d467e04a926236029d567ac334f476e77ac907f508fb257c657c1",
+        "effectPlanDigestOnlyHere": true,
+        "bytes": 1002,
+        "existingChallengeBytes": 916,
+        "addedBytes": 86,
+        "challengeDigest": "14c27c90c69d467e04a926236029d567ac334f476e77ac907f508fb257c657c1"
+      },
+      "preparedWrapperCandidate": {
+        "object": {
+          "v": 1,
+          "challenge": {
+            "requestId": "00000000-0000-4000-8000-000000000108",
+            "principal": "principal_00000000-0000-4000-8000-000000000002",
+            "account": "qwts",
+            "soul": "agent_00000000-0000-4000-8000-000000000001",
+            "operation": "soul.computer-use.set",
+            "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+            "action": "eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA4Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9",
+            "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            "acceptedAt": 1900000000,
+            "preparedAt": 1900000000,
+            "exp": 1900000180,
+            "daemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "daemonEpoch": 7,
+            "watchId": "00000000-0000-4000-8000-000000000104",
+            "effectPlanDigest": "8201431192aec0377bf49e6b846892cea4d923211e982f6c022b7d7bca20baf6"
+          },
+          "stage": null
+        },
+        "canonicalUtf8": "{\"challenge\":{\"acceptedAt\":1900000000,\"account\":\"qwts\",\"action\":\"eyJhY2NvdW50IjoicXd0cyIsIm9wZXJhdGlvbiI6InNvdWwuY29tcHV0ZXItdXNlLnNldCIsInBhcmFtZXRlcnMiOnsiZW5hYmxlZCI6ZmFsc2V9LCJwcmluY2lwYWwiOiJwcmluY2lwYWxfMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVxdWVzdElkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMTA4Iiwic291bCI6ImFnZW50XzAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInYiOjF9\",\"daemonEpoch\":7,\"daemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"effectPlanDigest\":\"8201431192aec0377bf49e6b846892cea4d923211e982f6c022b7d7bca20baf6\",\"exp\":1900000180,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"preparedAt\":1900000000,\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"watchId\":\"00000000-0000-4000-8000-000000000104\"},\"stage\":null,\"v\":1}",
+        "bytes": 1035,
+        "keys": [
+          "challenge",
+          "stage",
+          "v"
+        ],
+        "existingWrapperBytes": 949,
+        "addedBytes": 86
+      },
+      "d1PayloadCandidate": {
+        "object": {
+          "v": 1,
+          "aud": "agent-comms-owner-decision",
+          "brokerKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "requestId": "00000000-0000-4000-8000-000000000108",
+          "principal": "principal_00000000-0000-4000-8000-000000000002",
+          "account": "qwts",
+          "soul": "agent_00000000-0000-4000-8000-000000000001",
+          "operation": "soul.computer-use.set",
+          "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+          "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "presenceKey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "presenceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "iat": 1900000000,
+          "exp": 1900000060
+        },
+        "canonicalUtf8": "{\"account\":\"qwts\",\"aud\":\"agent-comms-owner-decision\",\"brokerKey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"exp\":1900000060,\"iat\":1900000000,\"nonce\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"soul.computer-use.set\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"presenceDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"presenceKey\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"principal\":\"principal_00000000-0000-4000-8000-000000000002\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"soul\":\"agent_00000000-0000-4000-8000-000000000001\",\"v\":1}",
+        "bytes": 674,
+        "unchangedExistingFields": true,
+        "signatureOmitted": true
+      },
+      "effectCandidates": {
+        "entered": {
+          "object": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000108",
+            "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+            "preparationDigest": "d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "entered",
+            "at": 1900000001,
+            "detail": {
+              "kind": "computer-use",
+              "beforeEnabled": false,
+              "afterEnabled": false
+            }
+          },
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"afterEnabled\":false,\"beforeEnabled\":false,\"kind\":\"computer-use\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"phase\":\"entered\",\"preparationDigest\":\"d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1}",
+          "bytes": 487,
+          "digest": "5f9aebb193fb21077ddbb42c3ee01eac4bd5237020cc29204b8464b97f3e9ca7"
+        },
+        "completed": {
+          "object": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000108",
+            "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+            "preparationDigest": "d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "completed",
+            "at": 1900000002,
+            "detail": {
+              "kind": "computer-use",
+              "beforeEnabled": false,
+              "afterEnabled": false
+            }
+          },
+          "canonicalUtf8": "{\"at\":1900000002,\"detail\":{\"afterEnabled\":false,\"beforeEnabled\":false,\"kind\":\"computer-use\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"phase\":\"completed\",\"preparationDigest\":\"d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1}",
+          "bytes": 489,
+          "digest": "9bfd328a83b16e9c18d536563e7e4aa5cefb48ec8d566477ece2a4573ab0037d",
+          "effectDigest": "9bfd328a83b16e9c18d536563e7e4aa5cefb48ec8d566477ece2a4573ab0037d"
+        }
+      },
+      "reconciliationCandidates": {
+        "observation": {
+          "object": {
+            "v": 1,
+            "kind": "computer-use",
+            "enabled": false
+          },
+          "canonicalUtf8": "{\"enabled\":false,\"kind\":\"computer-use\",\"v\":1}",
+          "digest": "6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd"
+        },
+        "indeterminatePair": {
+          "object": {
+            "v": 1,
+            "preimage": {
+              "v": 1,
+              "kind": "computer-use",
+              "enabled": false
+            },
+            "record": {
+              "v": 1,
+              "kind": "reconciliation",
+              "requestId": "00000000-0000-4000-8000-000000000108",
+              "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+              "effectId": "00000000-0000-4000-8000-000000000105",
+              "auditId": "00000000-0000-4000-8000-000000000106",
+              "originalDaemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "originalDaemonEpoch": 7,
+              "reportingDaemonKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "reportingDaemonEpoch": 8,
+              "at": 1900000003,
+              "finding": "indeterminate",
+              "basisDigest": null,
+              "observedDigest": "6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd"
+            }
+          },
+          "canonicalUtf8": "{\"preimage\":{\"enabled\":false,\"kind\":\"computer-use\",\"v\":1},\"record\":{\"at\":1900000003,\"auditId\":\"00000000-0000-4000-8000-000000000106\",\"basisDigest\":null,\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"finding\":\"indeterminate\",\"kind\":\"reconciliation\",\"observedDigest\":\"6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd\",\"originalDaemonEpoch\":7,\"originalDaemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"reportingDaemonEpoch\":8,\"reportingDaemonKey\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1},\"v\":1}",
+          "bytes": 707,
+          "recordBytes": 633,
+          "preimageBytes": 45
+        },
+        "appliedPairWithRetainedCompletion": {
+          "object": {
+            "v": 1,
+            "preimage": {
+              "v": 1,
+              "kind": "computer-use",
+              "enabled": false
+            },
+            "record": {
+              "v": 1,
+              "kind": "reconciliation",
+              "requestId": "00000000-0000-4000-8000-000000000108",
+              "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+              "effectId": "00000000-0000-4000-8000-000000000105",
+              "auditId": "00000000-0000-4000-8000-000000000106",
+              "originalDaemonKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "originalDaemonEpoch": 7,
+              "reportingDaemonKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "reportingDaemonEpoch": 8,
+              "at": 1900000003,
+              "finding": "applied",
+              "basisDigest": "9bfd328a83b16e9c18d536563e7e4aa5cefb48ec8d566477ece2a4573ab0037d",
+              "observedDigest": "6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd"
+            }
+          },
+          "canonicalUtf8": "{\"preimage\":{\"enabled\":false,\"kind\":\"computer-use\",\"v\":1},\"record\":{\"at\":1900000003,\"auditId\":\"00000000-0000-4000-8000-000000000106\",\"basisDigest\":\"9bfd328a83b16e9c18d536563e7e4aa5cefb48ec8d566477ece2a4573ab0037d\",\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"finding\":\"applied\",\"kind\":\"reconciliation\",\"observedDigest\":\"6e7523188658f8d8c815a9dee0532061231d5421e79d3f72963f198a908fcedd\",\"originalDaemonEpoch\":7,\"originalDaemonKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"reportingDaemonEpoch\":8,\"reportingDaemonKey\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1},\"v\":1}",
+          "bytes": 763,
+          "basisDigest": "9bfd328a83b16e9c18d536563e7e4aa5cefb48ec8d566477ece2a4573ab0037d",
+          "recordBytes": 689,
+          "preimageBytes": 45
+        }
+      },
+      "refusalCandidates": [
+        {
+          "domain": "stale-expected-state",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000108",
+            "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+            "preparationDigest": "d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "expected-state-changed"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"expected-state-changed\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"phase\":\"refused\",\"preparationDigest\":\"d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1}",
+          "bytes": 454,
+          "effectDigest": "48f2877b38537a4b734c97a77b2516d0bb5c9370e18c7216978fc33485fdd43c"
+        },
+        {
+          "domain": "soul-not-found",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000108",
+            "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+            "preparationDigest": "d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "target-unavailable"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"target-unavailable\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"phase\":\"refused\",\"preparationDigest\":\"d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1}",
+          "bytes": 450,
+          "effectDigest": "2ea4f761f57fddf6521f3a1d5d29ac7e92d90f5f69d2810d5ae6f1a06a142f0a"
+        },
+        {
+          "domain": "invalid-request",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000108",
+            "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+            "preparationDigest": "d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "validation-failed"
+            }
+          },
+          "publicOutcome": "validation-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"validation-failed\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"phase\":\"refused\",\"preparationDigest\":\"d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1}",
+          "bytes": 449,
+          "effectDigest": "dcae8de91918f690e5a51dcccde3ec9b31ce59366baba887fc07d6edb45bece2"
+        },
+        {
+          "domain": "pre-effect-io-durable-refusal",
+          "record": {
+            "v": 1,
+            "kind": "effect",
+            "requestId": "00000000-0000-4000-8000-000000000108",
+            "payloadDigest": "2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4",
+            "preparationDigest": "d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60",
+            "receiptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectId": "00000000-0000-4000-8000-000000000105",
+            "phase": "refused",
+            "at": 1900000001,
+            "detail": {
+              "code": "storage-unavailable"
+            }
+          },
+          "publicOutcome": "storage-refused",
+          "canonicalUtf8": "{\"at\":1900000001,\"detail\":{\"code\":\"storage-unavailable\"},\"effectId\":\"00000000-0000-4000-8000-000000000105\",\"kind\":\"effect\",\"payloadDigest\":\"2aab13f64c588d783561e9727f001d7665058d2a658f7796ae71d199d837d6c4\",\"phase\":\"refused\",\"preparationDigest\":\"d9c40c0525a2fc8f9a75487655ecd738175bf2316d2072699570e5bcfc6f6a60\",\"receiptDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"requestId\":\"00000000-0000-4000-8000-000000000108\",\"v\":1}",
+          "bytes": 451,
+          "effectDigest": "92f27843b37c59dc83c2af7e48d8364951942fc2457ee1824acef8a56eea7ca3"
+        }
+      ],
+      "p1BindingCandidate": {
+        "action": "34d8b315b5fbec9e652c5129c80bb9fdb7e52907cff70cb449a39d05b27f4cfb",
+        "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signatureGenerated": false
+      }
+    }
+  ],
+  "candidateEvidence": {
+    "expectedUnion": {
+      "kind": "computer-use",
+      "enabled": "strict Boolean captured at preparation"
+    },
+    "lockRule": "Under one held population lock: compare current enabled boolean to expected before durable entered/spend; then durable entered, setting write, exact readback, and completed publication, including no-op. No second write after uncertain outcome.",
+    "enteredDetailCandidate": {
+      "kind": "computer-use",
+      "beforeEnabled": "expected Boolean",
+      "afterEnabled": "desired Boolean"
+    },
+    "completedDetailCandidate": {
+      "kind": "computer-use",
+      "beforeEnabled": "expected Boolean",
+      "afterEnabled": "desired Boolean"
+    },
+    "effectWrapper": "Retain existing exact {v,kind,requestId,payloadDigest,preparationDigest,receiptDigest,effectId,phase,at,detail}; existing entered/completed slots only. The exact detail union is not accepted and requires bot/Comms joint review.",
+    "preEffectRefusalMapping": {
+      "stale-expected-state": [
+        "expected-state-changed",
+        "validation-refused"
+      ],
+      "soul-not-found": [
+        "target-unavailable",
+        "validation-refused"
+      ],
+      "invalid-request-after-valid-challenge": [
+        "validation-failed",
+        "validation-refused"
+      ],
+      "pre-effect-io-durable-refusal": [
+        "storage-unavailable",
+        "storage-refused"
+      ],
+      "pre-effect-io-no-durable-refusal": [
+        "storage-failed/uncertain",
+        "no refused record"
+      ]
+    },
+    "strictDecode": "Strict decode failure before a valid challenge follows the existing protocol refusal path; it does not invent a new journal refusal enum.",
+    "reconciliation": "Keep existing exact {v:1,preimage,record} pair and reconciliation record fields/slots. Candidate observation preimage is a typed computer-use enabled boolean. finding=indeterminate with null basisDigest unless an exact retained request-linked completed/refused record proves terminal outcome. Current Boolean alone never proves applied/refused and never authorizes a second write.",
+    "durability": "Logical durable file+directory flush and exact readback before completion; no physical-flush guarantee. A no-op still consumes/spends and completes before==after. Audit is best-effort and never retried."
+  },
+  "negativeVectors": [
+    "enabled absent, null, string, number, or extra key; reject.",
+    "effectPlanDigest absent/extra/wrong-length/wrong-case on computer-use challenge; reject.",
+    "Conditional effectPlanDigest on any existing operation; reject.",
+    "Changed target/account/principal/request/action parameter with unchanged digests; reject.",
+    "Payload digest/display action digest/plan digest independently tampered; reject.",
+    "Action digest recomputed from canonical action bytes instead of exact display text; reject.",
+    "Changed summary/display text while retaining actionDigest; reject.",
+    "Stale expected boolean before entry; refusal only before entered.",
+    "No-op still spends and completes with equal before/after.",
+    "Uncertain write: indeterminate observation only; current boolean never terminal proof and no second write.",
+    "Applied reconciliation only when exact retained request-linked completed record exists and basisDigest names it.",
+    "d1 nonce resolves exact immutable challenge tuple; altered plan/expected/digest at confirm, receipt, release, or effect rejects.",
+    "Current operation challenge byte vector hashes remain unchanged."
+  ],
+  "existingFixtureSha256": {
+    "tests/fixtures/owner-decisions/v1.json": "70706e7327b90f8649b0b1f8baa7b59d2e4e8f6f1f33b674dc8472cb7eb951ac",
+    "tests/fixtures/owner-decisions/issuer-v1.json": "da8d10b7994edd275c18042a5c418eb634c1bccabc8c47a0f80d9a58bcdb7028",
+    "tests/fixtures/owner-decisions/effect-evidence-v1.json": "4363adad57e232231d2893c4e20b37b4b28048d307893d6ebf97fb01042de4b4"
+  },
+  "exactSources": [
+    "lib/owner-decision-challenge.mjs:11-12,28-58 (exact challenge fields and binding)",
+    "lib/owner-decision-prepared.mjs:17-42 (exact {v,challenge,stage} wrapper)",
+    "lib/owner-decision-proof.mjs:19-41 (p1 actionText/nonce and d1 bindings)",
+    "lib/owner-decision-daemon-evidence.mjs:81-103 (strict preparation union/actionDigest binding); 109-160 (effect wrappers, phases, detail union); 178-220 (reconciliation pair/record)",
+    "docs/owner-decision-effect-evidence.md:15-23,27,49-56 (record phases, bounded reconciliation, refusal mapping)",
+    "docs/owner-decision-journal-records.md:17-20,35-50,75-89 (exact wrappers, slots, unchanged field budgets)",
+    "Comms exact merged head 86a04d0402c3ddf10b042d46b892da6f81506a10/tree a493c2e1b17180ed3fefc1d4852a042f69af570c: docs/owner-computer-use-wire-candidate.md:17-35,38-57,61-86,88-116,140-161",
+    "Comms current source at prior inspected b731631: lib/owner-decision-codec.mjs:15,80-91; lib/owner-decision-challenge.mjs:11-12,28-58; lib/owner-decision-prepared.mjs:17-42; lib/owner-decision-daemon-evidence.mjs:81-103,109-160,178-220",
+    "agent-bot-identity exact commit aea8fe6c039c4455fa30b05d3737918713de3df9/tree f807ae034e0af33379f56c5833eb7e99358650ff: identity/owner-decision-evidence.mjs:22,27-36,81-123,129-169,181-208; canonical-json.mjs:7-11",
+    "Comms exact merged head 86a04d0402c3ddf10b042d46b892da6f81506a10/tree a493c2e1b17180ed3fefc1d4852a042f69af570c: docs/owner-computer-use-wire-candidate.md:17-35,38-57,61-86,88-116,140-161",
+    "Comms current source at prior inspected b731631: lib/owner-decision-codec.mjs:15,80-91; lib/owner-decision-challenge.mjs:11-12,28-58; lib/owner-decision-prepared.mjs:17-42; lib/owner-decision-daemon-evidence.mjs:81-103,109-160,178-220",
+    "agent-bot-identity exact commit aea8fe6c039c4455fa30b05d3737918713de3df9/tree f807ae034e0af33379f56c5833eb7e99358650ff: identity/owner-decision-evidence.mjs:22,27-36,81-123,129-169,181-208; canonical-json.mjs:7-11"
+  ],
+  "unresolvedJointSchemaDecisions": [
+    "The existing d1 nonce linkage must be proved end-to-end by both implementations to resolve the immutable challenge tuple including expected boolean/plan digest; d1 has no effectPlanDigest field.",
+    "The maximum-width bounded journal reservation growth must be calculated for existing fixed slot caps/admission before shipping; recorded example growth (86 bytes in challenge/wrapper) is only representative, not a complete maximum-width capacity proof.",
+    "Runtime lock/flush/readback and recovery adapters, stale-lock correction, live grant/revocation boundary tests, and native presence behavior require implementation review; scratch vectors prove none of these."
+  ],
+  "preservation": "No repository writes. Existing fixture bytes are fingerprinted for regression reference; preserve their exact bytes and all current operation schemas/vectors. Exact bot source was read from the specified Git objects only; current accepted schema remains unchanged.",
+  "botSourceSnapshot": {
+    "repo": "agent-bot-identity",
+    "commit": "aea8fe6c039c4455fa30b05d3737918713de3df9",
+    "tree": "f807ae034e0af33379f56c5833eb7e99358650ff",
+    "sourceFilesSha256": {
+      "identity/owner-decision-evidence.mjs": "746701097915772507787da099fc40c65bcc830d9134f0b01d2bda47b1309674",
+      "canonical-json.mjs": "4aeeace0d67cccbe53deff4b643d284c1fbeccf952229c268ac3d897ffdeeec8",
+      "identity/owner-decision-prepared.mjs": "7bb4832e1698c1b2e3c1ab1e6319fe3d6d058d1819ca39d6257c1d03f224a8b8"
+    },
+    "provenanceNote": "Exact git objects read with git show; no checkout or worktree mutation."
+  },
+  "botCompatibilityAudit": {
+    "ownerDecisionEvidence": "At this commit the accepted operation set and expectedShape support only revision operations and cold-wake.set (source lines 22,81-97); preparation exact field sets are PREPARATION_V1 plus trustVersion in v2 (101-123). The proposed soul.computer-use.set and {kind:computer-use,enabled:boolean} expected union are NOT accepted today.",
+    "challenge": "challengeFor emits exact existing challenge keys (159-169); effectPlanDigest is not currently encoded. Adding it conditionally is a strict schema change requiring joint review.",
+    "effect": "decodeEffect enforces exact existing effect wrapper and exact revision/cold-wake detail unions (181-208). The profile entered/completed computer-use detail examples are deliberately invented placeholders pending joint schema; they are not claimed to fit the current codec.",
+    "reconciliation": "Current reconciliation pair/record codecs and slots are strict. A typed computer-use observation preimage cannot be admitted by current code. Profile reconciliation shape is pending, with existing wrapper and slots preserved as a constraint, not an assertion of compatibility.",
+    "canonical": "Candidate JSON bytes use the same recursive lexicographic object-key sorting and compact UTF-8 JSON shape used by Comms canonical encoder and bot canonicalJson. This confirms digest preimages for the candidates only; it does not make any new fields valid.",
+    "binding": "Existing actionDigest is hash of exact display actionText; payloadDigest is hash of original canonical action bytes. The candidate keeps these distinct. No signature/token was generated."
+  },
+  "profileCompleteness": "Full concrete proposed byte vectors, but not complete conformance: all proposed operation/expected/preparation/challenge/effect/reconciliation schemas are rejected by current codecs until reviewed schema changes land. No signatures generated.",
+  "limitsAndJournalBudget": {
+    "existingActionCapBytes": 32768,
+    "existingPreparedWrapperCapBytes": 32768,
+    "existingEvidenceRecordCapBytes": 4096,
+    "existingReconciliationRecordCapBytes": 2048,
+    "existingReconciliationPairCapBytes": 4352,
+    "measured": [
+      {
+        "name": "disable",
+        "actionBytes": 255,
+        "preparedWrapperBytes": 1035,
+        "preparationBytes": 803,
+        "enteredBytes": 486,
+        "completedBytes": 488,
+        "refusalRecordBytes": [
+          454,
+          450,
+          449,
+          451
+        ],
+        "indeterminatePairBytes": 707,
+        "appliedPairBytes": 763
+      },
+      {
+        "name": "enable",
+        "actionBytes": 254,
+        "preparedWrapperBytes": 1034,
+        "preparationBytes": 804,
+        "enteredBytes": 486,
+        "completedBytes": 488,
+        "refusalRecordBytes": [
+          454,
+          450,
+          449,
+          451
+        ],
+        "indeterminatePairBytes": 706,
+        "appliedPairBytes": 762
+      },
+      {
+        "name": "noop-disabled",
+        "actionBytes": 255,
+        "preparedWrapperBytes": 1035,
+        "preparationBytes": 804,
+        "enteredBytes": 487,
+        "completedBytes": 489,
+        "refusalRecordBytes": [
+          454,
+          450,
+          449,
+          451
+        ],
+        "indeterminatePairBytes": 707,
+        "appliedPairBytes": 763
+      }
+    ],
+    "requiredGrowth": "Compute exact max-width deltas and admission reservation growth after strict new unions/schema approved; existing caps do not imply sufficient capacity. Current examples are below caps only.",
+    "challengeGrowthSamples": [
+      {
+        "name": "disable",
+        "challengeExistingBytes": 916,
+        "challengeProposedBytes": 1002,
+        "challengeAddedBytes": 86,
+        "wrapperExistingBytes": 949,
+        "wrapperProposedBytes": 1035,
+        "wrapperAddedBytes": 86
+      },
+      {
+        "name": "enable",
+        "challengeExistingBytes": 915,
+        "challengeProposedBytes": 1001,
+        "challengeAddedBytes": 86,
+        "wrapperExistingBytes": 948,
+        "wrapperProposedBytes": 1034,
+        "wrapperAddedBytes": 86
+      },
+      {
+        "name": "noop-disabled",
+        "challengeExistingBytes": 916,
+        "challengeProposedBytes": 1002,
+        "challengeAddedBytes": 86,
+        "wrapperExistingBytes": 949,
+        "wrapperProposedBytes": 1035,
+        "wrapperAddedBytes": 86
+      }
+    ]
+  },
+  "existingChallengeIdentityVector": {
+    "existingOperations": "Not modified: shared current operation challenge vectors remain byte-identical and current binders keep exact legacy challenge fields on other operations.",
+    "newOperation": "Conditional challenge field only for soul.computer-use.set; both bot challengeFor and Comms binder strict field lists must be extended jointly."
+  },
+  "scratchAssertions": {
+    "passed": [
+      "canonical action bytes equal lexicographically sorted compact JSON",
+      "payloadDigest hashes action bytes",
+      "actionDigest hashes exact display actionText",
+      "effectPlanDigest hashes canonical plan bytes",
+      "d1 nonce and payloadDigest match challenge/action",
+      "conditional digest appears only inside challenge, not as wrapper-level field",
+      "all sample records/pairs fall under current caps",
+      "summaries and plan behavior copied from candidate source document",
+      "preparation contains no duplicate effectPlanDigest; all dependent hashes/lengths recomputed",
+      "entered/completed detail omits duplicate plan digest and links through recomputed preparationDigest",
+      "applied reconciliation basisDigest equals regenerated retained-completion digest"
+    ],
+    "note": "Sample cap checks only; not maximum-width reservation or implementation conformance."
+  },
+  "fullProposalStatus": "Concrete exact synthetic bytes are supplied for the candidate action, plan, preparation, challenge, prepared wrapper, d1 payload, entered/completed effects, mapped refusals, and indeterminate/applied reconciliation pairs. They are proposed fixtures only; bot1113 and Comms current strict decoders reject new operation and shape until both sides jointly adopt schema extensions.",
+  "minimalDerivedPlan": {
+    "decision": "No top-level effectPlanDigest in preparation. New preparation shape changes only by the strict expected Boolean union; validate/recompute the existing display actionDigest from retained action at every required boundary.",
+    "digestPlacement": "effectPlanDigest is conditionally present inside challenge only; no duplicate in prepared wrapper, preparation, d1, or entered/completed detail.",
+    "derivation": "Recompute plan from immutable retained action bytes, strictly decoded enabled parameter, captured expected Boolean, exact validated display text/digest, and fixed policy constants copied from contract; compare to challenge digest at preparation/challenge/receipt/release/effect.",
+    "transitiveEvidence": "Entered/completed records bind preparationDigest. Their computer-use details are exactly {kind,beforeEnabled,afterEnabled}; linkage to the plan is transitive only when each boundary strictly validates preparationDigest against the retained preparation and recomputes its challenge plan. Nonce alone is insufficient.",
+    "reconciliation": "Applied remains admissible only with exact retained request-linked completed proof and its digest as basisDigest. Current observation alone is never terminal proof. No-op still entered/completed."
+  }
+}
