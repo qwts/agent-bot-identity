@@ -451,7 +451,7 @@ const DENY_OPAQUE = [
   // zsh EXTENDED_GLOB `#`, `^`, `~`, zsh `=cmd`, and every other expansion:
   // unquoted text is an allowlist of characters now, not a denylist (#1064)
   "find . -exec# sh -c 'touch PWNED' ';'", "find . ^zz sh -c 'touch PWNED' ';'",
-  "find . -exec~x sh -c 'touch PWNED' ';'", 'ls =ls', 'cat =ls', 'ls ~+', 'ls ~', 'ls ~root',
+  "find . -exec~x sh -c 'touch PWNED' ';'", 'ls =ls', 'cat =ls', "ls ''=ls", 'ls ""=ls', "cat ''\"\"=ls", "ls x ''=ls", 'ls ~+', 'ls ~', 'ls ~root',
   'find ~ -maxdepth 0', 'ls {a,b}', 'ls -{exec,x}', 'ls **', 'ls !(x)', 'ls @(x)', 'ls !x',
   "ls $'\\x2dexec'", "ls $'a'", 'find . -name=x*', 'find . -name x*', 'grep -r x*',
   'ls a#b', 'ls a^b', 'ls a~b', 'ls a&', 'ls a;b', 'ls a|b', 'ls a>b', 'ls a<b', 'ls (a)',
@@ -485,7 +485,7 @@ const ALLOW_SAFE = [
   'diff -r a b', 'diff -u a b', 'diff --to-file=a b', 'file -b f', 'file -m ./magic f',
   'find . -name x', 'find . -type f -newer f', "find . -name '*.js'", "grep 'a*b' f", 'ls "[x]"',
   'find . -name "*"', "find . -name '*'", "grep -r 'x*' .", "grep 'a#b' f", 'grep "^x" f',
-  "ls 'a~b'", 'ls a=b', 'ls --color=auto', 'ls\t-la', 'find . -name zz -print',
+  "ls 'a~b'", 'ls a=b', 'ls --color=auto', "ls 'a'=b", 'ls "a"=b', "ls ''", 'ls\t-la', 'find . -name zz -print',
   'stat -f %z f', 'ls a,b.c@d+e:f%g', 'stat f', 'file f',
 ];
 

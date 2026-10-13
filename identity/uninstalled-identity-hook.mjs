@@ -596,7 +596,8 @@ function shellPayload(argv) {
 // - anything else must sit inside single or double quotes;
 // - `$`, backtick and backslash are refused anywhere, quoted or not (a
 //   double-quoted `$x` or backtick still expands);
-// - an unquoted `=` may not start a word (zsh EQUALS turns `=ls` into a path);
+// - an unquoted `=` may not start a word (zsh EQUALS turns `=ls` into a path),
+//   empty quotes before it included (`""=ls` is still `=ls` to zsh);
 // - an unterminated quote is refused.
 function structurallySimple(command) {
   const text = String(command || "");
@@ -611,12 +612,14 @@ function structurallySimple(command) {
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
     if (ch === backslash || ch === dollar || ch === backtick) return false;
+    // Only content ends the start of a word: an empty quote pair adds
+    // nothing, so zsh still reads an empty-quoted `=ls` as `=ls`.
     if (quote) {
       if (ch === quote) quote = null;
-      wordStart = false;
+      else wordStart = false;
       continue;
     }
-    if (ch === single || ch === double) { quote = ch; wordStart = false; continue; }
+    if (ch === single || ch === double) { quote = ch; continue; }
     if (ch === " " || ch === "\t") { wordStart = true; continue; }
     if (!safeUnquoted.test(ch)) return false;
     if (ch === "=" && wordStart) return false;
