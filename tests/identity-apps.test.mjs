@@ -20,6 +20,7 @@ import { populationFile, upsertSoul } from '../agent-population.mjs';
 import { configuredAppSlugs, buildReadinessReport, renderReadinessJson, readinessCheck } from '../readiness.mjs';
 import { inspectAppCredentials, inspectLocalAppCredential } from '../credential-reconciler.mjs';
 import { loadConfig, slugForHarness } from '../config.mjs';
+import { GITHUB_API, routeGitHubApi } from './helpers/github-api-route.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ID = 'agent_44444444-4444-4444-8444-444444444444';
@@ -60,7 +61,9 @@ async function github(t, f) {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
-  const config = loadConfig(f.options); config.apiBase = `http://127.0.0.1:${server.address().port}`;
+  // App JWTs go only to api.github.com (#1062); this process reroutes it to the mock.
+  t.after(routeGitHubApi(`http://127.0.0.1:${server.address().port}`));
+  const config = loadConfig(f.options); config.apiBase = GITHUB_API;
   writeFileSync(f.env.AGENT_BOT_CONFIG, JSON.stringify(config));
   return { calls, rejectMint: () => { rejectMint = true; }, rejectApp: () => { rejectApp = true; }, conversions: () => conversions,
     appIdentity: (slug, id) => { reportedSlug = slug; reportedId = id; } };

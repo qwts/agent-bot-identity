@@ -645,7 +645,10 @@ on the account's first login (`RunAtLoad`), bootstrap does not wait for a
 daemon that cannot start yet, and doctor reports `daemon-load-skipped` as a
 warning instead of failing the account.
 
-Optional `api_base` must be a credential-free HTTPS URL. Optional `settings`
+Optional `api_base` must be a credential-free HTTPS URL. App tokens are
+minted only through `https://api.github.com` for now (#1062), so another host
+is refused when an App token is minted; an owner-approved enterprise host is
+#1099. Optional `settings`
 may contain `spaces_root`, `daemon_preference` (`off`, `prefer`, or
 `required`), `unmanaged_authors` (at most 64 distinct lowercase logins,
 projected to `settings.unmanagedAuthors`), and `keyd_team_id` /
@@ -1573,7 +1576,10 @@ use the `apps` map with the exact slugs instead. `doctor` prints the resolved
   `account_owner` (the roster's governance owner): a private App owned by an
   organization is installed on that organization while the person keeps
   governing the roster, so the two may differ.
-- `apiBase` — GitHub Enterprise Server / data-residency hosts.
+- `apiBase` — GitHub Enterprise Server / data-residency hosts. App tokens are
+  minted only through `https://api.github.com` for now, so another host is
+  refused for minting until an owner-approved enterprise host lands (#1062,
+  #1099).
 - `settings.spacesRoot` — an absolute, durable Agent Space root.
 - `settings.daemonPreference` — `off`, `prefer`, or `required`; the default is
   `off`.
@@ -2046,6 +2052,9 @@ update can never create two invocations.
 - **EMU / managed accounts live on github.com** — do *not* set `apiBase` for
   them; it is only for GHE Server / data-residency hosts, where commit
   noreply emails also follow the host.
+- **GHE Server / data-residency hosts cannot mint App tokens yet** — an App
+  JWT goes only to `https://api.github.com` (#1062); an owner-approved
+  enterprise host is tracked in #1099.
 - **Externally invisible Apps are handled**: the bot-UID lookup retries
   authenticated as the App itself when the anonymous lookup 404s.
 

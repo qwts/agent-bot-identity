@@ -240,6 +240,8 @@ impl Ureq {
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_global(Some(std::time::Duration::from_secs(20)))
+            // A redirect would carry the App JWT to whatever origin it names (#1062).
+            .max_redirects(0)
             .tls_config(
                 ureq::tls::TlsConfig::builder()
                     .provider(ureq::tls::TlsProvider::NativeTls)

@@ -95,6 +95,12 @@ fn nonce_ok(nonce: &str) -> bool {
 
 /// Verifies `token` for `tool` and spends its nonce. Errors are stable,
 /// non-reflecting strings: a grant's contents never come back in a message.
+/// The only GitHub API an App JWT may go to (#1062).
+pub const GITHUB_API: &str = "https://api.github.com";
+/// Why a grant naming any other API is refused.
+pub const GITHUB_API_ONLY: &str =
+    "grant names a GitHub API other than https://api.github.com; an owner-approved enterprise host is not supported yet (#1099)";
+
 pub fn verify(
     token: &str,
     tool: &str,
@@ -139,8 +145,10 @@ pub fn verify(
     {
         return Err("grant has expired");
     }
-    if !grant.api_base.starts_with("https://") || grant.api_base.len() > 200 {
-        return Err("grant names an invalid GitHub API");
+    // The App JWT goes only to GitHub's own API, by the owner's #1062
+    // decision; an owner-approved enterprise host is #1099, not yet built.
+    if grant.api_base.trim_end_matches('/') != GITHUB_API {
+        return Err(GITHUB_API_ONLY);
     }
     if grant.tool == "git_credential" && grant.host.as_deref().is_none_or(str::is_empty) {
         return Err("grant names no GitHub host");
@@ -310,8 +318,29 @@ pub mod tests {
                 1000,
                 &mut replay
             ),
-            Err("grant names an invalid GitHub API")
+            Err(GITHUB_API_ONLY)
         );
+        for other in [
+            "https://ghe.example/api/v3",
+            "https://api.github.com.evil.example",
+            "https://api.github.com:8443",
+            "https://api.github.com/api/v3",
+            "https://user:secret@api.github.com",
+        ] {
+            let mut enterprise = payload("credential", 1000);
+            enterprise["apiBase"] = json!(other);
+            assert_eq!(
+                verify(
+                    &sign(&key, &enterprise),
+                    "credential",
+                    &pinned,
+                    1000,
+                    &mut replay
+                ),
+                Err(GITHUB_API_ONLY),
+                "{other}"
+            );
+        }
         let mut extra = payload("credential", 1000);
         extra["privateKeyPem"] = json!("x");
         assert_eq!(

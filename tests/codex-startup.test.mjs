@@ -64,6 +64,7 @@ function fixture() {
   for (const key of Object.keys(env)) {
     if (/^(CODEX|CLAUDE|AI_AGENT|QWTS_AGENT|GH_AGENT_APP)/.test(key)) delete env[key];
   }
+  Object.assign(env, github.routeEnv);
   env.AGENT_BOT_STATE_HOME = stateDir;
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo, env });
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo, env });

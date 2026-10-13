@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { GITHUB_API, githubApiRouteEnv, routeGitHubApi } from './helpers/github-api-route.mjs';
 import { buildAppJwt, appConfig, mint, pickInstallation, parseMintArgs, parsePermissions, selectionReason, ungrantedPermissions, MINT_USAGE } from '../mint-token.mjs';
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -317,10 +318,15 @@ function installationServer(installations) {
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
+      // App JWTs go only to api.github.com (#1062): this process, and a child
+      // given `routeEnv`, reach the mock through that origin.
+      const target = `http://127.0.0.1:${server.address().port}`;
+      const restore = routeGitHubApi(target);
       resolve({
-        apiBase: `http://127.0.0.1:${server.address().port}`,
+        apiBase: GITHUB_API,
+        routeEnv: githubApiRouteEnv(target),
         requests,
-        close: () => new Promise((done) => server.close(done)),
+        close: () => { restore(); return new Promise((done) => server.close(done)); },
       });
     });
   });
@@ -471,7 +477,7 @@ function runMintCli(env, args = [], { nodeArgs = [], cwd = mkdtempSync(join(tmpd
   });
 }
 
-function operatorEnv(apiBase) {
+function operatorEnv(apiBase, routeEnv = {}) {
   const root = mkdtempSync(join(tmpdir(), 'agent-bot-mint-receipt-'));
   const home = fakeHome('you-claude-agent');
   const configPath = join(root, 'config.json');
@@ -483,6 +489,7 @@ function operatorEnv(apiBase) {
     AGENT_BOT_CONFIG: configPath,
     AGENT_BOT_INTERACTION_HOME: join(root, 'interaction'),
     GH_AGENT_APP: 'you-claude-agent',
+    ...routeEnv,
   };
 }
 
@@ -496,7 +503,7 @@ function mintReceipts(env) {
 test('an operator mint-token run receipts the App and the reason, never the token (#107)', async () => {
   const github = await installationServer([ORG]);
   try {
-    const env = operatorEnv(github.apiBase);
+    const env = operatorEnv(github.apiBase, github.routeEnv);
     const minted = await runMintCli(env, ['--json']);
     assert.equal(minted.code, 0, minted.stderr);
     assert.equal(JSON.parse(minted.stdout).token, 'fixture-token-never-logged-42');
@@ -519,7 +526,7 @@ test('an operator mint-token run receipts the App and the reason, never the toke
 test('a failed operator mint still receipts the App, with no error text (#107)', async () => {
   const github = await installationServer([]);
   try {
-    const env = operatorEnv(github.apiBase);
+    const env = operatorEnv(github.apiBase, github.routeEnv);
     const failed = await runMintCli(env);
     assert.notEqual(failed.code, 0);
     assert.equal(failed.stdout, '');
@@ -539,7 +546,7 @@ test('a failed operator mint still receipts the App, with no error text (#107)',
 test('the Codex desktop mint receipts the App with no prompt and no token (#107)', async () => {
   const github = await installationServer([ORG]);
   try {
-    const env = operatorEnv(github.apiBase);
+    const env = operatorEnv(github.apiBase, github.routeEnv);
     delete env.GH_AGENT_APP;
     const config = JSON.parse(readFileSync(env.AGENT_BOT_CONFIG, 'utf8'));
     writeFileSync(env.AGENT_BOT_CONFIG, `${JSON.stringify({ ...config, apps: { codex: 'you-claude-agent' }, features: { 'github-identity': true } })}\n`);
@@ -571,7 +578,7 @@ test('an owner-approval refusal receipts the explicit App as denied and mints no
     // An explicit --app in the owner's account with no other identity marker
     // needs owner approval. The child process reports a non-macOS platform,
     // so the approval refuses without a dialog on every OS.
-    const env = operatorEnv(github.apiBase);
+    const env = operatorEnv(github.apiBase, github.routeEnv);
     delete env.GH_AGENT_APP;
     const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-owner-'));
     const refused = await runMintCli(env, ['--app', 'you-claude-agent'], {
@@ -594,7 +601,7 @@ test('an owner-approval refusal receipts the explicit App as denied and mints no
 test('a bound checkout asking mint-token for another App goes through the owner gate and a headless refusal mints nothing (#775)', async () => {
   const github = await installationServer([ORG]);
   try {
-    const env = operatorEnv(github.apiBase);
+    const env = operatorEnv(github.apiBase, github.routeEnv);
     delete env.GH_AGENT_APP;
     const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-bound-'));
     execFileSync('git', ['init', '-q', cwd]);
@@ -656,7 +663,7 @@ test('#1062: a caller GITHUB_API_URL never receives the App JWT; GitHub does', a
   assert.equal(seen[0].redirect, 'error');
 });
 
-test('#1062: an apiBase that is not credential-free HTTPS is refused before any JWT is sent', async () => {
+test('#1062: an apiBase other than https://api.github.com is refused before any JWT is sent', async () => {
   for (const base of [
     'http://github.example',
     'https://user:secret@github.example/api/v3',
@@ -664,6 +671,11 @@ test('#1062: an apiBase that is not credential-free HTTPS is refused before any 
     'https://github.example/api/v3#frag',
     'ftp://github.example',
     'not a url',
+    // Owner decision on #1062: only GitHub's own API, even over HTTPS.
+    'https://ghe.example/api/v3',
+    'https://api.github.com.attacker.example',
+    'https://api.github.com:8443',
+    'https://api.github.com/api/v3',
   ]) {
     const seen = await withRecordedFetch(null, async () => {
       await assert.rejects(mint({ env: mintEnv(base, 'governance-owner') }), /apiBase/, base);
@@ -686,10 +698,12 @@ test('#1062: a redirect from the API never carries the App JWT to another origin
     response.end();
   });
   await new Promise((resolve) => redirecting.listen(0, '127.0.0.1', resolve));
+  const restore = routeGitHubApi(`http://127.0.0.1:${redirecting.address().port}`);
   try {
-    await assert.rejects(mint({ env: mintEnv(`http://127.0.0.1:${redirecting.address().port}`, 'governance-owner') }));
+    await assert.rejects(mint({ env: mintEnv(GITHUB_API, 'governance-owner') }));
     assert.deepEqual(elsewhere, []);
   } finally {
+    restore();
     await new Promise((resolve) => attacker.close(resolve));
     await new Promise((resolve) => redirecting.close(resolve));
   }
@@ -702,10 +716,12 @@ test('#1062: keyd grants and the stored-key check resolve the JWT origin the sam
     assert.deepEqual(await grantTarget({ env: {}, config: {} }), {
       apiBase: 'https://api.github.com', host: 'github.com', owner: null, installationId: null,
     });
-    const configured = await grantTarget({ env: {}, config: { apiBase: 'https://ghe.example/api/v3/' } });
-    assert.equal(configured.apiBase, 'https://ghe.example/api/v3');
-    assert.equal(configured.host, 'ghe.example');
-    await assert.rejects(grantTarget({ env: {}, config: { apiBase: 'https://u:p@ghe.example' } }), /apiBase/);
+    const configured = await grantTarget({ env: {}, config: { apiBase: 'https://api.github.com/' } });
+    assert.equal(configured.apiBase, 'https://api.github.com');
+    assert.equal(configured.host, 'github.com');
+    // By the owner's #1062 decision an enterprise host is refused until #1099.
+    await assert.rejects(grantTarget({ env: {}, config: { apiBase: 'https://ghe.example/api/v3' } }), /only to https:\/\/api\.github\.com.*#1099/);
+    await assert.rejects(grantTarget({ env: {}, config: { apiBase: 'https://u:p@api.github.com' } }), /apiBase/);
   });
   const requests = [];
   const fetchImpl = async (url, init) => {

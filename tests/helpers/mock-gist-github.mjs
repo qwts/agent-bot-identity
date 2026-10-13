@@ -9,6 +9,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { GITHUB_API, githubApiRouteEnv } from './github-api-route.mjs';
 
 export function startMockGistGitHub(root, mode = 'ok') {
   const portFile = join(root, `gist-github-port-${process.pid}-${Date.now()}-${mode}`);
@@ -26,10 +27,13 @@ export function startMockGistGitHub(root, mode = 'ok') {
     child.kill();
     throw new Error('mock gist GitHub server did not start');
   }
-  const apiBase = `http://127.0.0.1:${port}`;
+  const mock = `http://127.0.0.1:${port}`;
+  // App JWTs go only to api.github.com (#1062): configs name that origin, and
+  // a child process given `routeEnv` reaches this mock through it.
   return {
-    apiBase,
-    state: async () => (await fetch(`${apiBase}/__state`)).json(),
+    apiBase: GITHUB_API,
+    routeEnv: githubApiRouteEnv(mock),
+    state: async () => (await fetch(`${mock}/__state`)).json(),
     stop: () => child.kill(),
   };
 }

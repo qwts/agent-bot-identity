@@ -5,7 +5,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import {
   branchName,
@@ -274,8 +274,6 @@ test('the wrapper finds an nvm node with none on PATH and nothing sourced', { sk
   assert.throws(() => run({ NVM_DIR: join(root, 'absent') }), /no node on PATH/);
 });
 
-const FIXTURE_API_BASE = 'https://api.github-fixture.test';
-
 test('concurrent user-level Claude adapters share only the same bound session (#193)', async (t) => {
   const home = join(root, 'installed adapter home');
   const repo = join(home, 'Code', 'sample');
@@ -301,10 +299,8 @@ test('concurrent user-level Claude adapters share only the same bound session (#
     }),
     scope: { apps: [app] },
     owner: 'test-owner',
-    // An App JWT goes only where the config points, never to GITHUB_API_URL,
-    // and a profile accepts only HTTPS (#1062). The preload below sends this
-    // reserved host to the local mock, so nothing leaves the machine.
-    apiBase: FIXTURE_API_BASE,
+    // App JWTs go only to api.github.com (#1062); routeEnv sends it to the mock.
+    apiBase: github.apiBase,
     features: { 'github-identity': true },
     settings: { daemonPreference: 'off' },
   };
@@ -321,23 +317,12 @@ test('concurrent user-level Claude adapters share only the same bound session (#
   // check); shim `id` so the fixture reads as that account regardless of
   // who actually runs the test.
   writeFileSync(join(bin, 'id'), '#!/bin/sh\necho qwts-fixture-agent\n', { mode: 0o755 });
-  const preload = join(home, 'fixture-github-fetch.mjs');
-  writeFileSync(preload, [
-    'const original = globalThis.fetch;',
-    `const base = ${JSON.stringify(FIXTURE_API_BASE)};`,
-    `const target = ${JSON.stringify(github.apiBase)};`,
-    'globalThis.fetch = (input, init) => {',
-    '  const url = typeof input === "string" ? input : String(input?.url ?? input);',
-    '  return original(url.startsWith(base) ? target + url.slice(base.length) : input, init);',
-    '};',
-    '',
-  ].join('\n'));
   const env = hermeticGitEnv({}, {
     HOME: home,
     PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
     GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
     GIT_TERMINAL_PROMPT: '0',
-    NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+    ...github.routeEnv,
     AGENT_BOT_BIN: join(home, '.local', 'bin', 'agent-bot'),
     AGENT_BOT_ACCOUNT: app,
     AGENT_BOT_STATE_HOME: stateDir,

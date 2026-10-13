@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { GITHUB_API, githubApiRouteEnv } from './github-api-route.mjs';
+
 export const MOCK_BOT_UID = '700001';
 
 export function startMockGitHubApp(root) {
@@ -25,8 +27,11 @@ export function startMockGitHubApp(root) {
     throw new Error('mock GitHub App server did not start');
   }
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  // App JWTs go only to api.github.com (#1062): configs name that origin, and
+  // a child process given `routeEnv` reaches this mock through it.
   return {
-    apiBase: `http://127.0.0.1:${port}`,
+    apiBase: GITHUB_API,
+    routeEnv: githubApiRouteEnv(`http://127.0.0.1:${port}`),
     privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }),
     stop: () => child.kill(),
   };

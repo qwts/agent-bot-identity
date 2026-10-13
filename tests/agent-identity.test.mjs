@@ -572,6 +572,7 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
       AGENT_BOT_POPULATION_PATH: populationPath,
       AGENT_BOT_PARENT_ID: id(42),
       ...(thread ? { CODEX_THREAD_ID: thread } : { AGENT_BOT_ID: sessionEnv.AGENT_BOT_ID }),
+      ...github.routeEnv,
     },
   });
   const worktreeTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
