@@ -1,1 +1,0 @@
-- `docs/identity-contract.md` is identity's public contract (ADR-0645 step 7): the published entries, the record operations, identity's daemon routes and what identity persists, kept in step with the module map by a test (#645).

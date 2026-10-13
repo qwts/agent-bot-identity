@@ -1,1 +1,0 @@
-- `docs/identity-contract.md` no longer says the package-revision write stays in-process; since #986 nothing outside identity calls it (#645).

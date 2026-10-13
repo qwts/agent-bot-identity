@@ -1,1 +1,0 @@
-- The module map assigns identity's non-code assets (`keyd/`, `scripts/ensure-identity.sh`, `wrangler.toml` and the git hooks) to identity, and the git hooks run soul's setup and co-author steps through one soul hook adapter, `hooks/soul-hook`; hook behavior and messages are unchanged (#645, F14).

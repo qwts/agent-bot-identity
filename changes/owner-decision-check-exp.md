@@ -1,1 +1,0 @@
-- The disabled owner-decision check intake now requires the successful check's `exp` to equal the saved receipt's exactly and to be no later than the preparation's, as agent-comms sets and validates it (agent-comms#77).

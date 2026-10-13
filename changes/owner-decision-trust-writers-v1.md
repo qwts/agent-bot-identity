@@ -1,1 +1,0 @@
-- The disabled owner-decision trust key writers are now versioned: `enrollKeysV1`/`revokeKeysV1` write only against the exact current trust observation digest and refuse under the lock on a mismatch, re-check the vouch key before the record and its confirmation, and the unversioned writers refuse (agent-comms#77).

@@ -1,1 +1,0 @@
-- The comms watch records the broker's owner-decision watch identity per socket at `ready`, checked against this daemon's own vouch key, and drops owner-decision relay events; intake stays disabled (agent-comms#77).

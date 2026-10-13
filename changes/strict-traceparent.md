@@ -1,1 +1,0 @@
-- A launch now continues only an exact version-00 `traceparent` (55 characters, lowercase, nonzero IDs, nothing around it), the same grammar agent-comms forwards; surrounding whitespace or another W3C version, previously accepted, now starts a new trace like any other invalid value (#1027).

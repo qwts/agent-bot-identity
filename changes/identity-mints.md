@@ -1,1 +1,0 @@
-- `soul fork`, template spawns and soul import now mint Agent IDs through identity's record entry. Behavior is unchanged (#645).

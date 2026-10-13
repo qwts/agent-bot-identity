@@ -1,1 +1,0 @@
-- `agent-bot identity` runs identity's record operations through `identityOp` instead of importing `agent-identity.mjs`. The identity entry gains `bind-transcript` and `record-evidence` operations and a `fieldsFromEnv` option on `ensure`, and `spawnIdentity` moves to `daemon-client.mjs`. Commands, flags and output are unchanged (#645, F13 step 1).

@@ -1,1 +1,0 @@
-- The disabled owner-decision trust audit append now checks the opened descriptor before writing: a regular file, owned by this uid, not group- or world-writable, with one link, and the file named at the audit path. A FIFO with an active reader, or a changed audit file, refuses with nothing written (agent-comms#77).

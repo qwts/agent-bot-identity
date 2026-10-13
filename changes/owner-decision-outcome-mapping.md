@@ -1,1 +1,0 @@
-- The disabled owner-decision journal reports refusals with the agreed public outcome codes for all eight final-refusal reasons, including `trust-unavailable` (authority-refused) and `storage-refused`, checked against the shared agent-comms outcome vectors (agent-comms#77).

@@ -1,1 +1,0 @@
-- A new soul's generated name no longer repeats a name another soul already holds; generation retries a bounded number of times and fails clearly if it runs out, and `agent-bot doctor` warns (`soul-name-duplicate`) when active souls already share a name, without renaming any (#1003).

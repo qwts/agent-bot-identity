@@ -1,1 +1,0 @@
-- Add the disabled owner-decision daemon trust observation: `readOwnerDecisionTrustObservation()` returns the frozen v1 canonical snapshot of this daemon's trust chain and its digest, from a fully validated read under the trust lock, as consistency input for the native trust ceremony (agent-comms#77).

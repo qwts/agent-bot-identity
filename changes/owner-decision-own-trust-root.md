@@ -1,1 +1,0 @@
-- The disabled owner-decision preparation writer and effect-entry gate no longer take a trust store from their caller: both read the daemon's own, resolved from its launch environment, so a second trust store can never be selected (agent-comms#77).

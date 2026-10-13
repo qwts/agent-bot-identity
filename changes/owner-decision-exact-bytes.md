@@ -1,1 +1,0 @@
-- The disabled owner-decision decoders now read only an input's intrinsic bytes into a private bounded copy, so an oversized byte view with a misleading own `length` can no longer pass a cap (agent-comms#77).

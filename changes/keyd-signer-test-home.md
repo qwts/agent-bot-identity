@@ -1,1 +1,0 @@
-- The keyd signer test reads its config from the test's own home, so a machine whose own config pins a keyd Team ID no longer fails it (#645).

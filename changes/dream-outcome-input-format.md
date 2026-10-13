@@ -1,1 +1,0 @@
-- Dream journal version 11 records each outcome's input format, so an outcome from a format-1 or format-2 run is bounded to 100 counted items and only a format-3 run may count up to 164; older journals still read, and a daemon that predates version 11 refuses the journal (#929).

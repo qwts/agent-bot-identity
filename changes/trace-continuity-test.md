@@ -1,1 +1,0 @@
-- A trace continuity test pins the launch frames the agent-comms 0.5.0 broker sends after a principal launch: a valid `traceparent` reaches the daemon's `event:launch` reader unchanged and the launch continues that trace, an invalid one is dropped by the broker and the launch starts its own, and nothing is echoed back or journaled (#983, agent-comms#164).

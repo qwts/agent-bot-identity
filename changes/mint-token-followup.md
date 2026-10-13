@@ -1,1 +1,0 @@
-- Comment, module-map note and inventory line references for `cli/mint-token.mjs` are corrected after #950; nothing else changes (#645).

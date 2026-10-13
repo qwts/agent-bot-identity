@@ -1,1 +1,0 @@
-- Add the local diagnostics store and W3C `traceparent` helper that later #983 slices record into: owner-only JSON lines under `~/.local/state/agent-bot/diagnostics/`, rotated at 5 MB into one previous file, kept 7 days, with allowlisted fields, hashed agent IDs, redacted detail and a dropped-event counter. Nothing records into it yet (#983, ADR-0983).

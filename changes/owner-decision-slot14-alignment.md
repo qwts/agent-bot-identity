@@ -1,1 +1,0 @@
-- Align the disabled owner-decision slot-14 local outcome and pre-effect refusal with agent-comms: no daemon cancelled or expired, a null-digest refusal only before a valid preparation, released without proof reported as uncertain, and a refusal binding the saved receipt whenever one is saved (agent-comms#77).

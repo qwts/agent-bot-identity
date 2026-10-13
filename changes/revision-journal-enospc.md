@@ -1,1 +1,0 @@
-- A soul revision journal write that fails, including a hard link refused with ENOSPC after the record was written, now reports `revision-storage-failed` when nothing was recorded or `revision-publication-uncertain` when the record may be published, and callers no longer roll a soul folder back under a possibly recorded revision (#1010).

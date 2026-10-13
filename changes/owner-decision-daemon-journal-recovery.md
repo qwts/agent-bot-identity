@@ -1,1 +1,0 @@
-- Add disabled daemon owner-decision journal recovery: a flush before any duplicate acknowledgement and strict refusal of every graph but the exact committed admission prefix (#1007).

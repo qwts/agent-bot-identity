@@ -1,1 +1,0 @@
-- In uninstalled mode, a word that starts with empty quotes followed by `=` (such as `''=ls`) is now refused like `=ls`, because zsh still expands it to a path (#1064 follow-up).
