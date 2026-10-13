@@ -32,6 +32,7 @@ import { readInstallStamp } from './soul-runtimes.mjs';
 import { readToolHomeRecord } from './soul-tool-home-record.mjs';
 import { planTemplateRename, renameFromTemplate } from './soul-templates.mjs';
 import { TOOL_HOME_REGISTRY, adoptStepId, hostToolStore, toolHomeDecision, toolHomeEnv, toolHomeFiles, toolHomeFor, toolHomePath, toolHomeRelative, toolHomesRoot } from './soul-tool-homes.mjs';
+import { readManifestText } from './soul-package.mjs';
 
 // The journal lives in soul-migration-journal.mjs (shared with the space
 // move); its API stays importable from here.
@@ -319,7 +320,7 @@ export function prepareSoulToolHome(id, { harness = null, env = process.env, hom
 // preferred ones, in that order, registry harnesses only.
 function soulHarnesses(soulDir, { identityHarness = null } = {}) {
   let manifest = null;
-  try { manifest = JSON.parse(readFileSync(path.join(soulDir, 'soul.json'), 'utf8')); } catch { /* no manifest */ }
+  try { manifest = JSON.parse(readManifestText(path.join(soulDir, 'soul.json'))); } catch { /* no manifest */ }
   const preferred = Array.isArray(manifest?.preferredHarnesses) ? manifest.preferredHarnesses : [];
   return [...new Set([identityHarness, ...preferred].filter((name) => typeof name === 'string' && (Object.hasOwn(ACP_SPAWN_REGISTRY, name) || Object.hasOwn(TOOL_HOME_REGISTRY, name))))];
 }

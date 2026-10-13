@@ -247,7 +247,7 @@ export async function spawnSoulTemplate(templatePath, { name, role = null, harne
     save();
     const initialized = await editSoulRevision(identity.id, directory,
       { ...revisionOptions, reason: 'Initialize display seed from instance identity' });
-    writeFileSync(manifestPath, readFileSync(join(revisionPackagePath(identity.id, initialized.revision, revisionOptions), 'soul.json')));
+    writeFileSync(manifestPath, readManifestText(join(revisionPackagePath(identity.id, initialized.revision, revisionOptions), 'soul.json')));
     upsertIdentitySoul(identity.id, space.path, { file, stateDir, ...(options.now ? { now: options.now } : {}) });
     registered = true;
     registerSoulDir(identity.id, directory, { file });

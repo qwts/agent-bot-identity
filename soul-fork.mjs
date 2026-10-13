@@ -36,7 +36,7 @@ import { initSoulSpace } from './agent-space.mjs';
 import { loadConfig } from './config.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
 import { joinComms, joinSoul } from './soul-join.mjs';
-import { computePackageRevision, PACKAGE_IGNORE_LIST, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
+import { computePackageRevision, PACKAGE_IGNORE_LIST, readManifestText, readSoulPackageEntries, validateSoulPackage } from './soul-package.mjs';
 import { adoptSoulPackage, editSoulRevision, revisionPackagePath } from './soul-revisions.mjs';
 import { stampNewSoulToolHomes } from './soul-tool-home-record.mjs';
 import { soulsHome } from './souls-root.mjs';
@@ -191,7 +191,7 @@ export async function forkSoul({
     save();
     const initialized = await editSoulRevision(identity.id, folder,
       { ...revisionOptions, reason: 'Initialize display seed from forked identity' });
-    writeFileSync(manifestPath, readFileSync(path.join(revisionPackagePath(identity.id, initialized.revision, revisionOptions), 'soul.json')));
+    writeFileSync(manifestPath, readManifestText(path.join(revisionPackagePath(identity.id, initialized.revision, revisionOptions), 'soul.json')));
     upsertIdentitySoul(identity.id, space.path, { file, stateDir, now });
     registered = true;
     registerSoulDir(identity.id, folder, { file });

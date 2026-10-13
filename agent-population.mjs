@@ -36,7 +36,7 @@ import { stateDirectory } from './state-paths.mjs';
 import { readSoulModes } from './soul-mode.mjs';
 import { readSoulModels } from './soul-model.mjs';
 import { soulsHome } from './souls-root.mjs';
-import { validateAppearanceDeclaration } from './soul-package.mjs';
+import { readManifestText, validateAppearanceDeclaration } from './soul-package.mjs';
 
 const SCHEMA_VERSION = 1;
 const APP_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
@@ -989,7 +989,7 @@ export function soulShownName(soul, directory = null) {
   if (soul.displayName) return soul.displayName;
   if (directory) {
     try {
-      const manifest = JSON.parse(readFileSync(path.join(directory, 'soul.json'), 'utf8'));
+      const manifest = JSON.parse(readManifestText(path.join(directory, 'soul.json')));
       if (typeof manifest?.name === 'string' && manifest.name.trim()) return manifest.name;
     } catch { /* no readable soul.json */ }
   }
@@ -1358,7 +1358,7 @@ const ROLE_MAX = 60;
 function soulManifest(record, root, scan) {
   let directory;
   try { ({ directory } = resolveSoulDir(record, root, scan)); } catch { return null; }
-  try { return JSON.parse(readFileSync(path.join(directory, 'soul.json'), 'utf8')); } catch { return null; }
+  try { return JSON.parse(readManifestText(path.join(directory, 'soul.json'))); } catch { return null; }
 }
 
 function shortText(value, max) {
