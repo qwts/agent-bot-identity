@@ -1,0 +1,1 @@
+- App JWTs now go only to `https://api.github.com`. A config or organization-profile `apiBase` naming any other host is refused when an App token is minted, by agent-bot and by agent-bot-keyd, whose GitHub client also no longer follows redirects. GitHub Enterprise Server and data-residency hosts can't mint App tokens until an owner-approved enterprise host lands (#1099) (#1062).

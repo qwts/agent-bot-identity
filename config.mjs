@@ -12,7 +12,8 @@
 //     "apps": { "claude": "custom" },    // per-harness overrides of that pattern
 //     "owner": "your-org",               // account an App is installed on; consulted
 //                                        // only when an App has several installations
-//     "apiBase": "https://api.github.com", // GitHub Enterprise Server / ghe.com
+//     "apiBase": "https://api.github.com", // GitHub Enterprise Server / ghe.com;
+//                                          // App JWTs go only to api.github.com (#1062)
 //     "settings": {                        // durable, secret-free user policy
 //       "spacesRoot": "/absolute/path",
 //       "soulsRoot": "/absolute/path",
@@ -435,24 +436,19 @@ export function apiBase(config = loadConfig()) {
 }
 
 // #1062: where an App JWT may be sent. The JWT can mint a token for any of the
-// App's installations, so its destination comes only from the config file (an
-// organization profile projects its validated api_base there) or GitHub's own
-// API, never from the caller's GITHUB_API_URL. The URL must be credential-free
-// HTTPS with no query or fragment; plain http is accepted only on a loopback
-// host (LOOPBACK_HOSTS above), where a local test GitHub listens.
+// App's installations, and the config file is chosen by AGENT_BOT_CONFIG or
+// HOME, so by the owner's decision it goes only to GitHub's own API: the
+// caller's GITHUB_API_URL is never read, and a config or profile apiBase that
+// names any other origin is refused rather than trusted. An owner-approved
+// enterprise host is #1099, not yet built.
+export const APP_JWT_API_BASE = 'https://api.github.com';
+
 export function appJwtApiBase(config = loadConfig()) {
-  const value = config.apiBase ?? 'https://api.github.com';
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error('agent-bot config apiBase is not a URL; no App JWT is sent');
+  const value = config.apiBase ?? APP_JWT_API_BASE;
+  if (typeof value !== 'string' || value.replace(/\/+$/, '') !== APP_JWT_API_BASE) {
+    throw new Error(`App JWTs go only to ${APP_JWT_API_BASE}; the configured apiBase is refused for App tokens. An owner-approved enterprise host is not supported yet (#1099)`);
   }
-  const secure = parsed.protocol === 'https:' || (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname));
-  if (!secure || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('agent-bot config apiBase must be a credential-free HTTPS URL with no query or fragment; no App JWT is sent');
-  }
-  return value.replace(/\/+$/, '');
+  return APP_JWT_API_BASE;
 }
 
 export function githubHost(config = loadConfig()) {

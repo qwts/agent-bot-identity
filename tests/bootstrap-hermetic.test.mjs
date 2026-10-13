@@ -104,13 +104,14 @@ test('cold machine bootstrap: delegate refusal, complete install, idempotent rer
   const fixture = createColdHome();
   const github = startMockGitHubApp(fixture.root);
   servers.push(github);
+  Object.assign(fixture.env, github.routeEnv);
   seedPassItem(fixture, SLUG, { privateKeyPem: github.privateKeyPem });
   const configSource = writeConfigSource(fixture, github.apiBase);
   const { repo, worktree } = createRepoWithLinkedWorktree(fixture);
   const paths = installationPaths(fixture.home);
   const configPath = join(fixture.home, '.config', 'agent-bot', 'config.json');
   const shimPath = join(fixture.home, '.config', 'agent-bot', 'bin', 'gh');
-  const host = new URL(github.apiBase).host;
+  const host = new URL(github.apiBase).host.replace(/^api\./, '');
 
   // ENG-0339: the account, not the directory, is bot territory. The fixture's
   // account is the owner's (AGENT_BOT_ACCOUNT unset — the real short name,

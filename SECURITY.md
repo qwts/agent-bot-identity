@@ -26,6 +26,19 @@ prepared, and can credit you in the published advisory if you wish.
 Fixes land on `main` and ship in the next release. Only the latest release is
 supported; please confirm an issue against it or `main` before reporting.
 
+## Where App JWTs go
+
+An App JWT can mint a token for any of the App's installations, so it is sent
+only to `https://api.github.com`, and every request that carries one refuses
+redirects. The caller's `GITHUB_API_URL` is never read for it. A config or
+organization profile `apiBase` naming any other host is refused when an App
+token is minted, by both agent-bot and agent-bot-keyd, because the config file
+is chosen by `AGENT_BOT_CONFIG` or `HOME` and a profile's `api_base` is checked
+only for HTTPS. GitHub Enterprise Server and data-residency hosts therefore
+cannot mint App tokens until an owner-approved enterprise host exists (#1062,
+#1099). Installation tokens, which are scoped to one installation, still go to
+the configured API base.
+
 ## CI and outside pull requests
 
 Self-hosted runners are meant only for pushes to this repository, manual runs

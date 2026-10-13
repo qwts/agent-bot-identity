@@ -339,7 +339,7 @@ test('gist references parse strictly and never fall through to file reads', () =
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const APP_KEY_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
 
-function gistFixture(apiBase) {
+function gistFixture(apiBase, routeEnv = {}) {
   const root = scratch();
   const home = path.join(root, 'home');
   const appDir = path.join(home, '.config', 'you-claude-agent');
@@ -363,6 +363,7 @@ function gistFixture(apiBase) {
     AGENT_BOT_SPACES_HOME: spaces,
     GIT_CONFIG_GLOBAL: globalConfig,
     GIT_CONFIG_NOSYSTEM: '1',
+    ...routeEnv,
   };
   return { root, spaces, checkout, env };
 }
@@ -370,7 +371,7 @@ function gistFixture(apiBase) {
 test('space export --gist uploads the pack, records the pointer, and import restores it', async () => {
   const github = startMockGistGitHub(scratch(), 'ok');
   try {
-    const fixture = gistFixture(github.apiBase);
+    const fixture = gistFixture(github.apiBase, github.routeEnv);
     seededSpace(fixture.spaces);
 
     const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.checkout);
@@ -398,7 +399,7 @@ test('space export --gist uploads the pack, records the pointer, and import rest
       ['pointer', 'gist:abc123DEF456'],
       ['url', 'https://gist.github.com/you/abc123DEF456'],
     ]) {
-      const target = gistFixture(github.apiBase);
+      const target = gistFixture(github.apiBase, github.routeEnv);
       const imported = runCli(['space', 'import', reference], target.env, target.checkout);
       assert.equal(imported.status, 0, `${suffix}: ${imported.stderr}`);
       assert.equal(
@@ -414,7 +415,7 @@ test('space export --gist uploads the pack, records the pointer, and import rest
 test('a mint failure fails the gist export closed before any upload', async () => {
   const github = startMockGistGitHub(scratch(), 'fail-mint');
   try {
-    const fixture = gistFixture(github.apiBase);
+    const fixture = gistFixture(github.apiBase, github.routeEnv);
     seededSpace(fixture.spaces);
 
     const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.checkout);
@@ -434,7 +435,7 @@ test('a mint failure fails the gist export closed before any upload', async () =
 test('missing gist access fails closed and names the App permission', async () => {
   const github = startMockGistGitHub(scratch(), 'refuse-gists');
   try {
-    const fixture = gistFixture(github.apiBase);
+    const fixture = gistFixture(github.apiBase, github.routeEnv);
     seededSpace(fixture.spaces);
 
     const exported = runCli(['space', 'export', ID, '--gist'], fixture.env, fixture.checkout);

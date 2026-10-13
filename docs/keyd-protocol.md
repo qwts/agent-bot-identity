@@ -93,7 +93,8 @@ wider envelope. With `now` in whole seconds it accepts a grant only when:
   lifetime is allowed;
 - the token is at most 4096 bytes, the payload has no unknown fields, the
   signature verifies under the pinned daemon key, `v` is 1, `aud` and `tool`
-  match, `apiBase` is `https://`, and a `git_credential` grant names a host;
+  match, `apiBase` is `https://api.github.com` (#1062; an owner-approved
+  enterprise host is #1099), and a `git_credential` grant names a host;
 - the nonce is 16 to 64 base64url characters and not already spent.
 
 The nonce is spent last, after every other check passes and before the mint
