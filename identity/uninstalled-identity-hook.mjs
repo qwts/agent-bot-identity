@@ -21,6 +21,7 @@ import { unmanagedAuthors } from '../config.mjs';
 import { encodeDecision } from '../hook-dialects.mjs';
 
 export const UNINSTALLED_REASON = 'uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot';
+export const UNINSTALLED_OPAQUE_REASON = 'uninstalled identity: refuse a script, interpreter or task runner, which could commit or push as the human where this hook cannot see it; finish durable bootstrap first, or run it as an unmanaged author';
 
 function extractCommand(payload, env = {}) {
   if (typeof env.AGENT_HOOK_TOOL_COMMAND === "string" && env.AGENT_HOOK_TOOL_COMMAND) {
@@ -573,6 +574,113 @@ function shellPayload(argv) {
   return null;
 }
 
+// A denylist of "opaque executors" is a losing game: wrapper flags
+// (`env -S`, `command -p`, `exec -a`), grouping and control flow, backslash
+// escapes, aliases, `$VAR` command words, shell functions, `git -c
+// alias…='!…'`, and the next interpreter not on the list all walk through it.
+// So uninstalled pre-command fails CLOSED by structure (#1064): only a bare,
+// simple command whose first word is a known read-only tool is allowed, plus
+// anything an unmanaged author runs. Everything else is denied, named or not.
+// That includes `./agent-bot bootstrap`: a launcher in the checkout is content
+// the agent can rewrite (and `.git` is agent-writable too, so binding it to
+// HEAD would mean trusting git against an agent-written config). Bootstrap is
+// for an unmanaged author, or the owner outside an agent session.
+
+// The command is one simple command with no shell machinery, checked by an
+// allowlist of characters rather than a list of dangerous ones (#1064). Each
+// shell has its own expansions (bash globs, `{a,b}`, `~`; zsh EXTENDED_GLOB
+// `#`, `^`, `~`; ksh `@(…)`; zsh `=cmd`), and arguments are checked before
+// the shell expands them, so with a file named `-exec` in the directory any
+// of them can turn into `-exec` after this check. So:
+// - unquoted text may contain only `[A-Za-z0-9_./:=,+@%-]`, space and tab;
+// - anything else must sit inside single or double quotes;
+// - `$`, backtick and backslash are refused anywhere, quoted or not (a
+//   double-quoted `$x` or backtick still expands);
+// - an unquoted `=` may not start a word (zsh EQUALS turns `=ls` into a path);
+// - an unterminated quote is refused.
+function structurallySimple(command) {
+  const text = String(command || "");
+  const single = String.fromCharCode(39);
+  const double = String.fromCharCode(34);
+  const backslash = String.fromCharCode(92);
+  const dollar = String.fromCharCode(36);
+  const backtick = String.fromCharCode(96);
+  const safeUnquoted = /^[A-Za-z0-9_.\/:=,+@%-]$/;
+  let quote = null;
+  let wordStart = true;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === backslash || ch === dollar || ch === backtick) return false;
+    if (quote) {
+      if (ch === quote) quote = null;
+      wordStart = false;
+      continue;
+    }
+    if (ch === single || ch === double) { quote = ch; wordStart = false; continue; }
+    if (ch === " " || ch === "\t") { wordStart = true; continue; }
+    if (!safeUnquoted.test(ch)) return false;
+    if (ch === "=" && wordStart) return false;
+    wordStart = false;
+  }
+  return quote === null;
+}
+
+// Read-only tools that neither publish nor run code the scan cannot see. A
+// bare name only (no slash): an explicit path is a program of its own.
+// `git` is not here (#1064 re-review): .git/config is agent-writable, so a
+// core.fsmonitor, diff.external, textconv or alias planted there runs on the
+// next `git status`, and `git grep -O`, `git log --output=` and friends run
+// or write on their own; no git subcommand is reliably read-only. Neither is
+// `rg` (`--pre=` runs a program per file).
+const SAFE_COMMANDS = new Set(["ls", "cat", "head", "tail", "grep", "egrep", "fgrep",
+  "find", "wc", "diff", "echo", "pwd", "which", "true", "false", "stat", "file"]);
+const GREP_COMMANDS = new Set(["grep", "egrep", "fgrep"]);
+// `find` actions that run a program or write. bfs, which some harnesses
+// use as `find`, also takes `-rm` as `-delete`.
+const FIND_UNSAFE = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-rm",
+  "-fprint", "-fprint0", "-fprintf", "-fls"]);
+
+// Whether an argument list uses an option, by its short letter anywhere in a
+// short cluster (`-rl`) or by its long name or any prefix getopt_long would
+// accept for it (`--pag` for `--paginate`). Short clusters are matched
+// letter by letter without knowing which letters take a value, so a value
+// that happens to contain the letter is refused too: that errs closed.
+function usesOption(args, letter, long) {
+  return args.some((arg) => {
+    if (arg.startsWith("--")) {
+      const name = arg.split("=")[0];
+      return name.length > 2 && long.startsWith(name);
+    }
+    return arg.length > 1 && arg.startsWith("-") && arg.slice(1).includes(letter);
+  });
+}
+
+function isStructurallySafe(command) {
+  if (!structurallySimple(command)) return false;
+  const argv = tokenizeCommand(command);
+  if (!argv.length) return false;
+  const word = argv[0];
+  // A leading env assignment (`FOO=bar ls`) or a `/`-bearing path is not a
+  // plain safe command; neither is a wrapper (`env`, `command`, `sudo`),
+  // which is simply absent from the allowlist.
+  if (word.includes("/") || word.includes("=")) return false;
+  if (!SAFE_COMMANDS.has(word)) return false;
+  // grep takes short options only: a long option this parser cannot tell
+  // apart from a `--pre`-style one is refused.
+  if (GREP_COMMANDS.has(word)) return !argv.slice(1).some((arg) => arg.startsWith("--"));
+  if (word === "find") return !argv.some((arg) => FIND_UNSAFE.has(arg));
+  // diff -l / --paginate pipes its output through `pr` found on PATH.
+  if (word === "diff") return !usesOption(argv.slice(1), "l", "--paginate");
+  // file -C / --compile writes a compiled magic file.
+  if (word === "file") return !usesOption(argv.slice(1), "C", "--compile");
+  return true;
+}
+
+function unmanagedOpaqueAllowed(env, authors) {
+  if (!authors.length) return false;
+  return isUnmanagedGitAuthor(env, authors, "") && isUnmanagedGhActor(env, authors);
+}
+
 export function isHumanAttributedPublish(command, depth) {
   if (depth == null) depth = 0;
   if (depth > 8) return true;
@@ -601,11 +709,16 @@ export function uninstalledDecision({ event, command = "", env = {}, authors = u
     }
     return { decision: "deny", reason: UNINSTALLED_REASON };
   }
-  if (event === "pre-command" && isHumanAttributedPublish(command)) {
-    if (unmanagedPublishAllowed(command, env, authors)) {
-      return { decision: "allow", reason: "" };
-    }
-    return { decision: "deny", reason: UNINSTALLED_REASON };
+  if (event === "pre-command") {
+    const publish = isHumanAttributedPublish(command);
+    // An unmanaged author acts as themselves: a publish by the listed git
+    // author or gh actor, or any command when both identities are listed.
+    if (publish && unmanagedPublishAllowed(command, env, authors)) return { decision: "allow", reason: "" };
+    if (!publish && unmanagedOpaqueAllowed(env, authors)) return { decision: "allow", reason: "" };
+    // Otherwise only a structurally safe read-only command is allowed;
+    // everything else, the source bootstrap launcher included, fails closed.
+    if (!publish && isStructurallySafe(command)) return { decision: "allow", reason: "" };
+    return { decision: "deny", reason: publish ? UNINSTALLED_REASON : UNINSTALLED_OPAQUE_REASON };
   }
   return { decision: "allow", reason: "" };
 }
@@ -648,17 +761,30 @@ const DETECT_SOURCE = [
   shellPayload,
   isHumanAttributedPublish,
   unmanagedPublishAllowed,
+  structurallySimple,
+  usesOption,
+  isStructurallySafe,
+  unmanagedOpaqueAllowed,
   uninstalledDecision,
 ].map((fn) => fn.toString()).join('\n');
 
-function eventDecisionFallback(allow, deny, event, snapshot) {
+// Constants the inlined functions close over, re-declared in the generated
+// program so its copies resolve them (they are not captured by toString()).
+const DETECT_CONSTS = `const SAFE_COMMANDS = ${JSON.stringify([...SAFE_COMMANDS])}.reduce((s, v) => s.add(v), new Set());
+const GREP_COMMANDS = ${JSON.stringify([...GREP_COMMANDS])}.reduce((s, v) => s.add(v), new Set());
+const FIND_UNSAFE = ${JSON.stringify([...FIND_UNSAFE])}.reduce((s, v) => s.add(v), new Set());`;
+
+function eventDecisionFallback(allow, deny, denyOpaque, event, snapshot) {
   const program = `import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 const UNINSTALLED_REASON = ${JSON.stringify(UNINSTALLED_REASON)};
+const UNINSTALLED_OPAQUE_REASON = ${JSON.stringify(UNINSTALLED_OPAQUE_REASON)};
+${DETECT_CONSTS}
 ${DETECT_SOURCE}
 const allow = ${JSON.stringify(allow)};
 const deny = ${JSON.stringify(deny)};
+const denyOpaque = ${JSON.stringify(denyOpaque)};
 let raw = "";
 try { if (!process.stdin.isTTY) raw = readFileSync(0, "utf8"); } catch {}
 let payload = {};
@@ -670,7 +796,7 @@ const verdict = uninstalledDecision({
   env: process.env,
   authors: unmanagedAuthorList(process.env, ${JSON.stringify(snapshot)}),
 });
-const encoded = verdict.decision === "deny" ? deny : allow;
+const encoded = verdict.decision !== "deny" ? allow : verdict.reason === UNINSTALLED_OPAQUE_REASON ? denyOpaque : deny;
 if (encoded.stdout) process.stdout.write(encoded.stdout);
 if (encoded.stderr) process.stderr.write(encoded.stderr + "\\n");
 process.exit(encoded.exitCode);
@@ -692,7 +818,8 @@ export function adapterFallback(dialectKey, event, snapshot = { sha256: null, au
     reason: UNINSTALLED_REASON,
   });
   if (event === 'pre-commit' || event === 'pre-push' || event === 'pre-command') {
-    return eventDecisionFallback(allow, deny, event, {
+    const denyOpaque = encodeDecision({ dialectKey, event, decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+    return eventDecisionFallback(allow, deny, denyOpaque, event, {
       sha256: typeof snapshot?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(snapshot.sha256) ? snapshot.sha256 : null,
       authors: Array.isArray(snapshot?.authors) ? snapshot.authors.filter((author) => typeof author === 'string' && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author)) : [],
     });

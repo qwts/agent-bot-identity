@@ -202,7 +202,43 @@ The allowlist covers git author for
 commits (`--author` or `GIT_AUTHOR_*`, never committer identity; amend and
 reuse require `--reset-author` or an explicit `--author`), and the
 authenticated `gh` login for pushes and `gh` writes. Reads and uncommitted
-working-tree edits proceed. Cursor blocking events still print `{}` on
+working-tree edits proceed.
+
+Code this check can't read is refused too, and by structure, not a denylist
+(#1064). A script, interpreter, task runner or wrapper can run `git push
+--no-verify` or `gh` as the human where the command text doesn't show it, and
+a denylist of such programs is endlessly bypassable (`env -S`, `command -p`,
+`\node`, `$VAR`, aliases, shell functions, grouping, `git -c alias…='!…'`,
+the next interpreter not on the list). So uninstalled pre-command **allows
+only**:
+
+- a single, simple command — no chaining, grouping, control flow,
+  redirection, substitution, `$`-expansion or backslash — whose first word is
+  a bare name on a small read-only allowlist: `ls`, `cat`, `head`, `tail`,
+  `grep`/`egrep`/`fgrep` with short options only, `find` without
+  `-exec`/`-ok`/`-delete`/`-rm`/`-fprint*`, `wc`, `diff` without
+  `-l`/`--paginate` (which run `pr`), `echo`, `pwd`, `which`, `stat`, `file`
+  without `-C`/`--compile` (which writes). Unquoted text may contain only
+  letters, digits, space, tab and `_ . / : = , + @ % -`, and a word may not
+  start with `=`; anything else (globs, `~`, braces, zsh `#`/`^`) must be
+  inside quotes, since the shell would expand it after this check;
+- anything, when both the git author and the authenticated `gh` login are in
+  the unmanaged-author list.
+
+`git` and `rg` are not on the allowlist. `.git/config` is writable by the
+agent, so a `core.fsmonitor`, `diff.external`, textconv driver or alias
+planted there runs on the next `git status`, and subcommands like
+`git grep -O`, `git log --output=` or `git tag -s` run or write on their own;
+no git subcommand is reliably read-only. `rg --pre=` runs a program per file.
+
+The source bootstrap launcher (`./agent-bot bootstrap`) is not exempt either:
+it is a file in the checkout the agent can rewrite, and binding it to `HEAD`
+would mean trusting git against that same agent-writable `.git`. In an
+uninstalled agent session, bootstrap runs only for an unmanaged author; the
+owner bootstraps from their own terminal, where no agent hook applies.
+
+Everything else is denied. A machine whose hook configs predate this rule
+gets it when `agent-bot sync-hooks` re-renders them. Cursor blocking events still print `{}` on
 allow so `failClosed` does not treat silence as a denial.
 
 That mode does not require `pass-cli`, a supervisor, or a finished durable

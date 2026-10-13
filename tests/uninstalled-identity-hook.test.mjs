@@ -6,10 +6,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 
+
 import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
 import { renderConfig } from '../sync-hooks.mjs';
 import { unmanagedAuthorsSnapshot } from '../config.mjs';
 import {
+  UNINSTALLED_OPAQUE_REASON,
   UNINSTALLED_REASON,
   adapterFallback,
   decideUninstalledHook,
@@ -86,6 +88,8 @@ const DENY = [
   'echo `git push origin HEAD`',
 ];
 
+// Not publishes. Opaque executors among them (`node --test ...`) are refused
+// separately in uninstalled mode; see OPAQUE below (#1064).
 const ALLOW = [
   'git status',
   'git diff',
@@ -248,11 +252,14 @@ test('uninstalled allowlist permits matching ai9d and refuses everyone else', ()
     command: 'echo "$(git commit -m hidden)"',
     env: allowed,
   }).decision, 'allow');
+  // Single quotes make the substitution a literal string, so it is not a
+  // publish; but a `$` in the command still fails the structural allowlist,
+  // which is the safe answer in fail-closed mode (#1064).
   assert.equal(uninstalledDecision({
     event: 'pre-command',
     command: "echo '$(git commit -m hidden)'",
     env: human,
-  }).decision, 'allow');
+  }).decision, 'deny');
 });
 
 test('uninstalled decisions deny only commit, push, and pre-command publishes', () => {
@@ -268,7 +275,7 @@ test('uninstalled decisions deny only commit, push, and pre-command publishes', 
     decision: 'deny',
     reason: UNINSTALLED_REASON,
   });
-  assert.deepEqual(uninstalledDecision({ event: 'pre-command', command: 'git status' }), {
+  assert.deepEqual(uninstalledDecision({ event: 'pre-command', command: 'ls' }), {
     decision: 'allow',
     reason: '',
   });
@@ -304,7 +311,7 @@ test('generated adapters on a cold home deny publish and allow file edits, in ev
 
       const allow = runGenerated(row.key, 'pre-command', {
         home,
-        payload: { tool_input: { command: 'git status' } },
+        payload: { tool_input: { command: 'ls' } },
       });
       const expectedAllow = encodeDecision({
         dialectKey: row.key,
@@ -379,6 +386,185 @@ test('generated adapters allow unmanaged publish only for an explicitly listed a
       });
       assert.equal(unlisted.status, expectedDeny.exitCode, `${row.key} unlisted ai9d commit exit`);
       assert.equal(unlisted.stdout, expectedDeny.stdout, `${row.key} unlisted ai9d commit stdout`);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Uninstalled pre-command fails CLOSED by structure (#1064): anything that is
+// not a bare, simple, read-only command is denied. These are the security
+// reviewer's bypass probes against a denylist — wrapper flags, grouping and
+// control flow, escapes, aliases, `$VAR`, functions, `git -c`, PATH-relative
+// names, other interpreters — plus the plain opaque commands. Every one denies.
+const DENY_OPAQUE = [
+  // plain interpreters and task runners
+  'node x.js', 'node build.mjs', 'npm test', 'npx some-tool', 'make release',
+  'pytest', 'python3.12 x.py', 'python3 publish.py', 'node2 x.js', 'node ./other.mjs',
+  // wrapper binaries and flags
+  'env node x.js', 'env -S "node x.js"', 'env -S node x.js', "env -S'node x.js'",
+  'env -Snode x.js', 'env -iS node x.js', 'env -u FOO node x.js', 'env -- node x.js',
+  'command node x.js', 'exec node x.js', 'nohup node x.js', 'time node x.js',
+  'builtin command node x.js', 'command -p node x.js', 'exec -a foo node x.js',
+  'command -p git push', 'exec -a x git push', 'env -- git push', 'env -S "git push"',
+  'caffeinate node x.js', 'arch -arm64 node x.js', 'sandbox-exec -p x node x.js',
+  'script -q /dev/null node x.js', 'launchctl submit -l x -- node x.js', 'ssh localhost ls',
+  'nice node x.js', 'timeout 5 node x.js', 'xargs -n1 git push < remotes', 'stdbuf -o0 node x.js',
+  // shells, here-strings, scripts, pipes
+  'bash -c "node x.js"', "bash -c 'echo hi; node x.js'", "bash -lc 'node x.js'",
+  'bash -c -- \'node x.js\'', "bash -o errexit -c 'node x.js'", 'bash -c -- \'git push\'',
+  'bash <<< "node x.js"', 'bash <<<"git status"', 'sh -s <<< "node x.js"', 'bash < script.sh',
+  'cat s.sh | bash', 'echo node x.js | sh', 'bash script.sh', 'sh ./s.sh', 'bash', 'sh -c "git status"',
+  // grouping and control flow
+  '{ node x.js; }', '(node x.js)', '(git push)', '{ git push; }',
+  'if true; then node x.js; fi', 'if true; then git push; fi', 'for i in 1; do node x.js; done',
+  // escapes, quotes-in-command-word, aliases, functions, variables
+  '\\node x.js', '\\git push', 'n\\ode x.js', '"no"de x.js', "n''ode x.js",
+  'alias n=node; n x.js', 'n x.js', 'NODE=node; $NODE x.js', 'PATH=.:$PATH a',
+  'hash -p ./evil git; git status', 'function git { node x.js; }; git status', 'git(){ node x.js; }; git status',
+  'trap "node x.js" EXIT', 'coproc node x.js', 'chmod +x a && a',
+  // git config / alias / -c injection, and non-read-only git
+  'git -c core.hooksPath=/dev/null commit -m x', 'git -c alias.p=!node\\ x.js p',
+  'git -c core.sshCommand=./evil fetch', 'git config alias.x "!node x.js"', 'git x',
+  'git -c core.editor=./e commit', 'git -c core.fsmonitor=./evil status', 'git -c diff.external=./evil diff',
+  'git -c alias.p=!git\\ push p', "git -c alias.p='!git push' p", "git -c core.fsmonitor='git push' status",
+  'git push', 'git commit -m x', 'git config alias.x y',
+  // gh is never read-only enough to allow here
+  'gh alias set x --shell "node x.js"', 'gh x', 'gh extension exec foo', 'gh pr view 122',
+  // other interpreters a denylist forgets
+  'swift x.swift', 'java -jar x.jar', 'awk \'BEGIN{system("echo hi")}\'', 'tclsh x',
+  'Rscript x.R', "vim -c '!ls'", 'open x.command', 'at now <<< "ls"', 'osascript -e x',
+  // explicit paths, redirects, substitutions
+  './scripts/release.sh', '/usr/local/bin/release', 'printf "hello" > /tmp/notes.md',
+  'echo "$(node build.mjs)"', 'source ./env.sh', '. ./env.sh', 'eval "$CMD"',
+  'find . -name x -exec sh {} ;', 'find . -delete', 'find . -rm', 'find . -name x -rm',
+  // globs expand after this check: with a file named `-exec` in the directory
+  // these become `-exec` (re-review, #1064); quoted `';'` must not help either
+  "find . -exe? sh -c 'touch PWNED' ';'", "find . [-]exec sh -c 'touch PWNED' ';'",
+  "find . -exec* sh -c 'touch PWNED' ';'", "find . -exe? sh -c 'touch PWNED' {} +",
+  'find . -de*', "find . -e'xec' sh -c 'touch PWNED' {} +", 'find . -e"xec" sh -c x {} +',
+  "find . '-exec' sh -c 'touch PWNED' {} +", 'ls *', 'cat ?', 'ls [a]', 'grep x *',
+  // diff -l / --paginate run `pr` from PATH; file -C / --compile writes
+  'diff -l a b', 'diff --paginate a b', 'diff --pag a b', 'diff -rl a b', 'diff -lr a b',
+  'diff -r -l a b', "diff '-l' a b", 'file -C', 'file -C -m ./magic', 'file --compile -m ./magic',
+  'file --comp -m m', 'file -bC x', "file '-C' -m m",
+  // zsh EXTENDED_GLOB `#`, `^`, `~`, zsh `=cmd`, and every other expansion:
+  // unquoted text is an allowlist of characters now, not a denylist (#1064)
+  "find . -exec# sh -c 'touch PWNED' ';'", "find . ^zz sh -c 'touch PWNED' ';'",
+  "find . -exec~x sh -c 'touch PWNED' ';'", 'ls =ls', 'cat =ls', 'ls ~+', 'ls ~', 'ls ~root',
+  'find ~ -maxdepth 0', 'ls {a,b}', 'ls -{exec,x}', 'ls **', 'ls !(x)', 'ls @(x)', 'ls !x',
+  "ls $'\\x2dexec'", "ls $'a'", 'find . -name=x*', 'find . -name x*', 'grep -r x*',
+  'ls a#b', 'ls a^b', 'ls a~b', 'ls a&', 'ls a;b', 'ls a|b', 'ls a>b', 'ls a<b', 'ls (a)',
+  'diff -ql a b', 'diff --p a b', 'file -zC x', 'file --comp x',
+  // the node-based bootstrap forms are gone: node is an interpreter
+  'node bootstrap.mjs --x y', 'node bootstrap.mjs --require ./evil.js', 'node bootstrap.mjs --import=./evil.mjs',
+  'NODE_OPTIONS=--require=./e.js node bootstrap.mjs', 'node bootstrap.mjs --eval x',
+  'node bootstrap.mjs --profile /tmp/organization-profile.json --machine-only',
+  // the source bootstrap launcher is content the agent can rewrite: refused
+  './agent-bot bootstrap', './agent-bot bootstrap --x y', './agent-bot bootstrap --repair --machine-only',
+  './agent-bot bootstrap; node x.mjs', './agent-bot bootstrap --profile $(node x.mjs)',
+  './agent-bot doctor',
+  // re-review (#1064): git and rg run code or write on their own, and
+  // .git/config is agent-writable, so no git subcommand is read-only here
+  "git grep -O'touch /tmp/pwned' x", "git grep --open-files-in-pager='touch /tmp/pwned' x",
+  'git log --format=x --output=.git/config', 'git log --output=agent-bot', 'git diff --output=agent-bot',
+  'git status', 'git log --oneline', 'git diff', 'git show HEAD', 'git rev-parse HEAD',
+  'git diff --ext-diff', 'git log -p --textconv', 'git show --textconv HEAD',
+  'git tag -s v1', 'git tag -a v1 -m x', 'git branch -f main HEAD', 'git branch --edit-description',
+  'git remote add x https://example.invalid/x', 'git remote update', 'git symbolic-ref HEAD refs/heads/x',
+  'git reflog expire --all', 'git branch', 'git tag',
+  'rg --pre=sh x', 'rg --pre sh x', 'rg pattern', 'rg -z x',
+  // grep takes short options only
+  'grep --pre=sh x .', 'grep --include=x y .', 'egrep --color=always x f',
+];
+
+// Bare read-only commands the allowlist permits.
+const ALLOW_SAFE = [
+  'ls', 'ls -la', 'cat README.md', 'head -n 5 f', 'tail f', 'wc -l f', 'diff a b',
+  'echo hi', 'pwd', 'which git', 'grep -rn node .', 'grep -i x f', 'egrep -v x f',
+  'diff -r a b', 'diff -u a b', 'diff --to-file=a b', 'file -b f', 'file -m ./magic f',
+  'find . -name x', 'find . -type f -newer f', "find . -name '*.js'", "grep 'a*b' f", 'ls "[x]"',
+  'find . -name "*"', "find . -name '*'", "grep -r 'x*' .", "grep 'a#b' f", 'grep "^x" f',
+  "ls 'a~b'", 'ls a=b', 'ls --color=auto', 'ls\t-la', 'find . -name zz -print',
+  'stat -f %z f', 'ls a,b.c@d+e:f%g', 'stat f', 'file f',
+];
+
+test('uninstalled pre-command denies every denylist-bypass probe and allows bare read-only commands (#1064)', () => {
+  for (const command of DENY_OPAQUE) {
+    const d = uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [] });
+    assert.equal(d.decision, 'deny', `should deny: ${command}`);
+  }
+  for (const command of ALLOW_SAFE) {
+    assert.deepEqual(uninstalledDecision({ event: 'pre-command', command, env: {}, authors: [] }),
+      { decision: 'allow', reason: '' }, `should allow: ${command}`);
+  }
+  // Other events are not commands.
+  assert.equal(uninstalledDecision({ event: 'pre-file-write', command: 'npm test', env: {}, authors: [] }).decision, 'allow');
+});
+
+test('the source bootstrap launcher is refused in uninstalled mode, genuine or modified, unless an unmanaged author runs it (#1064)', () => {
+  // A launcher in the checkout is content the agent can rewrite (`git log
+  // --output=agent-bot` did exactly that), so the hook does not exempt it.
+  const root = mkdtempSync(join(tmpdir(), 'uninstalled-boot-'));
+  try {
+    writeFileSync(join(root, 'agent-bot'), '#!/bin/sh\nexec node bootstrap.mjs "$@"\n');
+    chmodSync(join(root, 'agent-bot'), 0o755);
+    const run = (command, env = {}, authors = []) => uninstalledDecision({ event: 'pre-command', command, env, authors }).decision;
+    assert.equal(run('./agent-bot bootstrap'), 'deny', 'a genuine-looking launcher');
+    writeFileSync(join(root, 'agent-bot'), '#!/bin/sh\ntouch /tmp/pwned\n');
+    assert.equal(run('./agent-bot bootstrap'), 'deny', 'a modified launcher');
+    assert.equal(run('./agent-bot bootstrap --machine-only'), 'deny');
+    // An unmanaged author (both identities listed) may run it.
+    assert.equal(run('./agent-bot bootstrap', actorEnv('ai9d', AI9D), ['ai9d']), 'allow');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unmanaged author runs anything, including the builds a repo needs; the human does not (#1064)', () => {
+  // Both the git author and the gh actor must be listed.
+  const both = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('ai9d', AI9D), authors: ['ai9d'] });
+  assert.deepEqual(both, { decision: 'allow', reason: '' });
+  for (const command of ['node build.mjs', 'make', './scripts/x.sh', 'bash -c "npm run build"']) {
+    assert.equal(uninstalledDecision({ event: 'pre-command', command, env: actorEnv('ai9d', AI9D), authors: ['ai9d'] }).decision, 'allow', command);
+  }
+  const humanGh = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('qwts', AI9D), authors: ['ai9d'] });
+  assert.deepEqual(humanGh, { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+  const humanGit = uninstalledDecision({ event: 'pre-command', command: 'npm test', env: actorEnv('ai9d', HUMAN), authors: ['ai9d'] });
+  assert.deepEqual(humanGit, { decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+});
+
+test('generated adapters on a cold home deny opaque execution, git and the launcher, and allow ls, in every dialect (#1064)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'uninstalled-opaque-'));
+  try {
+    for (const row of DIALECTS.filter((candidate) => candidate.file)) {
+      const run = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'node build.mjs' },
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: '' }),
+      });
+      const expected = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON });
+      assert.equal(run.status, expected.exitCode, `${row.key} opaque exit`);
+      if (expected.stdout) assert.equal(run.stdout, expected.stdout, `${row.key} opaque stdout`);
+
+      for (const command of ['./agent-bot bootstrap --machine-only', 'git status', 'rg --pre=sh x']) {
+        const refused = runGenerated(row.key, 'pre-command', {
+          home,
+          payload: { command },
+          env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: '' }),
+        });
+        assert.equal(refused.status, expected.exitCode, `${row.key} ${command} exit`);
+        if (expected.stdout) assert.equal(refused.stdout, expected.stdout, `${row.key} ${command} stdout`);
+      }
+
+      const ls = runGenerated(row.key, 'pre-command', {
+        home,
+        payload: { command: 'ls' },
+        env: actorEnv('qwts', { ...HUMAN, AGENT_BOT_UNMANAGED_AUTHORS: '' }),
+      });
+      const allow = encodeDecision({ dialectKey: row.key, event: 'pre-command', decision: 'allow' });
+      assert.equal(ls.status, allow.exitCode, `${row.key} ls exit`);
+      assert.equal(ls.stdout, allow.stdout, `${row.key} ls stdout`);
     }
   } finally {
     rmSync(home, { recursive: true, force: true });
