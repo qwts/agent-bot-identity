@@ -15,7 +15,7 @@ import {
 } from './owner-decision-journal-frame.mjs';
 import {
   bindEffect, bindPreparation, bindReconciliationPair, challengeFor, completedRecordFor, decodeEffect, decodePreparation, decodeSuccessfulCheck, effectDigest,
-  effectOutcome, enteredRecordFor, isRevisionOperation, refusedRecordFor, SETTING_OPERATIONS,
+  effectOutcome, enteredRecordFor, isRevisionOperation, preparedChallengeMatches, refusedRecordFor, SETTING_OPERATIONS,
 } from './owner-decision-evidence.mjs';
 import { COMPUTER_USE_OPERATION } from './owner-decision-action.mjs';
 import { LINKED_EVENT_CAP, verifyLinkedEvent } from './owner-decision-linked-event.mjs';
@@ -417,7 +417,7 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
       if (['prepared-challenge', 'presence', 'receipt', 'successful-check', 'pre-effect-refused'].some((slot) => slots[slot])) fail();
       return { state: 'admitted' };
     }
-    if (slots['prepared-challenge'] && !slots['prepared-challenge'].equals(challengeFor(preparation, saved.action))) fail();
+    if (slots['prepared-challenge'] && !preparedChallengeMatches(slots['prepared-challenge'], preparation, saved.action)) fail();
     if (!slots['prepared-challenge'] && (slots.presence || slots.receipt || slots['successful-check'])) fail();
     if (slots['successful-check']) {
       if (!slots.presence || !slots.receipt) fail();
@@ -459,7 +459,7 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
   function enteredPrefix(decode, saved) {
     const ev = evidence(decode, saved);
     const { slots, action, preparation, preparationDigest, receiptDigest, acceptance } = ev;
-    if (!preparation || !slots['prepared-challenge'] || !slots['prepared-challenge'].equals(challengeFor(preparation, saved.action))
+    if (!preparation || !slots['prepared-challenge'] || !preparedChallengeMatches(slots['prepared-challenge'], preparation, saved.action)
       || !slots.presence || !slots.receipt || !slots['successful-check'] || slots['pre-effect-refused'] || !slots.entered
       || slots['observation-pair'] || slots['local-lifecycle-outcome']) fail();
     decodeSuccessfulCheck(slots['successful-check'], { acceptance, receiptDigest });

@@ -226,6 +226,20 @@ export function challengeFor(p, actionBytes) {
   return Buffer.from(canonicalJson(challenge));
 }
 
+// Whether saved slot-3 bytes are exactly the challenge the preparation and
+// action imply. The journal store checks this on every read; for
+// `soul.computer-use.set` it is where a divergent plan digest refuses.
+export function preparedChallengeMatches(challengeBytes, p, actionBytes) {
+  const saved = exactBytes(challengeBytes, { max: ACTION_CAP });
+  return saved !== null && saved.equals(challengeFor(p, actionBytes));
+}
+
+// The same check as a codec: the saved challenge, or an evidence refusal.
+export function bindPreparedChallenge(challengeBytes, p, actionBytes) {
+  if (!preparedChallengeMatches(challengeBytes, p, actionBytes)) fail('owner-evidence-binding');
+  return challengeBytes;
+}
+
 // --- the one live successful check (slot 7) ---
 
 export function decodeSuccessfulCheck(bytes, { acceptance, receiptDigest }) {

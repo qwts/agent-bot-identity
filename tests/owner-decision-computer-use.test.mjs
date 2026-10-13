@@ -1,13 +1,16 @@
 // `soul.computer-use.set` (agent-comms#250, first phase): the disabled action,
 // codec and evidence slice. No route, wire adoption or gate adapter.
 //
-// DRAFT FIXTURE: tests/fixtures/owner-decisions/computer-use-candidate-v1.json
-// is agent-comms PR #263's candidate fixture, copied byte for byte from its
-// signed head 0f4dbf95589125df98a2697e7f87c28885e1e7fd (tree 6932c2d5) and
-// pinned below. It is a proposal until that PR merges: re-vendor and re-pin
-// from the merged agent-comms bytes then. The 46 rejections its checker
-// (tools/acceptance/owner-decision-computer-use-candidate-vectors.mjs) asserts
-// are each exercised below against this repository's own codecs.
+// tests/fixtures/owner-decisions/computer-use-candidate-v1.json is the
+// agent-comms candidate fixture as merged in agent-comms
+// 9158689935083269f879ad9d93604ca8caa1f2d0 (PR #263, tree 6932c2d5), copied
+// byte for byte and pinned below. Its shapes are still candidates, not wire
+// adoption: nothing routes to them. Of the 46 rejections its checker
+// (tools/acceptance/owner-decision-computer-use-candidate-vectors.mjs)
+// asserts, 45 are exercised below against this repository's own codecs, each
+// asserting the codec's own error code; #23 (a duplicated wrapper field) has
+// no codec here, since the broker owns the prepared wrapper, and is checked
+// structurally instead.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
@@ -18,7 +21,7 @@ import process from 'node:process';
 import { canonicalJson } from '../canonical-json.mjs';
 import { decodeOwnerDecisionAction, ownerDecisionCanonical } from '../identity/owner-decision-action.mjs';
 import {
-  COMPUTER_USE_BEHAVIOR, bindEffect, bindPreparation, bindReconciliationPair, challengeFor, completedRecordFor, computerUsePlan,
+  COMPUTER_USE_BEHAVIOR, bindEffect, bindPreparation, bindPreparedChallenge, bindReconciliationPair, challengeFor, completedRecordFor, computerUsePlan,
   decodeEffect, decodePreparation, effectOutcome, effectPlanDigest, enteredRecordFor, reconciliationFinding, refusedRecordFor,
 } from '../identity/owner-decision-evidence.mjs';
 import {
@@ -221,8 +224,22 @@ test('computer use has no linked event', () => {
 
 // --- B. the candidate checker's 46 rejections, against our own codecs ---
 
+// Each case must be refused by the named codec with its own error code (and
+// reason, where the codec gives a specific one); any other throw fails it.
+const ACTION = { code: 'invalid-owner-decision' };
+const EVIDENCE = { code: 'invalid-owner-decision-evidence' };
+const BINDING = { code: 'invalid-owner-decision-evidence', reason: 'owner-evidence-binding' };
+const FRAME = { code: 'invalid-owner-journal-frame' };
+const RECEIPT = { code: 'receipt-invalid' };
 let rejections = 0;
-const rejects = (run, label) => { assert.throws(run, undefined, label); rejections += 1; };
+const rejects = (run, label, expected) => {
+  assert.throws(run, (error) => {
+    assert.equal(error?.code, expected.code, `${label}: refused by the wrong code (${error?.code ?? error?.name}: ${error?.message})`);
+    if (expected.reason) assert.equal(error.reason, expected.reason, `${label}: reason`);
+    return true;
+  }, label);
+  rejections += 1;
+};
 
 test('checker rejections 1-11: action mutations refuse in the strict action decoder', () => {
   const valid = vector('disable').x.action.object;
@@ -240,15 +257,14 @@ test('checker rejections 1-11: action mutations refuse in the strict action deco
     ['soul ID version out of range', (a) => { a.soul = 'agent_00000000-0000-9000-8000-000000000002'; }],
   ]) {
     const bad = clone(valid); mutate(bad);
-    rejects(() => decodeOwnerDecisionAction(utf8(ownerDecisionCanonical(bad))), label);
+    rejects(() => decodeOwnerDecisionAction(utf8(ownerDecisionCanonical(bad))), label, ACTION);
   }
 });
 
 // The journal holds slot 3 only if it equals what challengeFor recomputes from
-// slots 6 and 2; `slot3` is that check, and the store tests below drive it.
-function slot3(challengeBytes, { preparation, actionBytes }) {
-  if (!challengeBytes.equals(challengeFor(preparation, actionBytes))) throw new Error('slot 3 differs from the derived challenge');
-}
+// slots 6 and 2: bindPreparedChallenge is that codec, the same check the
+// store makes on every read (the store tests below drive the store itself).
+const slot3 = (challengeBytes, { preparation, actionBytes }) => bindPreparedChallenge(challengeBytes, preparation, actionBytes);
 
 test('checker rejections 12-15: challenge mutations never match the derived challenge', () => {
   const v = vector('disable'), valid = v.x.challenge.object;
@@ -260,7 +276,7 @@ test('checker rejections 12-15: challenge mutations never match the derived chal
     ['conditional effectPlanDigest on a legacy operation', (c) => { c.operation = 'cold-wake.set'; }],
   ]) {
     const bad = clone(valid); mutate(bad);
-    rejects(() => slot3(utf8(canonicalJson(bad)), v), label);
+    rejects(() => slot3(utf8(canonicalJson(bad)), v), label, BINDING);
   }
 });
 
@@ -268,32 +284,37 @@ test('checker rejections 16-18: a changed target with retained digests, a tamper
   const v = vector('disable');
   // 16: the target changed, the preparation's digests kept.
   const changedTarget = { ...v.action, soul: 'agent_00000000-0000-4000-8000-000000000009' };
-  rejects(() => bindPreparation(v.preparation, { acceptance: v.acceptance, action: changedTarget }), 'changed target with retained digests');
+  rejects(() => bindPreparation(v.preparation, { acceptance: v.acceptance, action: changedTarget }), 'changed target with retained digests', BINDING);
   // 17: a challenge with a tampered payload digest.
-  rejects(() => slot3(utf8(canonicalJson({ ...v.x.challenge.object, payloadDigest: 'g'.repeat(64) })), v), 'tampered payloadDigest');
+  rejects(() => slot3(utf8(canonicalJson({ ...v.x.challenge.object, payloadDigest: 'g'.repeat(64) })), v), 'tampered payloadDigest', BINDING);
   // 18: display text changed while the preparation keeps a digest of it.
   const badText = v.x.action.actionText.replace('enabled=false', 'enabled=true');
-  rejects(() => bindPreparation({ ...v.preparation, actionDigest: sha256(utf8(badText)) }, { acceptance: v.acceptance, action: v.action }), 'changed display text');
+  rejects(() => bindPreparation({ ...v.preparation, actionDigest: sha256(utf8(badText)) }, { acceptance: v.acceptance, action: v.action }), 'changed display text', BINDING);
 });
 
 test('checker rejections 19-22: non-canonical encodings refuse in every decoder', () => {
   for (const [label, bytes] of [['duplicate key', utf8('{"a":1,"a":1}')], ['whitespace', utf8('{ "a":1}')], ['invalid UTF-8', Uint8Array.from([0xff, 0xfe])],
     ['oversized', Buffer.alloc(32769, 0x20)]]) {
-    rejects(() => decodeOwnerDecisionAction(bytes), label);
+    rejects(() => decodeOwnerDecisionAction(bytes), label, { ...ACTION, reason: 'owner-action-encoding' });
     // The same bytes refuse in the preparation and effect decoders too.
-    assert.throws(() => decodePreparation(bytes), undefined, `preparation ${label}`);
-    assert.throws(() => decodeEffect(bytes), undefined, `effect ${label}`);
+    assert.throws(() => decodePreparation(bytes), (error) => error.code === EVIDENCE.code, `preparation ${label}`);
+    assert.throws(() => decodeEffect(bytes), (error) => error.code === EVIDENCE.code, `effect ${label}`);
   }
 });
 
-test('checker rejection 23: a plan digest duplicated at the prepared-wrapper top level is never the composed wrapper', () => {
+// #23 is structural, not counted among the coded rejections: the broker owns
+// the prepared wrapper and this repository has no codec for it, so it checks
+// that the composed wrapper is exactly {challenge, stage, v} and that one with a
+// duplicated plan digest is not it.
+test('checker case 23: a plan digest duplicated at the prepared-wrapper top level is never the composed wrapper', () => {
   const v = vector('disable');
   const prepared = composeOwnerDecisionPrepared({ actionBytes: v.actionBytes, acceptanceBytes: acceptanceFor(v.preparation, OP, v.preparation.payloadDigest),
     namespaceDigest: NAMESPACE, nonce: v.preparation.nonce, preparedAt: v.preparation.preparedAt, now: v.preparation.preparedAt, expected: v.preparation.expected });
   const wrapper = canonicalJson({ challenge: prepared.challenge, stage: prepared.stage, v: 1 });
   assert.equal(wrapper, v.x.preparedWrapper.canonicalUtf8);
+  assert.deepEqual(Object.keys(JSON.parse(wrapper)).sort(), ['challenge', 'stage', 'v']);
   const duplicate = canonicalJson({ ...JSON.parse(wrapper), effectPlanDigest: prepared.challenge.effectPlanDigest });
-  rejects(() => assert.equal(duplicate, wrapper), 'duplicated plan digest');
+  assert.notEqual(duplicate, wrapper);
 });
 
 // A d1 receipt over the candidate payload, signed with test-only keys made
@@ -324,7 +345,13 @@ function d1Harness() {
 test('checker rejection 24: a d1 whose nonce differs from the computer-use challenge refuses', () => {
   const h = d1Harness();
   assert.equal(h.verify(h.token(h.payload)).payload.nonce, h.v.x.challenge.object.nonce, 'the candidate d1 binds the challenge');
-  rejects(() => h.verify(h.token({ ...h.payload, nonce: 'B'.repeat(43) })), 'changed nonce in d1 payload');
+  // The checker's exact mutation: 'B'×43 isn't canonical unpadded base64url
+  // (its trailing bits aren't zero), so the receipt decoder refuses it as
+  // malformed before any binding.
+  rejects(() => h.verify(h.token({ ...h.payload, nonce: 'B'.repeat(43) })), 'changed nonce in d1 payload', { ...RECEIPT, reason: 'owner-receipt-invalid' });
+  // A well-formed but different nonce reaches the binding and refuses there.
+  assert.throws(() => h.verify(h.token({ ...h.payload, nonce: Buffer.alloc(32, 1).toString('base64url') })),
+    (error) => error.code === RECEIPT.code && error.reason === 'owner-receipt-binding');
 });
 
 test('checker rejection 25: an applied pair with no retained completion (the current boolean as proof) refuses', () => {
@@ -334,7 +361,7 @@ test('checker rejection 25: an applied pair with no retained completion (the cur
   rejects(() => {
     const bytes = encodeReconciliationPair(pair, { slot: 'terminal-pair', requestId: pair.record.requestId });
     bindReconciliationPair(decodeReconciliationPair(bytes, { slot: 'terminal-pair', requestId: pair.record.requestId }), { ...recContext(v, 'applied'), basisBytes: null });
-  }, 'applied without retained completed proof');
+  }, 'applied without retained completed proof', FRAME);
 });
 
 test('checker rejections 26-30: a foreign completed proof, with a recomputed basis digest, refuses', () => {
@@ -344,30 +371,33 @@ test('checker rejections 26-30: a foreign completed proof, with a recomputed bas
     ['effectId', '00000000-0000-4000-8000-000000000999'], ['phase', 'entered']]) {
     const foreign = utf8(canonicalJson({ ...completed, [field]: value }));
     const pair = clone(applied); pair.record.basisDigest = sha256(foreign);
-    rejects(() => bindReconciliationPair(pair, { ...recContext(v, 'applied'), basisBytes: foreign }), `foreign proof ${field}`);
+    rejects(() => bindReconciliationPair(pair, { ...recContext(v, 'applied'), basisBytes: foreign }), `foreign proof ${field}`, BINDING);
   }
 });
 
 test('checker rejections 31-45: retained bytes that are not canonical, absent or null refuse in each decoder', () => {
   const v = vector('disable'), h = d1Harness();
   const applied = v.x.reconciliation.appliedPairWithRetainedCompletion;
+  // Retained bytes are given as text; absent and null go to the decoder raw,
+  // so the decoder itself must refuse them.
+  const raw = (text) => (text === undefined || text === null ? text : utf8(text));
   const decoders = {
-    d1: (text) => h.verify(h.token(text)),
-    preparation: (text) => decodePreparation(utf8(text)),
-    entered: (text) => decodeEffect(utf8(text)),
-    completed: (text) => decodeEffect(utf8(text)),
-    reconciliation: (text) => decodeReconciliationPair(utf8(text), { slot: 'terminal-pair', requestId: applied.object.record.requestId }),
+    d1: [(text) => h.verify(text === undefined || text === null ? text : h.token(text)), RECEIPT],
+    preparation: [(text) => decodePreparation(raw(text)), EVIDENCE],
+    entered: [(text) => decodeEffect(raw(text)), EVIDENCE],
+    completed: [(text) => decodeEffect(raw(text)), EVIDENCE],
+    reconciliation: [(text) => decodeReconciliationPair(raw(text), { slot: 'terminal-pair', requestId: applied.object.record.requestId }), FRAME],
   };
   // Each decoder accepts its retained canonical bytes.
-  decoders.d1(canonicalJson(h.payload));
-  decoders.preparation(v.x.preparation.canonicalUtf8);
-  decoders.entered(v.x.entered.canonicalUtf8);
-  decoders.completed(v.x.completed.canonicalUtf8);
-  decoders.reconciliation(applied.canonicalUtf8);
-  for (const [name, decode] of Object.entries(decoders)) {
-    rejects(() => decode('not canonical bytes'), `${name} not canonical`);
-    rejects(() => decode(undefined), `${name} absent`);
-    rejects(() => decode(null), `${name} null`);
+  decoders.d1[0](canonicalJson(h.payload));
+  decoders.preparation[0](v.x.preparation.canonicalUtf8);
+  decoders.entered[0](v.x.entered.canonicalUtf8);
+  decoders.completed[0](v.x.completed.canonicalUtf8);
+  decoders.reconciliation[0](applied.canonicalUtf8);
+  for (const [name, [decode, expected]] of Object.entries(decoders)) {
+    rejects(() => decode('not canonical bytes'), `${name} not canonical`, expected);
+    rejects(() => decode(undefined), `${name} absent`, expected);
+    rejects(() => decode(null), `${name} null`, expected);
   }
 });
 
@@ -375,11 +405,11 @@ test('checker rejection 46: a completed proof in the wrong state refuses, even w
   const v = vector('disable'), applied = v.x.reconciliation.appliedPairWithRetainedCompletion.object;
   const wrongCompleted = utf8(canonicalJson({ ...v.x.completed.object, detail: { ...v.x.completed.object.detail, beforeEnabled: false } }));
   const pair = clone(applied); pair.record.basisDigest = sha256(wrongCompleted);
-  rejects(() => bindReconciliationPair(pair, { ...recContext(v, 'applied'), basisBytes: wrongCompleted }), 'wrong-state completed proof');
+  rejects(() => bindReconciliationPair(pair, { ...recContext(v, 'applied'), basisBytes: wrongCompleted }), 'wrong-state completed proof', BINDING);
 });
 
-test('all 46 checker rejections ran', () => {
-  assert.equal(rejections, 46);
+test('all 45 coded checker rejections ran (the 46th, #23, is structural)', () => {
+  assert.equal(rejections, 45);
 });
 
 // Rejections beyond the checker's: the expected union, the effect detail and
