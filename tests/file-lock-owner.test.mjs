@@ -165,9 +165,9 @@ test('acquiring, releasing and reclaiming a lock never spawns', async (t) => {
   try {
     for (let i = 0; i < 20; i += 1) withLock(path.join(dir, 'state.lock'), 'test store', () => {}, { keepLiveOwners: true });
     lockOwnerToken();
-    // The reclaim path too: a stale lock held by a live pid with a recorded
-    // start (kept), and one held by a pid that is gone (reclaimed).
-    staleLock(path.join(dir, 'live.lock'), `${process.pid}.1000.-.${UUID}`);
+    // The reclaim path too: a stale lock held by this live process (kept, on
+    // every platform), and one held by a pid that is gone (reclaimed).
+    staleLock(path.join(dir, 'live.lock'), lockOwnerToken());
     assert.throws(() => withLock(path.join(dir, 'live.lock'), 'test store', () => {}, { keepLiveOwners: true }), /timed out/);
     staleLock(path.join(dir, 'gone.lock'), `${2 ** 22 + 12345}.1000.-.${UUID}`);
     withLock(path.join(dir, 'gone.lock'), 'test store', () => {}, { keepLiveOwners: true });
