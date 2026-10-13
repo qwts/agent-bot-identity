@@ -59,7 +59,6 @@ const LAUNCH_PATHS = {
   'identity/owner-approval.mjs': [1, 'OS tool: osascript'],
   'identity/owner-presence.mjs': [2, 'OS tool: codesign, then the verified keyd binary'],
   'process-ownership.mjs': [1, 'OS tool: ps'],
-  'file-lock.mjs': [1, 'OS tool: /bin/ps for a lock owner\'s start time, only on the macOS reclaim path, with a fixed env (#1115)'],
   'sandbox.mjs': [1, 'OS tool: sandbox probes'],
   'comms-client.mjs': [1, 'OS tool: id'],
   'comms-windows.mjs': [2, 'OS tool: powershell for the pipe relay, under legacyPowerShellEnv'],
