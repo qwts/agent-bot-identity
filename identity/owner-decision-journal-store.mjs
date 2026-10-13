@@ -895,6 +895,24 @@ export function createDaemonJournalStore({ root = ownerDecisionJournalRoot(), na
     // already completed but without its terminal pair (a crash between the
     // two writes). Returns the soul, operation, revisions, proposal and the
     // exact slot-13 bytes, or refuses.
+    // A released request's saved action and preparation, read under the
+    // journal lock for an effect adapter that must decide before entering
+    // (the computer-use comparison, agent-comms#250). Read-only: copies, no
+    // write, no entry. Anything not exactly released refuses: an entered,
+    // applied or refused request is consumed.
+    readReleased(requestId) {
+      if (!matches(UUID4, requestId)) fail('invalid-owner-journal-record');
+      const name = requestDirectoryName({ namespaceDigest, requestId });
+      return locked(() => {
+        if (!scan().includes(name)) fail('owner-journal-transition-refused');
+        const graph = readGraph(name, requestId);
+        if (['indeterminate', 'applied', 'refused'].includes(graph.state)) fail('owner-journal-consumed');
+        if (graph.state !== 'released') fail('owner-journal-transition-refused');
+        const copy = (value) => JSON.parse(JSON.stringify(value));
+        return Object.freeze({ requestId, action: copy(graph.view.action), preparation: copy(graph.view.preparation) });
+      });
+    },
+
     readRecordOnlyReconcilable(requestId) {
       if (!matches(UUID4, requestId)) fail('invalid-owner-journal-record');
       const name = requestDirectoryName({ namespaceDigest, requestId });
