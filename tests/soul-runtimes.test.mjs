@@ -6,6 +6,7 @@ import { chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, re
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { auditFile } from '../identity-format.mjs';
@@ -30,8 +31,25 @@ const GO = resolveCatalogPin('go', '1');
 const UV = newestPin('uv');
 const PYTHON = resolveCatalogPin('python', '3.12');
 
-// A fake archive is JSON naming its files; the fake `tar` below unpacks it.
-const archive = (files) => Buffer.from(JSON.stringify(files));
+// A fake archive is a real gzip tar (the only kind of archive the installer
+// takes, #1072) holding one JSON entry naming its files; the fake `tar` below
+// unpacks that.
+const archive = (files) => {
+  const body = Buffer.from(JSON.stringify(files));
+  const header = Buffer.alloc(512);
+  header.write('fake-archive.json', 0, 100, 'utf8');
+  for (const [at, value] of [[100, '0000644\0'], [108, '0000000\0'], [116, '0000000\0'], [124, `${body.length.toString(8).padStart(11, '0')}\0`], [136, '00000000000\0'], [148, '        ']]) header.write(value, at, value.length, 'ascii');
+  header.write('0', 156, 1, 'ascii');
+  header.write('ustar\0', 257, 6, 'ascii');
+  header.write('00', 263, 2, 'ascii');
+  let sum = 0; for (const byte of header) sum += byte;
+  header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+  return gzipSync(Buffer.concat([header, body, Buffer.alloc((512 - (body.length % 512)) % 512), Buffer.alloc(1024)]));
+};
+const unpack = (file) => {
+  const tar = gunzipSync(readFileSync(file));
+  return JSON.parse(tar.subarray(512, 512 + parseInt(tar.subarray(124, 135).toString('ascii'), 8)).toString('utf8'));
+};
 const NODE_ARCHIVE = archive({ [`node-v${NODE.version}-darwin-arm64/bin/node`]: '#!/bin/sh\n', [`node-v${NODE.version}-darwin-arm64/bin/npm`]: '#!/bin/sh\n' });
 const GO_ARCHIVE = archive({ 'go/bin/go': '#!/bin/sh\n', 'go/VERSION': `go${GO.version}` });
 const UV_ARCHIVE = archive({ [`uv-aarch64-apple-darwin/uv`]: '#!/bin/sh\n', [`uv-aarch64-apple-darwin/uvx`]: '#!/bin/sh\n' });
@@ -66,7 +84,7 @@ function doubles({ archives, fail = {} } = {}) {
   const runImpl = async (command, args, options = {}) => {
     commands.push({ command: path.basename(command), args, env: options.env ?? null });
     if (command === 'tar') {
-      const files = JSON.parse(readFileSync(args[1], 'utf8'));
+      const files = unpack(args[1]);
       if (files.corrupt) throw Object.assign(new Error('tar failed'), { stderr: 'tar: Unrecognized archive format' });
       for (const [name, contents] of Object.entries(files)) put(path.join(args[3], name), contents);
       return { stdout: '', stderr: '' };
@@ -1569,4 +1587,49 @@ test('uv runs every install with --no-config, so no config file can redirect it 
   const uvCalls = d.commands.filter((c) => ['python', 'tool', 'venv', 'pip'].includes(c.args[0]));
   assert.ok(uvCalls.length >= 2);
   for (const call of uvCalls) assert.ok(call.args.includes('--no-config'), call.args.join(' '));
+});
+
+// #1072: a digest pins an archive's bytes, not its size.
+test('a runtime download past the size cap is refused, by its stated length or as it streams, and leaves nothing', async (t) => {
+  const f = fixture(t);
+  const bytes = Buffer.alloc(4096, 1);
+  let pulled = 0;
+  const stated = async () => ({ ok: true, status: 200, headers: new Headers({ 'content-length': String(bytes.length) }),
+    body: new ReadableStream({ pull(controller) { pulled += 1; controller.enqueue(bytes); controller.close(); } }) });
+  await assert.rejects(fetchArchive({ url: 'https://example.test/big.tgz', sha256: sha(bytes) }, { cache: f.cache, label: 'x', fetchFn: stated, maxBytes: 1024 }),
+    (e) => e.code === 'runtime-download-failed' && /larger than 1024 bytes/.test(e.message));
+  assert.ok(pulled <= 1, 'the body is not read past the stated length');
+  const unstated = async () => ({ ok: true, status: 200, body: new ReadableStream({ start(controller) { for (let i = 0; i < 4; i += 1) controller.enqueue(bytes.subarray(i * 1024, (i + 1) * 1024)); controller.close(); } }) });
+  await assert.rejects(fetchArchive({ url: 'https://example.test/big.tgz', sha256: sha(bytes) }, { cache: f.cache, label: 'x', fetchFn: unstated, maxBytes: 2048 }),
+    (e) => e.code === 'runtime-download-failed' && /larger than 2048 bytes/.test(e.message));
+  assert.deepEqual(readdirSync(f.cache), [], 'no partial or cached file remains');
+  // At the cap exactly, it downloads.
+  assert.equal((await fetchArchive({ url: 'https://example.test/big.tgz', sha256: sha(bytes) }, { cache: f.cache, label: 'x', fetchFn: unstated, maxBytes: bytes.length })).reused, false);
+});
+
+test('an archive over the expansion budget is refused before tar runs', async (t) => {
+  const f = fixture(t, { manifest: { runtimes: { node: '24' } } });
+  const block = (prefix, name) => {
+    const header = Buffer.alloc(512);
+    header.write(name, 0, 100, 'utf8');
+    header.write(prefix, 345, 155, 'utf8');
+    for (const [at, value] of [[100, '0000644\0'], [108, '0000000\0'], [116, '0000000\0'], [124, '00000000000\0'], [136, '00000000000\0'], [148, '        ']]) header.write(value, at, value.length, 'ascii');
+    header.write('0', 156, 1, 'ascii');
+    header.write('ustar\0', 257, 6, 'ascii');
+    let sum = 0; for (const byte of header) sum += byte;
+    header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+    return header;
+  };
+  // One entry nested past the depth budget: a few hundred bytes compressed.
+  const segments = (n) => Array.from({ length: n }, () => 'd').join('/');
+  const deep = gzipSync(Buffer.concat([block(segments(35), segments(35)), Buffer.alloc(1024)]));
+  const bumped = structuredClone(f.catalog);
+  for (const source of Object.values(bumped.node[0].sources)) Object.assign(source, { url: 'https://example.test/deep.tgz', sha256: sha(deep) });
+  const d = doubles({ archives: { 'https://example.test/deep.tgz': deep } });
+  const error = await installSoulRuntimes(f.dir, { ...f.options, catalog: bumped, fetchFn: d.fetchFn, runImpl: d.runImpl }).then(() => null, (e) => e);
+  assert.ok(error, 'rejects');
+  assert.equal(error.code, 'runtime-install-failed');
+  assert.match(error.message, /deep\.tgz was not extracted: an entry is nested deeper than 64 directories/);
+  assert.deepEqual(d.commands.filter((c) => c.command === 'tar'), [], 'tar never ran');
+  assert.deepEqual(readdirSync(path.join(f.runtimes, 'node')).filter((n) => n.startsWith('.installing-')), [], 'no staging remains');
 });

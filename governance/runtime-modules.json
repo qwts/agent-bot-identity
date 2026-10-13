@@ -92,6 +92,7 @@
     "agent-wake.mjs": "comms",
     "agent-web.mjs": "host",
     "approval-action.mjs": "soul",
+    "archive-budget.mjs": "soul",
     "binding-proof.mjs": "identity",
     "identity/binding-proof.mjs": "identity",
     "bootstrap.mjs": "cli",

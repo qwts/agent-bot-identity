@@ -35,7 +35,17 @@ implemented slice and its limits.
   `archive` takes a `version`, an https `url` (one template with
   `{version}` and `{platform}`, or a per-platform map), `sha256` per
   platform, and `bin` (the executable inside the archive; defaults to the
-  harness command). `uv-tool` takes a PyPI `package`, exact `version` and
+  harness command). The archive must be a gzip tar, ustar tar or zip of at
+  most 1 GiB that expands to at most 4 GiB in at most 200,000 entries, 64
+  directories deep, counting every parent directory extraction would make
+  whether or not the archive lists it. A tar may hold only regular files,
+  directories, links without data, pax headers with path, size, time, owner
+  and mode keys written as plain decimal records, and GNU long names. Other
+  pax keys are refused, including macOS bsdtar's `LIBARCHIVE.xattr.*`, so an
+  archive made with macOS `tar` needs `--no-xattrs` (or `COPYFILE_DISABLE=1`).
+  A file that reads as both tar and zip is refused
+  (`archive-budget.mjs`, #1072). Anything else fails
+  `runtime-install-failed` before it is extracted. `uv-tool` takes a PyPI `package`, exact `version` and
   the `bin` it installs, and needs `runtimes.python`. It may add `lock`:
   every package the tool installs, itself included, as
   `{ "name", "version", "sha256": ["<hex>", ...] }` with each entry's

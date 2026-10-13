@@ -28,6 +28,7 @@ import { ACP_SPAWN_REGISTRY, windowsExecutable } from './acp-registry.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
+import { ArchiveBudgetError, RUNTIME_ARCHIVE_LIMITS, checkArchiveBudget } from './archive-budget.mjs';
 import { ownerGate } from './cold-wake-settings.mjs';
 import { PROVIDER_NAMES, RUNTIME_NAMES, SHA256_HEX, catalogPin, catalogReleaseHash, harnessInstallSource, isExactVersion, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, versionMatches, uvToolRequirements } from './runtime-catalog.mjs';
 
@@ -775,7 +776,7 @@ function bodyStream(body) {
  * again; a download that hashes wrong is removed and fails
  * `runtime-checksum-mismatch`, so only verified bytes are ever shared.
  */
-export async function fetchArchive({ url, sha256 }, { cache, fetchFn = globalThis.fetch, label, action = null, timeoutMs = DOWNLOAD_TIMEOUT_MS }) {
+export async function fetchArchive({ url, sha256 }, { cache, fetchFn = globalThis.fetch, label, action = null, timeoutMs = DOWNLOAD_TIMEOUT_MS, maxBytes = RUNTIME_ARCHIVE_LIMITS.maxDownloadBytes }) {
   mkdirSync(cache, { recursive: true, mode: 0o700 });
   const file = path.join(cache, sha256);
   if (existsSync(file)) {
@@ -788,16 +789,30 @@ export async function fetchArchive({ url, sha256 }, { cache, fetchFn = globalThi
   if (!response || response.ok === false || !response.body) {
     fail('runtime-download-failed', `${label}: ${url} answered ${response?.status ?? 'nothing'}; check the network and retry`, { runtime: label, action });
   }
+  // A digest pins the bytes, not their size (#1072): a stated length past the
+  // cap is refused before reading, and the stream is counted as it arrives.
+  const tooLarge = () => fail('runtime-download-failed', `${label}: ${url} is larger than ${maxBytes} bytes, the most a runtime archive may be; the download was refused`, { runtime: label, action });
+  const stated = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(stated) && stated > maxBytes) {
+    try { await response.body.cancel?.(); } catch { /* the refusal stands */ }
+    tooLarge();
+  }
   const partial = path.join(cache, `.partial-${sha256}-${randomUUID()}`);
   const hash = createHash('sha256');
+  let received = 0;
   try {
     // Node 20 can reject an already-errored body before an output stream's
     // async open completes. Create the private file before the pipeline so
     // that a late open cannot recreate it after failure cleanup.
-    await pipeline(bodyStream(response.body), new Transform({ transform(chunk, _encoding, done) { hash.update(chunk); done(null, chunk); } }),
+    await pipeline(bodyStream(response.body), new Transform({ transform(chunk, _encoding, done) {
+      received += chunk.length;
+      if (received > maxBytes) { done(Object.assign(new Error('over the size cap'), { code: 'runtime-archive-too-large' })); return; }
+      hash.update(chunk); done(null, chunk);
+    } }),
       createWriteStream(partial, { fd: openSync(partial, 'wx', 0o600), autoClose: true }));
   } catch (error) {
     rmSync(partial, { force: true });
+    if (error.code === 'runtime-archive-too-large') tooLarge();
     fail('runtime-download-failed', `${label}: download of ${url} failed (${error.message}); check the network and retry`, { runtime: label, action });
   }
   const digest = hash.digest('hex');
@@ -857,6 +872,12 @@ async function installArchive({ name, version, archive, kind, executable = null,
   const extract = path.join(staging, 'extract');
   mkdirSync(extract, { recursive: true, mode: 0o700 });
   try {
+    // What the archive expands to is checked before tar runs (#1072).
+    try { await checkArchiveBudget(file); }
+    catch (error) {
+      if (!(error instanceof ArchiveBudgetError)) throw error;
+      fail('runtime-install-failed', `${label}: ${path.basename(archive.url)} was not extracted: ${error.message}`, { runtime: label, action });
+    }
     try { await runImpl('tar', ['-xf', file, '-C', extract], { timeout: INSTALL_TIMEOUT_MS }); }
     catch (error) { fail('runtime-install-failed', `${label}: could not extract ${path.basename(archive.url)} (${String(error.stderr ?? error.message).trim().split('\n').pop()})`, { runtime: label, action }); }
     const payload = stripSingleDirectory(extract);
