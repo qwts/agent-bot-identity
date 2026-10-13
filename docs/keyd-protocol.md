@@ -45,8 +45,9 @@ Each socket admits a bounded number of connections: 256 on the soul socket
 and 32 on the owner socket. The owner's budget is its own, so souls holding
 connections cannot crowd out an owner request. When the soul socket is full,
 a new connection is admitted by closing the least recently active idle soul
-connection, so no soul can hold every slot (#1095). A connection with a message
-arriving or being answered is never closed this way. When there is no idle
+connection, so no soul can hold every slot (#1095). Only a connection whose
+complete request keyd is answering is never closed this way; one that has sent
+part of a message is idle, so a dangling partial message shields nothing. When there is no idle
 connection to close, and always on the owner socket, a connection past the
 budget is answered with JSON-RPC error `-32000` ("too many open connections")
 and closed. Once a message's first byte arrives, the whole line (at most 1 MiB)

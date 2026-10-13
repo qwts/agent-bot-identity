@@ -906,8 +906,7 @@ enum Frame {
 }
 
 /// A live connection as its channel sees it (#1095): a handle to shut it down,
-/// whether a message is arriving or being answered, and when it last finished
-/// one.
+/// whether a whole message is being answered, and when it last finished one.
 struct Conn {
     stream: UnixStream,
     busy: AtomicBool,
@@ -924,13 +923,13 @@ impl Conn {
 type Registry = Arc<Mutex<HashMap<u64, Arc<Conn>>>>;
 
 /// One newline-terminated message. With no message under way the wait runs to
-/// `idle_until` (`None`: indefinitely); once a byte of one arrives, the
-/// connection is busy and the rest must follow within `frame`.
+/// `idle_until` (`None`: indefinitely); once a byte of one arrives, the rest
+/// must follow within `frame`. A message still arriving does not make the
+/// connection busy, so a partial message cannot shield it from eviction.
 fn read_frame(
     reader: &mut BufReader<UnixStream>,
     idle_until: Option<Instant>,
     frame: Duration,
-    conn: &Conn,
 ) -> Frame {
     let mut line = Vec::new();
     let mut started: Option<Instant> = None;
@@ -962,7 +961,6 @@ fn read_frame(
             // Idle past its deadline, a frame past its deadline, or a failed read.
             Err(_) => return Frame::Closed,
         };
-        conn.busy.store(true, Ordering::SeqCst);
         let (take, done) = match available.iter().position(|&b| b == b'\n') {
             Some(at) => (at + 1, true),
             None => (available.len(), false),
@@ -1002,7 +1000,7 @@ fn serve_connection(
     // (#1095): a blank line keeps nothing alive.
     let mut idle_until = idle.map(|idle| Instant::now() + idle);
     loop {
-        let line = match read_frame(&mut reader, idle_until, limits.frame, conn) {
+        let line = match read_frame(&mut reader, idle_until, limits.frame) {
             Frame::Line(line) => line,
             Frame::Closed => return,
             Frame::TooLarge => {
@@ -1015,9 +1013,12 @@ fn serve_connection(
             }
         };
         if line.trim_ascii().is_empty() {
-            conn.busy.store(false, Ordering::SeqCst);
             continue;
         }
+        // Busy only from a whole message until its answer is written (#1103
+        // review): the window in which closing the connection would lose a
+        // request keyd is acting on.
+        conn.busy.store(true, Ordering::SeqCst);
         let response = match serde_json::from_slice::<Value>(&line) {
             Ok(message) if message.is_object() => handle(&message),
             Ok(_) => Some(failure(&Value::Null, -32600, "batches are not supported")),
@@ -1046,8 +1047,8 @@ impl Drop for Slot {
 }
 
 /// Makes room on a full channel by closing its least recently active idle
-/// connection, if it has one. A connection with a message arriving or being
-/// answered is never chosen.
+/// connection, if it has one. A connection whose request keyd is answering is
+/// never chosen; one that has only sent part of a message is idle.
 fn evict_idle(connections: &mut HashMap<u64, Arc<Conn>>) -> bool {
     let oldest = connections
         .iter()
@@ -1549,43 +1550,60 @@ mod tests {
     }
 
     #[test]
-    fn a_soul_channel_full_of_busy_connections_refuses_a_newcomer() {
-        // Long frames, so the partial messages below stay in flight.
+    fn a_partial_message_does_not_shield_a_connection_from_eviction() {
+        // Long frames, so the trailing partial messages stay open.
         let limits = Limits {
             frame: Duration::from_secs(5),
             ..QUICK
         };
-        let (dir, paths) = serving("busy", limits);
-        let busy: Vec<UnixStream> = (0..limits.soul_connections)
+        let (dir, paths) = serving("partial", limits);
+        // Each holder answers a request and then leaves a `{` hanging, the
+        // review's way of keeping a slot looking busy (#1103).
+        let holders: Vec<UnixStream> = (0..limits.soul_connections)
             .map(|_| {
                 let stream = client(&paths.socket);
-                write!(&stream, "{{\"jsonrpc\":").unwrap();
+                assert_eq!(ask(&stream, "ping")["result"], json!({}));
+                write!(&stream, "{{").unwrap();
+                std::thread::sleep(Duration::from_millis(20));
                 stream
             })
             .collect();
-        std::thread::sleep(Duration::from_millis(200));
-        let extra = client(&paths.socket);
-        let mut line = String::new();
-        BufReader::new(&extra).read_line(&mut line).unwrap();
-        let refusal: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(refusal["error"]["code"], -32000);
-        assert!(refusal["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("too many open connections"));
-        assert!(closed(&extra));
-        // A connection with a message in flight is never the one evicted:
-        // each can still finish its message and be answered.
-        for stream in &busy {
-            writeln!(&*stream, "\"2.0\",\"id\":1,\"method\":\"ping\"}}").unwrap();
-            let mut line = String::new();
-            BufReader::new(stream).read_line(&mut line).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        for _ in 0..3 {
+            let newcomer = client(&paths.socket);
             assert_eq!(
-                serde_json::from_str::<Value>(&line).unwrap()["result"],
-                json!({})
+                ask(&newcomer, "ping")["result"],
+                json!({}),
+                "a newcomer is admitted"
             );
         }
+        assert!(
+            closed(&holders[0]),
+            "a holder with only a partial message was evicted"
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_connection_being_answered_is_never_evicted() {
+        let conn = |busy: bool, age: u64| {
+            let (stream, _) = UnixStream::pair().unwrap();
+            Arc::new(Conn {
+                stream,
+                busy: AtomicBool::new(busy),
+                last: Mutex::new(Instant::now() - Duration::from_secs(age)),
+            })
+        };
+        let mut connections = HashMap::from([(1, conn(true, 100)), (2, conn(false, 10))]);
+        assert!(evict_idle(&mut connections));
+        assert!(
+            connections.contains_key(&1),
+            "the busy, older connection stays"
+        );
+        assert!(!connections.contains_key(&2));
+        let mut all_busy = HashMap::from([(1, conn(true, 100)), (2, conn(true, 50))]);
+        assert!(!evict_idle(&mut all_busy));
+        assert_eq!(all_busy.len(), 2);
     }
 
     #[test]
