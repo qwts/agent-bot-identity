@@ -23,12 +23,18 @@ import { PROFILE_HARNESSES, runtimeProfileInfo } from './organization-profile-sc
 const HARNESSES = [
   {
     key: 'claude',
-    match: (e) => e.CLAUDECODE === '1' || (e.AI_AGENT ?? '').startsWith('claude') || (e.CLAUDE_CODE_ENTRYPOINT ?? '') !== '',
+    match: (e) =>
+      e.CLAUDECODE === '1' ||
+      (e.AI_AGENT ?? '').startsWith('claude') ||
+      (e.CLAUDE_CODE_ENTRYPOINT ?? '') !== '' ||
+      e.CLAUDE_AGENT === '1',
   },
   {
     key: 'codex',
     match: (e) =>
-      Object.keys(e).some((k) => k.startsWith('CODEX_')) || (e.AI_AGENT ?? '').includes('codex'),
+      Object.keys(e).some((k) => k.startsWith('CODEX_')) ||
+      (e.AI_AGENT ?? '').includes('codex') ||
+      e.CODEX_AGENT === '1',
   },
   {
     // Qwen Code is keyed `qwen`: the key names the worktree layout
@@ -61,11 +67,15 @@ const HARNESSES = [
     // agree, so there is no split to repair; which of two nested agents
     // should win is a separate question this row does not answer.
     key: 'qwen',
-    match: (e) => e.QWEN_CODE === '1' || (e.AI_AGENT ?? '').toLowerCase().includes('qwen'),
+    match: (e) =>
+      e.QWEN_CODE === '1' ||
+      (e.AI_AGENT ?? '').toLowerCase().includes('qwen') ||
+      e.QWEN_AGENT === '1',
   },
   {
     key: 'cursor',
     match: (e) =>
+      e.CURSOR_AGENT === '1' ||
       Object.keys(e).some((k) => k.startsWith('CURSOR_')) ||
       (e.__CFBundleIdentifier ?? '').toLowerCase().includes('cursor'),
   },
@@ -79,6 +89,8 @@ const HARNESSES = [
   {
     key: 'devin',
     match: (e) =>
+      e.DEVIN_AGENT === '1' ||
+      e.WINDSURF_AGENT === '1' ||
       Object.keys(e).some((k) => k.startsWith('WINDSURF_')) ||
       (e.ACP_BACKEND ?? '').toLowerCase() === 'windsurf' ||
       (e.__CFBundleIdentifier ?? '').toLowerCase().includes('exafunction') ||
@@ -95,15 +107,18 @@ const HARNESSES = [
     // MUSE_AGENT marker in detectAgentHarness below.
     key: 'muse',
     match: (e) =>
+      e.MUSE_AGENT === '1' ||
       Object.keys(e).some((k) => k.startsWith('MUSE_')) ||
       (e.AI_AGENT ?? '').toLowerCase().includes('muse'),
   },
   {
     key: 'vscode',
     match: (e) =>
+      e.VSCODE_AGENT === '1' ||
       e.TERM_PROGRAM === 'vscode' ||
       Object.keys(e).some((k) => k.startsWith('VSCODE_')) ||
-      (e.__CFBundleIdentifier ?? '').toLowerCase().includes('com.microsoft.vscode'),
+      (e.__CFBundleIdentifier ?? '').toLowerCase().includes('com.microsoft.vscode') ||
+      (e.AI_AGENT ?? '').toLowerCase().includes('vscode'),
   },
 ];
 
@@ -152,14 +167,73 @@ export function accountHarness(config = loadConfig(), account = accountName()) {
   return null;
 }
 
+function harnessEnvKey(harness) {
+  return `${harness.toUpperCase()}_AGENT`;
+}
+
+// Detect explicit <HARNESS>_AGENT === '1' for any harness in PROFILE_HARNESSES
+// (plus legacy WINDSURF_AGENT === '1' -> 'devin').
+function detectExplicitHarnessAgent(env = process.env) {
+  if (!env || typeof env !== 'object') return null;
+  for (const harness of PROFILE_HARNESSES) {
+    if (env[harnessEnvKey(harness)] === '1') return harness;
+  }
+  if (env.WINDSURF_AGENT === '1') return 'devin';
+  return null;
+}
+
+// Match AI_AGENT containing any harness name across PROFILE_HARNESSES
+// (copilot before vscode; legacy windsurf -> devin).
+function detectAiAgentHarness(aiAgent) {
+  if (!aiAgent || typeof aiAgent !== 'string') return null;
+  const lower = aiAgent.toLowerCase();
+  for (const harness of PROFILE_HARNESSES) {
+    if (harness === 'vscode') continue;
+    if (lower.includes(harness)) return harness;
+  }
+  if (lower.includes('windsurf')) return 'devin';
+  if (lower.includes('vscode')) return 'vscode';
+  return null;
+}
+
 // Returns the harness key for the detected tool, or null if none matched.
 export function detectHarness(env = process.env) {
-  for (const h of HARNESSES) {
-    try {
-      if (h.match(env)) return h.key;
-    } catch {
-      /* a malformed env value must never throw the resolver */
+  try {
+    if (
+      env.CLAUDECODE === '1' ||
+      (typeof env.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
+      (env.AI_AGENT ?? '').startsWith('claude')
+    ) {
+      return 'claude';
     }
+    if (
+      Object.keys(env).some((k) => k.startsWith('CODEX_')) ||
+      (env.AI_AGENT ?? '').includes('codex')
+    ) {
+      return 'codex';
+    }
+    if (
+      env.QWEN_CODE === '1' ||
+      (env.AI_AGENT ?? '').toLowerCase().includes('qwen')
+    ) {
+      return 'qwen';
+    }
+
+    // Explicit <HARNESS>_AGENT=1 outranks ambient editor markers (CURSOR_*,
+    // WINDSURF_*, MUSE_*, VSCODE_*), avoiding split attribution between
+    // detectHarness and detectAgentHarness.
+    const explicitHarness = detectExplicitHarnessAgent(env);
+    if (explicitHarness) return explicitHarness;
+
+    // AI_AGENT naming any harness (except vscode, which stays with editor fallback).
+    const aiHarness = detectAiAgentHarness(env.AI_AGENT);
+    if (aiHarness && aiHarness !== 'vscode') return aiHarness;
+
+    for (const h of HARNESSES) {
+      if (h.match(env)) return h.key;
+    }
+  } catch {
+    /* a malformed env value must never throw the resolver */
   }
   return null;
 }
@@ -168,13 +242,13 @@ export function detectHarness(env = process.env) {
 // process, not merely a human terminal opened inside an editor.
 //
 // THE RULE for adding a harness here: key on that tool's `<NAME>_AGENT`-shaped
-// marker (CLAUDECODE=1, CURSOR_AGENT=1, COPILOT_AGENT=1, DEVIN_AGENT=1) and
-// nothing else. A human terminal never carries one. Ambient editor variables —
-// VSCODE_*, CURSOR_TRACE_ID, WINDSURF_*, TERM_PROGRAM — say only that an editor
-// is open, and keying on them would attribute a human's commits to a bot.
-// Security
-// guards use this resolver when allowing stock human credentials would cross
-// the agent/human identity boundary. Returns a bot slug (via config) or null.
+// marker (CLAUDECODE=1, CURSOR_AGENT=1, COPILOT_AGENT=1, DEVIN_AGENT=1,
+// ANTIGRAVITY_AGENT=1, …) and nothing else. A human terminal never carries one.
+// Ambient editor variables — VSCODE_*, CURSOR_TRACE_ID, WINDSURF_*, TERM_PROGRAM —
+// say only that an editor is open, and keying on them would attribute a human's
+// commits to a bot. Security guards use this resolver when allowing stock human
+// credentials would cross the agent/human identity boundary. Returns a bot
+// slug (via config) or null.
 export function detectAgentHarness(
   env = process.env,
   config = loadConfig({ env }),
@@ -198,47 +272,37 @@ export function detectAgentHarness(
   if (
     env.CLAUDECODE === '1' ||
     (typeof env.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
+    env.CLAUDE_AGENT === '1' ||
+    aiAgent.startsWith('claude') ||
     aiAgent.includes('claude')
   ) {
     key = 'claude';
-  } else if (Object.keys(env).some((k) => k.startsWith('CODEX_')) || aiAgent.includes('codex')) {
-    key = 'codex';
-  } else if (env.CURSOR_AGENT === '1' || aiAgent.includes('cursor')) {
-    key = 'cursor';
-    // Copilot must precede the vscode test: it sets
-    // AI_AGENT=github_copilot_vscode_agent, which *contains* "vscode", so the
-    // generic editor test would otherwise claim it and attribute Copilot's
-    // commits to the vscode App.
-  } else if (env.COPILOT_AGENT === '1' || aiAgent.includes('copilot')) {
-    key = 'copilot';
-    // DEVIN_AGENT/WINDSURF_AGENT follow the rule above; neither is confirmed
-    // from a Devin agent session yet, but an unset marker simply never matches,
-    // whereas the ambient WINDSURF_*/ACP_BACKEND markers deliberately do NOT
-    // appear here — those were measured from the IDE extension host and mean
-    // the editor is open, not that an agent is running.
   } else if (
-    env.DEVIN_AGENT === '1' ||
-    env.WINDSURF_AGENT === '1' ||
-    aiAgent.includes('devin') ||
-    aiAgent.includes('windsurf')
+    Object.keys(env).some((k) => k.startsWith('CODEX_')) ||
+    env.CODEX_AGENT === '1' ||
+    aiAgent.includes('codex')
   ) {
-    key = 'devin';
-    // MUSE_AGENT follows the <NAME>_AGENT rule (Meta Muse, keyed `muse` — see
-    // the HARNESSES row). MUSE_RELEASE_INFO is ambient (present whenever the
-    // app is open, agent or human) and deliberately does NOT appear here.
-  } else if (env.MUSE_AGENT === '1' || aiAgent.includes('muse')) {
-    key = 'muse';
-    // Qwen Code has no separate <NAME>_AGENT marker: QWEN_CODE=1 is it, the
-    // same shape as CLAUDECODE=1, because the CLI is the agent process rather
-    // than an editor a human may merely have open. QWEN_CODE_AGENT_ID stays
-    // out for the reason recorded on the HARNESSES row — it is exported empty
-    // at top level, so it cannot distinguish an agent from anything else.
-  } else if (env.QWEN_CODE === '1' || aiAgent.includes('qwen')) {
+    key = 'codex';
+  } else if (
+    env.QWEN_CODE === '1' ||
+    env.QWEN_AGENT === '1' ||
+    aiAgent.includes('qwen')
+  ) {
     key = 'qwen';
-  } else if (aiAgent.includes('vscode')) {
-    key = 'vscode';
+  } else {
+    const explicitHarness = detectExplicitHarnessAgent(env);
+    if (explicitHarness) {
+      key = explicitHarness;
+    } else {
+      key = detectAiAgentHarness(env.AI_AGENT);
+    }
   }
   return slugForHarness(key, config);
 }
 
-export { HARNESSES };
+export {
+  HARNESSES,
+  detectAiAgentHarness,
+  detectExplicitHarnessAgent,
+  harnessEnvKey,
+};

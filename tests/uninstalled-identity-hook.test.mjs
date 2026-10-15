@@ -10,6 +10,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
 import { renderConfig } from '../sync-hooks.mjs';
 import { unmanagedAuthorsSnapshot } from '../config.mjs';
+import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
 import {
   UNINSTALLED_OPAQUE_REASON,
   UNINSTALLED_REASON,
@@ -678,7 +679,8 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
   const hook = join(dirname(dirname(fileURLToPath(import.meta.url))), 'hooks', 'pre-push');
   const AMBIENT = [
     'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
-    'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+    ...PROFILE_HARNESSES.map((h) => `${h.toUpperCase()}_AGENT`),
+    'WINDSURF_AGENT',
     'MUSE_AGENT', 'AGENT_BOT_ACCOUNT',
   ];
   const stripped = Object.fromEntries(

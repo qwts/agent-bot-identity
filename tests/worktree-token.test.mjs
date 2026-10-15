@@ -76,7 +76,7 @@ function run(mode, cwd, extra = {}, config = cfg) {
   writeFileSync(configPath, JSON.stringify(config));
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^(CODEX|CLAUDE|AI_AGENT|CURSOR|COPILOT|DEVIN|WINDSURF|MUSE|QWEN|GH_AGENT_APP|AGENT_BOT_)/.test(key)) delete env[key];
+    if (/^(CODEX|CLAUDE|AI_AGENT|CURSOR|COPILOT|DEVIN|WINDSURF|MUSE|QWEN|ANTIGRAVITY|GH_AGENT_APP|AGENT_BOT_|[A-Z0-9_]+_AGENT$)/.test(key)) delete env[key];
   }
   return execFileSync(process.execPath, [TOOL, mode], {
     cwd,

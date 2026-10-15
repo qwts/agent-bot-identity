@@ -40,6 +40,7 @@ import { createInterface } from 'node:readline';
 import path from 'node:path';
 import process from 'node:process';
 import { withLock } from '../file-lock.mjs';
+import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
 import { vouchStateDir } from './vouch.mjs';
 import { MAX_TEXT_BYTES, textProblem } from './owner-text.mjs';
 
@@ -394,12 +395,22 @@ export function describeScope(scope) {
 
 // --- Sign (ssh store) ------------------------------------------------------
 
+const NAMED_HARNESS_MARKERS = Object.freeze(
+  Array.from(new Set([
+    'CLAUDECODE',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'AI_AGENT',
+    ...PROFILE_HARNESSES.map((h) => `${h.toUpperCase()}_AGENT`),
+    'WINDSURF_AGENT',
+    'QWEN_CODE',
+  ])),
+);
+
 // Agent processes, by the `<NAME>_AGENT`-shaped markers detect-harness.mjs
 // keys on. The ssh store has no trusted display (ADR-0753 section 5), so it
 // signs only where no agent is running the terminal.
 export function harnessMarkers(env = process.env) {
-  const named = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT',
-    'WINDSURF_AGENT', 'MUSE_AGENT', 'QWEN_CODE'].filter((name) => typeof env[name] === 'string' && env[name] !== '');
+  const named = NAMED_HARNESS_MARKERS.filter((name) => typeof env[name] === 'string' && env[name] !== '');
   return [...named, ...Object.keys(env).filter((name) => name.startsWith('CODEX_')).sort()];
 }
 

@@ -42,8 +42,8 @@ const SYSTEM_PATH = '/usr/bin:/bin';
 // simulated: harness markers, GitHub identity/API overrides, agent-bot's own
 // seams, XDG roots, zsh redirection, and version-manager homes.
 const AMBIENT_IDENTITY_RE = new RegExp(
-  '^(?:CODEX|CLAUDE|CURSOR|AI_AGENT|QWTS_|AGENT_BOT_|GH_|GITHUB_|XDG_'
-  + '|ZDOTDIR$|NVM_DIR$|VOLTA_HOME$|ASDF_|NODENV_)',
+  '^(?:CODEX|CLAUDE|CURSOR|ANTIGRAVITY|AI_AGENT|QWTS_|AGENT_BOT_|GH_|GITHUB_|XDG_'
+  + '|ZDOTDIR$|NVM_DIR$|VOLTA_HOME$|ASDF_|NODENV_|[A-Z0-9_]+_AGENT$)',
 );
 
 const FAKE_PASS_CLI = `#!/bin/sh

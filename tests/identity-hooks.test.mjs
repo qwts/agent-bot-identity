@@ -20,6 +20,9 @@ import {
 } from '../agent-identity.mjs';
 import { displayName, recordSoulDisplayName, upsertIdentitySoul } from '../agent-population.mjs';
 import { soulTrailerStatus } from '../soul-coauthor.mjs';
+import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
+
+const HARNESS_AGENT_MARKERS = PROFILE_HARNESSES.map((h) => `${h.toUpperCase()}_AGENT`);
 
 const root = mkdtempSync(path.join(tmpdir(), 'identity-hooks-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -264,6 +267,7 @@ test('pre-commit recognizes agent markers for bot attribution and lets the deleg
     ['devin-agent', { DEVIN_AGENT: '1' }],
     ['windsurf-agent', { WINDSURF_AGENT: '1' }],
     ['muse-agent', { MUSE_AGENT: '1' }],
+    ['antigravity-agent', { ANTIGRAVITY_AGENT: '1' }],
     // ENG-0339: an agent account is agent context with no env marker at all.
     ['agent-account', { AGENT_BOT_ACCOUNT: 'you-goose-agent' }],
     ['unmanaged-ai9d', { CURSOR_AGENT: '1' }],
@@ -278,7 +282,8 @@ test('pre-commit recognizes agent markers for bot attribution and lets the deleg
     // so the marker under test could stop working and this would still pass.
     const AMBIENT = [
       'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
-      'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+      ...HARNESS_AGENT_MARKERS,
+      'WINDSURF_AGENT',
       'MUSE_AGENT', 'AGENT_BOT_ACCOUNT',
     ];
     const env = Object.fromEntries(
@@ -312,7 +317,8 @@ test('pre-commit recognizes agent markers for bot attribution and lets the deleg
 // cannot carry an ambient marker that trips a guard on its own.
 const GUARD_MARKERS = [
   'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
-  'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+  ...HARNESS_AGENT_MARKERS,
+  'WINDSURF_AGENT',
   'MUSE_AGENT', 'AGENT_BOT_ACCOUNT',
 ];
 

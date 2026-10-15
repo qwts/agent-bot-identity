@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { HARNESSES, accountName, detectAgentHarness, detectHarness } from '../detect-harness.mjs';
+import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
 
 const cfg = { prefix: 'you' };
 
@@ -101,6 +102,46 @@ test('every harness is an agent via its own <NAME>_AGENT marker alone', () => {
   assert.equal(detectAgentHarness({ DEVIN_AGENT: '1' }, cfg), 'you-devin-agent');
   assert.equal(detectAgentHarness({ MUSE_AGENT: '1' }, cfg), 'you-muse-agent');
   assert.equal(detectAgentHarness({ QWEN_CODE: '1' }, cfg), 'you-qwen-agent');
+  assert.equal(detectAgentHarness({ ANTIGRAVITY_AGENT: '1' }, cfg), 'you-antigravity-agent');
+  assert.equal(detectAgentHarness({ WINDSURF_AGENT: '1' }, cfg), 'you-devin-agent');
+
+  for (const harness of PROFILE_HARNESSES) {
+    const envKey = `${harness.toUpperCase()}_AGENT`;
+    assert.equal(
+      detectAgentHarness({ [envKey]: '1' }, cfg),
+      `you-${harness}-agent`,
+      `detectAgentHarness should match ${envKey}=1 to you-${harness}-agent`,
+    );
+    assert.equal(
+      detectHarness({ [envKey]: '1' }),
+      harness,
+      `detectHarness should match ${envKey}=1 to ${harness}`,
+    );
+  }
+});
+
+test('generic <HARNESS>_AGENT=1 outranks ambient editor markers in detectHarness and detectAgentHarness', () => {
+  const ambientEditor = {
+    CURSOR_TRACE_ID: 'editor-trace',
+    CURSOR_LAYOUT: 'editor-layout',
+    TERM_PROGRAM: 'vscode',
+    VSCODE_PID: '1234',
+  };
+  assert.equal(detectHarness({ ANTIGRAVITY_AGENT: '1', ...ambientEditor }), 'antigravity');
+  assert.equal(detectAgentHarness({ ANTIGRAVITY_AGENT: '1', ...ambientEditor }, cfg), 'you-antigravity-agent');
+  assert.equal(detectHarness({ KIRO_AGENT: '1', ...ambientEditor }), 'kiro');
+  assert.equal(detectAgentHarness({ KIRO_AGENT: '1', ...ambientEditor }, cfg), 'you-kiro-agent');
+  assert.equal(detectHarness({ WINDSURF_AGENT: '1', ...ambientEditor }), 'devin');
+  assert.equal(detectAgentHarness({ WINDSURF_AGENT: '1', ...ambientEditor }, cfg), 'you-devin-agent');
+});
+
+test('generic AI_AGENT containing harness name resolves across PROFILE_HARNESSES', () => {
+  assert.equal(detectAgentHarness({ AI_AGENT: 'antigravity-worker' }, cfg), 'you-antigravity-agent');
+  assert.equal(detectHarness({ AI_AGENT: 'antigravity-worker' }), 'antigravity');
+  assert.equal(detectAgentHarness({ AI_AGENT: 'kiro_agent' }, cfg), 'you-kiro-agent');
+  assert.equal(detectHarness({ AI_AGENT: 'kiro_agent' }), 'kiro');
+  assert.equal(detectAgentHarness({ AI_AGENT: 'windsurf_agent' }, cfg), 'you-devin-agent');
+  assert.equal(detectHarness({ AI_AGENT: 'windsurf_agent' }), 'devin');
 });
 
 // Meta Muse is keyed `muse` (its territory is .muse/worktrees/, matching its

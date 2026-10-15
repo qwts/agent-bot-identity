@@ -1,9 +1,15 @@
+import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
+
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
 // POSIX single-quote quoting: nothing inside is expanded by the shell.
 const shQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof', configModule = null } = {}) {
+  const harnessAgentChecks = [
+    ...PROFILE_HARNESSES.map((h) => `[ "$${h.toUpperCase()}_AGENT" = "1" ] && AGENT_CONTEXT=1`),
+    '[ "$WINDSURF_AGENT" = "1" ] && AGENT_CONTEXT=1',
+  ].join('\n');
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
 TOKEN_REQUIRES_NODE=1
@@ -178,11 +184,7 @@ token_tool_available() {
 # to be the bot is the human's delegate and gets stock gh.
 AGENT_CONTEXT=""
 [ "$CLAUDECODE" = "1" ] && AGENT_CONTEXT=1
-[ "$CURSOR_AGENT" = "1" ] && AGENT_CONTEXT=1
-[ "$COPILOT_AGENT" = "1" ] && AGENT_CONTEXT=1
-[ "$DEVIN_AGENT" = "1" ] && AGENT_CONTEXT=1
-[ "$WINDSURF_AGENT" = "1" ] && AGENT_CONTEXT=1
-[ "$MUSE_AGENT" = "1" ] && AGENT_CONTEXT=1
+${harnessAgentChecks}
 [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && AGENT_CONTEXT=1
 [ -n "$AI_AGENT" ] && AGENT_CONTEXT=1
 [ -n "$GH_AGENT_APP" ] && AGENT_CONTEXT=1
