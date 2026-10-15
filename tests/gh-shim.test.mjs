@@ -269,6 +269,7 @@ test('configured harnesses retain their own App identity, and are the human pers
     ['codex-agent', { CODEX_SANDBOX: 'seatbelt' }],
     ['antigravity-agent', { ANTIGRAVITY_AGENT: '1' }],
     ['kiro-agent', { KIRO_AGENT: '1' }],
+    ['qwen-agent', { QWEN_CODE: '1' }],
   ];
   for (const [slug, agentEnv] of harnesses) {
     assert.equal(runWhoami({
@@ -306,6 +307,18 @@ test('every PROFILE_HARNESSES <HARNESS>_AGENT establishes agent context in gh sh
     assert.equal(result.status, 1, `${envKey}: fails closed without token tool`);
     assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
   }
+});
+
+test('QWEN_CODE=1 establishes agent context in gh shim', () => {
+  const shim = buildGhShim('/tmp/agent-bot');
+  assert.match(shim, /\[ "\$QWEN_CODE" = "1" \] && AGENT_CONTEXT=1/);
+  const result = runShim({
+    agentEnv: { QWEN_CODE: '1' },
+    args: ['issue', 'create', '--title', 'forbidden'],
+    tokenToolAvailable: false,
+  });
+  assert.equal(result.status, 1, 'QWEN_CODE fails closed without token tool');
+  assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
 });
 
 test('Codex desktop passes through unchanged without a configured App mapping', () => {

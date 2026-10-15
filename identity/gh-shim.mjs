@@ -1,4 +1,4 @@
-import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
+import { buildHarnessAgentShellChecks } from '../detect-harness.mjs';
 
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
@@ -6,10 +6,7 @@ export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by inst
 const shQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof', configModule = null } = {}) {
-  const harnessAgentChecks = [
-    ...PROFILE_HARNESSES.map((h) => `[ "$${h.toUpperCase()}_AGENT" = "1" ] && AGENT_CONTEXT=1`),
-    '[ "$WINDSURF_AGENT" = "1" ] && AGENT_CONTEXT=1',
-  ].join('\n');
+  const harnessAgentChecks = buildHarnessAgentShellChecks('AGENT_CONTEXT=1', '');
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
 TOKEN_REQUIRES_NODE=1

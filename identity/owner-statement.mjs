@@ -40,7 +40,7 @@ import { createInterface } from 'node:readline';
 import path from 'node:path';
 import process from 'node:process';
 import { withLock } from '../file-lock.mjs';
-import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
+import { HARNESS_AGENT_ENV_VARS } from '../detect-harness.mjs';
 import { vouchStateDir } from './vouch.mjs';
 import { MAX_TEXT_BYTES, textProblem } from './owner-text.mjs';
 
@@ -400,8 +400,7 @@ const NAMED_HARNESS_MARKERS = Object.freeze(
     'CLAUDECODE',
     'CLAUDE_CODE_ENTRYPOINT',
     'AI_AGENT',
-    ...PROFILE_HARNESSES.map((h) => `${h.toUpperCase()}_AGENT`),
-    'WINDSURF_AGENT',
+    ...HARNESS_AGENT_ENV_VARS,
     'QWEN_CODE',
   ])),
 );

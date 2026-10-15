@@ -20,20 +20,49 @@ import { userInfo } from 'node:os';
 import { loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { PROFILE_HARNESSES, runtimeProfileInfo } from './organization-profile-schema.mjs';
 
+function harnessEnvKey(harness) {
+  return `${harness.toUpperCase()}_AGENT`;
+}
+
+const HARNESS_AGENT_ENV_VARS = Object.freeze([
+  ...PROFILE_HARNESSES.map(harnessEnvKey),
+  'WINDSURF_AGENT',
+]);
+
+function buildHarnessAgentShellChecks(action = 'return 0', indent = '  ') {
+  return [
+    ...HARNESS_AGENT_ENV_VARS.map((envVar) => `${indent}[ "$${envVar}" = "1" ] && ${action}`),
+    `${indent}[ "$QWEN_CODE" = "1" ] && ${action}`,
+  ].join('\n');
+}
+
+const HARNESS_TOKEN_RES = new Map(
+  PROFILE_HARNESSES.map((harness) => [
+    harness,
+    new RegExp(`(?:^|[^a-z0-9])${harness}(?:[^a-z0-9]|$)`, 'i'),
+  ]),
+);
+const WINDSURF_TOKEN_RE = /(?:^|[^a-z0-9])windsurf(?:[^a-z0-9]|$)/i;
+
+function hasHarnessToken(text, harness) {
+  if (typeof text !== 'string') return false;
+  return HARNESS_TOKEN_RES.get(harness)?.test(text) ?? false;
+}
+
 const HARNESSES = [
   {
     key: 'claude',
     match: (e) =>
       e.CLAUDECODE === '1' ||
-      (e.AI_AGENT ?? '').startsWith('claude') ||
-      (e.CLAUDE_CODE_ENTRYPOINT ?? '') !== '' ||
+      (typeof e.CLAUDE_CODE_ENTRYPOINT === 'string' && e.CLAUDE_CODE_ENTRYPOINT !== '') ||
+      (typeof e.AI_AGENT === 'string' && (e.AI_AGENT.toLowerCase().startsWith('claude') || hasHarnessToken(e.AI_AGENT, 'claude'))) ||
       e.CLAUDE_AGENT === '1',
   },
   {
     key: 'codex',
     match: (e) =>
       Object.keys(e).some((k) => k.startsWith('CODEX_')) ||
-      (e.AI_AGENT ?? '').includes('codex') ||
+      hasHarnessToken(e.AI_AGENT, 'codex') ||
       e.CODEX_AGENT === '1',
   },
   {
@@ -69,7 +98,7 @@ const HARNESSES = [
     key: 'qwen',
     match: (e) =>
       e.QWEN_CODE === '1' ||
-      (e.AI_AGENT ?? '').toLowerCase().includes('qwen') ||
+      hasHarnessToken(e.AI_AGENT, 'qwen') ||
       e.QWEN_AGENT === '1',
   },
   {
@@ -77,14 +106,14 @@ const HARNESSES = [
     match: (e) =>
       e.CURSOR_AGENT === '1' ||
       Object.keys(e).some((k) => k.startsWith('CURSOR_')) ||
-      (e.__CFBundleIdentifier ?? '').toLowerCase().includes('cursor'),
+      (typeof e.__CFBundleIdentifier === 'string' && e.__CFBundleIdentifier.toLowerCase().includes('cursor')),
   },
   {
     // Deliberately NOT a `COPILOT_` prefix test: the extension sets keys like
     // COPILOT_DEBUG_NONCE in a human's VS Code terminal too. COPILOT_AGENT=1
     // is the marker that means the agent itself is running.
     key: 'copilot',
-    match: (e) => e.COPILOT_AGENT === '1' || (e.AI_AGENT ?? '').toLowerCase().includes('copilot'),
+    match: (e) => e.COPILOT_AGENT === '1' || hasHarnessToken(e.AI_AGENT, 'copilot'),
   },
   {
     key: 'devin',
@@ -92,9 +121,10 @@ const HARNESSES = [
       e.DEVIN_AGENT === '1' ||
       e.WINDSURF_AGENT === '1' ||
       Object.keys(e).some((k) => k.startsWith('WINDSURF_')) ||
-      (e.ACP_BACKEND ?? '').toLowerCase() === 'windsurf' ||
-      (e.__CFBundleIdentifier ?? '').toLowerCase().includes('exafunction') ||
-      (e.AI_AGENT ?? '').toLowerCase().includes('devin'),
+      (typeof e.ACP_BACKEND === 'string' && e.ACP_BACKEND.toLowerCase() === 'windsurf') ||
+      (typeof e.__CFBundleIdentifier === 'string' && e.__CFBundleIdentifier.toLowerCase().includes('exafunction')) ||
+      hasHarnessToken(e.AI_AGENT, 'devin') ||
+      (typeof e.AI_AGENT === 'string' && WINDSURF_TOKEN_RE.test(e.AI_AGENT)),
   },
   {
     // Meta Muse is keyed `muse`: the key names the worktree layout, and the app's
@@ -109,7 +139,7 @@ const HARNESSES = [
     match: (e) =>
       e.MUSE_AGENT === '1' ||
       Object.keys(e).some((k) => k.startsWith('MUSE_')) ||
-      (e.AI_AGENT ?? '').toLowerCase().includes('muse'),
+      hasHarnessToken(e.AI_AGENT, 'muse'),
   },
   {
     key: 'vscode',
@@ -117,8 +147,8 @@ const HARNESSES = [
       e.VSCODE_AGENT === '1' ||
       e.TERM_PROGRAM === 'vscode' ||
       Object.keys(e).some((k) => k.startsWith('VSCODE_')) ||
-      (e.__CFBundleIdentifier ?? '').toLowerCase().includes('com.microsoft.vscode') ||
-      (e.AI_AGENT ?? '').toLowerCase().includes('vscode'),
+      (typeof e.__CFBundleIdentifier === 'string' && e.__CFBundleIdentifier.toLowerCase().includes('com.microsoft.vscode')) ||
+      hasHarnessToken(e.AI_AGENT, 'vscode'),
   },
 ];
 
@@ -167,10 +197,6 @@ export function accountHarness(config = loadConfig(), account = accountName()) {
   return null;
 }
 
-function harnessEnvKey(harness) {
-  return `${harness.toUpperCase()}_AGENT`;
-}
-
 // Detect explicit <HARNESS>_AGENT === '1' for any harness in PROFILE_HARNESSES
 // (plus legacy WINDSURF_AGENT === '1' -> 'devin').
 function detectExplicitHarnessAgent(env = process.env) {
@@ -183,38 +209,39 @@ function detectExplicitHarnessAgent(env = process.env) {
 }
 
 // Match AI_AGENT containing any harness name across PROFILE_HARNESSES
-// (copilot before vscode; legacy windsurf -> devin).
+// (copilot before vscode; legacy windsurf -> devin), bounded by token delimiters.
 function detectAiAgentHarness(aiAgent) {
   if (!aiAgent || typeof aiAgent !== 'string') return null;
-  const lower = aiAgent.toLowerCase();
   for (const harness of PROFILE_HARNESSES) {
     if (harness === 'vscode') continue;
-    if (lower.includes(harness)) return harness;
+    if (hasHarnessToken(aiAgent, harness)) return harness;
   }
-  if (lower.includes('windsurf')) return 'devin';
-  if (lower.includes('vscode')) return 'vscode';
+  if (WINDSURF_TOKEN_RE.test(aiAgent)) return 'devin';
+  if (hasHarnessToken(aiAgent, 'vscode')) return 'vscode';
   return null;
 }
 
 // Returns the harness key for the detected tool, or null if none matched.
 export function detectHarness(env = process.env) {
   try {
+    const aiAgent = typeof env?.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
     if (
-      env.CLAUDECODE === '1' ||
-      (typeof env.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
-      (env.AI_AGENT ?? '').startsWith('claude')
+      env?.CLAUDECODE === '1' ||
+      (typeof env?.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
+      aiAgent.startsWith('claude') ||
+      hasHarnessToken(aiAgent, 'claude')
     ) {
       return 'claude';
     }
     if (
-      Object.keys(env).some((k) => k.startsWith('CODEX_')) ||
-      (env.AI_AGENT ?? '').includes('codex')
+      Object.keys(env ?? {}).some((k) => k.startsWith('CODEX_')) ||
+      hasHarnessToken(aiAgent, 'codex')
     ) {
       return 'codex';
     }
     if (
-      env.QWEN_CODE === '1' ||
-      (env.AI_AGENT ?? '').toLowerCase().includes('qwen')
+      env?.QWEN_CODE === '1' ||
+      hasHarnessToken(aiAgent, 'qwen')
     ) {
       return 'qwen';
     }
@@ -226,7 +253,7 @@ export function detectHarness(env = process.env) {
     if (explicitHarness) return explicitHarness;
 
     // AI_AGENT naming any harness (except vscode, which stays with editor fallback).
-    const aiHarness = detectAiAgentHarness(env.AI_AGENT);
+    const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
     if (aiHarness && aiHarness !== 'vscode') return aiHarness;
 
     for (const h of HARNESSES) {
@@ -254,7 +281,7 @@ export function detectAgentHarness(
   config = loadConfig({ env }),
   account = accountName(env),
 ) {
-  const explicit = typeof env.GH_AGENT_APP === 'string' ? env.GH_AGENT_APP.trim() : '';
+  const explicit = typeof env?.GH_AGENT_APP === 'string' ? env.GH_AGENT_APP.trim() : '';
   if (explicit) return explicit;
 
   // ENG-0339 moved bot territory up to the account: in an agent account every
@@ -267,26 +294,26 @@ export function detectAgentHarness(
   const accountKey = accountHarness(config, account);
   if (accountKey) return slugForHarness(accountKey, config);
 
-  const aiAgent = typeof env.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
+  const aiAgent = typeof env?.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
   let key = null;
   if (
-    env.CLAUDECODE === '1' ||
-    (typeof env.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
-    env.CLAUDE_AGENT === '1' ||
+    env?.CLAUDECODE === '1' ||
+    (typeof env?.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
+    env?.CLAUDE_AGENT === '1' ||
     aiAgent.startsWith('claude') ||
-    aiAgent.includes('claude')
+    hasHarnessToken(aiAgent, 'claude')
   ) {
     key = 'claude';
   } else if (
-    Object.keys(env).some((k) => k.startsWith('CODEX_')) ||
-    env.CODEX_AGENT === '1' ||
-    aiAgent.includes('codex')
+    Object.keys(env ?? {}).some((k) => k.startsWith('CODEX_')) ||
+    env?.CODEX_AGENT === '1' ||
+    hasHarnessToken(aiAgent, 'codex')
   ) {
     key = 'codex';
   } else if (
-    env.QWEN_CODE === '1' ||
-    env.QWEN_AGENT === '1' ||
-    aiAgent.includes('qwen')
+    env?.QWEN_CODE === '1' ||
+    env?.QWEN_AGENT === '1' ||
+    hasHarnessToken(aiAgent, 'qwen')
   ) {
     key = 'qwen';
   } else {
@@ -294,7 +321,7 @@ export function detectAgentHarness(
     if (explicitHarness) {
       key = explicitHarness;
     } else {
-      key = detectAiAgentHarness(env.AI_AGENT);
+      key = detectAiAgentHarness(env?.AI_AGENT);
     }
   }
   return slugForHarness(key, config);
@@ -302,6 +329,8 @@ export function detectAgentHarness(
 
 export {
   HARNESSES,
+  HARNESS_AGENT_ENV_VARS,
+  buildHarnessAgentShellChecks,
   detectAiAgentHarness,
   detectExplicitHarnessAgent,
   harnessEnvKey,

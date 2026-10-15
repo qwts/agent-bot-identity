@@ -144,6 +144,29 @@ test('generic AI_AGENT containing harness name resolves across PROFILE_HARNESSES
   assert.equal(detectHarness({ AI_AGENT: 'windsurf_agent' }), 'devin');
 });
 
+test('AI_AGENT matches harness tokens bounded by delimiters, not substrings', () => {
+  // amp and pi must not match substrings of example-agent or custom-api
+  assert.equal(detectHarness({ AI_AGENT: 'example-agent' }), null);
+  assert.equal(detectAgentHarness({ AI_AGENT: 'example-agent' }, cfg), null);
+  assert.equal(detectHarness({ AI_AGENT: 'custom-api' }), null);
+  assert.equal(detectAgentHarness({ AI_AGENT: 'custom-api' }, cfg), null);
+
+  // Exact or delimited tokens match
+  assert.equal(detectHarness({ AI_AGENT: 'amp' }), 'amp');
+  assert.equal(detectAgentHarness({ AI_AGENT: 'amp' }, cfg), 'you-amp-agent');
+  assert.equal(detectHarness({ AI_AGENT: 'amp-agent' }), 'amp');
+  assert.equal(detectAgentHarness({ AI_AGENT: 'amp_worker' }, cfg), 'you-amp-agent');
+  assert.equal(detectHarness({ AI_AGENT: 'pi' }), 'pi');
+  assert.equal(detectAgentHarness({ AI_AGENT: 'pi' }, cfg), 'you-pi-agent');
+  assert.equal(detectHarness({ AI_AGENT: 'my-pi-agent' }), 'pi');
+
+  // Non-string AI_AGENT alongside explicit harness agent resolves correctly
+  assert.equal(detectHarness({ AI_AGENT: 123, ANTIGRAVITY_AGENT: '1' }), 'antigravity');
+  assert.equal(detectAgentHarness({ AI_AGENT: 123, ANTIGRAVITY_AGENT: '1' }, cfg), 'you-antigravity-agent');
+  assert.equal(detectHarness({ AI_AGENT: true, ANTIGRAVITY_AGENT: '1' }), 'antigravity');
+  assert.equal(detectAgentHarness({ AI_AGENT: true, ANTIGRAVITY_AGENT: '1' }, cfg), 'you-antigravity-agent');
+});
+
 // Meta Muse is keyed `muse` (its territory is .muse/worktrees/, matching its
 // ~/.muse config home). MUSE_RELEASE_INFO is set for any terminal the app
 // opens — it marks the editor, not an agent. Broad detection may key on it;

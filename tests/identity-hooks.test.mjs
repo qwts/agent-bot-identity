@@ -20,9 +20,9 @@ import {
 } from '../agent-identity.mjs';
 import { displayName, recordSoulDisplayName, upsertIdentitySoul } from '../agent-population.mjs';
 import { soulTrailerStatus } from '../soul-coauthor.mjs';
-import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
+import { HARNESS_AGENT_ENV_VARS, buildHarnessAgentShellChecks } from '../detect-harness.mjs';
 
-const HARNESS_AGENT_MARKERS = PROFILE_HARNESSES.map((h) => `${h.toUpperCase()}_AGENT`);
+const HARNESS_AGENT_MARKERS = HARNESS_AGENT_ENV_VARS;
 
 const root = mkdtempSync(path.join(tmpdir(), 'identity-hooks-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -409,4 +409,13 @@ test('pre-commit never confines a human-attributed commit by remote or directory
     env: { ...humanEnv({ CLAUDECODE: '1' }), AGENT_BOT_HOOK_BIN: hookBin },
     stdio: ['ignore', 'pipe', 'pipe'],
   }));
+});
+
+test('hooks/agent-context contains the exact generated shell checks from PROFILE_HARNESSES', () => {
+  const content = readFileSync(fileURLToPath(new URL('../hooks/agent-context', import.meta.url)), 'utf8');
+  const expectedBlock = buildHarnessAgentShellChecks('return 0', '  ');
+  assert.ok(
+    content.includes(expectedBlock),
+    'hooks/agent-context must contain the exact generated checks from buildHarnessAgentShellChecks',
+  );
 });
