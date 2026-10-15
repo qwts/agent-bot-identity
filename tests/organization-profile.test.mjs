@@ -122,6 +122,34 @@ test('Junie and Command Code defaults and active identities validate into runtim
   );
 });
 
+test('Vibe and Mirror defaults and active identities validate into runtime App mappings', () => {
+  const base = completeProfile();
+  const profile = completeProfile({
+    defaults: {
+      ...base.defaults,
+      mirror: 'example-mirror-agent',
+      vibe: 'example-vibe-agent',
+    },
+    identities: [
+      ...base.identities,
+      { slug: 'example-mirror-agent', harness: 'mirror', status: 'active' },
+      { slug: 'example-vibe-agent', harness: 'vibe', status: 'active' },
+    ],
+  });
+
+  const config = organizationProfileToConfig(parseOrganizationProfile(JSON.stringify(profile)));
+  assert.equal(config.apps.mirror, 'example-mirror-agent');
+  assert.equal(config.apps.vibe, 'example-vibe-agent');
+  assert.deepEqual(
+    runtimeProfileInfo(config).active.filter(({ harness }) => ['mirror', 'vibe'].includes(harness))
+      .map(({ harness, slug }) => ({ harness, slug })),
+    [
+      { harness: 'mirror', slug: 'example-mirror-agent' },
+      { harness: 'vibe', slug: 'example-vibe-agent' },
+    ],
+  );
+});
+
 test('profile v1 normalizes complete defaults, model mappings, and lifecycle state', () => {
   const profile = validateOrganizationProfile(completeProfile());
   assert.deepEqual(Object.keys(profile.defaults), ['claude', 'codex']);
