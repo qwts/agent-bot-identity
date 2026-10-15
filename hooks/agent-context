@@ -42,10 +42,12 @@ agent_bot_agent_context() {
   [ "$HERMES_AGENT" = "1" ] && return 0
   [ "$JUNIE_AGENT" = "1" ] && return 0
   [ "$KIRO_AGENT" = "1" ] && return 0
+  [ "$MIRROR_AGENT" = "1" ] && return 0
   [ "$MUSE_AGENT" = "1" ] && return 0
   [ "$OPENCODE_AGENT" = "1" ] && return 0
   [ "$PI_AGENT" = "1" ] && return 0
   [ "$QWEN_AGENT" = "1" ] && return 0
+  [ "$VIBE_AGENT" = "1" ] && return 0
   [ "$VSCODE_AGENT" = "1" ] && return 0
   [ "$WARP_AGENT" = "1" ] && return 0
   [ "$ZCODE_AGENT" = "1" ] && return 0
