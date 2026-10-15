@@ -58,6 +58,7 @@ const LAUNCH_PATHS = {
   'keyd-supervisor.mjs': [1, 'OS tool: launchctl'],
   'identity/owner-approval.mjs': [1, 'OS tool: osascript'],
   'identity/owner-presence.mjs': [2, 'OS tool: codesign, then the verified keyd binary'],
+  'detect-harness.mjs': [1, 'OS tool: ps'],
   'process-ownership.mjs': [1, 'OS tool: ps'],
   'sandbox.mjs': [1, 'OS tool: sandbox probes'],
   'comms-client.mjs': [1, 'OS tool: id'],

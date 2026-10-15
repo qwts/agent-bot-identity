@@ -40,7 +40,7 @@ import { createInterface } from 'node:readline';
 import path from 'node:path';
 import process from 'node:process';
 import { withLock } from '../file-lock.mjs';
-import { HARNESS_AGENT_ENV_VARS } from '../detect-harness.mjs';
+import { HARNESS_AGENT_ENV_VARS, detectProcessTreeHarness } from '../detect-harness.mjs';
 import { vouchStateDir } from './vouch.mjs';
 import { MAX_TEXT_BYTES, textProblem } from './owner-text.mjs';
 
@@ -408,9 +408,16 @@ const NAMED_HARNESS_MARKERS = Object.freeze(
 // Agent processes, by the `<NAME>_AGENT`-shaped markers detect-harness.mjs
 // keys on. The ssh store has no trusted display (ADR-0753 section 5), so it
 // signs only where no agent is running the terminal.
-export function harnessMarkers(env = process.env) {
+export function harnessMarkers(env = process.env, options = {}) {
   const named = NAMED_HARNESS_MARKERS.filter((name) => typeof env[name] === 'string' && env[name] !== '');
-  return [...named, ...Object.keys(env).filter((name) => name.startsWith('CODEX_')).sort()];
+  const codex = Object.keys(env).filter((name) => name.startsWith('CODEX_')).sort();
+  const processHarness = detectProcessTreeHarness({ env, ...options });
+  const processMarker = processHarness === 'mirror'
+    ? 'mirror-agent'
+    : processHarness === 'vibe'
+      ? 'vibe-rs'
+      : null;
+  return [...named, ...codex, ...(processMarker ? [processMarker] : [])];
 }
 
 // The public half of an ssh key file, from the `.pub` beside it.
