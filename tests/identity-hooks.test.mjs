@@ -20,7 +20,11 @@ import {
 } from '../agent-identity.mjs';
 import { displayName, recordSoulDisplayName, upsertIdentitySoul } from '../agent-population.mjs';
 import { soulTrailerStatus } from '../soul-coauthor.mjs';
-import { HARNESS_AGENT_ENV_VARS, buildHarnessAgentShellChecks } from '../detect-harness.mjs';
+import {
+  HARNESS_AGENT_ENV_VARS,
+  buildHarnessAgentShellChecks,
+  buildProcessTreeShellFunction,
+} from '../detect-harness.mjs';
 
 const HARNESS_AGENT_MARKERS = HARNESS_AGENT_ENV_VARS;
 
@@ -418,4 +422,31 @@ test('hooks/agent-context contains the exact generated shell checks from PROFILE
     content.includes(expectedBlock),
     'hooks/agent-context must contain the exact generated checks from buildHarnessAgentShellChecks',
   );
+  const expectedProcessFn = buildProcessTreeShellFunction('agent_bot_process_tree_context', '/bin/ps');
+  assert.ok(
+    content.includes(expectedProcessFn),
+    'hooks/agent-context must contain the exact generated agent_bot_process_tree_context function',
+  );
+});
+
+test('pre-commit recognizes mirror-agent and vibe-rs process ancestry as agent context without env markers', () => {
+  for (const wrapperName of ['mirror-agent', 'vibe-rs']) {
+    const { repo, git } = fixture(`proc-${wrapperName}`);
+    git('remote', 'add', 'origin', 'https://github.com/example/repo.git');
+    git('config', 'user.name', 'you-codex-agent[bot]');
+    git('config', '--unset', 'agentBot.agentId');
+    const wrapper = path.join(root, wrapperName);
+    writeFileSync(wrapper, '#!/bin/sh\n"$@"\n');
+    chmodSync(wrapper, 0o755);
+    assert.throws(
+      () => execFileSync(wrapper, [preCommit], {
+        cwd: repo,
+        env: { ...humanEnv(), AGENT_BOT_CONFIG: gateOnConfig, AGENT_BOT_HOOK_BIN: allowingAgentHook() },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+      (error) => /no resolvable Agent-Identity/.test(error.stderr),
+      `${wrapperName}: process ancestry recognized as agent context`,
+    );
+  }
 });

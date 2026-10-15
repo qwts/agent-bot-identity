@@ -1,7 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -129,6 +129,34 @@ test('--agent-slug reports the agent process, which is not the same question', (
   const primary = checkout('agent-process');
   assert.equal(run('--agent-slug', primary, { AGENT_BOT_ACCOUNT: 'user', CLAUDECODE: '1' }), 'you-claude-agent');
   assert.equal(run('--agent-slug', primary, { AGENT_BOT_ACCOUNT: 'user' }), '');
+
+  const globalConfig = join(root, 'empty.gitconfig');
+  const configPath = join(root, 'config.json');
+  const cleanEnv = { ...process.env };
+  for (const key of Object.keys(cleanEnv)) {
+    if (/^(CODEX|CLAUDE|AI_AGENT|CURSOR|COPILOT|DEVIN|WINDSURF|MUSE|QWEN|ANTIGRAVITY|GH_AGENT_APP|AGENT_BOT_|[A-Z0-9_]+_AGENT$)/.test(key)) delete cleanEnv[key];
+  }
+  for (const [wrapperName, expected] of [
+    ['mirror-agent', 'you-mirror-agent'],
+    ['vibe-rs', 'you-vibe-agent'],
+  ]) {
+    const wrapper = join(root, wrapperName);
+    writeFileSync(wrapper, '#!/bin/sh\n"$@"\n');
+    chmodSync(wrapper, 0o755);
+    const out = execFileSync(wrapper, [process.execPath, TOOL, '--agent-slug'], {
+      cwd: primary,
+      encoding: 'utf8',
+      env: {
+        ...cleanEnv,
+        HOME: root,
+        AGENT_BOT_ACCOUNT: 'user',
+        AGENT_BOT_CONFIG: configPath,
+        GIT_CONFIG_GLOBAL: globalConfig,
+        GIT_CONFIG_SYSTEM: '/dev/null',
+      },
+    }).trim();
+    assert.equal(out, expected);
+  }
 });
 
 test('--account-slug is an empty successful probe when the add-on is off', () => {

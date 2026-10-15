@@ -1,0 +1,1 @@
+- Detect Reflection.ai Mirror CLI (`mirror-agent`) and Mistral Vibe (`vibe-rs`, `vibe-app-server`) harnesses from process-tree ancestry when they do not export `<HARNESS>_AGENT=1` or `AI_AGENT` (#1121, #1123).

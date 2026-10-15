@@ -38,6 +38,7 @@ function runShim({
   lsofOutput = null,
   explicitReal = false,
   realIsShim = false,
+  wrapperBin = null,
 } = {}) {
   const shimDir = join(root, `shim-${Math.random()}`);
   const realDir = join(root, `real-${Math.random()}`);
@@ -125,7 +126,17 @@ exit ${realExit}
   );
   chmodSync(real, 0o755);
 
-  return spawnSync('/bin/sh', [shim, ...args], {
+  let spawnCmd = '/bin/sh';
+  let spawnArgs = [shim, ...args];
+  if (wrapperBin) {
+    const wrapperPath = join(shimDir, wrapperBin);
+    writeFileSync(wrapperPath, '#!/bin/sh\n"$@"\n');
+    chmodSync(wrapperPath, 0o755);
+    spawnCmd = wrapperPath;
+    spawnArgs = ['/bin/sh', shim, ...args];
+  }
+
+  return spawnSync(spawnCmd, spawnArgs, {
     encoding: 'utf8',
     env: {
       ...(explicitReal ? {
@@ -319,6 +330,18 @@ test('QWEN_CODE=1 establishes agent context in gh shim', () => {
   });
   assert.equal(result.status, 1, 'QWEN_CODE fails closed without token tool');
   assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
+});
+
+test('mirror-agent and vibe-rs process ancestry establishes agent context in gh shim without env markers', () => {
+  for (const wrapperBin of ['mirror-agent', 'vibe-rs']) {
+    const result = runShim({
+      wrapperBin,
+      args: ['issue', 'create', '--title', 'forbidden'],
+      tokenToolAvailable: false,
+    });
+    assert.equal(result.status, 1, `${wrapperBin}: fails closed without token tool`);
+    assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
+  }
 });
 
 test('Codex desktop passes through unchanged without a configured App mapping', () => {

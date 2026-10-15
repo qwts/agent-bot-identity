@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { HARNESSES, accountName, detectAgentHarness, detectHarness } from '../detect-harness.mjs';
+import { HARNESSES, accountName, detectAgentHarness, detectHarness, detectProcessTreeHarness } from '../detect-harness.mjs';
 import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
 
 const cfg = { prefix: 'you' };
@@ -297,4 +297,63 @@ test('AGENT_BOT_ACCOUNT overrides the OS account name for JS consumers', () => {
   assert.equal(typeof accountName({}), 'string');
   assert.equal(accountName({ AGENT_BOT_ACCOUNT: '' }), accountName({}));
   assert.equal(detectAgentHarness({ AGENT_BOT_ACCOUNT: 'you-goose-agent' }, cfg), 'you-goose-agent');
+});
+
+test('Reflection.ai Mirror CLI and Mistral Vibe are detected from mirror-agent and vibe-rs process ancestry', () => {
+  const mirrorPs = [
+    '  100     1 /sbin/launchd',
+    '  200   100 /Users/user/.local/share/uv/tools/mirror/bin/python /Users/user/.local/bin/mirror',
+    '  300   200 /Users/user/.local/share/uv/tools/mirror/lib/python3.12/site-packages/mirror/bin/mirror-agent {"model": "Beam"}',
+    '  400   300 /bin/bash -c git status',
+    '  500   400 /opt/homebrew/bin/node /Users/user/.local/bin/agent-bot',
+  ].join('\n');
+
+  assert.equal(detectProcessTreeHarness({ pid: 500, psOutput: mirrorPs }), 'mirror');
+  assert.equal(detectHarness({ TERM_dumb: '1' }, { pid: 500, psOutput: mirrorPs }), 'mirror');
+  assert.equal(detectAgentHarness({ TERM: 'dumb' }, cfg, 'user', { pid: 500, psOutput: mirrorPs }), 'you-mirror-agent');
+
+  const vibePs = [
+    '  100     1 /sbin/launchd',
+    '  200   100 /opt/homebrew/Cellar/mistral-vibe/2.26.1/libexec/lib/python3.14/site-packages/vibe/_bin/vibe-rs',
+    '  300   200 /opt/homebrew/Cellar/python@3.14/Resources/Python /opt/homebrew/Cellar/mistral-vibe/2.26.1/libexec/bin/vibe-app-server --experimental-harness',
+    '  400   300 /bin/zsh -c gh pr list',
+  ].join('\n');
+
+  assert.equal(detectProcessTreeHarness({ pid: 400, psOutput: vibePs }), 'vibe');
+  assert.equal(detectHarness({}, { pid: 400, psOutput: vibePs }), 'vibe');
+  assert.equal(detectAgentHarness({}, cfg, 'user', { pid: 400, psOutput: vibePs }), 'you-vibe-agent');
+
+  // Surrounding editor markers do not split attribution when mirror or vibe runs in an integrated terminal.
+  for (const ambient of [
+    { CURSOR_TRACE_ID: 'x', CURSOR_LAYOUT: 'y' },
+    { WINDSURF_IDE_TYPE: 'windsurf' },
+    { MUSE_RELEASE_INFO: '0.9.1' },
+    { TERM_PROGRAM: 'vscode', VSCODE_PID: '1' },
+  ]) {
+    assert.equal(detectHarness(ambient, { pid: 500, psOutput: mirrorPs }), 'mirror');
+    assert.equal(detectAgentHarness(ambient, cfg, 'user', { pid: 500, psOutput: mirrorPs }), 'you-mirror-agent');
+    assert.equal(detectHarness(ambient, { pid: 400, psOutput: vibePs }), 'vibe');
+    assert.equal(detectAgentHarness(ambient, cfg, 'user', { pid: 400, psOutput: vibePs }), 'you-vibe-agent');
+  }
+
+  // Test runner boundary stops ancestor walk so running the test suite inside mirror or vibe stays hermetic,
+  // while a test spawning a child mirror-agent below the test runner still matches.
+  const nestedTestPs = [
+    '  100     1 /Users/user/.local/share/uv/tools/mirror/lib/python3.12/site-packages/mirror/bin/mirror-agent {}',
+    '  200   100 /bin/bash -c npm test',
+    '  300   200 /opt/homebrew/bin/node --test tests/detect-harness.test.mjs',
+    '  400   300 /bin/sh /tmp/shim/gh whoami',
+    '  450   300 /bin/sh /tmp/shim/mirror-agent /bin/sh /tmp/shim/gh whoami',
+    '  460   450 /bin/sh /tmp/shim/gh whoami',
+  ].join('\n');
+  assert.equal(detectProcessTreeHarness({ pid: 400, psOutput: nestedTestPs }), null);
+  assert.equal(detectProcessTreeHarness({ pid: 460, psOutput: nestedTestPs }), 'mirror');
+
+  // Inline -c scripts or commit messages mentioning mirror-agent or .test.mjs never false-positive.
+  const inlineArgsPs = [
+    '  100     1 /sbin/launchd',
+    '  200   100 /bin/bash -c echo mirror-agent vibe-rs',
+    '  300   200 /usr/bin/git commit -m mirror-agent',
+  ].join('\n');
+  assert.equal(detectProcessTreeHarness({ pid: 300, psOutput: inlineArgsPs }), null);
 });

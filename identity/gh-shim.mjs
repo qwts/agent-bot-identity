@@ -1,4 +1,4 @@
-import { buildHarnessAgentShellChecks } from '../detect-harness.mjs';
+import { buildHarnessAgentShellChecks, buildProcessTreeShellFunction } from '../detect-harness.mjs';
 
 export const GH_SHIM_MARKER = '# gh shim — agent bot identity. Managed by install-gh-shim.mjs';
 
@@ -7,6 +7,7 @@ const shQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 export function buildGhShim(tokenTool = null, { psPath = '/bin/ps', lsofPath = '/usr/sbin/lsof', configModule = null } = {}) {
   const harnessAgentChecks = buildHarnessAgentShellChecks('AGENT_CONTEXT=1', '');
+  const processTreeFunction = buildProcessTreeShellFunction('agent_bot_process_tree_context', psPath);
   const tokenSetup = tokenTool
     ? `TOKEN_TOOL="${tokenTool}"
 TOKEN_REQUIRES_NODE=1
@@ -143,11 +144,11 @@ fi
 # every rule here. The guarantee is against default and inadvertent use of the
 # human credential, not against a hostile process.
 CLAUDE_DESKTOP_CONTEXT=""
-if [ -x ${psPath} ] && [ -x ${lsofPath} ]; then
-  CLAUDE_DESKTOP_PARENT=$(${psPath} -p "$PPID" -o comm= 2>/dev/null || true)
+if [ -x ${shQuote(psPath)} ] && [ -x ${shQuote(lsofPath)} ]; then
+  CLAUDE_DESKTOP_PARENT=$(${shQuote(psPath)} -p "$PPID" -o comm= 2>/dev/null || true)
   case "$CLAUDE_DESKTOP_PARENT" in
     /Applications/Claude.app/Contents/*)
-      CLAUDE_DESKTOP_TEXT=$(${lsofPath} -p "$PPID" -a -d txt -Fn 2>/dev/null \
+      CLAUDE_DESKTOP_TEXT=$(${shQuote(lsofPath)} -p "$PPID" -a -d txt -Fn 2>/dev/null \
         | sed -n 's/^n//p' | head -1)
       case "$CLAUDE_DESKTOP_TEXT" in
         /Applications/Claude.app/Contents/*)
@@ -179,6 +180,8 @@ token_tool_available() {
 # shell and JS cannot disagree about what an agent account is. In the owner's
 # account an agent marker alone confers nothing: a harness that was not told
 # to be the bot is the human's delegate and gets stock gh.
+${processTreeFunction}
+
 AGENT_CONTEXT=""
 [ "$CLAUDECODE" = "1" ] && AGENT_CONTEXT=1
 ${harnessAgentChecks}
@@ -189,6 +192,9 @@ ${harnessAgentChecks}
 [ -n "$AGENT_BOT_ACCOUNT" ] && AGENT_CONTEXT=1
 if [ -z "$AGENT_CONTEXT" ]; then
   env | grep -q '^CODEX_' && AGENT_CONTEXT=1
+fi
+if [ -z "$AGENT_CONTEXT" ] && agent_bot_process_tree_context; then
+  AGENT_CONTEXT=1
 fi
 
 # A checkout configured as a bot — a pin or the bot credential helper in its

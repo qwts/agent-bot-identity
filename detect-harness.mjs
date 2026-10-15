@@ -16,6 +16,7 @@
 // the bot slug. Only the env markers are still Codeium-era, so the matcher and
 // the key deliberately differ.
 
+import { execFileSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { loadConfig, rosterScope, slugForHarness } from './config.mjs';
 import { PROFILE_HARNESSES, runtimeProfileInfo } from './organization-profile-schema.mjs';
@@ -34,6 +35,205 @@ function buildHarnessAgentShellChecks(action = 'return 0', indent = '  ') {
     ...HARNESS_AGENT_ENV_VARS.map((envVar) => `${indent}[ "$${envVar}" = "1" ] && ${action}`),
     `${indent}[ "$QWEN_CODE" = "1" ] && ${action}`,
   ].join('\n');
+}
+
+function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context', psPath = '/bin/ps') {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(fnName)) {
+    throw new Error(`Invalid shell function name: ${fnName}`);
+  }
+  const quotedPs = `'${String(psPath).replaceAll("'", "'\\''")}'`;
+  return `${fnName}() {
+  [ -x ${quotedPs} ] && [ -x /usr/bin/awk ] || return 1
+  ${quotedPs} -axo pid=,ppid=,command= 2>/dev/null | /usr/bin/awk -v self="$$" -v ppid="$PPID" '
+    function base(path,    n, parts) {
+      n = split(path, parts, "/")
+      return parts[n]
+    }
+    function is_interp(bin,    b) {
+      b = base(bin)
+      return (b == "sh" || b == "bash" || b == "zsh" || b == "dash" || b == "ksh" || b == "node" || b ~ /^[Pp]ython([0-9.]*)?$/)
+    }
+    function match_harness(line,    n, tok, t1, t2, b1, b2, i) {
+      n = split(line, tok, /[[:space:]]+/)
+      if (n < 1) return 0
+      t1 = tok[1]
+      b1 = base(t1)
+      if (b1 == "mirror-agent" || t1 ~ /\\/mirror\\/bin\\/mirror$/) return 1
+      if (b1 == "vibe-rs" || b1 == "vibe-app-server" || t1 ~ /\\/bin\\/vibe$/) return 1
+      if (is_interp(t1)) {
+        for (i = 2; i <= n; i++) {
+          if (tok[i] ~ /^-[a-zA-Z]*c/ || tok[i] == "-e" || tok[i] == "--eval" || tok[i] == "-m") break
+          if (substr(tok[i], 1, 1) == "-") continue
+          t2 = tok[i]
+          b2 = base(t2)
+          if (b2 == "mirror-agent" || t2 ~ /\\/(mirror\\/)?bin\\/mirror$/) return 1
+          if (b2 == "vibe-rs" || b2 == "vibe-app-server" || t2 ~ /\\/bin\\/vibe$/) return 1
+          break
+        }
+      }
+      return 0
+    }
+    function is_test_runner(line,    n, tok, t1, b1, i) {
+      n = split(line, tok, /[[:space:]]+/)
+      if (n < 1) return 0
+      t1 = tok[1]
+      b1 = base(t1)
+      if (t1 ~ /\\.test\\.sh$/) return 1
+      if (b1 == "bash" || b1 == "sh") {
+        for (i = 2; i <= n; i++) {
+          if (tok[i] ~ /^-[a-zA-Z]*c/) break
+          if (substr(tok[i], 1, 1) == "-") continue
+          return (tok[i] ~ /\\.test\\.sh$/)
+        }
+      }
+      if (b1 == "node") {
+        for (i = 2; i <= n; i++) {
+          if (tok[i] == "-e" || tok[i] == "--eval" || tok[i] == "-p" || tok[i] == "--print") break
+          if (tok[i] == "--test" || tok[i] ~ /\\.test\\.(mjs|cjs|js)$/) return 1
+        }
+      }
+      return 0
+    }
+    {
+      pid = $1 + 0
+      p = $2 + 0
+      $1 = ""; $2 = ""
+      sub(/^[[:space:]]+/, "")
+      parent[pid] = p
+      cmd[pid] = $0
+    }
+    END {
+      cur = (self + 0 in cmd) ? (self + 0) : (ppid + 0)
+      for (depth = 0; cur > 1 && depth < 32; depth++) {
+        if (!(cur in cmd)) break
+        if (match_harness(cmd[cur])) exit 0
+        if (is_test_runner(cmd[cur])) exit 1
+        if (parent[cur] == cur) break
+        cur = parent[cur]
+      }
+      exit 1
+    }
+  '
+}`;
+}
+
+function baseName(token) {
+  const idx = token.lastIndexOf('/');
+  return idx === -1 ? token : token.slice(idx + 1);
+}
+
+function isProcessInterpreter(token) {
+  const b = baseName(token);
+  return (
+    b === 'sh' ||
+    b === 'bash' ||
+    b === 'zsh' ||
+    b === 'dash' ||
+    b === 'ksh' ||
+    b === 'node' ||
+    /^[Pp]ython(?:[0-9.]*)?$/.test(b)
+  );
+}
+
+function matchProcessHarnessCommand(command) {
+  if (typeof command !== 'string' || !command.trim()) return null;
+  const tokens = command.trim().split(/\s+/);
+  const t1 = tokens[0] ?? '';
+  const b1 = baseName(t1);
+  if (b1 === 'mirror-agent' || /\/mirror\/bin\/mirror$/.test(t1)) return 'mirror';
+  if (b1 === 'vibe-rs' || b1 === 'vibe-app-server' || /\/bin\/vibe$/.test(t1)) return 'vibe';
+  if (isProcessInterpreter(t1)) {
+    for (let i = 1; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      if (/^-[a-zA-Z]*c/.test(tok) || tok === '-e' || tok === '--eval' || tok === '-m') break;
+      if (tok.startsWith('-')) continue;
+      const b2 = baseName(tok);
+      if (b2 === 'mirror-agent' || /\/(?:mirror\/)?bin\/mirror$/.test(tok)) return 'mirror';
+      if (b2 === 'vibe-rs' || b2 === 'vibe-app-server' || /\/bin\/vibe$/.test(tok)) return 'vibe';
+      break;
+    }
+  }
+  return null;
+}
+
+function isProcessTestRunnerCommand(command) {
+  if (typeof command !== 'string' || !command.trim()) return false;
+  const tokens = command.trim().split(/\s+/);
+  const t1 = tokens[0] ?? '';
+  const b1 = baseName(t1);
+  if (/\.test\.sh$/.test(t1)) return true;
+  if (b1 === 'bash' || b1 === 'sh') {
+    for (let i = 1; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      if (/^-[a-zA-Z]*c/.test(tok)) break;
+      if (tok.startsWith('-')) continue;
+      return /\.test\.sh$/.test(tok);
+    }
+  }
+  if (b1 === 'node') {
+    for (let i = 1; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      if (tok === '-e' || tok === '--eval' || tok === '-p' || tok === '--print') break;
+      if (tok === '--test' || /\.test\.[cm]?js$/.test(tok)) return true;
+    }
+  }
+  return false;
+}
+
+let cachedLiveProcessHarness;
+
+export function detectProcessTreeHarness({
+  env = process.env,
+  pid = process.pid,
+  psOutput,
+  psPath = '/bin/ps',
+} = {}) {
+  try {
+    if (psOutput === undefined) {
+      if (env !== process.env) return null;
+      if (process.argv.some((arg) => arg === '--test' || /\.test\.[cm]?js$/.test(arg))) {
+        return null;
+      }
+      if (cachedLiveProcessHarness !== undefined && pid === process.pid && psPath === '/bin/ps') {
+        return cachedLiveProcessHarness;
+      }
+    }
+    const raw =
+      typeof psOutput === 'string'
+        ? psOutput
+        : execFileSync(psPath, ['-axo', 'pid=,ppid=,command='], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+          });
+    const table = new Map();
+    for (const line of raw.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+      if (!m) continue;
+      table.set(Number(m[1]), { ppid: Number(m[2]), command: m[3] });
+    }
+    let cur = Number(pid);
+    let found = null;
+    for (let depth = 0; cur > 1 && depth < 32; depth += 1) {
+      const entry = table.get(cur);
+      if (!entry) break;
+      const harness = matchProcessHarnessCommand(entry.command);
+      if (harness) {
+        found = harness;
+        break;
+      }
+      if (isProcessTestRunnerCommand(entry.command)) {
+        break;
+      }
+      if (entry.ppid === cur) break;
+      cur = entry.ppid;
+    }
+    if (psOutput === undefined && env === process.env && pid === process.pid && psPath === '/bin/ps') {
+      cachedLiveProcessHarness = found;
+    }
+    return found;
+  } catch {
+    return null;
+  }
 }
 
 const HARNESS_TOKEN_RES = new Map(
@@ -100,6 +300,24 @@ const HARNESSES = [
       e.QWEN_CODE === '1' ||
       hasHarnessToken(e.AI_AGENT, 'qwen') ||
       e.QWEN_AGENT === '1',
+  },
+  {
+    // Reflection.ai Mirror CLI (`mirror` -> `mirror-agent`) and Mistral Vibe
+    // (`vibe` -> `vibe-rs` / `vibe-app-server`) are terminal CLI harnesses
+    // that do not export `<HARNESS>_AGENT=1` into tool subprocesses by default.
+    // Like `qwen`, they sit above ambient editor rows so a CLI session launched
+    // inside an editor's integrated terminal resolves to the CLI agent rather
+    // than the surrounding editor.
+    key: 'mirror',
+    match: (e) =>
+      e.MIRROR_AGENT === '1' ||
+      hasHarnessToken(e.AI_AGENT, 'mirror'),
+  },
+  {
+    key: 'vibe',
+    match: (e) =>
+      e.VIBE_AGENT === '1' ||
+      hasHarnessToken(e.AI_AGENT, 'vibe'),
   },
   {
     key: 'cursor',
@@ -222,7 +440,7 @@ function detectAiAgentHarness(aiAgent) {
 }
 
 // Returns the harness key for the detected tool, or null if none matched.
-export function detectHarness(env = process.env) {
+export function detectHarness(env = process.env, options = {}) {
   try {
     const aiAgent = typeof env?.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
     if (
@@ -256,6 +474,11 @@ export function detectHarness(env = process.env) {
     const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
     if (aiHarness && aiHarness !== 'vscode') return aiHarness;
 
+    // Process-ancestry CLI harnesses (`mirror-agent`, `vibe-rs`, `vibe-app-server`)
+    // outrank ambient surrounding-editor markers just like `qwen`.
+    const processHarness = detectProcessTreeHarness({ env, ...options });
+    if (processHarness) return processHarness;
+
     for (const h of HARNESSES) {
       if (h.match(env)) return h.key;
     }
@@ -280,6 +503,7 @@ export function detectAgentHarness(
   env = process.env,
   config = loadConfig({ env }),
   account = accountName(env),
+  options = {},
 ) {
   const explicit = typeof env?.GH_AGENT_APP === 'string' ? env.GH_AGENT_APP.trim() : '';
   if (explicit) return explicit;
@@ -321,7 +545,12 @@ export function detectAgentHarness(
     if (explicitHarness) {
       key = explicitHarness;
     } else {
-      key = detectAiAgentHarness(env?.AI_AGENT);
+      const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
+      if (aiHarness && aiHarness !== 'vscode') {
+        key = aiHarness;
+      } else {
+        key = detectProcessTreeHarness({ env, ...options }) ?? aiHarness;
+      }
     }
   }
   return slugForHarness(key, config);
@@ -331,6 +560,7 @@ export {
   HARNESSES,
   HARNESS_AGENT_ENV_VARS,
   buildHarnessAgentShellChecks,
+  buildProcessTreeShellFunction,
   detectAiAgentHarness,
   detectExplicitHarnessAgent,
   harnessEnvKey,
