@@ -134,7 +134,9 @@ organization governance (`qwts/qwts-agent-org`, `qwts/agent-sop`), the identity
 runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
 (`qwts/managed-machine`). Walk and verify each step in order:
 
-1. **Restore App credentials from `pass-cli`.** Confirm `pass-cli` is signed in
+1. **Provision credentials and prepare the backend store.** For locally stored
+   Apps (`file`, `keychain`, `pass-cli`, or legacy
+   `~/.config/<slug>/{app-id,private-key.pem}`), confirm `pass-cli` is signed in
    with access to the `Agent Identities` vault, then run:
 
    ```bash
@@ -142,12 +144,20 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
    ```
 
    This provisions the App ID and private key into the managed App credential
-   store (or legacy `~/.config/<slug>/{app-id,private-key.pem}`).
+   store (or legacy `~/.config/<slug>/{app-id,private-key.pem}`). For
+   `agent-bot-keyd`-backed Apps (`store: "keyd"`, shipped with GeniusBar),
+   `ensure-private-key` does not apply and `mint-token` routes through
+   `mintThroughDaemon`, which rejects an unbound caller (`only a bound soul can
+   get a token for it, through the daemon`) — join and bind the agent's
+   canonical soul in a linked worktree (`agent-bot join --name NAME --harness
+   HARNESS --soul AGENT_ID --json`, MCP `bind`, `agent-bot setup-worktree
+   <slug>`) before attempting step 2.
 2. **Verify the first token mint without triggering owner-approval prompts.**
    In the owner's account, `agent-bot mint-token --app <slug>` from an unpinned
    context with no stated identity fires the macOS owner-approval gate and
    prompts for administrator credentials on every call. State the identity via
-   `GH_AGENT_APP=<slug>` (or run inside a pinned worktree) to verify minting
+   `GH_AGENT_APP=<slug>` (for locally readable stores) or run inside the bound,
+   pinned worktree (required for `agent-bot-keyd`-backed Apps) to verify minting
    cleanly:
 
    ```bash
@@ -160,8 +170,9 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
 
 3. **Install the `gh` shim and verify readiness.** Ensure the fail-closed `gh`
    shim is installed (`agent-bot install-gh-shim` or `agent-bot bootstrap
-   --with-gh-shim`), link and bind the worktree to the agent's canonical soul,
-   and run `agent-bot doctor --json --require-schema-version 1`.
+   --with-gh-shim`), link and bind the worktree to the agent's canonical soul if
+   not already bound in step 1, and run
+   `agent-bot doctor --json --require-schema-version 1`.
 4. **Confirm CI policy (`qwts-agent-ci`).** Every bot-authored commit must be
    Web-Flow signed (`agent-bot signed-commit`), attributed to `<slug>[bot]`,
    and accompanied by any repository-required checks (such as a `changes/`
@@ -180,8 +191,11 @@ the human persona). Understand the shim's token rules:
   daemon binding (`<git-dir>/agent-binding.json`) to mint a token through
   `worktree-token`.
 
-Without the shim — or when operating before a worktree has a live daemon
-binding — mint with `GH_AGENT_APP=<slug>`, verify the bot login via GraphQL,
+Without the shim — or when operating with a locally readable credential store
+(`file`, `keychain`, `pass-cli`, or legacy `~/.config/<slug>`) before a
+worktree has a live daemon binding (for `agent-bot-keyd`-backed Apps, join and
+bind the canonical soul first, since `mintThroughDaemon` rejects unbound
+callers) — mint with `GH_AGENT_APP=<slug>`, verify the bot login via GraphQL,
 and invoke the real `gh` binary (for example `/opt/homebrew/bin/gh`) in
 fail-closed steps:
 
