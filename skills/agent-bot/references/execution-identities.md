@@ -161,14 +161,24 @@ observable) and genuinely has no parent, while `?` means the soul never bound
 and its parent is unknown rather than absent. In JSON both appear as
 `parentId: null`; apply the same rule by checking `transcriptLocator`.
 
+Each agent persona should operate as one long-lived soul rather than spawning a
+fresh task-scoped soul per issue or PR: link task worktrees to the canonical
+soul and reuse its `agentBot.agentId` pin (`agent-bot join --name NAME --harness
+H --soul AGENT_ID`). Retire any ephemeral task-scoped souls after their work
+merges (`agent-bot soul remove <agentId> --plan`, then owner-gated `agent-bot
+soul remove <agentId>`; removal archives the soul's folders and permanently
+retires the identity with no un-retire).
 
 ## Operate the soul skill lifecycle
 
 Use `agent-bot soul skill --help` for this release's available lifecycle verbs.
 `agent-bot skill NAME` discloses an application or catalogued skill; it is not a
 library-import or adoption command. Library operations need no GitHub App or
-soul binding. Recording a learning outcome requires the target soul's binding;
-dream mutations use the daemon's owner gate. Do not turn a library task into
+soul binding. The soul's package `AGENTS.md` is its standing instruction set,
+growing through reviewed revisions (`agent-bot soul revision prepare` /
+`edit ... --apply`), recorded learning outcomes, and the owner-gated dream.
+Recording a learning outcome requires the target soul's binding;
+dream mutations use the daemon's owner gate (agents prepare, owners authorize). Do not turn a library task into
 identity setup or automatically register a maintenance schedule.
 
 1. **Acquire and inspect.** `agent-bot soul skill import PATH_OR_URL --json`

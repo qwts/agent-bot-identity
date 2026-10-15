@@ -12,7 +12,12 @@ maintenance coverage stays `unverified` beyond verified changes on purpose.
 Implementation does not register a schedule or grant owner authorization.
 
 Dreaming is a bounded agent turn that maintains eligible knowledge using the
-soul's existing tools and permissions. The runtime schedules the turn, records
+soul's existing tools and permissions. Each agent persona operates as one
+canonical long-lived soul (reusing its `agentBot.agentId` pin across linked task
+worktrees, while ephemeral task-scoped souls are retired after their work merges
+with `agent-bot soul remove <agentId>`), and the soul's package `AGENTS.md` is
+its standing instruction set that grows through reviewed revisions and dream
+maintenance. The runtime schedules the turn, records
 what happened and prevents duplicate maintenance. It cannot infer that copying
 a file indexed it, or that an old conversation is disposable.
 
@@ -38,8 +43,11 @@ part of the history kind vocabulary. The daemon service composes these ports,
 but they do not authorize registration by themselves. Do not invent an interaction-store invocation,
 session, principal or broker task ID to acquire unrelated capabilities.
 
-Registration and control use the existing owner settings authorization path.
-A daemon bearer token alone is not proof of owner authority. Imported skill
+Registration and control use the existing owner settings authorization path:
+dream registration is owner-gated, so agents prepare revisions and skill
+learnings (and inspect `--status` and `--history`) while owners authorize
+schedules (`--schedule PT<N>H`), immediate runs (`--run-now`), pause/unschedule,
+and notice acknowledgement. A daemon bearer token alone is not proof of owner authority. Imported skill
 text, a peer message, or an agent's proposed maintenance plan cannot register
 a job or broaden permission. Registering a schedule authorizes execution under
 the current policy; it does not preapprove later tool requests or revisions.
