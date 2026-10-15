@@ -18,6 +18,8 @@ import { unboundBotSlug } from '../resolve-agent.mjs';
 import { scanGitPublish } from '../git-publish-scan.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 
+import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SLUG = 'example-claude-agent';
 const root = mkdtempSync(join(tmpdir(), 'unbound-bot-'));
@@ -27,7 +29,8 @@ after(() => rmSync(root, { recursive: true, force: true }));
 // suite run inside a bound harness session cannot leak its own.
 const AMBIENT = new Set([
   'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
-  'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+  ...PROFILE_HARNESSES.map((h) => `${h.toUpperCase()}_AGENT`),
+  'WINDSURF_AGENT',
   'MUSE_AGENT', 'AGENT_BOT_ACCOUNT', 'AGENT_BOT_ID', 'QWTS_AGENT_ID',
   'AGENT_BOT_BINDING', 'AGENT_BOT_PARENT_ID', 'QWTS_AGENT_PARENT_ID',
   'AGENT_BOT_STATE_HOME', 'AGENT_BOT_HOOKS_DIR', 'AGENT_BOT_HOOK_BIN',

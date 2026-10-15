@@ -20,6 +20,9 @@ import {
 } from '../agent-identity.mjs';
 import { displayName, recordSoulDisplayName, upsertIdentitySoul } from '../agent-population.mjs';
 import { soulTrailerStatus } from '../soul-coauthor.mjs';
+import { HARNESS_AGENT_ENV_VARS, buildHarnessAgentShellChecks } from '../detect-harness.mjs';
+
+const HARNESS_AGENT_MARKERS = HARNESS_AGENT_ENV_VARS;
 
 const root = mkdtempSync(path.join(tmpdir(), 'identity-hooks-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -264,6 +267,7 @@ test('pre-commit recognizes agent markers for bot attribution and lets the deleg
     ['devin-agent', { DEVIN_AGENT: '1' }],
     ['windsurf-agent', { WINDSURF_AGENT: '1' }],
     ['muse-agent', { MUSE_AGENT: '1' }],
+    ['antigravity-agent', { ANTIGRAVITY_AGENT: '1' }],
     // ENG-0339: an agent account is agent context with no env marker at all.
     ['agent-account', { AGENT_BOT_ACCOUNT: 'you-goose-agent' }],
     ['unmanaged-ai9d', { CURSOR_AGENT: '1' }],
@@ -278,7 +282,8 @@ test('pre-commit recognizes agent markers for bot attribution and lets the deleg
     // so the marker under test could stop working and this would still pass.
     const AMBIENT = [
       'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
-      'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+      ...HARNESS_AGENT_MARKERS,
+      'WINDSURF_AGENT',
       'MUSE_AGENT', 'AGENT_BOT_ACCOUNT',
     ];
     const env = Object.fromEntries(
@@ -312,7 +317,8 @@ test('pre-commit recognizes agent markers for bot attribution and lets the deleg
 // cannot carry an ambient marker that trips a guard on its own.
 const GUARD_MARKERS = [
   'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
-  'CURSOR_AGENT', 'COPILOT_AGENT', 'DEVIN_AGENT', 'WINDSURF_AGENT',
+  ...HARNESS_AGENT_MARKERS,
+  'WINDSURF_AGENT',
   'MUSE_AGENT', 'AGENT_BOT_ACCOUNT',
 ];
 
@@ -403,4 +409,13 @@ test('pre-commit never confines a human-attributed commit by remote or directory
     env: { ...humanEnv({ CLAUDECODE: '1' }), AGENT_BOT_HOOK_BIN: hookBin },
     stdio: ['ignore', 'pipe', 'pipe'],
   }));
+});
+
+test('hooks/agent-context contains the exact generated shell checks from PROFILE_HARNESSES', () => {
+  const content = readFileSync(fileURLToPath(new URL('../hooks/agent-context', import.meta.url)), 'utf8');
+  const expectedBlock = buildHarnessAgentShellChecks('return 0', '  ');
+  assert.ok(
+    content.includes(expectedBlock),
+    'hooks/agent-context must contain the exact generated checks from buildHarnessAgentShellChecks',
+  );
 });

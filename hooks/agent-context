@@ -4,8 +4,9 @@
 # <name>`, which runs the sibling hook from this directory.
 #
 # agent_bot_agent_context: true when the process carries agent-only markers —
-# CLAUDECODE, CURSOR_AGENT, COPILOT_AGENT, DEVIN_AGENT, WINDSURF_AGENT,
-# MUSE_AGENT, CLAUDE_CODE_ENTRYPOINT, AI_AGENT, GH_AGENT_APP, CODEX_* — or runs
+# CLAUDECODE, <HARNESS>_AGENT for every profile harness (CURSOR_AGENT,
+# COPILOT_AGENT, DEVIN_AGENT, ANTIGRAVITY_AGENT, MUSE_AGENT, …), WINDSURF_AGENT,
+# QWEN_CODE, CLAUDE_CODE_ENTRYPOINT, AI_AGENT, GH_AGENT_APP, CODEX_* — or runs
 # in an agent account (ENG-0339). The account is classified by an exact roster
 # match through the runtime (worktree-token.mjs --account-slug, the same
 # slugForHarness the JS resolver uses), never by a glob on the short name, so
@@ -24,11 +25,32 @@
 # fallback for a session that stated a bot its checkout is not bound to (#749).
 agent_bot_agent_context() {
   [ "$CLAUDECODE" = "1" ] && return 0
-  [ "$CURSOR_AGENT" = "1" ] && return 0
+  [ "$AIDER_AGENT" = "1" ] && return 0
+  [ "$AMP_AGENT" = "1" ] && return 0
+  [ "$ANTIGRAVITY_AGENT" = "1" ] && return 0
+  [ "$CLAUDE_AGENT" = "1" ] && return 0
+  [ "$CLINE_AGENT" = "1" ] && return 0
+  [ "$CODEX_AGENT" = "1" ] && return 0
+  [ "$COMMANDCODE_AGENT" = "1" ] && return 0
   [ "$COPILOT_AGENT" = "1" ] && return 0
+  [ "$CURSOR_AGENT" = "1" ] && return 0
+  [ "$DEEPSEEK_AGENT" = "1" ] && return 0
   [ "$DEVIN_AGENT" = "1" ] && return 0
-  [ "$WINDSURF_AGENT" = "1" ] && return 0
+  [ "$DROID_AGENT" = "1" ] && return 0
+  [ "$GOOSE_AGENT" = "1" ] && return 0
+  [ "$GROK_AGENT" = "1" ] && return 0
+  [ "$HERMES_AGENT" = "1" ] && return 0
+  [ "$JUNIE_AGENT" = "1" ] && return 0
+  [ "$KIRO_AGENT" = "1" ] && return 0
   [ "$MUSE_AGENT" = "1" ] && return 0
+  [ "$OPENCODE_AGENT" = "1" ] && return 0
+  [ "$PI_AGENT" = "1" ] && return 0
+  [ "$QWEN_AGENT" = "1" ] && return 0
+  [ "$VSCODE_AGENT" = "1" ] && return 0
+  [ "$WARP_AGENT" = "1" ] && return 0
+  [ "$ZCODE_AGENT" = "1" ] && return 0
+  [ "$WINDSURF_AGENT" = "1" ] && return 0
+  [ "$QWEN_CODE" = "1" ] && return 0
   [ -n "$AI_AGENT" ] && return 0
   [ -n "$GH_AGENT_APP" ] && return 0
   [ -n "$CLAUDE_CODE_ENTRYPOINT" ] && return 0

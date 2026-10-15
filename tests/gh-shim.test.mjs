@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
 import { buildGhShim } from '../gh-shim.mjs';
+import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'gh-shim-test-'));
 const testHome = join(root, 'home');
@@ -266,6 +267,9 @@ test('configured harnesses retain their own App identity, and are the human pers
     ['windsurf-agent', { WINDSURF_AGENT: '1' }],
     ['muse-agent', { MUSE_AGENT: '1' }],
     ['codex-agent', { CODEX_SANDBOX: 'seatbelt' }],
+    ['antigravity-agent', { ANTIGRAVITY_AGENT: '1' }],
+    ['kiro-agent', { KIRO_AGENT: '1' }],
+    ['qwen-agent', { QWEN_CODE: '1' }],
   ];
   for (const [slug, agentEnv] of harnesses) {
     assert.equal(runWhoami({
@@ -287,6 +291,33 @@ test('an agent fails closed when the installed token-helper path is stale', () =
     tokenToolAvailable: false,
   });
   assert.equal(result.status, 1);
+  assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
+});
+
+test('every PROFILE_HARNESSES <HARNESS>_AGENT establishes agent context in gh shim', () => {
+  const shim = buildGhShim('/tmp/agent-bot');
+  for (const harness of PROFILE_HARNESSES) {
+    const envKey = `${harness.toUpperCase()}_AGENT`;
+    assert.match(shim, new RegExp(`\\[ "\\$${envKey}" = "1" \\] && AGENT_CONTEXT=1`));
+    const result = runShim({
+      agentEnv: { [envKey]: '1' },
+      args: ['issue', 'create', '--title', 'forbidden'],
+      tokenToolAvailable: false,
+    });
+    assert.equal(result.status, 1, `${envKey}: fails closed without token tool`);
+    assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
+  }
+});
+
+test('QWEN_CODE=1 establishes agent context in gh shim', () => {
+  const shim = buildGhShim('/tmp/agent-bot');
+  assert.match(shim, /\[ "\$QWEN_CODE" = "1" \] && AGENT_CONTEXT=1/);
+  const result = runShim({
+    agentEnv: { QWEN_CODE: '1' },
+    args: ['issue', 'create', '--title', 'forbidden'],
+    tokenToolAvailable: false,
+  });
+  assert.equal(result.status, 1, 'QWEN_CODE fails closed without token tool');
   assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
 });
 
