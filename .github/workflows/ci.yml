@@ -48,7 +48,7 @@ jobs:
       run_post_merge: ${{ steps.policy.outputs.run_post_merge }}
     steps:
       - id: policy
-        uses: qwts/qwts-agent-ci/.github/actions/ci-policy@d9f8cf9dbab9adafaccbc743bc44efba5c07d1b1
+        uses: qwts/qwts-agent-ci/.github/actions/ci-policy@b754c7e2e58bb0d16c39f3bf3a595ff9a85906dd
 
   merge-evidence:
     name: Verify exact main evidence
@@ -182,7 +182,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: qwts/qwts-agent-ci
-          ref: d9f8cf9dbab9adafaccbc743bc44efba5c07d1b1
+          ref: b754c7e2e58bb0d16c39f3bf3a595ff9a85906dd
           path: .ci-runtime-policy
           sparse-checkout: tools/ci-runtime
           persist-credentials: false
@@ -217,7 +217,7 @@ jobs:
           git archive HEAD | tar -x -C "$pkg/src"
           rm -rf "$pkg/src/tests" "$pkg/src/tools" "$pkg/src/governance" "$pkg/src/Formula"
           cp -R "$pkg/src/"* "$pkg/libexec/"
-      - uses: qwts/qwts-agent-ci/.github/actions/cli-skill-gate@d9f8cf9dbab9adafaccbc743bc44efba5c07d1b1
+      - uses: qwts/qwts-agent-ci/.github/actions/cli-skill-gate@b754c7e2e58bb0d16c39f3bf3a595ff9a85906dd
         with:
           skill: skills/agent-bot
           executable: ${{ runner.temp }}/pkg/libexec/agent-bot
