@@ -245,6 +245,10 @@ test('skill and docs document the recommended soul operating model (#1128) and G
     assert.match(text, /Agent Identities/u);
     assert.match(text, /mint-token --app <slug>/u);
     assert.match(text, /GH_AGENT_APP=<slug> agent-bot mint-token/u);
+    assert.match(text, /agent-binding\.json/u);
+    assert.match(text, /reconcileAppCredentials/u);
+    assert.match(text, /keyd-held/u);
+    assert.match(text, /owner-only/u);
     assert.match(text, /SOUL_BOUND=1/u);
     assert.match(text, /\/opt\/homebrew\/bin\/gh/u);
     assert.match(text, /qwts-agent-ci/u);
@@ -252,3 +256,4 @@ test('skill and docs document the recommended soul operating model (#1128) and G
   assert.match(main, /qwts\/managed-machine/u);
   assert.match(main, /qwts\/qwts-agent-org/u);
 });
+

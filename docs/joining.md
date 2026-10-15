@@ -137,11 +137,23 @@ each layer before opening a PR:
      caller (`only a bound soul can get a token for it, through the daemon`).
      For `store: "pass-cli"`, `passCliStore` (`identity/soul-credentials.mjs`)
      refuses any soul-marked caller — including `GH_AGENT_APP=<slug>` — before
-     any provider access (`owner-only`). Join and bind the canonical soul in a
-     linked worktree (`agent-bot join --name NAME --harness HARNESS --soul
-     AGENT_ID --json`, MCP `bind`, `agent-bot setup-worktree <slug>`) and route
-     minting through the bound soul/daemon path (or import the key into a
-     readable `file`/`keychain` store) before attempting the first mint.
+     any provider access (`owner-only`). Establish a live daemon binding
+     (`<git-dir>/agent-binding.json`) in a linked worktree first by running
+     `agent-bot join --name NAME --harness HARNESS --soul AGENT_ID --json`
+     (which pins `agentBot.agentId` and mints `<git-dir>/agent-bind-token.json`)
+     followed by the MCP `bind` exchange (or `agent-bot join ... --wake acp`),
+     so `mintForCaller` and `/v0/credential` can mint through the daemon.
+     **Runtime `setup-worktree` limitation:** `setup-worktree` only mints a bind
+     token (`prepareWorktreeBinding`) — it is not an alternative to the MCP
+     `bind` exchange — and `setup-worktree.mjs` currently calls
+     `reconcileAppCredentials` (`ensurePrivateKey`) before writing GitHub
+     attribution, which does not use the daemon credential path and fails during
+     `local preparation` with `keyd-held` (even after MCP `bind`) for
+     `store: "keyd"` or `owner-only` for soul-marked `store: "pass-cli"`. Full
+     `agent-bot setup-worktree <slug>` attribution therefore requires a readable
+     `file` or `keychain` store (or legacy `~/.config/<slug>`) until
+     `setup-worktree` / `reconcileAppCredentials` routes preparation through the
+     daemon.
 2. **Verify first token minting without triggering owner-approval prompts.** Do
    not run `agent-bot mint-token --app <slug>` from an unpinned checkout with no
    stated identity in the owner's account — that path triggers the macOS
@@ -149,10 +161,12 @@ each layer before opening a PR:
    - **Bound soul/daemon path (`store: "keyd"` and `store: "pass-cli"`
      backends):** Neither backend has an unbound `GH_AGENT_APP=<slug>` path
      (`keyd` rejects unbound callers and `passCliStore` refuses soul-marked
-     callers such as `GH_AGENT_APP` with `owner-only`). Run `agent-bot
-     mint-token` (or the `gh` shim) from inside the bound, pinned worktree so
-     minting routes through the daemon, and verify `.data.viewer.login ==
-     "<slug>[bot]"` via GraphQL.
+     callers such as `GH_AGENT_APP` with `owner-only`). After `agent-bot join` +
+     the MCP `bind` exchange (or `join --wake acp`) has written
+     `<git-dir>/agent-binding.json`, run `agent-bot mint-token` (or the `gh`
+     shim) from inside the bound, pinned worktree so `mintForCaller` /
+     `worktree-token` mints through `/v0/credential` on the daemon, and verify
+     `.data.viewer.login == "<slug>[bot]"` via GraphQL.
    - **Unbound local-store path (`file`, `keychain`, or legacy
      `~/.config/<slug>` only):** State the identity with
      `GH_AGENT_APP=<slug> agent-bot mint-token` and verify `.data.viewer.login ==
@@ -164,7 +178,8 @@ each layer before opening a PR:
    binding (`<git-dir>/agent-binding.json`) to mint; in an unpinned context
    without a soul marker, inherited tokens are not used for bot attribution.
    `store: "keyd"` and `store: "pass-cli"` backends have no unbound workaround
-   and must join and bind the canonical soul first so the daemon binding
+   and must establish `<git-dir>/agent-binding.json` via `agent-bot join` + the
+   MCP `bind` exchange (or `join --wake acp`) first so the daemon binding
    supplies the token. Only when the credential is in a readable `file` or
    `keychain` store (or legacy `~/.config/<slug>`) — including keys imported
    from Proton Pass via `ensure-private-key` into `file` or `keychain` — can an

@@ -156,12 +156,27 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
      `identity/soul-credentials.mjs` refuses any soul-marked caller — including
      `GH_AGENT_APP=<slug>` — before any provider call (`owner-only`: `soul
      credential stores are unavailable to a soul caller`).
-   - For both `store: "keyd"` and `store: "pass-cli"`, join and bind the
-     agent's canonical soul in a linked worktree (`agent-bot join --name NAME
-     --harness HARNESS --soul AGENT_ID --json`, MCP `bind`, `agent-bot
-     setup-worktree <slug>`) so minting routes through the bound soul/daemon
-     path (or import the key into a readable `file`/`keychain` store) before
-     attempting step 2.
+   - For both `store: "keyd"` and `store: "pass-cli"`, establish a live daemon
+     binding (`<git-dir>/agent-binding.json`) in a linked worktree first by
+     running `agent-bot join --name NAME --harness HARNESS --soul AGENT_ID
+     --json` (which pins `agentBot.agentId` and mints
+     `<git-dir>/agent-bind-token.json`) followed by the MCP `bind` exchange (or
+     `agent-bot join ... --wake acp`, which spends the bind token with the
+     daemon immediately) before attempting step 2.
+   - **Runtime `setup-worktree` limitation:** `agent-bot setup-worktree` only
+     mints a bind token (`prepareWorktreeBinding`) — it is not an alternative to
+     the MCP `bind` exchange — and `setup-worktree.mjs` currently calls
+     `reconcileAppCredentials` (`ensurePrivateKey`) before writing GitHub
+     worktree attribution (`agentBot.app`, `user.name`, `user.email`,
+     `core.hooksPath`, `credential.helper`), without using the daemon credential
+     path (`/v0/credential`). Because `ensurePrivateKey` throws `keyd-held` for
+     `store: "keyd"` (even after MCP `bind`) and `passCliStore` throws
+     `owner-only` when soul markers are present, `agent-bot setup-worktree
+     <slug>` stops at `local preparation` for `store: "keyd"` and soul-marked
+     `store: "pass-cli"` unless the credential is imported into a readable
+     `file` or `keychain` store (or until `setup-worktree` /
+     `reconcileAppCredentials` is updated to prepare and verify through the
+     daemon).
 2. **Verify the first token mint without triggering owner-approval prompts.**
    In the owner's account, `agent-bot mint-token --app <slug>` from an unpinned
    context with no stated identity fires the macOS owner-approval gate and
@@ -169,10 +184,12 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
    - **Bound soul/daemon path (`store: "keyd"` and `store: "pass-cli"`
      backends):** Neither backend has an unbound `GH_AGENT_APP=<slug>` path
      (`keyd` rejects unbound callers and `passCliStore` refuses soul-marked
-     callers such as `GH_AGENT_APP` with `owner-only`). From inside the bound,
-     pinned worktree created in step 1, mint through the daemon (`agent-bot
-     mint-token` or the `gh` shim) and verify `.data.viewer.login ==
-     "<slug>[bot]"`:
+     callers such as `GH_AGENT_APP` with `owner-only`). After `agent-bot join` +
+     the MCP `bind` exchange (or `join --wake acp`) has written
+     `<git-dir>/agent-binding.json` in step 1, run `agent-bot mint-token` (or
+     the `gh` shim) from inside the bound, pinned worktree so `mintForCaller` /
+     `worktree-token` mints through `/v0/credential` on the daemon, and verify
+     `.data.viewer.login == "<slug>[bot]"`:
 
      ```bash
      GH_TOKEN="$(agent-bot mint-token)" || exit 1
@@ -195,11 +212,16 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
      [ "$login" = "<slug>[bot]" ] || exit 1
      ```
 
-3. **Install the `gh` shim and verify readiness.** Ensure the fail-closed `gh`
-   shim is installed (`agent-bot install-gh-shim` or `agent-bot bootstrap
-   --with-gh-shim`), link and bind the worktree to the agent's canonical soul if
-   not already bound in step 1, and run
-   `agent-bot doctor --json --require-schema-version 1`.
+3. **Install the `gh` shim, configure worktree attribution, and verify readiness.**
+   Ensure the fail-closed `gh` shim is installed (`agent-bot install-gh-shim` or
+   `agent-bot bootstrap --with-gh-shim`). For readable `file` or `keychain`
+   stores (or legacy `~/.config/<slug>`), link the worktree (`agent-bot join`),
+   run `AGENT_BOT_ID=<agent-id> GH_AGENT_APP=<slug> agent-bot setup-worktree
+   <slug>` to write GitHub attribution and mint the bind token, complete the MCP
+   `bind` exchange to write `<git-dir>/agent-binding.json`, and run
+   `agent-bot doctor --json --require-schema-version 1`. (For `store: "keyd"` and
+   `store: "pass-cli"` without a readable `file`/`keychain` copy, see the
+   `setup-worktree` `reconcileAppCredentials` limitation in step 1.)
 4. **Confirm CI policy (`qwts-agent-ci`).** Every bot-authored commit must be
    Web-Flow signed (`agent-bot signed-commit`), attributed to `<slug>[bot]`,
    and accompanied by any repository-required checks (such as a `changes/`
@@ -221,8 +243,9 @@ the human persona). Understand the shim's token rules:
 `store: "keyd"` and `store: "pass-cli"` credential backends have no unbound
 `GH_AGENT_APP` workaround (`mintThroughDaemon` rejects unbound callers and
 `passCliStore` refuses soul-marked callers such as `GH_AGENT_APP` with
-`owner-only`); always join and bind the canonical soul in a linked worktree so
-minting runs through the bound soul/daemon path.
+`owner-only`); always establish `<git-dir>/agent-binding.json` in a linked
+worktree via `agent-bot join` + the MCP `bind` exchange (or `join --wake acp`)
+so minting runs through `/v0/credential` on the daemon.
 
 Only when the credential lives in a readable `file` or `keychain` store (or
 legacy `~/.config/<slug>`) — including keys imported from Proton Pass via
