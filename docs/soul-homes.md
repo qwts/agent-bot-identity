@@ -216,8 +216,11 @@ directly, so they stand on their own; `--scope team` retires every active
 descendant too, deepest first, and is refused while any of them runs. `--plan`
 prints what a scope would archive, make independent or leave unchanged
 without changing anything; the remove itself runs that same plan and reports
-it with what was done. Nothing restores or deletes an archived soul; the
-folders stay under `.archive` for the owner to move by hand.
+it with what was done. Nothing restores or deletes an archived soul (there is
+no un-retire); the folders stay under `.archive` for the owner to move by
+hand. Ephemeral task-scoped souls created for a single issue or PR should be
+retired with `agent-bot soul remove <agentId>` once their work merges so each
+agent persona converges on one canonical long-lived soul.
 
 ## Repository worktrees
 
@@ -226,8 +229,13 @@ Read `agent-bot skill agent-space` for the check-in, checkout, and cleanup proce
 ADR-0332 decision 6 and the work-area rule (#516) require agents to check in
 with `agent-bot join` and do repository work in their soul's
 `<soulDir>/worktrees/<name>` (0700), or in an existing checkout linked from
-that directory. This applies to every harness. A path validates the work
-area; it never supplies an identity (ENG-0339).
+that directory. This applies to every harness. Each agent persona operates as
+one canonical long-lived soul (whose package `AGENTS.md` is its standing
+instruction set, growing via reviewed revisions and the owner-gated dream where
+agents prepare and the owner authorizes) and links task worktrees into that
+soul (`agent-bot join --name NAME --harness H --soul AGENT_ID` from an unpinned
+checkout, or running `join` inside an already-pinned checkout). A path
+validates the work area; it never supplies an identity (ENG-0339).
 
 ```sh
 agent-bot setup-worktree [app-slug]
@@ -247,9 +255,11 @@ The session must already have a soul: `AGENT_BOT_ID` (legacy `QWTS_AGENT_ID`),
 an explicitly supplied `AGENT_BOT_BINDING`, or an existing registered soul
 matching the session transcript. Setup does not resolve a soul from a Git pin
 or from the checkout path, and never mints a replacement soul. A session
-without a soul joins first (`agent-bot join --name NAME --harness H`); any
-harness key can join, and a harness's wake lanes and generated files are its
-agent-bot rows (Kiro: #523). No ambient identity substitutes for that step.
+without a soul joins first (`agent-bot join --name NAME --harness H --soul
+AGENT_ID` to reuse the agent's canonical soul, or omitting `--soul` only when
+first creating it); any harness key can join, and a harness's wake lanes and
+generated files are its agent-bot rows (Kiro: #523). No ambient identity
+substitutes for that step.
 
 Before credentials, census updates, or Git configuration writes, setup refuses
 an owner's primary checkout outside the soul work area, an arbitrary checkout,

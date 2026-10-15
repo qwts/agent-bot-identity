@@ -77,6 +77,62 @@ nothing. See [joining.md](../../docs/joining.md) for all flags, wake choices,
 and the full join procedure, and [soul-homes.md](../../docs/soul-homes.md)
 for the souls root and directory contract.
 
+## Recommended soul operating model
+
+1. **One long-lived soul per agent.** Maintain one canonical soul per agent
+   persona rather than spawning a fresh soul per issue or PR. Link task
+   worktrees into that soul and pin them (`agentBot.agentId`). `join` reuses a
+   pinned soul automatically; the default workflow is reuse (`agent-bot join
+   --name NAME --harness H --soul AGENT_ID` from an unpinned checkout, or
+   running `join` inside an already-pinned checkout), not per-task spawning.
+2. **Package `AGENTS.md` is the standing instruction set.** Store durable
+   operating conventions in the soul package's `AGENTS.md` (and `SOUL.md` /
+   `TOOLS.md`). Grow that instruction set through reviewed revisions
+   (`agent-bot soul revision prepare` and `soul revision edit ... --apply`),
+   curated skill learning (`agent-bot soul skill learn`), and the owner-gated
+   dream.
+3. **Dream registration is owner-gated.** Agents inspect dream state
+   (`agent-bot soul skill dream --soul ID_OR_NAME --status` / `--history`) and
+   prepare revisions or skill outcomes; the owner authorizes schedule
+   registration (`--schedule PT<N>H`), immediate runs (`--run-now`),
+   pause/unschedule, and notice acknowledgement (`--ack-notice`).
+4. **Retire task-scoped souls after their work merges.** When a task-scoped
+   soul's PR merges, preview retirement with `agent-bot soul remove <agentId>
+   --plan` and ask the owner to run `agent-bot soul remove <agentId>`. Removal
+   archives the soul's folders and permanently retires the identity (there is
+   no un-retire).
+
+## Onboard a GitHub App identity
+
+Agent onboarding spans four surfaces: CI policy (`qwts/qwts-agent-ci` /
+`qwts-agent-ci`), the development environment and org governance
+(`qwts/qwts-agent-org` and `qwts/agent-sop`), the identity runtime and `gh`
+shim (`qwts/agent-bot-identity`), and machine setup (`qwts/managed-machine`).
+Follow the step-by-step verification sequence in
+[operations.md](references/operations.md#onboard-an-agent-github-app):
+
+1. **Provision credentials from `pass-cli`.** Verify an active `pass-cli`
+   session against the `Agent Identities` vault and run
+   `agent-bot ensure-private-key --app <slug>` to restore the App ID and
+   private key into the managed App store (or legacy
+   `~/.config/<slug>/{app-id,private-key.pem}`).
+2. **Avoid the `mint-token --app` prompt storm.** In the owner's account,
+   running `agent-bot mint-token --app <slug>` from an unpinned context with no
+   stated identity triggers the macOS owner-approval gate and prompts for
+   administrator credentials on every invocation. State the identity with
+   `GH_AGENT_APP=<slug> agent-bot mint-token` or run inside a pinned worktree
+   to bypass the unmarked-operator prompt.
+3. **Respect the `gh` shim token contract.** When any soul marker
+   (`GH_AGENT_APP`, `agentBot.app`, `AGENT_BOT_ID`, `agentBot.agentId`, or
+   `<git-dir>/agent-binding.json`) is present, the `gh` shim sets
+   `SOUL_BOUND=1`, drops any inherited `GH_TOKEN`, and requires a live daemon
+   binding to mint; in an unpinned context without a soul marker, inherited
+   tokens are not used for bot attribution. When operating before a worktree
+   has a live daemon binding, mint via `GH_AGENT_APP=<slug> agent-bot
+   mint-token`, verify `.data.viewer.login == "<slug>[bot]"` via GraphQL, and
+   invoke the real `gh` binary (for example `/opt/homebrew/bin/gh`) with
+   `GH_TOKEN`.
+
 ## Choose the storage surface
 
 <!-- conformance: keep this three-surface distinction and its ENG-0172-backed

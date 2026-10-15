@@ -225,3 +225,30 @@ test('skill teaches joining the hub and classifies the command effects (#513)', 
     ['remote-write', 'telegram run'], ['destructive', 'soul remove'],
   ]) assert.ok(rows.some((row) => row.startsWith(`| ${kind} |`) && row.split('|')[2].includes(`\`${command}\``)), `${command}: ${kind}`);
 });
+
+test('skill and docs document the recommended soul operating model (#1128) and GitHub App onboarding (#1127)', () => {
+  const main = readFileSync(join(SKILL, 'SKILL.md'), 'utf8');
+  const operations = readFileSync(join(SKILL, 'references', 'operations.md'), 'utf8');
+  const identities = readFileSync(join(SKILL, 'references', 'execution-identities.md'), 'utf8');
+  const soulPackage = readFileSync(join(ROOT, 'docs', 'soul-package.md'), 'utf8');
+  const joining = readFileSync(join(ROOT, 'docs', 'joining.md'), 'utf8');
+  const soulHomes = readFileSync(join(ROOT, 'docs', 'soul-homes.md'), 'utf8');
+  const dreamDesign = readFileSync(join(ROOT, 'docs', 'soul-skill-dream-design.md'), 'utf8');
+
+  for (const text of [main, identities, soulPackage, joining, soulHomes, dreamDesign]) {
+    assert.match(text, /long-lived soul/u);
+    assert.match(text, /AGENTS\.md/u);
+    assert.match(text, /soul remove/u);
+  }
+  for (const text of [main, operations, joining]) {
+    assert.match(text, /ensure-private-key --app <slug>/u);
+    assert.match(text, /Agent Identities/u);
+    assert.match(text, /mint-token --app <slug>/u);
+    assert.match(text, /GH_AGENT_APP=<slug> agent-bot mint-token/u);
+    assert.match(text, /SOUL_BOUND=1/u);
+    assert.match(text, /\/opt\/homebrew\/bin\/gh/u);
+    assert.match(text, /qwts-agent-ci/u);
+  }
+  assert.match(main, /qwts\/managed-machine/u);
+  assert.match(main, /qwts\/qwts-agent-org/u);
+});

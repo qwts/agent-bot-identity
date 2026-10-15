@@ -96,17 +96,57 @@ unavailable` or `webhook at HOST answered 401`. URLs are replaced with
 
 ## GitHub onboarding and recovery
 
-Start in the isolated worktree where the agent will work, then run:
+Each agent persona should operate as one canonical long-lived soul rather than
+spawning a fresh soul per task. When starting a new task worktree, link it to
+that canonical soul with `--soul AGENT_ID` (or run `join` inside an
+already-pinned checkout so `join` reuses the existing `agentBot.agentId` pin):
 
 ```bash
-agent-bot join --name NAME --harness HARNESS --json
+agent-bot join --name NAME --harness HARNESS --soul AGENT_ID --json
 ```
+
+Only omit `--soul` (or pass `--template PATH`) when first standing up the
+agent's long-lived soul. The soul's package `AGENTS.md` holds its standing
+operating instructions and grows through reviewed revisions and the
+owner-gated dream (`agent-bot soul skill dream`, where agents prepare and the
+owner authorizes schedules and runs). Retire any ephemeral task-scoped souls
+after their work merges via the owner-gated `agent-bot soul remove <agentId>`
+(`--plan` first; removal archives the soul's folders and permanently retires
+the identity with no un-retire).
 
 Set `AGENT_BOT_ID` to the returned `agentId`, bind using the MCP `bind` tool,
 and run `agent-bot setup-worktree` in that same linked worktree. Setup verifies
 the App credentials before writing Git attribution. The daemon's credential
 route then uses the App recorded on the bound soul. A `join` alone never writes
 Git author, credential helper, or hooks.
+
+When onboarding a new GitHub App identity for the first time, walk and verify
+each layer before opening a PR:
+
+1. **Provision credentials from `pass-cli`.** Ensure `pass-cli` is signed in to
+   the `Agent Identities` vault and run
+   `agent-bot ensure-private-key --app <slug>` to restore the App ID and
+   private key into the managed App store (or legacy
+   `~/.config/<slug>/{app-id,private-key.pem}`).
+2. **Verify token minting with `GH_AGENT_APP`.** Do not run
+   `agent-bot mint-token --app <slug>` from an unpinned checkout with no stated
+   identity in the owner's account — that path triggers the macOS
+   owner-approval gate and prompts for administrator credentials on every call.
+   Instead, state the identity with `GH_AGENT_APP=<slug> agent-bot mint-token`
+   or run inside a pinned worktree.
+3. **Understand the `gh` shim token contract.** Whenever any soul marker
+   (`GH_AGENT_APP`, `agentBot.app`, `AGENT_BOT_ID`, `agentBot.agentId`, or
+   `<git-dir>/agent-binding.json`) is present, the `gh` shim sets
+   `SOUL_BOUND=1`, unsets any inherited `GH_TOKEN`, and requires a live daemon
+   binding (`<git-dir>/agent-binding.json`) to mint; in an unpinned context
+   without a soul marker, inherited tokens are not used for bot attribution.
+   When operating before a worktree has a live daemon binding, mint via
+   `GH_AGENT_APP=<slug> agent-bot mint-token`, verify `.data.viewer.login ==
+   "<slug>[bot]"` via GraphQL, and invoke the real `gh` binary (for example
+   `/opt/homebrew/bin/gh`) with `GH_TOKEN`.
+4. **Verify readiness and CI policy.** Run `agent-bot doctor` and ensure
+   commits are Web-Flow signed (`agent-bot signed-commit`) and satisfy
+   `qwts-agent-ci` checks.
 
 App selection uses `resolve-agent.mjs`: explicit environment selection,
 checkout App pin, managed soul assignment, configured account, then configured

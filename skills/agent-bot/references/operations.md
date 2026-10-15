@@ -96,11 +96,15 @@ complete when only the current harness is usable.
 
 ## Configure safely
 
-1. Work in an isolated checkout. Deliberately check in with
-   `agent-bot join --name NAME --harness HARNESS --json`. With
-   `github-identity` enabled, join uses the shared resolver and configured
-   harness markers to record the App on the new soul, including template
-   instances. No mapping or an add-on that is off still permits hub-only join.
+1. Work in an isolated checkout linked to the agent's canonical long-lived
+   soul. Reuse the existing soul by passing `--soul AGENT_ID` from an unpinned
+   checkout (`agent-bot join --name NAME --harness HARNESS --soul AGENT_ID
+   --json`) or running `agent-bot join --name NAME --harness HARNESS --json`
+   inside an already-pinned checkout; do not spawn a new task-scoped soul per
+   issue or PR. With `github-identity` enabled, join uses the shared resolver
+   and configured harness markers to record the App on the soul, including
+   template instances. No mapping or an add-on that is off still permits
+   hub-only join.
 2. Set `AGENT_BOT_ID` from the result and bind with the MCP `bind` tool.
 3. Run `agent-bot setup-worktree` in that same linked worktree. It verifies
    credentials and writes Git attribution for the soul's App. A conflicting
@@ -122,15 +126,66 @@ checkout's `agentBot.app` pin, managed soul assignment, configured account,
 then harness mapping for deliberate CLI calls. Present but unreadable or
 conflicting pins are errors. Directory names never select identity.
 
+## Onboard an agent GitHub App
+
+Onboarding a new harness or App spans four governed surfaces: CI policy
+(`qwts/qwts-agent-ci` / `qwts-agent-ci`), the development environment and
+organization governance (`qwts/qwts-agent-org`, `qwts/agent-sop`), the identity
+runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
+(`qwts/managed-machine`). Walk and verify each step in order:
+
+1. **Restore App credentials from `pass-cli`.** Confirm `pass-cli` is signed in
+   with access to the `Agent Identities` vault, then run:
+
+   ```bash
+   agent-bot ensure-private-key --app <slug>
+   ```
+
+   This provisions the App ID and private key into the managed App credential
+   store (or legacy `~/.config/<slug>/{app-id,private-key.pem}`).
+2. **Verify the first token mint without triggering owner-approval prompts.**
+   In the owner's account, `agent-bot mint-token --app <slug>` from an unpinned
+   context with no stated identity fires the macOS owner-approval gate and
+   prompts for administrator credentials on every call. State the identity via
+   `GH_AGENT_APP=<slug>` (or run inside a pinned worktree) to verify minting
+   cleanly:
+
+   ```bash
+   tok="$(GH_AGENT_APP=<slug> agent-bot mint-token)" || exit 1
+   ```
+
+3. **Install the `gh` shim and verify readiness.** Ensure the fail-closed `gh`
+   shim is installed (`agent-bot install-gh-shim` or `agent-bot bootstrap
+   --with-gh-shim`), link and bind the worktree to the agent's canonical soul,
+   and run `agent-bot doctor --json --require-schema-version 1`.
+4. **Confirm CI policy (`qwts-agent-ci`).** Every bot-authored commit must be
+   Web-Flow signed (`agent-bot signed-commit`), attributed to `<slug>[bot]`,
+   and accompanied by any repository-required checks (such as a `changes/`
+   changelog fragment in `qwts/agent-bot-identity`).
+
 ## Authenticate GitHub operations
 
-Prefer the installed `gh` shim under a bot identity (it is stock `gh` for the
-human persona). Without the shim, mint and
-export in two fail-closed steps:
+Prefer the installed `gh` shim under a bound bot worktree (it is stock `gh` for
+the human persona). Understand the shim's token rules:
+
+- In an unpinned context with no soul marker, inherited `GH_TOKEN` values are
+  not treated as a bound bot identity.
+- Whenever any soul marker (`GH_AGENT_APP`, `agentBot.app`, `AGENT_BOT_ID`,
+  `agentBot.agentId`, or `<git-dir>/agent-binding.json`) is present, the shim
+  sets `SOUL_BOUND=1`, unsets any inherited `GH_TOKEN`, and requires a live
+  daemon binding (`<git-dir>/agent-binding.json`) to mint a token through
+  `worktree-token`.
+
+Without the shim — or when operating before a worktree has a live daemon
+binding — mint with `GH_AGENT_APP=<slug>`, verify the bot login via GraphQL,
+and invoke the real `gh` binary (for example `/opt/homebrew/bin/gh`) in
+fail-closed steps:
 
 ```bash
-GH_TOKEN=$(agent-bot mint-token) || exit 1
+GH_TOKEN=$(GH_AGENT_APP=<slug> agent-bot mint-token) || exit 1
 export GH_TOKEN
+login=$(/opt/homebrew/bin/gh api graphql -f 'query={viewer{login}}' --jq .data.viewer.login) || exit 1
+[ "$login" = "<slug>[bot]" ] || exit 1
 ```
 
 Do not combine the command substitution with `export`: many shells return the

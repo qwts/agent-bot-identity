@@ -40,7 +40,16 @@ example.soul/
   ...                       preserved extensions and arbitrary binary assets
 ```
 
-Only `soul.json` and `AGENTS.md` are required. Tool, MCP and policy files are
+Only `soul.json` and `AGENTS.md` are required. In a living soul, `AGENTS.md` is
+the standing instruction set: each agent persona operates as one canonical
+long-lived soul (linking task worktrees under `worktrees/` and pinning
+`agentBot.agentId`), and its `AGENTS.md` grows over time through reviewed
+revisions (`agent-bot soul revision prepare` / `edit ... --apply`), recorded
+skill learnings (`agent-bot soul skill learn`), and the owner-gated dream
+(`agent-bot soul skill dream`, where agents prepare and the owner authorizes
+schedules and runs). Any ephemeral task-scoped souls should be retired once
+their work merges via the owner-gated `agent-bot soul remove <agentId>` (which
+archives the soul's folders permanently; there is no un-retire). Tool, MCP and policy files are
 opaque in both package formats: this validator neither interprets nor authorizes them.
 Their execution and policy schemas belong to their respective consumers. In
 particular, absence of a policy does not authorize automatic self-modification
