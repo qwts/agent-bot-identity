@@ -143,30 +143,57 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
    agent-bot ensure-private-key --app <slug>
    ```
 
-   This provisions the App ID and private key into the managed App credential
-   store (or legacy `~/.config/<slug>/{app-id,private-key.pem}`). For
-   `agent-bot-keyd`-backed Apps (`store: "keyd"`, shipped with GeniusBar),
-   `ensure-private-key` does not apply and `mint-token` routes through
-   `mintThroughDaemon`, which rejects an unbound caller (`only a bound soul can
-   get a token for it, through the daemon`) — join and bind the agent's
-   canonical soul in a linked worktree (`agent-bot join --name NAME --harness
-   HARNESS --soul AGENT_ID --json`, MCP `bind`, `agent-bot setup-worktree
-   <slug>`) before attempting step 2.
+   This imports the App ID and private key from Proton Pass into the managed
+   `file` or `keychain` credential store (or legacy
+   `~/.config/<slug>/{app-id,private-key.pem}`). Distinguish using `pass-cli`
+   to import a key into a readable `file`/`keychain` store from retaining
+   `store: "pass-cli"` as the credential backend:
+   - For `agent-bot-keyd`-backed Apps (`store: "keyd"`, shipped with GeniusBar),
+     `ensure-private-key` does not apply (`keyd-held`) and `mint-token` routes
+     through `mintThroughDaemon`, which rejects an unbound caller (`only a bound
+     soul can get a token for it, through the daemon`).
+   - For `store: "pass-cli"` backends, `passCliStore` in
+     `identity/soul-credentials.mjs` refuses any soul-marked caller — including
+     `GH_AGENT_APP=<slug>` — before any provider call (`owner-only`: `soul
+     credential stores are unavailable to a soul caller`).
+   - For both `store: "keyd"` and `store: "pass-cli"`, join and bind the
+     agent's canonical soul in a linked worktree (`agent-bot join --name NAME
+     --harness HARNESS --soul AGENT_ID --json`, MCP `bind`, `agent-bot
+     setup-worktree <slug>`) so minting routes through the bound soul/daemon
+     path (or import the key into a readable `file`/`keychain` store) before
+     attempting step 2.
 2. **Verify the first token mint without triggering owner-approval prompts.**
    In the owner's account, `agent-bot mint-token --app <slug>` from an unpinned
    context with no stated identity fires the macOS owner-approval gate and
-   prompts for administrator credentials on every call. State the identity via
-   `GH_AGENT_APP=<slug>` (for locally readable stores) or run inside the bound,
-   pinned worktree (required for `agent-bot-keyd`-backed Apps) to verify minting
-   cleanly:
+   prompts for administrator credentials on every call:
+   - **Bound soul/daemon path (`store: "keyd"` and `store: "pass-cli"`
+     backends):** Neither backend has an unbound `GH_AGENT_APP=<slug>` path
+     (`keyd` rejects unbound callers and `passCliStore` refuses soul-marked
+     callers such as `GH_AGENT_APP` with `owner-only`). From inside the bound,
+     pinned worktree created in step 1, mint through the daemon (`agent-bot
+     mint-token` or the `gh` shim) and verify `.data.viewer.login ==
+     "<slug>[bot]"`:
 
-   ```bash
-   GH_TOKEN="$(GH_AGENT_APP=<slug> agent-bot mint-token)" || exit 1
-   export GH_TOKEN
-   login="$(/opt/homebrew/bin/gh api graphql -f 'query={viewer{login}}' --jq .data.viewer.login)" || { unset GH_TOKEN; exit 1; }
-   unset GH_TOKEN
-   [ "$login" = "<slug>[bot]" ] || exit 1
-   ```
+     ```bash
+     GH_TOKEN="$(agent-bot mint-token)" || exit 1
+     export GH_TOKEN
+     login="$(/opt/homebrew/bin/gh api graphql -f 'query={viewer{login}}' --jq .data.viewer.login)" || { unset GH_TOKEN; exit 1; }
+     unset GH_TOKEN
+     [ "$login" = "<slug>[bot]" ] || exit 1
+     ```
+
+   - **Unbound local-store path (`file`, `keychain`, or legacy
+     `~/.config/<slug>` only):** When the credential was imported into a
+     readable `file` or `keychain` store (or legacy `~/.config/<slug>`), state
+     the identity via `GH_AGENT_APP=<slug>` to verify minting before binding:
+
+     ```bash
+     GH_TOKEN="$(GH_AGENT_APP=<slug> agent-bot mint-token)" || exit 1
+     export GH_TOKEN
+     login="$(/opt/homebrew/bin/gh api graphql -f 'query={viewer{login}}' --jq .data.viewer.login)" || { unset GH_TOKEN; exit 1; }
+     unset GH_TOKEN
+     [ "$login" = "<slug>[bot]" ] || exit 1
+     ```
 
 3. **Install the `gh` shim and verify readiness.** Ensure the fail-closed `gh`
    shim is installed (`agent-bot install-gh-shim` or `agent-bot bootstrap
@@ -191,13 +218,18 @@ the human persona). Understand the shim's token rules:
   daemon binding (`<git-dir>/agent-binding.json`) to mint a token through
   `worktree-token`.
 
-Without the shim — or when operating with a locally readable credential store
-(`file`, `keychain`, `pass-cli`, or legacy `~/.config/<slug>`) before a
-worktree has a live daemon binding (for `agent-bot-keyd`-backed Apps, join and
-bind the canonical soul first, since `mintThroughDaemon` rejects unbound
-callers) — mint with `GH_AGENT_APP=<slug>`, verify the bot login via GraphQL,
-and invoke the real `gh` binary (for example `/opt/homebrew/bin/gh`) in
-fail-closed steps:
+`store: "keyd"` and `store: "pass-cli"` credential backends have no unbound
+`GH_AGENT_APP` workaround (`mintThroughDaemon` rejects unbound callers and
+`passCliStore` refuses soul-marked callers such as `GH_AGENT_APP` with
+`owner-only`); always join and bind the canonical soul in a linked worktree so
+minting runs through the bound soul/daemon path.
+
+Only when the credential lives in a readable `file` or `keychain` store (or
+legacy `~/.config/<slug>`) — including keys imported from Proton Pass via
+`ensure-private-key` into `file` or `keychain` — and you are operating without a
+live daemon binding, mint with `GH_AGENT_APP=<slug>`, verify the bot login via
+GraphQL, and invoke the real `gh` binary (for example `/opt/homebrew/bin/gh`)
+in fail-closed steps:
 
 ```bash
 GH_TOKEN=$(GH_AGENT_APP=<slug> agent-bot mint-token) || exit 1
