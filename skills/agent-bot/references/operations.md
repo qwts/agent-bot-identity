@@ -151,7 +151,11 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
    cleanly:
 
    ```bash
-   tok="$(GH_AGENT_APP=<slug> agent-bot mint-token)" || exit 1
+   GH_TOKEN="$(GH_AGENT_APP=<slug> agent-bot mint-token)" || exit 1
+   export GH_TOKEN
+   login="$(/opt/homebrew/bin/gh api graphql -f 'query={viewer{login}}' --jq .data.viewer.login)" || { unset GH_TOKEN; exit 1; }
+   unset GH_TOKEN
+   [ "$login" = "<slug>[bot]" ] || exit 1
    ```
 
 3. **Install the `gh` shim and verify readiness.** Ensure the fail-closed `gh`
