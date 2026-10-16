@@ -1,1 +1,0 @@
-- Document the recommended long-lived soul operating model and streamlined GitHub App onboarding flow across the `agent-bot` skill, references, and docs (#1127, #1128).
