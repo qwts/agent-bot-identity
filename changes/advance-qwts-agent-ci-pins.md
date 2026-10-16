@@ -1,1 +1,0 @@
-- CI pins qwts-agent-ci at b754c7e, the merge of qwts/qwts-agent-ci#12, moving `ci-policy`, the runtime-checker checkout and `cli-skill-gate` off d9f8cf9 so the Action Policy admits the fleet's qwts-vibe-agent[bot] and qwts-mirror-agent[bot] actors and agent-authored pull requests pass CI again (#12, unblocking qwts/agent-bot-identity#1125).
