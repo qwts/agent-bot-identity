@@ -28,7 +28,7 @@ import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { harnessForSlug, isGateEnabled, loadConfig, soulCoauthorDomainSetting } from '../config.mjs';
+import { harnessForSlug, isGateEnabled, loadConfig, slugForHarness, soulCoauthorDomainSetting } from '../config.mjs';
 import { deriveSoulId, spawnNonce, validateGenesis } from './soul-genesis.mjs';
 import { AGENT_ID_KEYS, isAgentId, validateAgentId } from './identity-format.mjs';
 
@@ -462,12 +462,22 @@ export function assignAgentApp(id, appSlug, { stateDir = stateDirectory(), now =
 }
 
 // Deliberate onboarding may complete a previously hub-only identity using
-// configured resolution. Unlike owner assignment, it can never switch Apps.
+// configured resolution, or repair a generic fallback default App to a
+// checkout-matched managed App. Unlike owner assignment, it cannot switch
+// away from a non-default App.
 export function initializeAgentApp(id, appSlug, { stateDir = stateDirectory(), now = () => new Date(), afterWrite } = {}) {
   return mutateIdentity(id, stateDir, now, (record) => {
     if (record.status === 'retired') throw new Error('cannot initialize a retired soul');
-    if (record.github && record.github.appSlug !== appSlug) throw new Error('soul already has a different GitHub App');
-    record.github ??= { appSlug, credentialProvider: 'worktree-token' };
+    if (record.github && record.github.appSlug !== appSlug) {
+      let canRepairDefault = false;
+      try {
+        const cfg = loadConfig();
+        const defaultSlug = record.harness ? slugForHarness(record.harness, cfg) : null;
+        canRepairDefault = Boolean(defaultSlug && record.github.appSlug === defaultSlug && cfg.identityApps?.[appSlug]);
+      } catch { /* keep strict rejection */ }
+      if (!canRepairDefault) throw new Error('soul already has a different GitHub App');
+    }
+    record.github = { appSlug, credentialProvider: 'worktree-token' };
     return record;
   }, { afterWrite });
 }

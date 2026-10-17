@@ -19,7 +19,7 @@ import { readSopPersonaRecord } from './sop.mjs';
 import { parsePersonaMapping } from './sandbox.mjs';
 import { duplicateSoulDirs, duplicateSoulNames, listSouls, orphanSoulDirs, populationFile, PRESENCE_WINDOW_MS, soulPresence } from './agent-population.mjs';
 import { inspectSpacesCutover } from './spaces-cutover.mjs';
-import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, unmanagedAuthors } from './config.mjs';
+import { apiBase, gateStatus, isGateEnabled, loadConfig, rosterScope, slugForHarness, soulOwnsAppSlug, unmanagedAuthors } from './config.mjs';
 import { preGateConfigStatus } from './config-migration.mjs';
 import {
   appKeyStores, BUILTIN_SECRET_PROVIDERS, createSecretProviderRegistry, inspectAppCredentials,
@@ -833,10 +833,11 @@ export function worktreePinOriginCheck({ gitDir, agentId,
 // refuses any other. Diagnosis only: the daemon reconciles the two at bind,
 // never doctor or a manual owner chore.
 export function appRecordCheck({ agentId, slug, config = {}, readIdentity } = {}) {
-  let recorded = null;
-  try { recorded = readIdentity(agentId)?.github?.appSlug ?? null; } catch { return null; }
+  let identity = null;
+  try { identity = readIdentity(agentId); } catch { return null; }
+  const recorded = identity?.github?.appSlug ?? null;
   if (!recorded || !slug) return null;
-  if (recorded === slug) {
+  if (recorded === slug || soulOwnsAppSlug(identity, slug, config)) {
     return readinessCheck({
       id: 'worktree.app_record',
       status: 'ready',

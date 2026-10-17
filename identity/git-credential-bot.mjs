@@ -17,7 +17,7 @@ import process from 'node:process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { mint } from './mint-token.mjs';
-import { isGateEnabled, loadConfig, githubHost } from '../config.mjs';
+import { isGateEnabled, loadConfig, githubHost, soulOwnsAppSlug } from '../config.mjs';
 import { presenceOrConsent, soulMarkers } from './owner-gate.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
@@ -113,11 +113,27 @@ export async function mintForCaller({
   let soul = binding?.agentId ?? null;
   let marked = Boolean(binding);
   let own = null;
+  let identityRecord = null;
+  let cfg = {};
+  try { cfg = loadConfig({ env }); } catch { /* ignore */ }
   if (!binding) {
     try { soul = currentAgentIdImpl({ env, cwd }); marked = soul !== null; } catch { marked = true; }
   }
   if (soul) {
-    try { own = readIdentityImpl(soul)?.github?.appSlug ?? null; } catch { /* no record: no App of its own */ }
+    try { identityRecord = readIdentityImpl(soul); own = identityRecord?.github?.appSlug ?? null; } catch { /* no record: no App of its own */ }
+    if (identityRecord) {
+      try {
+        const checkoutOwn = resolveSlugImpl({
+          env: { ...env, AGENT_BOT_ID: soul, GH_AGENT_APP: '' },
+          cwd,
+          config: cfg,
+          detect: false,
+        });
+        if (checkoutOwn && soulOwnsAppSlug(identityRecord, checkoutOwn, cfg)) {
+          own = checkoutOwn;
+        }
+      } catch { /* keep identityRecord's appSlug */ }
+    }
   } else if (!marked) {
     try { own = resolveSlugImpl({ env, cwd, detect: false }); marked = own !== null; } catch { marked = true; }
   }
@@ -143,11 +159,13 @@ export async function mintForCaller({
 
   const wanted = slug ?? env.GH_AGENT_APP ?? own;
   if (!wanted) throw new Error('this soul has no GitHub App; name one with --app to ask the owner for its token');
-  if (wanted === own && !permissions && (!env.GH_AGENT_APP || env.GH_AGENT_APP === own)) {
-    if (!binding) return mintImpl({ slug, env, selected });
-    if (selected) selected({ appSlug: own, reason: 'bound-soul-own-app' });
+  const isOwnApp = wanted === own || Boolean(identityRecord && soulOwnsAppSlug(identityRecord, wanted, cfg));
+  if (isOwnApp && !permissions && (!env.GH_AGENT_APP || env.GH_AGENT_APP === wanted)) {
+    const localSlug = slug ?? (wanted !== (identityRecord?.github?.appSlug ?? own) ? wanted : null);
+    if (!binding) return mintImpl({ slug: localSlug, env, selected });
+    if (selected) selected({ appSlug: wanted, reason: 'bound-soul-own-app' });
     return mintCredential({
-      slug: own, env, cwd, soulBound: true, readBindingImpl: () => binding,
+      slug: wanted, env, cwd, soulBound: true, readBindingImpl: () => binding,
       ...(clientFactory ? { clientFactory } : {}),
     });
   }

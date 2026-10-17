@@ -38,7 +38,7 @@ import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, setS
 import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
-import { daemonPreference, isGateEnabled, loadConfig } from './config.mjs';
+import { daemonPreference, isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { pinnedSlug, readBinding, resolveAgentSlug } from './identity-soul.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulNpmHarnessDirs } from './soul-home.mjs';
 import { bundledStarter, spawnSoulTemplate } from './soul-templates.mjs';
@@ -233,10 +233,20 @@ export async function joinSoul({
     { cwd: directory, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   // Owner-driven fork joins must not inherit the caller's App or session.
   const githubOn = !ownWorkspace && isGateEnabled('github-identity', options);
-  const appSlug = githubOn ? resolveAgentSlug({ env, cwd, config: loaded, git }) : null;
+  const appSlug = githubOn ? resolveAgentSlug({ env, cwd, config: loaded, git, harness }) : null;
   const appPin = githubOn ? pinnedSlug(cwd, { git }) : null;
+  const defaultAppSlug = githubOn ? slugForHarness(harness, loaded) : null;
+  const repairingDefaultApp = Boolean(
+    githubOn && !appPin && !env.GH_AGENT_APP
+    && existing?.github?.appSlug && existing.github.appSlug === defaultAppSlug
+    && appSlug && appSlug !== existing.github.appSlug && Boolean(loaded.identityApps?.[appSlug]),
+  );
+  const matchesSoulApp = Boolean(
+    existing?.github?.appSlug && appSlug
+    && (existing.github.appSlug === appSlug || soulOwnsAppSlug(existing, appSlug, loaded)),
+  );
   if ((appPin && appSlug !== appPin)
-      || (appSlug && existing?.github?.appSlug && existing.github.appSlug !== appSlug)) {
+      || (appSlug && existing?.github?.appSlug && !matchesSoulApp && !repairingDefaultApp)) {
     throw new Error('GitHub App does not match the session soul or checkout pin');
   }
   if (appSlug && existing?.harness && existing.harness !== harness) {
@@ -264,11 +274,12 @@ export async function joinSoul({
       ? `wake the existing soul ${known ?? 'unnamed'} (${agentId}) on new messages (${wake})`
       : `create a new soul ${name} and wake it on new messages (${wake})`, { principal, env, cwd });
 
-  // Recovery for the old join path fills only absent App metadata. It
-  // never changes an assignment, revives a soul, or replaces a binding.
+  // Recovery for the old join path fills only absent App metadata (or repairs a
+  // generic fallback default App to the checkout's slug-matched managed App). It
+  // never changes a non-default assignment, revives a soul, or replaces a binding.
   // The census gets the App first and identity's record last; if the
   // identity write fails, the census row's App is put back (#645, F6).
-  if (existing && appSlug && !existing.github) {
+  if (existing && appSlug && (!existing.github || repairingDefaultApp)) {
     setSoulAppThen(agentId, appSlug, { file }, () => identityOp('initialize-app', { id: agentId, appSlug, stateDir }));
   }
 

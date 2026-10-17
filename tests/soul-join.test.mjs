@@ -670,3 +670,130 @@ test('marker onboarding refuses retired souls and inconsistent session claims wi
   assert.equal(a.identity(one.agentId).status, 'retired');
   assert.equal(git(one.worktree, 'config', '--get', 'agentBot.agentId'), one.agentId);
 });
+
+test('a single soul works across multiple GitHub organizations (qwts and true-line) with each org App (#1139)', async (t) => {
+  const a = mappedAccount(t);
+  a.config = {
+    prefix: 'qwts',
+    apps: { muse: 'qwts-muse-agent' },
+    identityApps: {
+      'qwts-muse-agent': { store: 'pass-cli' },
+      'trueline-muse-agent': { store: 'pass-cli' },
+    },
+    features: { 'github-identity': true },
+    settings: { daemonPreference: 'off' },
+  };
+  writeFileSync(a.env.AGENT_BOT_CONFIG, JSON.stringify(a.config));
+
+  const makeOrgWorktree = (label, remoteUrl) => {
+    const primary = path.join(a.root, `${label}-primary`);
+    const checkout = path.join(a.root, `${label}-worktree`);
+    mkdirSync(primary);
+    git(primary, 'init', '-q', '-b', 'main');
+    git(primary, 'config', 'user.name', 'Owner');
+    git(primary, 'config', 'user.email', 'owner@example.com');
+    git(primary, 'config', 'core.hooksPath', '/dev/null');
+    git(primary, 'remote', 'add', 'origin', remoteUrl);
+    git(primary, 'commit', '--allow-empty', '-q', '-m', 'initial');
+    git(primary, 'config', 'extensions.worktreeConfig', 'true');
+    git(primary, 'worktree', 'add', '-q', '-b', `muse/${label}`, checkout);
+    return checkout;
+  };
+
+  const truelineCheckout = makeOrgWorktree('trueline', 'https://github.com/true-line/carto.git');
+  const qwtsCheckout = makeOrgWorktree('qwts', 'https://github.com/qwts/agent-bot-identity.git');
+
+  // 1. Join in the true-line checkout: resolves trueline-muse-agent.
+  const joined = await joinSoul({
+    name: 'quiet-hyperion',
+    harness: 'muse',
+    template: null,
+    cwd: truelineCheckout,
+    env: a.env,
+    home: a.home,
+    config: a.config,
+  });
+  assert.equal(a.identity(joined.agentId).github?.appSlug, 'trueline-muse-agent');
+  assert.equal(showSoul(joined.agentId, { file: a.env.AGENT_BOT_POPULATION_PATH }).appSlug, 'trueline-muse-agent');
+
+  // 2. Join the SAME soul in a qwts checkout: accepted without conflict.
+  const rejoined = await joinSoul({
+    name: 'quiet-hyperion',
+    harness: 'muse',
+    template: null,
+    cwd: qwtsCheckout,
+    env: { ...a.env, AGENT_BOT_ID: joined.agentId },
+    home: a.home,
+    config: a.config,
+  });
+  assert.equal(rejoined.agentId, joined.agentId);
+  assert.equal(rejoined.created, false);
+
+  // 3. setup-worktree configures each checkout with its organization's App.
+  const setupUrl = new URL('../setup-worktree.mjs', import.meta.url).href;
+  const runSetup = (checkout) => spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { main } from ${JSON.stringify(setupUrl)};
+    await main({
+      reconcileCredentials: async ({ slugs, onVerified }) => {
+        onVerified(slugs[0], { token: 'mock-token' });
+        return [{ local: { status: 'ready' } }];
+      },
+      resolveBotUid: async () => '123',
+    });
+  `], { cwd: checkout, env: { ...a.env, AGENT_BOT_ID: joined.agentId }, encoding: 'utf8' });
+
+  const tlSetup = runSetup(truelineCheckout);
+  assert.equal(tlSetup.status, 0, tlSetup.stderr);
+  assert.equal(git(truelineCheckout, 'config', '--worktree', '--get', 'agentBot.app'), 'trueline-muse-agent');
+  assert.equal(git(truelineCheckout, 'config', '--get', 'user.name'), 'trueline-muse-agent[bot]');
+
+  const qwtsSetup = runSetup(qwtsCheckout);
+  assert.equal(qwtsSetup.status, 0, qwtsSetup.stderr);
+  assert.equal(git(qwtsCheckout, 'config', '--worktree', '--get', 'agentBot.app'), 'qwts-muse-agent');
+  assert.equal(git(qwtsCheckout, 'config', '--get', 'user.name'), 'qwts-muse-agent[bot]');
+
+  // 4. Daemon binding & credential minting return each bound worktree's App.
+  const mints = [];
+  const server = createDaemonServer({
+    env: a.env,
+    home: a.home,
+    config: a.config,
+    mintImpl: async ({ slug, agentId }) => {
+      mints.push({ slug, agentId });
+      return { token: `token-${slug}`, expires_at: '2030-01-01T00:00:00Z' };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const call = (route, body, secret) => fetch(`http://127.0.0.1:${server.address().port}${route}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${server.token}`,
+      'content-type': 'application/json',
+      ...(secret ? { 'x-agent-binding': secret } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+
+  for (const [checkout, expectedSlug, label] of [
+    [truelineCheckout, 'trueline-muse-agent', 'tl'],
+    [qwtsCheckout, 'qwts-muse-agent', 'qwts'],
+  ]) {
+    const gitDir = git(checkout, 'rev-parse', '--absolute-git-dir');
+    const token = JSON.parse(readFileSync(path.join(gitDir, 'agent-bind-token.json'), 'utf8')).token;
+    const bindRes = await call('/v0/bind', {
+      gitDir,
+      token,
+      harness: 'muse',
+      transcript: { provider: 'muse', id: `session-${joined.agentId}` },
+    });
+    assert.equal(bindRes.status, 200, await bindRes.clone().text());
+    const bound = await bindRes.json();
+    const credRes = await call('/v0/credential', {}, bound.secret);
+    assert.equal(credRes.status, 200);
+    const cred = await credRes.json();
+    assert.equal(cred.appSlug, expectedSlug, `${label} checkout should mint ${expectedSlug}`);
+    assert.equal(cred.token, `token-${expectedSlug}`);
+  }
+});
+

@@ -425,3 +425,32 @@ test('a stated App with no Agent ID (GH_AGENT_APP or the pin) asks the owner for
   assert.deepEqual(calls.receipts.map((fields) => [fields.agentId, fields.decision]), [[null, 'approved'], [null, 'approved']]);
   assert.equal(calls.daemon, 0);
 });
+
+test('mintForCaller treats registered multi-org Apps for the same soul harness as own Apps without owner gate (#1139)', async (t) => {
+  const { cwd, calls, options } = callerFixture(t, { bound: false });
+  const configFile = join(cwd, 'multi-org-config.json');
+  writeFileSync(configFile, JSON.stringify({
+    prefix: 'qwts',
+    apps: { muse: 'qwts-muse-agent', claude: 'qwts-claude-agent' },
+    identityApps: {
+      'qwts-muse-agent': { store: 'pass-cli' },
+      'trueline-muse-agent': { store: 'pass-cli' },
+      'qwts-claude-agent': { store: 'pass-cli' },
+    },
+  }));
+  const env = { ...process.env, AGENT_BOT_CONFIG: configFile, AGENT_BOT_ID: agentId };
+  const readIdentityImpl = () => ({ id: agentId, harness: 'muse', github: { appSlug: 'qwts-muse-agent' } });
+  const resolveSlugImpl = () => 'trueline-muse-agent';
+
+  // Minting default checkout App (trueline-muse-agent) or explicit trueline-muse-agent / qwts-muse-agent needs no owner gate.
+  await mintForCaller({ ...options, env, readIdentityImpl, resolveSlugImpl });
+  await mintForCaller({ ...options, env, slug: 'trueline-muse-agent', readIdentityImpl, resolveSlugImpl });
+  await mintForCaller({ ...options, env, slug: 'qwts-muse-agent', readIdentityImpl, resolveSlugImpl });
+  assert.equal(calls.gate.length, 0, 'both org Apps for the soul harness are own Apps');
+  assert.deepEqual(calls.local.map((req) => req.slug), ['trueline-muse-agent', 'trueline-muse-agent', 'qwts-muse-agent']);
+
+  // Another harness App still triggers the owner gate.
+  await mintForCaller({ ...options, env, slug: 'qwts-claude-agent', readIdentityImpl, resolveSlugImpl });
+  assert.equal(calls.gate.length, 1);
+});
+

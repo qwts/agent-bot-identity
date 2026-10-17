@@ -381,3 +381,52 @@ test('new-harness worktree directories are layout, not identity', () => {
     );
   }
 });
+
+test('origin owner refines App resolution across organizations for both detection and existing souls (#1139)', async () => {
+  const { mintAgentIdentity } = await import('../agent-identity.mjs');
+  const { stateDirectory } = await import('../state-paths.mjs');
+  const home = mkdtempSync(join(root, 'multi-org-home-'));
+  const env = { HOME: home };
+  const stateDir = stateDirectory({ env, home });
+  const multiOrgConfig = {
+    prefix: 'qwts',
+    apps: { muse: 'qwts-muse-agent', claude: 'qwts-claude-agent' },
+    identityApps: {
+      'qwts-muse-agent': { store: 'pass-cli' },
+      'trueline-muse-agent': { store: 'pass-cli' },
+      'qwts-claude-agent': { store: 'pass-cli' },
+      'trueline-claude-agent': { store: 'pass-cli' },
+    },
+  };
+
+  const truelineRepo = repo('true-line-carto');
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/true-line/carto.git'], { cwd: truelineRepo });
+  const qwtsRepo = repo('qwts-identity');
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/qwts/agent-bot-identity.git'], { cwd: qwtsRepo });
+
+  assert.equal(
+    resolveAgentSlug({ env: { ...env, MUSE_AGENT: '1' }, cwd: truelineRepo, config: multiOrgConfig, account: OWNER }),
+    'trueline-muse-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: { ...env, MUSE_AGENT: '1' }, cwd: qwtsRepo, config: multiOrgConfig, account: OWNER }),
+    'qwts-muse-agent',
+  );
+
+  // Same soul working across both organizations resolves each checkout's org-App.
+  const soul = mintAgentIdentity({
+    stateDir,
+    appSlug: 'qwts-muse-agent',
+    harness: 'muse',
+    useGithub: true,
+  });
+  assert.equal(
+    resolveAgentSlug({ env: { ...env, AGENT_BOT_ID: soul.id }, cwd: truelineRepo, config: multiOrgConfig, account: OWNER, detect: false }),
+    'trueline-muse-agent',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: { ...env, AGENT_BOT_ID: soul.id }, cwd: qwtsRepo, config: multiOrgConfig, account: OWNER, detect: false }),
+    'qwts-muse-agent',
+  );
+});
+

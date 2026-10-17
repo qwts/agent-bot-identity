@@ -455,10 +455,77 @@ export function githubHost(config = loadConfig()) {
   return new URL(apiBase(config)).host.replace(/^api\./, '');
 }
 
-export function slugForHarness(harness, config = loadConfig()) {
+export function originOwnerFromRemote(remoteUrl) {
+  if (typeof remoteUrl !== 'string') return null;
+  const trimmed = remoteUrl.trim();
+  const match = trimmed.match(/^(?:(?:https?|ssh|git):\/\/(?:[^@/\s]+@)?[^/:\s]+(?::\d+)?\/|[^@/\s]+@[^:/\s]+:)([^/\s]+)\/[^/\s]+?(?:\.git)?\/?$/i);
+  if (!match) return null;
+  const owner = match[1].toLowerCase();
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(owner) ? owner : null;
+}
+
+function isRegisteredAppSlug(slug, config, harnessKey) {
+  if (!slug || typeof slug !== 'string') return false;
+  if (appLifecycleStatus(slug, config) === 'retired') return false;
+  if (Array.isArray(config?.scope?.apps) && !config.scope.apps.includes(slug)) return false;
+  if (config?.identityApps && Object.hasOwn(config.identityApps, slug)) return true;
+  const profileIdentity = runtimeProfileInfo(config)?.identities.find((entry) => entry.slug === slug);
+  if (profileIdentity) return profileIdentity.status === 'active';
+  if (config?.apps && Object.values(config.apps).includes(slug)) return true;
+  if (harnessKey && !config?.apps?.[harnessKey] && config?.prefix && slug === `${config.prefix}-${harnessKey}-agent`) return true;
+  return false;
+}
+
+export function isOrgHarnessAppSlug(slug, harness, config = loadConfig()) {
+  if (typeof slug !== 'string' || typeof harness !== 'string' || !slug || !/^[a-z0-9-]+$/.test(harness)) return false;
+  const key = harness === 'claude-code' ? 'claude' : harness;
+  if (slug === slugForHarness(harness, config)) return true;
+  const escaped = [...new Set([key, harness])].map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`^[a-z0-9-]+-(?:${escaped.join('|')})-agent$`).test(slug);
+}
+
+export function soulOwnsAppSlug(identity, candidateSlug, config = loadConfig()) {
+  if (!identity || typeof candidateSlug !== 'string' || !candidateSlug) return false;
+  const recorded = identity.github?.appSlug ?? null;
+  if (recorded === candidateSlug) return true;
+  const harness = typeof identity.harness === 'string' ? identity.harness : null;
+  if (!harness || !recorded) return false;
+  const key = harness === 'claude-code' ? 'claude' : harness;
+  const recordedHarness = harnessForSlug(recorded, config);
+  const recordedKey = recordedHarness === 'claude-code' ? 'claude' : recordedHarness;
+  if (recordedKey && recordedKey !== key) return false;
+  if (!isOrgHarnessAppSlug(recorded, harness, config)) return false;
+  if (!isOrgHarnessAppSlug(candidateSlug, harness, config)) return false;
+  if (!isRegisteredAppSlug(recorded, config, key)) return false;
+  return isRegisteredAppSlug(candidateSlug, config, key);
+}
+
+export function slugForOriginOwner(originOwner, harness, config = loadConfig()) {
+  if (!originOwner || !harness) return null;
+  const owner = String(originOwner).trim().toLowerCase();
+  if (!owner) return null;
+  const key = harness === 'claude-code' ? 'claude' : harness;
+  const prefixes = [...new Set([owner, owner.replaceAll('-', '')].filter(Boolean))];
+  const harnessKeys = [...new Set([key, harness].filter(Boolean))];
+  for (const prefix of prefixes) {
+    for (const h of harnessKeys) {
+      const candidate = `${prefix}-${h}-agent`;
+      if (isRegisteredAppSlug(candidate, config, h)) return candidate;
+    }
+  }
+  return null;
+}
+
+export function slugForHarness(harness, config = loadConfig(), { originOwner = null } = {}) {
   if (!harness) return null;
+  if (originOwner) {
+    const matched = slugForOriginOwner(originOwner, harness, config);
+    if (matched) return matched;
+  }
+  const key = harness === 'claude-code' ? 'claude' : harness;
   if (config.apps?.[harness]) return config.apps[harness];
-  if (config.prefix) return `${config.prefix}-${harness}-agent`;
+  if (config.apps?.[key]) return config.apps[key];
+  if (config.prefix) return `${config.prefix}-${key}-agent`;
   return null;
 }
 

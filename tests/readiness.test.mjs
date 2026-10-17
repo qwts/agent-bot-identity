@@ -2642,6 +2642,14 @@ test('appRecordCheck flags a checkout acting as an App its soul record does not 
     config: { identityApps: { 'qwts-codex-agent': { store: 'keychain' } } } });
   assert.doesNotMatch(managed.action, /not a managed App/);
   assert.match(managed.action, /^bind a new session run as qwts-codex-agent: the daemon updates the record/);
+
+  const multiOrgReady = appRecordCheck({
+    agentId,
+    slug: 'trueline-muse-agent',
+    readIdentity: () => ({ id: agentId, harness: 'muse', github: { appSlug: 'qwts-muse-agent' } }),
+    config: { identityApps: { 'qwts-muse-agent': { store: 'pass-cli' }, 'trueline-muse-agent': { store: 'pass-cli' } } },
+  });
+  assert.equal(multiOrgReady.status, 'ready');
 });
 
 // #110: the key-store check reports recorded stores and a remaining legacy

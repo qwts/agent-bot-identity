@@ -9,8 +9,12 @@ import {
   daemonPreference,
   githubHost,
   harnessForSlug,
+  isOrgHarnessAppSlug,
   loadConfig,
+  originOwnerFromRemote,
   slugForHarness,
+  slugForOriginOwner,
+  soulOwnsAppSlug,
   spacesRootSetting,
 } from '../config.mjs';
 import { organizationProfileToConfig, runtimeProfileInfo } from '../organization-profile.mjs';
@@ -287,4 +291,56 @@ test('apiBase and githubHost honor config and defaults', () => {
   assert.equal(apiBase({ apiBase: 'https://github.example.com/api/v3/' }), 'https://github.example.com/api/v3');
   assert.equal(githubHost({ apiBase: 'https://api.github.com' }), 'github.com');
   assert.equal(githubHost({ apiBase: 'https://github.example.com/api/v3' }), 'github.example.com');
+});
+
+test('originOwnerFromRemote, slugForOriginOwner, and soulOwnsAppSlug resolve multi-org Apps per harness (#1139)', () => {
+  assert.equal(originOwnerFromRemote('https://github.com/true-line/carto.git'), 'true-line');
+  assert.equal(originOwnerFromRemote('git@github.com:True-Line/carto.git'), 'true-line');
+  assert.equal(originOwnerFromRemote('ssh://git@github.com/qwts/agent-bot-identity'), 'qwts');
+  assert.equal(originOwnerFromRemote('/local/path/repo'), null);
+
+  const config = {
+    prefix: 'qwts',
+    apps: { muse: 'qwts-muse-agent', claude: 'qwts-claude-agent' },
+    identityApps: {
+      'qwts-muse-agent': { store: 'pass-cli' },
+      'trueline-muse-agent': { store: 'pass-cli' },
+      'qwts-claude-agent': { store: 'pass-cli' },
+      'trueline-claude-agent': { store: 'pass-cli' },
+    },
+  };
+
+  assert.equal(slugForOriginOwner('true-line', 'muse', config), 'trueline-muse-agent');
+  assert.equal(slugForOriginOwner('qwts', 'muse', config), 'qwts-muse-agent');
+  assert.equal(slugForOriginOwner('true-line', 'claude-code', config), 'trueline-claude-agent');
+  assert.equal(slugForOriginOwner('unknown-org', 'muse', config), null);
+  assert.equal(slugForHarness('muse', config, { originOwner: 'true-line' }), 'trueline-muse-agent');
+  assert.equal(slugForHarness('muse', config, { originOwner: 'qwts' }), 'qwts-muse-agent');
+  assert.equal(slugForHarness('muse', config, { originOwner: 'unknown-org' }), 'qwts-muse-agent');
+
+  assert.equal(isOrgHarnessAppSlug('qwts-muse-agent', 'muse', config), true);
+  assert.equal(isOrgHarnessAppSlug('trueline-muse-agent', 'muse', config), true);
+  assert.equal(isOrgHarnessAppSlug('you-claude-fable-agent', 'claude-code', config), false);
+
+  const museSoul = { harness: 'muse', github: { appSlug: 'qwts-muse-agent' } };
+  const truelineMuseSoul = { harness: 'muse', github: { appSlug: 'trueline-muse-agent' } };
+  const fableSoul = { harness: 'claude-code', github: { appSlug: 'you-claude-fable-agent' } };
+
+  assert.equal(soulOwnsAppSlug(museSoul, 'trueline-muse-agent', config), true);
+  assert.equal(soulOwnsAppSlug(truelineMuseSoul, 'qwts-muse-agent', config), true);
+  assert.equal(soulOwnsAppSlug(museSoul, 'qwts-claude-agent', config), false);
+  assert.equal(soulOwnsAppSlug(museSoul, 'unregistered-muse-agent', config), false);
+  assert.equal(soulOwnsAppSlug(fableSoul, 'qwts-claude-agent', config), false);
+
+  // Reject invalid/adversarial owner strings and missing harness records.
+  assert.equal(originOwnerFromRemote('https://github.com/..%2f../repo.git'), null);
+  assert.equal(originOwnerFromRemote('https://github.com/-bad/repo.git'), null);
+  assert.equal(originOwnerFromRemote('https://github.com/bad-/repo.git'), null);
+  assert.equal(soulOwnsAppSlug({ github: { appSlug: 'qwts-muse-agent' } }, 'trueline-muse-agent', config), false);
+  assert.equal(soulOwnsAppSlug({ harness: 'muse', github: { appSlug: 'unregistered-muse-agent' } }, 'trueline-muse-agent', config), false);
+
+  // Respect config.scope.apps allowlist when present.
+  const scopedConfig = { ...config, scope: { apps: ['qwts-muse-agent'] } };
+  assert.equal(slugForOriginOwner('true-line', 'muse', scopedConfig), null);
+  assert.equal(soulOwnsAppSlug(museSoul, 'trueline-muse-agent', scopedConfig), false);
 });
