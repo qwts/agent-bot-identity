@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.3
+
+- Recognize MiniMax Code, Kilo Code, and Roo Code identities in organization profiles and agent-context detection so their rostered accounts can use agent-bot (#1146).
+
 ## 0.11.2
 
 - Resolve `<org>-<harness>-agent` GitHub Apps from the checkout's `remote.origin.url` owner so a single soul works across multiple GitHub organizations (`qwts/*`, `true-line/*`, etc.) with each organization's App (`join`, `setup-worktree`, `mint-token`, and daemon-bound credentials) (#1139).
