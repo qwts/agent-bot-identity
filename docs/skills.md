@@ -35,7 +35,9 @@ Any other name is resolved through `skills/README.md` in the explicitly
 selected SOP repository (#674). Selection reuses `agent-bot sop`: the current
 soul's `agent-sop.toml` takes precedence over the user's
 `~/.config/agent-sop/config.toml`, and an explicit `[repos] sop` takes
-precedence over the SOP pin in the selected organization's `org.json`.
+precedence over the SOP repository declared by the selected organization.
+Bare repository selections resolve the current default branch on every use;
+legacy `sources.sop.ref` values remain provenance baselines only.
 A foreign soul selection requires the existing trust decision for that
 repository and commit. Neither the catalog nor an entry can redirect the
 index lookup to another organization. There is no implicit qwts selection.
@@ -56,12 +58,14 @@ The name must match exactly one entry. The command then fetches
 | no entry with that name | error |
 | two or more entries with that name | error naming each repository |
 | the link's ref is a branch, a tag, or a short SHA | error: not pinned |
-| the link is not a `tree/<ref>/<path>` link | error: no pin |
+| a safe relative `<directory>/SKILL.md` link | same repository and SHA as the SOP catalog |
+| any other link shape | error: no pin |
 | "owned by" names a different repository from the link | error |
 
 Both the catalog and each skill are read at full commits. The SOP resolver
-may resolve a configured branch or tag once; the index request then uses the
-resulting immutable commit, including when `org.json` pins an older revision.
+resolves the live default branch or an explicit configured ref once per
+operation; catalog and SOP-owned skills use that same immutable commit.
+A later operation discovers any newly approved head.
 Missing catalogs never fall back to a repository's default branch. A catalog
 entry may name a different owning repository, but its full commit and the
 existing owner/path checks remain mandatory.
@@ -86,12 +90,17 @@ soul's `agent-sop.toml` for a soul-specific selection):
 ```toml
 schema_version = 1
 [repos]
-org = "your-org/agent-org@<reviewed-ref-or-full-commit>"
+org = "your-org/agent-org"
 ```
 
 Run `agent-bot sop --json` to verify the resolved repository and commit. The
 selected SOP must contain `skills/README.md`. An explicit `[repos] sop`
-selection uses the same `owner/repository@ref` syntax. There is no `sop set`
+selection accepts a bare repository for live discovery or `owner/repository@ref`
+for an explicit override. To migrate a frozen local selection, back up its
+config and remove `@<sha>` only when it is not an intentional historical
+selection. Omit `repos.sop` to follow the organization's declared SOP. For full historical
+replay, specify both the org and SOP SHAs; an org-only snapshot still follows
+the declared SOP's live head. There is no `sop set`
 command and this migration never writes a config or updates a live policy
 repository automatically. If a foreign soul selection is withheld, review
 it before `agent-bot sop trust OWNER/REPOSITORY --soul ID`.

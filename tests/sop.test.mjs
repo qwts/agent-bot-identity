@@ -88,6 +88,7 @@ function subcommands(calls) {
 }
 
 const HEADS = {
+  HEAD: SOP,
   'refs/heads/main': ORG,
   'refs/tags/v1': TAG,
   [`refs/tags/v1^{}`]: COMMS,
@@ -261,7 +262,7 @@ test('resolves branch and tag refs, reports pins, and does not execute them', ()
     schemaVersion: 1,
     repositories: {
       org: { repository: 'acme/org', ref: 'main', commit: ORG, selected: 'config' },
-      sop: { repository: 'acme/sop', ref: SOP, commit: SOP, selected: 'org.json' },
+      sop: { repository: 'acme/sop', ref: 'HEAD', commit: SOP, selected: 'org.json' },
       comms: { repository: 'acme/comms', ref: 'v1', commit: COMMS, selected: 'config' },
     },
     orgJson: {
@@ -284,14 +285,14 @@ test('resolves branch and tag refs, reports pins, and does not execute them', ()
     },
     read: [{ repository: 'acme/org', commit: ORG, path: 'org.json' }],
   });
-  assert.deepEqual(subcommands(git.calls), ['ls-remote', 'init', 'remote', 'config', 'config', 'fetch', 'cat-file', 'ls-remote']);
+  assert.deepEqual(subcommands(git.calls), ['ls-remote', 'init', 'remote', 'config', 'config', 'fetch', 'cat-file', 'ls-remote', 'ls-remote']);
   assert.ok(git.calls.every((args) => SOP_GIT_COMMANDS.includes(gitSubcommand(args))));
   assert.equal(git.calls.filter((args) => gitSubcommand(args) === 'fetch').length, 1);
   assert.ok(git.calls.some((args) => args.includes(ORG) && gitSubcommand(args) === 'fetch'));
   assert.ok(git.calls.every((args) => !args.includes('README.md') && !args.includes('evil.sh')));
   assert.ok(git.calls.some((args) => args.at(-1) === 'FETCH_HEAD:org.json'));
   const urls = git.calls.filter((args) => gitSubcommand(args) === 'ls-remote').map((args) => args[args.indexOf('ls-remote') + 1]);
-  assert.deepEqual(urls, ['https://github.com/acme/org.git', 'https://github.com/acme/comms.git']);
+  assert.deepEqual(urls, ['https://github.com/acme/org.git', 'https://github.com/acme/sop.git', 'https://github.com/acme/comms.git']);
   assert.equal(formatSopReport(report), [
     'SOP in effect',
     '',
@@ -303,7 +304,7 @@ test('resolves branch and tag refs, reports pins, and does not execute them', ()
     '',
     'sop:',
     '  repository: acme/sop',
-    `  ref: ${SOP}`,
+    '  ref: HEAD',
     `  commit: ${SOP}`,
     '  selected: org.json',
     '',
@@ -371,7 +372,7 @@ test('a config sop ref overrides the org.json pin and a branch wins over a same-
 });
 
 test('a lightweight tag resolves to its commit and a missing ref fails', () => {
-  const git = fakeGit({ 'refs/heads/main': ORG, 'refs/tags/light': COMMS });
+  const git = fakeGit({ HEAD: SOP, 'refs/heads/main': ORG, 'refs/tags/light': COMMS });
   const report = resolveSop({
     configText: 'schema_version = 1\n[repos]\norg = "acme/org@main"\ncomms = "acme/comms@light"\n',
     runGit: git.runGit,
@@ -650,7 +651,7 @@ test('the human report strips terminal control characters from org.json values',
   const body = orgJson({
     organization: { id: 'acme\u001b[2J', account: 'acme\u009b31m', profile: 'p\u0007.json' },
   });
-  const git = fakeGit({ 'refs/heads/main': ORG }, body.replace('The SOP.', 'The \\u001b]0;pwned\\u0007SOP.'));
+  const git = fakeGit({ HEAD: SOP, 'refs/heads/main': ORG }, body.replace('The SOP.', 'The \\u001b]0;pwned\\u0007SOP.'));
   const report = resolveSop({
     configText: 'schema_version = 1\n[repos]\norg = "acme/org@main"\n',
     configPath: '/cfg/config.toml',
@@ -660,4 +661,50 @@ test('the human report strips terminal control characters from org.json values',
   const text = formatSopReport(report);
   assert.match(text, /acme\[2J/);
   assert.doesNotMatch(text, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+});
+
+
+test('live org and SOP heads refresh independently; legacy baseline never freezes discovery', () => {
+  const heads = { org: ORG, sop: SOP };
+  const reads = [], lookups = [];
+  const options = {
+    configText: 'schema_version = 1\n[repos]\norg = "acme/org"\n',
+    readOrgText(repo, commit) { reads.push({ repo, commit }); return orgJson(); },
+    runGit(args) {
+      assert.equal(gitSubcommand(args), 'ls-remote');
+      const repo = args[args.indexOf('ls-remote') + 1].includes('/org.') ? 'org' : 'sop';
+      lookups.push(repo);
+      return { status: 0, stdout: `${heads[repo]}\tHEAD\n`, stderr: '' };
+    },
+  };
+  const first = resolveSop(options);
+  heads.sop = DEV;
+  const second = resolveSop(options);
+  assert.equal(first.repositories.sop.commit, SOP);
+  assert.equal(second.repositories.sop.commit, DEV);
+  assert.equal(second.orgJson.sources.sop.commit, SOP); // legacy provenance only
+  heads.org = TAG;
+  const third = resolveSop(options);
+  assert.equal(third.repositories.org.commit, TAG);
+  assert.equal(third.repositories.sop.commit, DEV);
+  assert.deepEqual(lookups, ['org', 'sop', 'org', 'sop', 'org', 'sop']);
+  assert.deepEqual(reads.map(read => read.commit), [ORG, ORG, TAG]);
+  options.runGit = () => ({ status: 1, stdout: '', stderr: 'offline' });
+  assert.throws(() => resolveSop(options), /offline/); // no stale cache fallback
+});
+
+test('SOP ref omission is live; capability pin omission is invalid; explicit snapshots stay offline', () => {
+  const manifest = JSON.parse(orgJson());
+  delete manifest.sources.sop.ref;
+  const parsed = parseOrgPins(JSON.stringify(manifest));
+  assert.equal(parsed.sources.sop.ref, 'HEAD');
+  assert.equal(parsed.sources.sop.commit, null);
+  const report = resolveSop({
+    configText: `schema_version = 1\n[repos]\norg = "acme/org@${ORG}"\nsop = "acme/sop@${DEV}"\n`,
+    readOrgText: () => JSON.stringify(manifest),
+    runGit: () => assert.fail('explicit historical snapshots need no ref lookup'),
+  });
+  assert.equal(report.repositories.sop.commit, DEV);
+  delete manifest.capabilities['agent-bot'].ref;
+  assert.throws(() => parseOrgPins(JSON.stringify(manifest)), /capabilities.agent-bot.ref/);
 });

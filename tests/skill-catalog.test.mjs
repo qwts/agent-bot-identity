@@ -232,3 +232,14 @@ test('every dispatched command has a reference or is explicitly listed as having
   for (const file of new Set(Object.values(SKILL_REFERENCES))) assert.ok(existsSync(join(REFERENCES, file)), file);
   assert.deepEqual([...new Set(Object.values(SKILL_REFERENCES))].sort(), files, 'every reference file is reachable through --for');
 });
+
+
+test('SOP-local catalog links are confined to the selected snapshot', () => {
+  const entries = parseCatalog(catalog('- [local](local/SKILL.md)'), CATALOG);
+  assert.deepEqual(resolveCatalogEntry(entries, 'local', CATALOG), {
+    name: 'local', repository: CATALOG.repository, commit: CATALOG.commit, path: 'skills/local/SKILL.md',
+  });
+  for (const link of ['../local/SKILL.md', '/local/SKILL.md', 'local/../../SKILL.md', 'local//SKILL.md', 'https://evil.test/local/SKILL.md']) {
+    assert.throws(() => resolveCatalogEntry(parseCatalog(catalog(`- [local](${link})`), CATALOG), 'local', CATALOG));
+  }
+});

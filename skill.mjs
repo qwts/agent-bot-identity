@@ -87,7 +87,7 @@ export function sourceCommit(root = ROOT) {
 // and runs until the next "- [" line or the end of the section. `commit` is
 // REF when REF is a full 40-hex commit, otherwise null (a branch or a tag is
 // not a pin). A link that is not a tree link has no ref and no path.
-export function parseCatalog(text) {
+export function parseCatalog(text, catalog = null) {
   const lines = String(text).split('\n');
   const start = lines.findIndex((line) => /^##\s+Available skills\s*$/u.test(line));
   if (start < 0) throw new SkillError('the fleet catalog has no "Available skills" section');
@@ -106,6 +106,15 @@ export function parseCatalog(text) {
     }
   }
   return entries.map(({ name, link, body }) => {
+    // SOP-owned skills travel with the selected SOP snapshot. Only a safe
+    // relative SKILL.md path is accepted; external capabilities still need pins.
+    if (catalog && COMMIT.test(catalog.commit ?? '')
+      && /^[a-zA-Z0-9_./-]+\/SKILL\.md$/u.test(link)
+      && !link.startsWith('/') && !link.split('/').some((part) => !part || part === '.' || part === '..')) {
+      return { name, repository: catalog.repository, owner: catalog.repository,
+        ref: catalog.commit, commit: catalog.commit,
+        directory: `${catalog.path.slice(0, catalog.path.lastIndexOf('/') + 1)}${link.slice(0, -'/SKILL.md'.length)}` };
+    }
     const tree = link.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/tree\/([^/]+)\/(.+?)\/?$/u);
     const owner = body.replace(/\s+/gu, ' ').match(/owned by \[([^\]]+)\]/u)?.[1] ?? null;
     const ref = tree?.[2] ?? null;
@@ -218,7 +227,7 @@ export function resolveCatalogSkill(name, fetchContents, selection = {}) {
   try { index = boundedText(fetchContents(catalog.repository, catalog.path, catalog.commit), 'selected skill catalog'); }
   catch (error) { throw new SkillError(`cannot read skill catalog ${catalog.repository}/${catalog.path} at ${catalog.commit}: ${error.message}; verify the selected SOP and its catalog with agent-bot sop`, 1, error.code === 'skill-content-missing' ? 'skill-catalog-missing' : error.code === 'skill-content-invalid' ? 'skill-catalog-invalid' : 'skill-catalog-unreadable'); }
   let entries;
-  try { entries = parseCatalog(index); }
+  try { entries = parseCatalog(index, catalog); }
   catch (error) { throw new SkillError(`invalid catalog ${catalog.repository}@${catalog.commit}: ${error.message}`, 1, 'skill-catalog-invalid'); }
   const entry = resolveCatalogEntry(entries, name, catalog);
   let text;
