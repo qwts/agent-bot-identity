@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.2
+
+- Resolve `<org>-<harness>-agent` GitHub Apps from the checkout's `remote.origin.url` owner so a single soul works across multiple GitHub organizations (`qwts/*`, `true-line/*`, etc.) with each organization's App (`join`, `setup-worktree`, `mint-token`, and daemon-bound credentials) (#1139).
+
 ## 0.11.1
 
 - CI pins qwts-agent-ci at b754c7e, the merge of qwts/qwts-agent-ci#12, moving `ci-policy`, the runtime-checker checkout and `cli-skill-gate` off d9f8cf9 so the Action Policy admits the fleet's qwts-vibe-agent[bot] and qwts-mirror-agent[bot] actors and agent-authored pull requests pass CI again (#12, unblocking qwts/agent-bot-identity#1125).
