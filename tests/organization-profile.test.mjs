@@ -12,7 +12,7 @@ import {
   runtimeProfileInfo,
   validateOrganizationProfile,
 } from '../organization-profile.mjs';
-import { HARNESSES } from '../detect-harness.mjs';
+import { HARNESSES, detectHarness, detectAgentHarness } from '../detect-harness.mjs';
 
 function completeProfile(overrides = {}) {
   return {
@@ -148,6 +148,23 @@ test('Vibe and Mirror defaults and active identities validate into runtime App m
       { harness: 'vibe', slug: 'example-vibe-agent' },
     ],
   );
+});
+
+test('MiniMax, Kilo Code and Roo Code profile identities resolve by account and explicit markers', () => {
+  const harnesses = ['kilocode', 'mcode', 'roocode'];
+  const base = completeProfile();
+  const profile = completeProfile({
+    defaults: { ...base.defaults, ...Object.fromEntries(harnesses.map(h => [h, `example-${h}-agent`])) },
+    identities: [...base.identities, ...harnesses.map(h => ({ slug: `example-${h}-agent`, harness: h, status: 'active' }))],
+  });
+  const config = organizationProfileToConfig(parseOrganizationProfile(JSON.stringify(profile)));
+  for (const harness of harnesses) {
+    const slug = `example-${harness}-agent`;
+    assert.equal(config.apps[harness], slug);
+    assert.equal(detectAgentHarness({}, config, slug), slug);
+    assert.equal(detectHarness({ [harness.toUpperCase() + '_AGENT']: '1', TERM_PROGRAM: 'vscode' }), harness);
+    assert.equal(detectAgentHarness({ AI_AGENT: harness }, config, 'owner'), slug);
+  }
 });
 
 test('profile v1 normalizes complete defaults, model mappings, and lifecycle state', () => {
