@@ -365,11 +365,11 @@ async function configure({ identity, options, config,
     return;
   }
   const currentPin = pinnedSlug();
-  const unpinnedGit = (args, opts) => {
+  const unpinnedGit = (args) => {
     if (args[0] === 'config' && args[1] === '--get' && (args[2] === 'agentBot.app' || args[2] === 'qwts.agentApp')) {
       return '';
     }
-    return execFileSync('git', args, { cwd: opts?.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return git(...args);
   };
   const checkoutHarness = identity.harness && isOrgHarnessAppSlug(identity.github?.appSlug, identity.harness, config)
     ? identity.harness

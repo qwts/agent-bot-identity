@@ -1,0 +1,1 @@
+- Resolve `<org>-<harness>-agent` GitHub Apps from the checkout's `remote.origin.url` owner so a single soul works across multiple GitHub organizations (`qwts/*`, `true-line/*`, etc.) with each organization's App (`join`, `setup-worktree`, `mint-token`, and daemon-bound credentials) (#1139).
