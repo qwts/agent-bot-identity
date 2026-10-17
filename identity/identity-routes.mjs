@@ -15,13 +15,37 @@
 
 import { readAgentIdentity, mintAgentIdentity } from './agent-identity.mjs';
 import { childBindingPath } from './agent-binding.mjs';
-import { isGateEnabled } from '../config.mjs';
+import { isGateEnabled, loadConfig, soulOwnsAppSlug } from '../config.mjs';
 import { SCHEMA_VERSION } from './daemon-client.mjs';
 import { validAppSlug } from './identity-app-store.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { boundRepository, inboxError } from './inbox-take.mjs';
 import { grantTarget, KEYD_TOOL_NAMES, mintViaKeyd, signKeydGrant } from './keyd-client.mjs';
+import { resolveAgentSlug } from './resolve-agent.mjs';
 import { stateDirectory } from '../state-paths.mjs';
+
+function boundAppSlug(binding, identity, { env, home, config }) {
+  const recorded = identity.github?.appSlug ?? null;
+  if (!recorded) return null;
+  let cfg = config;
+  if (!cfg) {
+    try { cfg = loadConfig({ env, home }); } catch { cfg = {}; }
+  }
+  if (binding?.worktree) {
+    try {
+      const worktreeSlug = resolveAgentSlug({
+        env: { ...env, AGENT_BOT_ID: binding.agentId, GH_AGENT_APP: '' },
+        cwd: binding.worktree,
+        config: cfg,
+        detect: false,
+        harness: binding.harness ?? identity.harness ?? null,
+      });
+      if (worktreeSlug && soulOwnsAppSlug(identity, worktreeSlug, cfg)) return worktreeSlug;
+    } catch { /* fall back to binding.app or recorded */ }
+  }
+  if (binding?.app && soulOwnsAppSlug(identity, binding.app, cfg)) return binding.app;
+  return recorded;
+}
 
 export function createIdentityRoutes({
   bindings, env, home, config, now,
@@ -146,20 +170,21 @@ export function createIdentityRoutes({
         // The add-on gate decides, not the record: a soul that carries a
         // github field gets no App token while github-identity is off.
         const githubOn = isGateEnabled('github-identity', { env, home, config });
-        if (!githubOn || !identity.github?.appSlug) {
+        const appSlug = boundAppSlug(binding, identity, { env, home, config });
+        if (!githubOn || !appSlug) {
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
             operation: 'tier1-app-token',
             decision: 'denied',
-            ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
+            ...(appSlug ? { appSlug } : {}),
             reason: githubOn ? 'no-github-app' : 'github-identity-off',
           }, { env, home, now });
           throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409, code: githubOn ? 'credential-no-app' : 'credential-github-off' });
         }
         try {
           grant = await mintImpl({
-            slug: identity.github.appSlug, env, agentId: binding.agentId,
+            slug: appSlug, env, agentId: binding.agentId,
             viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
           });
         } catch (error) {
@@ -171,7 +196,7 @@ export function createIdentityRoutes({
             agentId: binding.agentId,
             operation: 'tier1-app-token',
             decision: 'failed',
-            appSlug: identity.github.appSlug,
+            appSlug,
             reason: 'mint-failed',
           }, { env, home, now });
           throw error;
@@ -182,13 +207,13 @@ export function createIdentityRoutes({
           agentId: binding.agentId,
           operation: 'tier1-app-token',
           decision: 'granted',
-          appSlug: identity.github.appSlug,
+          appSlug,
           reason: 'bound-soul-own-app',
         }, { env, home, now });
         sendJson(res, 200, {
           schemaVersion: SCHEMA_VERSION,
           agentId: binding.agentId,
-          appSlug: identity.github.appSlug,
+          appSlug,
           token: grant.token,
           expires_at: grant.expires_at,
           installation_id: Number.isSafeInteger(grant.installation_id) ? grant.installation_id : null,
@@ -212,7 +237,7 @@ export function createIdentityRoutes({
         let identity;
         try { identity = readAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }) }); }
         catch (error) { receipt('failed', { agentId, reason: 'identity-unreadable' }); throw error; }
-        const appSlug = identity.github?.appSlug;
+        const appSlug = boundAppSlug(binding, identity, { env, home, config });
         if (!appSlug) {
           receipt('denied', { agentId, reason: 'no-github-app' });
           throw inboxError('inbox-no-app', 'take_inbox failed: this soul has no GitHub App', { statusCode: 409 });

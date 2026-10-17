@@ -9,7 +9,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { pinnedSlug, readAppMetadata, readBinding, reconcileAppCredentials, resolveAgentSlug, writeAppMetadata } from './identity-soul.mjs';
 import { AGENT_ID_KEYS } from './identity-format.mjs';
-import { loadConfig, isGateEnabled, apiBase, daemonPreference, githubHost } from './config.mjs';
+import { loadConfig, isGateEnabled, isOrgHarnessAppSlug, soulOwnsAppSlug, apiBase, daemonPreference, githubHost } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
@@ -364,10 +364,29 @@ async function configure({ identity, options, config,
     await configureSoulWithoutApp({ gitDir, config, daemon, identity });
     return;
   }
-  const resolvedSlug = resolveAgentSlug({ explicit: options.slug ?? identity.github?.appSlug, config, detect: false });
+  const currentPin = pinnedSlug();
+  const unpinnedGit = (args) => {
+    if (args[0] === 'config' && args[1] === '--get' && (args[2] === 'agentBot.app' || args[2] === 'qwts.agentApp')) {
+      return '';
+    }
+    return git(...args);
+  };
+  const checkoutHarness = identity.harness && isOrgHarnessAppSlug(identity.github?.appSlug, identity.harness, config)
+    ? identity.harness
+    : null;
+  const checkoutGit = (!currentPin || soulOwnsAppSlug(identity, currentPin, config)) ? unpinnedGit : undefined;
+  const checkoutSlug = options.slug ? null : resolveAgentSlug({
+    env: { ...process.env, AGENT_BOT_ID: identity.id, GH_AGENT_APP: '' },
+    config,
+    git: checkoutGit,
+    detect: false,
+    harness: checkoutHarness,
+  });
+  const resolvedSlug = resolveAgentSlug({ explicit: options.slug ?? checkoutSlug ?? identity.github?.appSlug, config, detect: false });
   if (!identity.github?.appSlug || !resolvedSlug) throw new Error('session soul has no GitHub App; re-run agent-bot join in this checkout to resolve its configured harness mapping');
   const slug = validateAppSlug(resolvedSlug);
-  if (slug !== identity.github?.appSlug || (pinnedSlug() && pinnedSlug() !== slug)) {
+  if ((slug !== identity.github?.appSlug && !soulOwnsAppSlug(identity, slug, config))
+      || (currentPin && currentPin !== slug && !soulOwnsAppSlug(identity, currentPin, config))) {
     throw new Error('GitHub App does not match the session soul; use a new worktree');
   }
   let verifiedToken = null;

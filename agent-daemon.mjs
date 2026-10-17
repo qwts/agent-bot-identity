@@ -105,7 +105,7 @@ import { launchSandbox, personaBlockNotice, readSandboxStatus, turnSandboxProble
 import { checkSopLaunchPolicy } from './sop.mjs';
 import { resolveSoulModel, resolveSoulReasoningEffort, soulModel, setSoulModel, recordSoulModels } from './soul-model.mjs';
 import { ownerGate as soulSettingOwnerGate, readColdWakeSnapshot, setColdWake } from './cold-wake-settings.mjs';
-import { diagnosticsOtlpEndpointSetting, isGateEnabled, loadConfig } from './config.mjs';
+import { appLifecycleStatus, diagnosticsOtlpEndpointSetting, isGateEnabled, isOrgHarnessAppSlug, loadConfig } from './config.mjs';
 import { createLaunchHandler, launchCommsSetting } from './daemon-launch.mjs';
 import { createDiagnostics, runtimeVersion } from './diagnostics.mjs';
 import { createOtlpExporter, otlpHeaders } from './otlp-export.mjs';
@@ -1050,11 +1050,16 @@ export function createDaemonServer({
 // hand-written `apps` entry with no profile behind it is not the org's word,
 // so it never stands in for the owner (#107).
 function orgMapsHarnessTo(config, harness, app) {
-  if (!harness) return false;
+  if (!harness || !app) return false;
+  if (appLifecycleStatus(app, config) === 'retired') return false;
+  if (Array.isArray(config?.scope?.apps) && !config.scope.apps.includes(app)) return false;
+  if (config?.identityApps && Object.hasOwn(config.identityApps, app) && isOrgHarnessAppSlug(app, harness, config)) {
+    return true;
+  }
   let info;
   try { info = runtimeProfileInfo(config); } catch { return false; }
-  return info?.defaults?.[harness] === app
-    && info.active.some((identity) => identity.slug === app && identity.harness === harness);
+  return (info?.defaults?.[harness] === app || isOrgHarnessAppSlug(app, harness, config))
+    && Boolean(info?.active.some((identity) => identity.slug === app && identity.harness === harness));
 }
 
 async function reconcileSoulApp({ agentId, claimed, env, home, config, now, ownerGate }) {

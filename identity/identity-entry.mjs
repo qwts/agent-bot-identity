@@ -166,8 +166,15 @@ export const IDENTITY_OPS = Object.freeze({
   // Fills absent App metadata on a soul being joined. The caller has
   // already recorded the App in the census and puts that back if this fails.
   'initialize-app'(input) {
-    const { id, appSlug, stateDir, now } = only(input, ['id', 'appSlug', 'stateDir', 'now']);
-    return initializeAgentApp(text('id', id), text('appSlug', appSlug), { ...stateDirOption(stateDir), ...nowOption(now) });
+    const { id, appSlug, stateDir, now, config } = only(input, ['id', 'appSlug', 'stateDir', 'now', 'config']);
+    if (config !== undefined && (!config || typeof config !== 'object' || Array.isArray(config))) {
+      throw invalid('config must be a JSON object');
+    }
+    return initializeAgentApp(text('id', id), text('appSlug', appSlug), {
+      ...stateDirOption(stateDir),
+      ...nowOption(now),
+      ...(config === undefined ? {} : { config }),
+    });
   },
   'mint-bind-token'(input) {
     const { gitDir, worktree, agentId, now } = only(input, ['gitDir', 'worktree', 'agentId', 'now']);

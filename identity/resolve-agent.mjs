@@ -27,7 +27,16 @@ import { stateDirectory } from '../state-paths.mjs';
 import { AGENT_ID_KEYS, PIN_KEYS } from './identity-format.mjs';
 import { accountHarness, accountName, detectHarness } from '../detect-harness.mjs';
 import { PROFILE_HARNESSES } from '../organization-profile.mjs';
-import { appLifecycleStatus, isGateEnabled, loadConfig, slugForHarness } from '../config.mjs';
+import {
+  appLifecycleStatus,
+  harnessForSlug,
+  isGateEnabled,
+  isOrgHarnessAppSlug,
+  loadConfig,
+  originOwnerFromRemote,
+  slugForHarness,
+  slugForOriginOwner,
+} from '../config.mjs';
 
 // The pin and Agent ID keys live in the identity-format contract (#645, F1).
 export const CHAINED_HOOKS_KEYS = ['agentBot.chainedHooksPath', 'qwts.chainedHooksPath'];
@@ -93,6 +102,15 @@ export function pinnedSlug(cwd = process.cwd(), options = {}) {
   return readGitConfig(cwd, PIN_KEYS, options);
 }
 
+function readOriginOwner(cwd, { git = defaultGitRunner, config = null } = {}) {
+  try {
+    const remote = readGitConfig(cwd, ['remote.origin.url'], { git });
+    return originOwnerFromRemote(remote, config);
+  } catch {
+    return null;
+  }
+}
+
 function requireActiveProfileApp(appSlug, config) {
   if (appLifecycleStatus(appSlug, config) === 'retired') {
     throw new Error('selected App is retired by the installed organization profile');
@@ -116,12 +134,14 @@ export function resolveAgentSlug({
   git,
   account = accountName(env),
   detect = true,
+  harness = null,
 } = {}) {
   const cfg = config ?? loadConfig({ env });
   if (explicit) return requireActiveProfileApp(explicit, cfg);
   if (env.GH_AGENT_APP) return requireActiveProfileApp(env.GH_AGENT_APP, cfg);
   const pinned = pinnedSlug(cwd, { git });
   if (pinned) return requireActiveProfileApp(pinned, cfg);
+  const originOwner = readOriginOwner(cwd, { git, config: cfg });
   // Managed App assignments are explicit soul identity metadata. Existing
   // explicit App/environment/worktree choices retain their precedence.
   if (cfg.identityApps && Object.keys(cfg.identityApps).length) {
@@ -130,16 +150,24 @@ export function resolveAgentSlug({
       const identity = readAgentIdentity(id, { stateDir: stateDirectory({ env, home: env.HOME }) });
       if (identity.status === 'retired') throw new Error('selected soul is retired');
       const app = identity.github?.appSlug;
-      if (app && cfg.identityApps[app]) return requireActiveProfileApp(app, cfg);
+      const identityHarness = identity.harness ?? (app ? harnessForSlug(app, cfg) : null) ?? harness ?? (detect ? detectHarness(env) : null);
+      const originApp = originOwner && identityHarness
+        ? slugForOriginOwner(originOwner, identityHarness, cfg)
+        : null;
+      const resolvedApp = (originApp && (!app || isOrgHarnessAppSlug(app, identityHarness, cfg))) ? originApp : app;
+      if (resolvedApp && (cfg.identityApps[resolvedApp] || resolvedApp === originApp)) {
+        return requireActiveProfileApp(resolvedApp, cfg);
+      }
     }
   }
   // ENG-0339: the account is the persona, so its input outranks environment
   // detection — a harness account resolves to its own App whatever tool runs
   // there. In the owner's account it yields nothing.
   const accountKey = accountHarness(cfg, account);
-  if (accountKey) return slugForHarness(accountKey, cfg);
-  if (!detect) return null;
-  return slugForHarness(detectHarness(env), cfg);
+  if (accountKey) return slugForHarness(accountKey, cfg, { originOwner });
+  const resolvedHarness = harness ?? (detect ? detectHarness(env) : null);
+  if (!resolvedHarness) return null;
+  return slugForHarness(resolvedHarness, cfg, { originOwner });
 }
 
 // No human fallback (#749, carried requirement 6 of #104). A session that
