@@ -102,10 +102,10 @@ export function pinnedSlug(cwd = process.cwd(), options = {}) {
   return readGitConfig(cwd, PIN_KEYS, options);
 }
 
-function readOriginOwner(cwd, { git = defaultGitRunner } = {}) {
+function readOriginOwner(cwd, { git = defaultGitRunner, config = null } = {}) {
   try {
     const remote = readGitConfig(cwd, ['remote.origin.url'], { git });
-    return originOwnerFromRemote(remote);
+    return originOwnerFromRemote(remote, config);
   } catch {
     return null;
   }
@@ -141,7 +141,7 @@ export function resolveAgentSlug({
   if (env.GH_AGENT_APP) return requireActiveProfileApp(env.GH_AGENT_APP, cfg);
   const pinned = pinnedSlug(cwd, { git });
   if (pinned) return requireActiveProfileApp(pinned, cfg);
-  const originOwner = readOriginOwner(cwd, { git });
+  const originOwner = readOriginOwner(cwd, { git, config: cfg });
   // Managed App assignments are explicit soul identity metadata. Existing
   // explicit App/environment/worktree choices retain their precedence.
   if (cfg.identityApps && Object.keys(cfg.identityApps).length) {

@@ -455,12 +455,18 @@ export function githubHost(config = loadConfig()) {
   return new URL(apiBase(config)).host.replace(/^api\./, '');
 }
 
-export function originOwnerFromRemote(remoteUrl) {
+export function originOwnerFromRemote(remoteUrl, config = null) {
   if (typeof remoteUrl !== 'string') return null;
   const trimmed = remoteUrl.trim();
-  const match = trimmed.match(/^(?:(?:https?|ssh|git):\/\/(?:[^@/\s]+@)?[^/:\s]+(?::\d+)?\/|[^@/\s]+@[^:/\s]+:)([^/\s]+)\/[^/\s]+?(?:\.git)?\/?$/i);
+  const match = trimmed.match(/^(?:(?:https?|ssh|git):\/\/(?:[^@/\s]+@)?([^/:\s]+)(?::\d+)?\/|[^@/\s]+@([^:/\s]+):)([^/\s]+)\/[^/\s]+?(?:\.git)?\/?$/i);
   if (!match) return null;
-  const owner = match[1].toLowerCase();
+  const host = (match[1] ?? match[2] ?? '').toLowerCase();
+  let expectedHost = 'github.com';
+  if (config && typeof config === 'object') {
+    try { expectedHost = githubHost(config).toLowerCase(); } catch { return null; }
+  }
+  if (host !== 'github.com' && host !== expectedHost) return null;
+  const owner = match[3].toLowerCase();
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(owner) ? owner : null;
 }
 

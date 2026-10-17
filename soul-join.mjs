@@ -239,7 +239,7 @@ export async function joinSoul({
   const repairingDefaultApp = Boolean(
     githubOn && !appPin && !env.GH_AGENT_APP
     && existing?.github?.appSlug && existing.github.appSlug === defaultAppSlug
-    && appSlug && appSlug !== existing.github.appSlug && Boolean(loaded.identityApps?.[appSlug]),
+    && appSlug && appSlug !== existing.github.appSlug && soulOwnsAppSlug(existing, appSlug, loaded),
   );
   const matchesSoulApp = Boolean(
     existing?.github?.appSlug && appSlug
@@ -280,7 +280,8 @@ export async function joinSoul({
   // The census gets the App first and identity's record last; if the
   // identity write fails, the census row's App is put back (#645, F6).
   if (existing && appSlug && (!existing.github || repairingDefaultApp)) {
-    setSoulAppThen(agentId, appSlug, { file }, () => identityOp('initialize-app', { id: agentId, appSlug, stateDir }));
+    const opEnv = { ...env, ...(home ? { HOME: home, USERPROFILE: home } : {}) };
+    setSoulAppThen(agentId, appSlug, { file }, () => identityOp('initialize-app', { id: agentId, appSlug, stateDir, config: loaded }, { env: opEnv, cwd }));
   }
 
   let created = false;

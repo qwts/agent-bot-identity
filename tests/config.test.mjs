@@ -332,10 +332,13 @@ test('originOwnerFromRemote, slugForOriginOwner, and soulOwnsAppSlug resolve mul
   assert.equal(soulOwnsAppSlug(museSoul, 'unregistered-muse-agent', config), false);
   assert.equal(soulOwnsAppSlug(fableSoul, 'qwts-claude-agent', config), false);
 
-  // Reject invalid/adversarial owner strings and missing harness records.
+  // Reject invalid/adversarial owner strings, non-GitHub hosts, and missing harness records.
   assert.equal(originOwnerFromRemote('https://github.com/..%2f../repo.git'), null);
   assert.equal(originOwnerFromRemote('https://github.com/-bad/repo.git'), null);
   assert.equal(originOwnerFromRemote('https://github.com/bad-/repo.git'), null);
+  assert.equal(originOwnerFromRemote('https://gitlab.com/true-line/carto.git'), null);
+  assert.equal(originOwnerFromRemote('git@gitlab.com:true-line/carto.git'), null);
+  assert.equal(originOwnerFromRemote('https://ghe.example.com/true-line/carto.git', { apiBase: 'https://ghe.example.com/api/v3' }), 'true-line');
   assert.equal(soulOwnsAppSlug({ github: { appSlug: 'qwts-muse-agent' } }, 'trueline-muse-agent', config), false);
   assert.equal(soulOwnsAppSlug({ harness: 'muse', github: { appSlug: 'unregistered-muse-agent' } }, 'trueline-muse-agent', config), false);
 
