@@ -1,8 +1,8 @@
 # gh-app-hook: deploying the GitHub App mailbox
 
 `identity/gh-app-hook.mjs` is a Cloudflare Worker with one Durable Object. GitHub
-posts each App's webhook deliveries to it; it stores the records that
-mention the App, pushes them to subscribers, and lets a bound session take
+posts each App's webhook deliveries to it; it stores supported repository
+notices, pushes them to subscribers, and lets a bound session take
 the oldest one for its App and repository through `take_inbox` (the
 `agent-bot mcp` server). This is the deployment and provisioning procedure
 that `doctor`'s `inbox.configuration` check points at (#230).
@@ -51,13 +51,48 @@ For every GitHub App that agents act as, in the App's settings on github.com:
 - Webhook URL: `https://<worker host>/github/<app slug>` (the slug is matched
   case-insensitively against the `WEBHOOK_SECRETS` keys).
 - Webhook secret: the value stored for that slug in `WEBHOOK_SECRETS`.
-- Events: issue comments, pull request review comments and reviews, issues
-  and pull requests, so mentions of `<slug>[bot]` arrive. The pull request
+- Events: discussions, issue comments, issues, pull requests, pull request
+  reviews, pull request review comments and pull request review threads. The pull request
   subscription also carries `review_requested`; GitHub does not offer the App
   as a reviewer unless its webhook is active and subscribed to pull requests.
 
 GitHub's `X-GitHub-Delivery` GUID becomes the record id, so a redelivery
 dedupes instead of being stored twice.
+
+### Which deliveries become notices
+
+The Worker retains all actions for these seven event families, including
+new comments without a mention. Notices are scoped to the receiving App and
+repository; an App installed on many repositories receives each repository's
+subscribed notices. A successful delivery is a notice, not an instruction
+or authorization to act on GitHub.
+
+| GitHub event | Examples |
+| --- | --- |
+| `discussion` | Opened, answered, edited, closed |
+| `issues` | Opened, assigned, labeled, closed, reopened |
+| `issue_comment` | Created, edited, deleted on issues or PR conversations |
+| `pull_request` | Opened, synchronized, review requested, closed or merged |
+| `pull_request_review` | Submitted, edited, dismissed |
+| `pull_request_review_comment` | Created, edited, deleted on a diff |
+| `pull_request_review_thread` | Resolved, unresolved |
+
+Each record has `event`, `action`, `number`, `title`, `state`, `actor`, `url`
+and `headSha` where available. A merge is `event: "pull_request"`,
+`action: "closed"`, `merged: true`; an unmerged close has `merged: false`.
+Review notices also carry `reviewState` (for example `approved` or
+`changes_requested`). `kind` is normally `<event>.<action>`; new comments
+mentioning the App retain `kind: "mention"`, and review requests addressed
+to the App retain `kind: "review_requested"` for compatibility.
+
+Comments authored by the receiving App are ignored for every comment action.
+A review request addressed to the App on a PR that App authored is also
+ignored. Other notices, including merges of the App's own PRs, are retained.
+Unsupported event families (including checks, pushes and discussion comments)
+and malformed notices are acknowledged with `stored: false`. Bad signatures
+still return 401. The push envelope includes the notice metadata but no body
+text or raw GitHub payload. Deploying this change does not replay earlier
+deliveries; redeliver them from GitHub if needed.
 
 ## 4. Wire the inbox into the daemon and the harness
 

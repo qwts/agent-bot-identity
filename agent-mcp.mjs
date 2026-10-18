@@ -101,7 +101,8 @@ const TOOLS = [
   {
     name: 'take_inbox',
     description:
-      'Take the next GitHub mention or review request for the App and '
+      'Take the next subscribed GitHub notice (including mentions, review requests, '
+      + 'merges, reviews, issue changes and discussion changes) for the App and '
       + 'repository this bound worktree is. The call returns the event and '
       + 'marks it pulled (the record stays until its push deliveries settle '
       + 'and the TTL expires). A returned event carries a `deliveries` array '
