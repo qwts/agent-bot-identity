@@ -255,6 +255,11 @@ export function buildDeliveryEnvelope(record) {
     headSha: record.headSha ?? null,
     deliveredAt: Number.isFinite(record.createdAt) ? new Date(record.createdAt).toISOString() : null,
     url: record.url ?? null,
+    ...Object.fromEntries(
+      ['event', 'action', 'title', 'state', 'merged', 'reviewState']
+        .filter((key) => record[key] !== undefined)
+        .map((key) => [key, record[key]]),
+    ),
   };
 }
 
@@ -446,7 +451,7 @@ function sameAccount(login, app) {
   return left === right || left === `${right}[bot]`;
 }
 
-export function acceptDelivery(app, payload) {
+function targetedDelivery(app, payload) {
   const repo = payload?.repository?.full_name;
   if (typeof repo !== 'string' || !repo.includes('/')) return null;
   if (payload.action === 'review_requested') {
@@ -480,6 +485,57 @@ export function acceptDelivery(app, payload) {
     };
   }
   return null;
+}
+
+// Only these repository event families are enabled for the App mailbox.
+// Use the signed delivery's header to distinguish equal action names, e.g.
+// issues.closed from pull_request.closed. Do not retain the raw payload.
+const NOTICE_OBJECTS = new Map([
+  ['discussion', 'discussion'],
+  ['issues', 'issue'],
+  ['issue_comment', 'comment'],
+  ['pull_request', 'pull_request'],
+  ['pull_request_review', 'review'],
+  ['pull_request_review_comment', 'comment'],
+  ['pull_request_review_thread', 'thread'],
+]);
+
+export function acceptDelivery(app, payload, event = null) {
+  // Keep the exported helper and old headerless integrations compatible.
+  if (event === null) return targetedDelivery(app, payload);
+  const objectKey = NOTICE_OBJECTS.get(event);
+  const object = payload?.[objectKey];
+  const repo = payload?.repository?.full_name;
+  const action = payload?.action;
+  if (!objectKey || !object || typeof object !== 'object' || Array.isArray(object)
+    || !fullName(repo) || typeof action !== 'string' || !/^[a-z_]{1,64}$/.test(action)) return null;
+  if (objectKey === 'comment' && sameAccount(object.user?.login, app)) return null;
+  // Preserve the existing refusal to review an App's own pull request.
+  if (event === 'pull_request' && action === 'review_requested'
+    && sameAccount(payload.requested_reviewer?.login, app)
+    && sameAccount(payload.pull_request?.user?.login, app)) return null;
+
+  const subject = event === 'discussion' ? payload.discussion
+    : (event === 'issues' || event === 'issue_comment') ? payload.issue : payload.pull_request;
+  if (!subject || !Number.isSafeInteger(subject.number) || subject.number < 1) return null;
+  const targeted = (objectKey === 'comment' || event === 'pull_request')
+    ? targetedDelivery(app, payload) : null;
+  return {
+    app,
+    repo,
+    kind: targeted?.kind ?? `${event}.${action}`,
+    event,
+    action,
+    url: object.html_url ?? subject?.html_url ?? null,
+    text: typeof object.body === 'string' ? object.body : null,
+    number: subject.number,
+    title: typeof subject?.title === 'string' ? subject.title.slice(0, 512) : null,
+    state: subject?.state ?? null,
+    actor: payload.sender?.login ?? object.user?.login ?? null,
+    headSha: payload.pull_request?.head?.sha ?? null,
+    ...(event === 'pull_request' ? { merged: payload.pull_request.merged === true } : {}),
+    ...(event === 'pull_request_review' ? { reviewState: object.state ?? null } : {}),
+  };
 }
 
 function json(status, body) {
@@ -523,7 +579,7 @@ export async function handleHookRequest(request, mailbox, { inboxToken, webhookS
     } catch {
       return json(400, { error: 'bad payload' });
     }
-    const record = acceptDelivery(app, payload);
+    const record = acceptDelivery(app, payload, request.headers.get('x-github-event'));
     if (record) {
       // GitHub redeliveries reuse the same delivery GUID; carrying it as the
       // record id lets the storage dedupe instead of re-pushing.
