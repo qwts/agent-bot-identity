@@ -81,12 +81,15 @@ export function sourceCommit(root = ROOT) {
   return 'unknown';
 }
 
-// Parse the catalog's "## Available skills" list. An entry is
-//   - [name](https://github.com/OWNER/REPO/tree/REF/PATH)
-//     — owned by [OWNER/REPO](https://github.com/OWNER/REPO). ...
-// and runs until the next "- [" line or the end of the section. `commit` is
-// REF when REF is a full 40-hex commit, otherwise null (a branch or a tag is
-// not a pin). A link that is not a tree link has no ref and no path.
+// Parse the catalog's "## Available skills" list. Entries run until the
+// next "- [" line or the end of the section and support two link forms:
+// - https://github.com/OWNER/REPO/tree/REF/PATH: commit is REF only when
+//   it is a full 40-hex SHA; branch/tag refs remain unpinned (commit null).
+// - DIRECTORY/SKILL.md: with a catalog snapshot, a safe relative link uses
+//   that snapshot's repository and commit, relative to its index directory.
+//   Without a snapshot, relative links remain unresolved.
+// Other links have no repository, ref, commit, or directory. The resolver
+// validates pins, paths, owner claims, and unique names before any skill read.
 export function parseCatalog(text, catalog = null) {
   const lines = String(text).split('\n');
   const start = lines.findIndex((line) => /^##\s+Available skills\s*$/u.test(line));
