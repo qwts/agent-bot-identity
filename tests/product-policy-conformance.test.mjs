@@ -93,7 +93,7 @@ function selectedPack(a, enabled) {
     remoteUrl: repository => { assert.ok(['qwts/qwts-agent-org', 'qwts/qwts-agent-sop'].includes(repository)); return repo; },
     runGit: createRunGit({ allowProtocols: 'file' }) };
   const selected = resolveSop(options);
-  assert.deepEqual([selected.repositories.sop.selected, selected.repositories.sop.commit], ['org.json', sopCommit]);
+  assert.deepEqual([selected.repositories.sop.selected, selected.repositories.sop.commit], ['org.json', orgCommit]);
   // Profile projection is the bootstrap seam; selecting an SOP does not
   // implicitly install its profile or enable a capability.
   const config = organizationProfileToConfig(JSON.parse(git('show', `${orgCommit}:profile.json`)));
@@ -102,13 +102,13 @@ function selectedPack(a, enabled) {
   mkdirSync(path.join(configDir, 'agent-bot'), { recursive: true });
   writeFileSync(path.join(configDir, 'agent-bot', 'config.json'), JSON.stringify(config));
   const recorded = recordSopPersona(options);
-  assert.equal(recorded.sop.commit, sopCommit);
+  assert.equal(recorded.sop.commit, orgCommit);
   // Destroy the remote: subsequent policy evaluation and both journeys must
   // use the immutable local record, without fetching or calling a real app.
   rmSync(repo, { recursive: true });
   const persona = loadPersona(a);
   assert.equal(persona.state, 'ok');
-  assert.equal(persona.commit, sopCommit);
+  assert.equal(persona.commit, orgCommit);
   if (enabled) {
     const reviewer = resolveSandbox({ id: 'agent_12345678-1234-4234-8234-123456789abc', name: 'fixture', sandbox: 'unrestricted' },
       { enabled: true, account: 'unused' }, { owner: 'qwts', persona, role: 'reviewer' });

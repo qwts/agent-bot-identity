@@ -330,3 +330,20 @@ the report separates machine from worktree readiness and contains no mint
 token or key material. A checkout with no bot identity is intentionally not
 applicable for worktree identity and must never be claimed by a repair
 command; a primary checkout in an agent account is verified like any worktree.
+
+
+## Discover current governance
+
+Read-only: `agent-bot sop --json` resolves the selected org and SOP once for
+this operation. Bare repositories in `~/.config/agent-sop/config.toml` follow
+their current default branches. Explicit `@ref` selections stay binding;
+legacy `org.json` SOP refs are provenance baselines. Record both resolved
+SHAs. `agent-bot skill <name> --json` repeats discovery at use and reads its
+catalog plus SOP-owned relative entries at one immutable SOP SHA. Installed
+bundled skills remain offline and version-paired.
+
+If discovery fails, stop the dependent operation and report the error. Retry
+is a fresh read, safe after connectivity or configuration is repaired; do
+not label a previous snapshot current. Fresh discovery does not activate
+policy hooks, personas, or change launch snapshots. Review and activate
+those through their existing owner-gated workflows.

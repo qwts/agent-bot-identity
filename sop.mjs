@@ -1,19 +1,11 @@
 #!/usr/bin/env node
 // agent-bot sop — resolve per-soul SOP selections and read reference documents.
 //
-// ENG-0355 as amended 2026-09-16 (qwts-agent-org docs/config.md): the file is
-// schema_version = 1 and a [repos] table. repos.org is required, repos.sop and
-// repos.comms are optional, and each value is owner/name@ref. A branch or tag
-// is resolved to a commit with git ls-remote. A 40-hex ref is already a
-// commit: ls-remote does not advertise non-tip commits, so it is not looked
-// up again. org.json is fetched at the org commit and reported. Its pins are
-// already commits (ENG-0282); they are not resolved or applied. Capability
-// entry files are not read. The organization profile is read at the org
-// commit only for `bootstrap --repair` (#190). SOP Markdown is read on
-// demand. Nothing is cloned, checked out, or executed.
-//
-// agentsop.ai was not reachable from this implementation. The keys above are
-// the ones ENG-0355 and docs/config.md name. An unknown key is an error.
+// Live org/SOP discovery (qwts-agent-org#66): bare owner/name selects the
+// current remote default branch. Explicit @ref selections remain binding.
+// Resolve each selected head once per operation and read at that exact SHA.
+// Legacy sources.sop.ref is provenance only; capabilities remain pinned.
+// No clone, checkout, execution, or implicit policy/persona activation.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -79,6 +71,8 @@ export const USAGE = `usage: agent-bot sop [--json] [--config <path>] [--soul ID
 Resolve the soul's agent-sop.toml, then ~/.config/agent-sop/config.toml
 (ENG-0355), then no SOP. The soul's sop/ documents override repository
 Markdown at the same path. workflows/NAME.toml lists sop = ["path.md"].
+Bare owner/name selects the current default branch; explicit @ref is preserved.
+The declared SOP follows its default branch; legacy org.json SOP refs are baselines.
 Foreign soul selections require explicit trust of the resolved repo + commit.
 Fetched documents are cached read-only and never executed or applied;
 reference documentation does not override harness or user instructions.
@@ -247,9 +241,9 @@ function isSafeRef(ref) {
 function parseRepoRef(value, label) {
   if (typeof value !== 'string') fail('config-invalid', `${label} must be owner/name@ref`);
   const at = value.indexOf('@');
-  if (at <= 0 || at === value.length - 1) fail('config-invalid', `${label} must be owner/name@ref`);
-  const repo = value.slice(0, at);
-  const ref = value.slice(at + 1);
+  if (at === 0 || at === value.length - 1) fail('config-invalid', `${label} must be owner/name@ref`);
+  const repo = at < 0 ? value : value.slice(0, at);
+  const ref = at < 0 ? 'HEAD' : value.slice(at + 1);
   if (!OWNER_NAME.test(repo) || !isSafeRef(ref)) fail('config-invalid', `${label} must be owner/name@ref`);
   // ls-remote does not resolve an abbreviated commit, and a short hex string
   // must not be mistaken for one. It is not looked up as a branch either.
@@ -487,7 +481,10 @@ function readPin(entry, where, errors) {
   if (typeof entry.repo !== 'string' || !OWNER_NAME.test(entry.repo)) {
     errors.push(`${where}.repo must be owner/name`);
   }
-  if (typeof entry.ref !== 'string' || !COMMIT_SHA.test(entry.ref)) {
+  // SOP refs in legacy manifests are provenance baselines, not a ceiling on
+  // live governance. Capability and other source refs remain immutable pins.
+  if (!(where === 'sources.sop' && entry.ref === undefined)
+    && (typeof entry.ref !== 'string' || !COMMIT_SHA.test(entry.ref))) {
     errors.push(`${where}.ref must be a 40-hex commit`);
   }
   if (!isRelativePath(entry.entry)) errors.push(`${where}.entry must be a relative path`);
@@ -497,8 +494,8 @@ function readPin(entry, where, errors) {
   if (errors.length !== before) return null;
   return {
     repository: entry.repo,
-    ref: entry.ref,
-    commit: entry.ref,
+    ref: entry.ref ?? 'HEAD',
+    commit: entry.ref ?? null,
     entry: entry.entry,
     summary: entry.summary,
   };
@@ -641,10 +638,10 @@ function resolveSelection(options = {}) {
     ? options.readOrgText(config.repos.org.repo, orgCommit)
     : readOrgJson(config.repos.org.repo, orgCommit, { runGit, remoteUrl, makeTemp: options.makeTemp });
   const pins = parseOrgPins(orgText);
-  const sopSpec = config.repos.sop ?? { repo: pins.sources.sop.repository, ref: pins.sources.sop.ref };
-  const sopCommit = config.repos.sop
-    ? resolveRepoRef(config.repos.sop, { runGit, remoteUrl })
-    : pins.sources.sop.commit;
+  // Resolve once per operation, then read every document at that exact SHA.
+  // An explicit user selection (including a historical SHA) remains binding.
+  const sopSpec = config.repos.sop ?? { repo: pins.sources.sop.repository, ref: 'HEAD' };
+  const sopCommit = resolveRepoRef(sopSpec, { runGit, remoteUrl });
   const comms = config.repos.comms
     ? repoRecord(config.repos.comms, resolveRepoRef(config.repos.comms, { runGit, remoteUrl }), 'config')
     : null;
@@ -1341,7 +1338,7 @@ export function formatSopReport(report) {
   lines.push(`  account: ${oneLine(pinned.organization.account)}`);
   lines.push(`  profile: ${oneLine(pinned.organization.profile)}`);
   for (const [name, source] of Object.entries(pinned.sources)) {
-    lines.push(`  source ${name}: ${source.repository}@${source.commit}`);
+    lines.push(`  source ${name}: ${source.repository}@${source.ref}`);
     lines.push(`    entry: ${oneLine(source.entry)}`);
     lines.push(`    summary: ${oneLine(source.summary)}`);
   }

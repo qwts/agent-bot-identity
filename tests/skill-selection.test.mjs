@@ -61,7 +61,7 @@ test('two organizations disclose only their selected immutable index and entry, 
   const f = fixture(t);
   for (const owner of ['alpha', 'beta']) {
     const p = f.pack(owner);
-    put(f.configFile, p.config);
+    put(f.configFile, `${p.config}sop = "${owner}/sop@${p.sopCommit}"\n`);
     put(path.join(p.dir, 'skills/README.md'), '# changed default branch has no catalog\n');
     p.commit();
     f.calls.length = 0;
@@ -143,4 +143,33 @@ test('an explicit user SOP overrides the org pin without guessing another catalo
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).catalog.repository, 'beta/sop');
   assert.deepEqual(f.calls.map(call => call.repo), ['beta/sop', 'beta/skills']);
+});
+
+
+test('live SOP-owned skills use one fresh snapshot even if the branch moves during content reads', t => {
+  const f = fixture(t), p = f.pack('alpha');
+  put(f.configFile, 'schema_version = 1\n[repos]\norg = "alpha/org"\n');
+  put(path.join(p.dir, 'skills/README.md'), '## Available skills\n\n- [shared](shared/SKILL.md)\n');
+  const firstHead = p.commit();
+  let advance = true;
+  const fetchContents = (...args) => {
+    const text = f.fetchContents(...args);
+    if (advance) {
+      advance = false;
+      put(path.join(p.dir, 'skills/shared/SKILL.md'), '# newly approved skill\n');
+      p.commit();
+    }
+    return text;
+  };
+  const first = f.run(['shared', '--json'], { fetchContents });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(JSON.parse(first.stdout).text, '# alpha skill\n');
+  assert.deepEqual(f.calls.map(call => call.ref), [firstHead, firstHead]);
+  f.calls.length = 0;
+  const second = f.run(['shared', '--json']);
+  assert.equal(second.status, 0, second.stderr);
+  const skill = JSON.parse(second.stdout);
+  assert.equal(skill.text, '# newly approved skill\n');
+  assert.notEqual(skill.commit, firstHead);
+  assert.equal(skill.commit, skill.catalog.commit);
 });
