@@ -1,1 +1,0 @@
-- Org and SOP governance now resolves current default branches at each use, recording immutable SHAs without recurring SOP pin bumps; explicit local refs remain binding, SOP-owned relative skills use the same snapshot, and installed CLI bundles stay version-paired (qwts/qwts-agent-org#66).
