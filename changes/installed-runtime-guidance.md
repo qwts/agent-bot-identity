@@ -1,0 +1,1 @@
+- Document installed-bundle skill discovery without org/SOP runtime pins and verify that SOP resolution and bundled skill reads work without those pins.

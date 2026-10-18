@@ -19,11 +19,13 @@ named.
 `agent-bot`, `agent-space` and `thread-orders` belong to this repository and
 ship in every release. They are read from the runtime's own tree, with no
 network, and they always win over the fleet catalog. The copy in the release
-is the one whose commands the running CLI has; a catalog pin for the same
-name can be older. The catalog lists `agent-bot` as owned by
-`qwts/agent-bot-identity`, so there is no conflict today. A catalog entry that
-gave a bundled name to another repository would be a name collision for the
-catalog's review to resolve; this command would still print the bundled copy.
+is the one whose commands the running CLI has. Org/SOP discovery commands
+do not select a runtime source revision. Bundled reads work without any
+org capability or catalog entry, and ignore historical pins for the same
+name. Check the installed version against the bundle's range and report
+its source provenance. An explicit task release requirement still applies.
+`agent-comms` owns its own bundle: read `agent-comms skill` directly rather
+than fetching a copy through this CLI's external skill resolver.
 
 `--json` prints `{ name, repository, commit, path, text }`. `repository` is
 `qwts/agent-bot-identity`, `commit` the release's source commit, and `path`

@@ -138,3 +138,10 @@ current harness:
   recognised indefinitely (#752); new writes use `AGENT_BOT_*`.
 - Legacy `qwts.*`, `PLAYBOOK_HOME`, and `playbook-home` values are read-only
   migration aliases through `0.x` and are removed in `1.0`.
+
+## CLI skill development
+
+For CLI changes, load the current SOP's
+[author-cli-skill](https://github.com/qwts/qwts-agent-sop/blob/main/skills/author-cli-skill/SKILL.md)
+through `agent-bot skill author-cli-skill`. Runtime use reads this executable's
+installed bundle; org/SOP does not select its runtime skill revision.

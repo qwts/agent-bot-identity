@@ -708,3 +708,18 @@ test('SOP ref omission is live; capability pin omission is invalid; explicit sna
   delete manifest.capabilities['agent-bot'].ref;
   assert.throws(() => parseOrgPins(JSON.stringify(manifest)), /capabilities.agent-bot.ref/);
 });
+
+test('SOP discovery works without identity or comms runtime capability pins', () => {
+  const manifest = JSON.parse(orgJson());
+  delete manifest.sources.sop.ref;
+  delete manifest.capabilities['agent-bot'];
+  manifest.capabilities.ci = { repo: 'acme/ci', ref: BOT, entry: 'README.md', summary: 'CI.' };
+  const report = resolveSop({
+    configText: `schema_version = 1\n[repos]\norg = "acme/org@${ORG}"\nsop = "acme/sop@${SOP}"\n`,
+    readOrgText: () => JSON.stringify(manifest),
+    runGit: () => assert.fail('explicit snapshots do not need runtime discovery'),
+  });
+  assert.equal(report.repositories.sop.commit, SOP);
+  assert.deepEqual(Object.keys(report.orgJson.capabilities), ['ci']);
+  assert.equal(report.orgJson.capabilities.ci.commit, BOT);
+});
