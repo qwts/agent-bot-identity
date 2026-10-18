@@ -1,0 +1,1 @@
+- The skills guide directs users to `agent-bot skill agent-bot` and `agent-bot skill agent-space` for guidance paired with the installed executable, avoiding stale org/SOP runtime pins (#1157).

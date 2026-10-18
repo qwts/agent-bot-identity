@@ -243,3 +243,19 @@ test('SOP-local catalog links are confined to the selected snapshot', () => {
     assert.throws(() => resolveCatalogEntry(parseCatalog(catalog(`- [local](${link})`), CATALOG), 'local', CATALOG));
   }
 });
+
+test('bundled skill discovery needs neither SOP selection nor a runtime pin', () => {
+  for (const name of BUNDLED_SKILLS) {
+    let stdout = '';
+    let stderr = '';
+    const status = main([name, '--json'], {
+      resolveSop: () => assert.fail('a bundled read must not select an SOP'),
+      fetchContents: () => assert.fail('a bundled read must not fetch remote guidance'),
+      stdout: { write: text => { stdout += text; } },
+      stderr: { write: text => { stderr += text; } },
+    });
+    assert.equal(status, 0, stderr);
+    assert.equal(JSON.parse(stdout).commit, sourceCommit());
+    assert.equal(JSON.parse(stdout).text, readFileSync(join(ROOT, 'skills', name, 'SKILL.md'), 'utf8'));
+  }
+});
