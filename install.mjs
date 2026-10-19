@@ -30,6 +30,7 @@ import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
 import { ensureClaudeWorktreeAdapter, syncHooks } from './sync-hooks.mjs';
 import { personaBlockNotice } from './sandbox.mjs';
+import { installWindowsLauncher, readWindowsLauncher } from './windows-cli-launcher.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const ENTRYPOINT = join(ROOT, 'agent-bot');
@@ -114,6 +115,9 @@ export function managedEntrypoint(entrypoint, exists = existsSync) {
 }
 
 export function isManagedExecutable(path, stat, entrypoint, readlink = readlinkSync) {
+  if (process.platform === 'win32' && stat?.isFile()) {
+    return readWindowsLauncher(path)?.entry === join(dirname(resolve(entrypoint)), 'agent-bot.mjs');
+  }
   if (!stat?.isSymbolicLink()) return false;
   const linked = readlink(path);
   const target = resolve(dirname(path), linked);
@@ -188,6 +192,7 @@ export function inspectExecutableLink(path, stat, { readlink = readlinkSync, sta
 export function installExecutable({
   home = homedir(),
   entrypoint = ENTRYPOINT,
+  platform = process.platform,
   mkdir = mkdirSync,
   lstat = lstatSync,
   readlink = readlinkSync,
@@ -202,6 +207,7 @@ export function installExecutable({
   embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const paths = installationPaths(home);
+  if (platform === 'win32') return installWindowsLauncher(paths.executable, { entrypoint });
   const desired = managedEntrypoint(entrypoint, exists);
   mkdir(paths.binDir, { recursive: true });
   const stat = optionalLstat(paths.executable, lstat);
@@ -240,6 +246,7 @@ export function installExecutable({
 export function ensureExecutablePath({
   home = homedir(),
   env = process.env,
+  platform = process.platform,
   read = readFileSync,
   write = writeFileSync,
   rename = renameSync,
@@ -248,6 +255,20 @@ export function ensureExecutablePath({
   stat = statSync,
   execFile = execFileSync,
 } = {}) {
+  if (platform === 'win32') {
+    const directory = installationPaths(home).binDir;
+      const script = '$ErrorActionPreference="Stop"; $ProgressPreference="SilentlyContinue"; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); $p=[Console]::In.ReadToEnd(); $old=[Environment]::GetEnvironmentVariable("Path","User"); '
+      + '$parts=@($old -split ";" | Where-Object { $_ }); $changed=-not ($parts -icontains $p); '
+      + 'if($changed){[Environment]::SetEnvironmentVariable("Path",(($parts + $p) -join ";"),"User")}; [Console]::Out.Write($changed.ToString())';
+    const output = execFile(join(env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      { input: directory, encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (!['True', 'False'].includes(output.trim())) throw new Error('Windows user PATH registration failed');
+      const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') ?? 'PATH';
+      const current = env[pathKey] ?? '';
+      if (!current.split(';').some(part => part.toLowerCase() === directory.toLowerCase())) env[pathKey] = `${directory};${current}`;
+    return { path: 'HKCU\\Environment\\Path', updated: output.trim() === 'True' };
+  }
   const dir = zshStartupDir(home, env);
   // .zshenv keeps the harness-resolution registration; .zprofile keeps the
   // login ordering one. Both are now managed blocks — reordered to put this
@@ -425,7 +446,9 @@ export async function installAgentBot({
   // label; a second unit from here would run a second daemon (#968).
   const supervisor = embeddingApp
     ? { applied: false, reason: 'app-managed', app: embeddingApp }
-    : await ensureSupervisor({ home, env, executable });
+    : await ensureSupervisor({ home, env, executable,
+      ...(process.platform === 'win32' ? { programArguments: [process.execPath, join(ROOT, 'agent-bot.mjs'), 'daemon', 'run'] } : {}),
+    });
   const cutover = ensureCutover({ home, env });
   const transcriptAdapter = installTranscriptAdapter({ home, env });
   const userHooks = installUserHooks({ home, env });

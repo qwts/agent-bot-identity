@@ -316,7 +316,7 @@ export function ensureSoulDirectory(agentId, packagePath = null, options = {}) {
     const soul = showSoul(agentId, { file });
     const outside = path.relative(directory, soul.spacePath).startsWith('..');
     if (outside && existsSync(soul.spacePath)) {
-      try { symlinkSync(soul.spacePath, link, 'dir'); }
+      try { symlinkSync(soul.spacePath, link, process.platform === 'win32' ? 'junction' : 'dir'); }
       catch (error) { if (error.code !== 'EEXIST') throw error; }
     } else {
       const space = initSoulSpace(agentId, directory, options);

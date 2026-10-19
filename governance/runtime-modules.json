@@ -68,6 +68,9 @@
     }
   },
   "files": {
+    "windows-cli-launcher.mjs": "shared",
+    "windows-git-shell.mjs": "shared",
+    "windows-install-path.mjs": "shared",
     "acp-engine.mjs": "soul",
     "acp-registry.mjs": "soul",
     "agent-approvals.mjs": "cli",

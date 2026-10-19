@@ -39,6 +39,7 @@ import { stateDirectory } from './state-paths.mjs';
 import { readSopPolicyState } from './sop.mjs';
 import { inspectSupervisor, supervisorSkipLoad, supervisorUnitCredentialNames } from './daemon-supervisor.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
+import { readWindowsLauncher } from './windows-cli-launcher.mjs';
 import {
   OrganizationProfileError,
   profileAppSlugs,
@@ -2151,6 +2152,8 @@ function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null,
     if (stat?.isSymbolicLink()) {
       const target = resolve(dirname(executable), readlink(executable));
       runtimeRoot = homebrewRuntimeRoot(target) ?? dirname(target);
+    } else if (stat && process.platform === 'win32' && readWindowsLauncher(executable)) {
+      runtimeRoot = dirname(readWindowsLauncher(executable).entry);
     } else if (stat) {
       foreign = true;
     }

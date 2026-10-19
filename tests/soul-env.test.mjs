@@ -231,7 +231,8 @@ test('a Python override keeps managed status visible without claiming unused imp
 test('a valid external runtime route clears only its managed unsupported launch error', (t) => {
   const f = fixture(t);
   const manifest = JSON.parse(readFileSync(path.join(f.dir, 'soul.json'), 'utf8'));
-  manifest.runtimes = { node: { version: '24.21.0', sources: { 'linux-x64': { url: 'https://example.test/node.tgz', sha256: 'a'.repeat(64) } } } };
+  const otherPlatform = hostPlatform() === 'linux-x64' ? 'darwin-arm64' : 'linux-x64';
+  manifest.runtimes = { node: { version: '24.21.0', sources: { [otherPlatform]: { url: 'https://example.test/node.tgz', sha256: 'a'.repeat(64) } } } };
   writeFileSync(path.join(f.dir, 'soul.json'), JSON.stringify(manifest));
   const executable = path.join(f.home, 'external-node');
   put(executable, '#!/bin/sh\nexit 0\n', 0o755);

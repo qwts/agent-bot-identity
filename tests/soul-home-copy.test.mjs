@@ -46,7 +46,10 @@ test('a refused copy after a read-only directory leaves a home that cleanup remo
   const made = spawnSync('mkfifo', [path.join(from, 'zzz')]);
   if (made.status !== 0) { chmodSync(path.join(from, 'aaa'), 0o755); t.skip('mkfifo is not available'); return; }
   assert.throws(() => copySoulPackage(from, to), /unsupported package entry: zzz/);
-  assert.deepEqual(readdirSync(to), ['aaa']);
+  // Directory enumeration can copy the ordinary readme before reaching zzz.
+  // The read-only directory must have been copied and remain removable.
+  assert.deepEqual(readdirSync(to).filter((name) => name !== 'AGENTS.md'), ['aaa']);
+  assert.equal(readFileSync(path.join(to, 'aaa', 'f'), 'utf8'), 'x');
   rmSync(to, { recursive: true, force: true });
   assert.equal(existsSync(to), false, 'the half-made home is gone');
   chmodSync(path.join(from, 'aaa'), 0o755);

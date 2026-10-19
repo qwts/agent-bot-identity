@@ -30,6 +30,7 @@ import {
 import { homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, win32 } from 'node:path';
 import { windowsTaskJobArguments, windowsTaskJobCommandLine } from './windows-task-job.mjs';
+import { windowsInstallDirectory } from './windows-install-path.mjs';
 import process from 'node:process';
 
 import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
@@ -166,6 +167,9 @@ export function supervisorEnvironment({ env = process.env, home = homedir(), pla
     ...(env.AGENT_BOT_EXECUTOR === '1' ? { AGENT_BOT_EXECUTOR: '1' } : {}),
     // The host's agent-comms and agent-bot, put first on souls' PATH.
     ...(env.AGENT_BOT_TOOL_PATH && isAbsolute(env.AGENT_BOT_TOOL_PATH) ? { AGENT_BOT_TOOL_PATH: env.AGENT_BOT_TOOL_PATH } : {}),
+    // Task Scheduler does not inherit a packaged terminal's Git/Node PATH.
+    // Preserve the installing host's tool selection for native binding checks.
+    ...(platform === 'win32' && (env.PATH || env.Path) ? { PATH: env.PATH || env.Path } : {}),
     // The gh-app-hook broker the daemon takes from for take_inbox (#229).
     ...(inboxUrlForUnit(env.GH_APP_HOOK_INBOX_URL) ? { GH_APP_HOOK_INBOX_URL: env.GH_APP_HOOK_INBOX_URL } : {}),
     // The owner's GitHub login, whose token spends delegation grants (#108).
@@ -741,6 +745,7 @@ export async function ensureDaemonSupervisor({
   exec = runCommand,
   processAlive = processIsAlive,
   restartOptions,
+  physicalDirectory = windowsInstallDirectory,
 } = {}) {
   const paths = supervisorPaths(home, platform, env);
   if (!paths.kind) {
@@ -758,15 +763,17 @@ export async function ensureDaemonSupervisor({
   const stableExecutable = stableHomebrewPath(executable);
   const stableArguments = stableDaemonProgramArguments(programArguments);
   const task = paths.kind === 'schtasks';
+  mkdir(dirname(paths.unitPath), { recursive: true });
+  if (paths.logPath) mkdir(dirname(paths.logPath), { recursive: true, mode: 0o700 });
+  const taskLogPath = task && process.platform === 'win32'
+    ? join(physicalDirectory(dirname(paths.logPath), { env }), 'daemon.log') : paths.logPath;
   const body = renderSupervisorUnit({
-    kind: paths.kind, executable: stableExecutable, programArguments: stableArguments, environment, label: paths.label, logPath: paths.logPath,
+    kind: paths.kind, executable: stableExecutable, programArguments: stableArguments, environment, label: paths.label, logPath: taskLogPath,
     ...(task ? { userId: scheduledTaskUserId(env) } : {}),
   });
-  mkdir(dirname(paths.unitPath), { recursive: true });
   // launchd opens the log file itself, but only inside a directory that
   // exists; a unit written before this file existed differs from this body,
   // so `daemon install` repairs it.
-  if (paths.logPath) mkdir(dirname(paths.logPath), { recursive: true, mode: 0o700 });
   let previous = null;
   try {
     previous = task ? scheduledTaskText(read(paths.unitPath)) : read(paths.unitPath, 'utf8');
@@ -812,7 +819,11 @@ export async function ensureDaemonSupervisor({
       statePath: environment.AGENT_BOT_DAEMON_STATE_PATH,
     };
   }
-  const healthy = await waitHealthy({ env: supervisorEnv, home, probe, rejectedPid: oldPid });
+  const healthy = await waitHealthy({ env: supervisorEnv, home, probe, rejectedPid: oldPid,
+    // Rewriting existing protected bindings on a native restart takes longer
+    // than an empty first install; keep each individual health probe quick.
+    timeoutMs: platform === 'win32' ? 60_000 : HEALTH_WAIT_MS,
+  });
   return {
     applied: true,
     loaded: true,

@@ -55,7 +55,7 @@ export function linkWorktree(agentId, checkoutPath, options = {}) {
     const ending = suffix === 1 ? '' : `-${suffix}`;
     const link = path.join(directory, `${name.slice(0, 100 - ending.length)}${ending}`);
     try {
-      symlinkSync(checkout, link, 'dir');
+      symlinkSync(checkout, link, process.platform === 'win32' ? 'junction' : 'dir');
       return link;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;

@@ -32,6 +32,9 @@ const OWNER_DECISION_TIMEOUT_MS = 180_000;
 // A record operation is local file work under a lock; the lock's own stale
 // reclaim bounds the wait well inside this.
 const IDENTITY_OP_TIMEOUT_MS = 60_000;
+// Native ACL inspection and protected binding writes launch Windows security
+// APIs. They cannot share the quick liveness probe's 1.5-second deadline.
+const WINDOWS_STORAGE_TIMEOUT_MS = 60_000;
 const IDENTITY_ENTRY = fileURLToPath(new URL('./identity-entry.mjs', import.meta.url));
 
 export function daemonStateFile({ env = process.env, home = homedir() } = {}) {
@@ -100,10 +103,10 @@ export function daemonClient({
   env = process.env,
   home = homedir(),
   fetchImpl = fetch,
-  timeoutMs = HEALTH_TIMEOUT_MS,
+  timeoutMs,
   cwd = process.cwd(),
 } = {}) {
-  async function request(method, pathname, body, headers = {}, requestTimeoutMs = timeoutMs) {
+  async function request(method, pathname, body, headers = {}, requestTimeoutMs = timeoutMs ?? (process.platform === 'win32' ? WINDOWS_STORAGE_TIMEOUT_MS : HEALTH_TIMEOUT_MS)) {
     // Re-read the state file on every request: a long-running adapter must
     // follow a daemon restart to its new port and per-start token instead of
     // failing forever against a cached endpoint.
@@ -152,7 +155,7 @@ export function daemonClient({
     async available() {
       try {
         const state = readDaemonState(daemonStateFile({ env, home }));
-        return Boolean(state && await probeDaemonHealth(state, { fetchImpl, timeoutMs }));
+        return Boolean(state && await probeDaemonHealth(state, { fetchImpl, timeoutMs: timeoutMs ?? HEALTH_TIMEOUT_MS }));
       } catch {
         return false;
       }

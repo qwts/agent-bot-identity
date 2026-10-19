@@ -2,7 +2,7 @@
 // leaving the hub as the soul itself. Moved out of the agent-daemon process
 // host so soul modules can call it; agent-daemon.mjs re-exports both.
 
-import { execFile } from 'node:child_process';
+import { execCliFile, cliCommandTimeout } from './windows-git-shell.mjs';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import process from 'node:process';
@@ -15,11 +15,11 @@ import { soulEnvironment } from './shell-path.mjs';
  * the soul's address; a failed join fails the launch with agent-comms' own
  * message.
  */
-export function joinLaunchedSoul({ agentId, harness, name, binding, parent = null }, { env = process.env, run = execFile } = {}) {
+export function joinLaunchedSoul({ agentId, harness, name, binding, parent = null }, { env = process.env, run = execCliFile } = {}) {
   const args = ['join', '--harness', harness, ...(name ? ['--name', name] : []), ...(parent ? ['--parent', parent] : [])];
   const soulEnv = { ...soulEnvironment(env), AGENT_BOT_BINDING: binding.file, AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
   return new Promise((resolve, reject) => {
-    run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
+    run('agent-comms', args, { cwd: binding.worktree, env: soulEnv, timeout: cliCommandTimeout() }, (error, stdout = '', stderr = '') => {
       let result = null;
       try { result = JSON.parse(String(stdout)); } catch {}
       if (!error && result?.ok === true) return resolve(result.address ?? null);
@@ -36,12 +36,12 @@ export function joinLaunchedSoul({ agentId, harness, name, binding, parent = nul
  * session would. A soul the hub never joined, or one that already left,
  * counts as left. Resolves to true, or rejects with agent-comms' message.
  */
-export function leaveLaunchedSoul({ agentId, binding = null }, { env = process.env, run = execFile, cwd = tmpdir() } = {}) {
+export function leaveLaunchedSoul({ agentId, binding = null }, { env = process.env, run = execCliFile, cwd = tmpdir() } = {}) {
   const { AGENT_BOT_BINDING: _binding, ...rest } = soulEnvironment(env);
   const soulEnv = { ...rest, ...(binding?.file ? { AGENT_BOT_BINDING: binding.file } : {}), AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
   const where = binding?.worktree && existsSync(binding.worktree) ? binding.worktree : cwd;
   return new Promise((resolve, reject) => {
-    run('agent-comms', ['leave'], { cwd: where, env: soulEnv, timeout: 30_000 }, (error, stdout = '', stderr = '') => {
+    run('agent-comms', ['leave'], { cwd: where, env: soulEnv, timeout: cliCommandTimeout() }, (error, stdout = '', stderr = '') => {
       let result = null;
       try { result = JSON.parse(String(stdout)); } catch {}
       if (!error && result?.ok === true) return resolve(true);

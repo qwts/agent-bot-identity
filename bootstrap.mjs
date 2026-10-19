@@ -18,6 +18,7 @@ import { isGateEnabled, loadConfig, scopeConfigToApps } from './config.mjs';
 import { installGhShim, reconcileAppCredentials } from './identity-cli.mjs';
 import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
+import { readWindowsLauncher } from './windows-cli-launcher.mjs';
 import {
   OrganizationProfileError,
   isProjectedRuntimeConfig,
@@ -468,6 +469,12 @@ export function assertInstalledRuntime({
 }
 
 function runInstalled(executable, args, { env = process.env } = {}) {
+  if (process.platform === 'win32') {
+    const launcher = readWindowsLauncher(executable);
+    if (!launcher) throw new Error('managed Windows launcher is invalid');
+    execFileSync(launcher.node, [launcher.entry, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return;
+  }
   execFileSync(executable, args, {
     env,
     encoding: 'utf8',

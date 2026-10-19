@@ -130,7 +130,7 @@ jobs:
         with:
           node-version: 20
       - name: Exercise native Windows custody and named-pipe APIs with disposable state
-        run: node --test tests/windows-native-preflight.test.mjs tests/windows-task-job-native.test.mjs
+        run: node --test tests/windows-native-preflight.test.mjs tests/windows-task-job-native.test.mjs tests/windows-cli-launcher.test.mjs
 
   darwin-journal:
     name: Darwin owner-decision journal
