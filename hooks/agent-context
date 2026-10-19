@@ -161,7 +161,7 @@ agent_bot_unbound_bot() {
   _resolver=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/../resolve-agent.mjs
   [ -f "$_resolver" ] || return 0
   command -v node >/dev/null 2>&1 || return 0
-  node --input-type=module -e 'import(process.argv[1]).then(({ unboundBotSlug }) => { const slug = unboundBotSlug(); if (slug) process.stdout.write(slug); }).catch((e) => { console.error("agent-bot: cannot verify the stated bot identity: " + e.message); process.exit(1); })' "$_resolver"
+  node --input-type=module -e 'import("node:url").then(({pathToFileURL}) => import(pathToFileURL(process.argv[1]).href)).then(({ unboundBotSlug }) => { const slug = unboundBotSlug(); if (slug) process.stdout.write(slug); }).catch((e) => { console.error("agent-bot: cannot verify the stated bot identity: " + e.message); process.exit(1); })' "$_resolver"
 }
 
 # Refuse a commit or push from a stated bot that is not bound here (#749).
@@ -223,7 +223,7 @@ agent_bot_unmanaged_authors() {
   if [ ! -f "$_config_module" ] || ! command -v node >/dev/null 2>&1; then
     return 0
   fi
-  node --input-type=module -e 'import(process.argv[1]).then(({ unmanagedAuthors }) => process.stdout.write(unmanagedAuthors().authors.join(","))).catch((e) => { console.error("agent-bot: unmanaged authors unavailable: " + e.message); })' "$_config_module"
+  node --input-type=module -e 'import("node:url").then(({pathToFileURL}) => import(pathToFileURL(process.argv[1]).href)).then(({ unmanagedAuthors }) => process.stdout.write(unmanagedAuthors().authors.join(","))).catch((e) => { console.error("agent-bot: unmanaged authors unavailable: " + e.message); })' "$_config_module"
 }
 
 # True when $1 (a GitHub login, git name, or email) names an unmanaged author

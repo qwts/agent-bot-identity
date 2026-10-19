@@ -9,6 +9,47 @@ client over a named pipe. Cross-platform tests use fakes for Windows account
 and ACL calls; a separate Windows CI preflight exercises native custody and
 pipe primitives with disposable state.
 
+## Install from a source checkout
+
+Run machine preparation with native Node from PowerShell:
+
+```powershell
+node agent-bot.mjs bootstrap --machine-only --profile ABSOLUTE_PROFILE_PATH --json
+```
+
+The installer writes a matching `agent-bot` shell launcher and `agent-bot.cmd`
+under `%USERPROFILE%\.local\bin`, without requiring symlink privileges. It
+registers that directory in the current user's PATH. Open a new terminal to
+inherit the registration, or invoke the `.cmd` by its full path. Existing
+managed symlinks to this runtime's `agent-bot` or `agent-bot.mjs` migrate to
+the launcher pair when no companion command exists. Existing
+foreign files, incomplete launcher pairs, and launchers belonging to a
+different runtime are refused rather than overwritten. Keep the installed
+source checkout at its original path.
+
+Git hooks run through the shell bundled with Git for Windows and require that
+Git installation's `usr/bin/sh.exe`. They do not select the Windows WSL shell.
+The same interpreter runs the `agent-comms` shell launcher for soul membership;
+install that CLI and configure the broker before joining. Existing Agent Space
+and external-checkout directory aliases use Windows junctions without symlink
+privileges, preserving the original targets and refusing foreign occupied paths.
+The scheduled task runs Node directly. When a packaged terminal redirects
+AppData, installation resolves the log directory through its native directory
+handle so Task Scheduler uses the same physical directory. It retains the
+installing host's tool PATH so binding checks can find that host's Git.
+
+Binding state needs a private ancestor chain. A checkout copied or moved from
+a directory granting other accounts mutation rights retains those ACLs; moving
+it alone does not make it eligible. Inspect and repair only agent-owned checkout
+ACLs under the soul's private work area. AppData can also carry packaged-app
+capability grants, so native binding tests use the profile state boundary.
+Windows daemon storage requests allow up to 60 seconds for native custody and
+protected writes. Installation allows 60 seconds for startup and binding
+restoration; each separate health probe remains bounded to 1.5 seconds.
+
+Machine readiness and App token minting do not establish a soul's worktree
+binding or prove broker pairing. Complete [joining](joining.md) separately.
+
 ## The daemon as a scheduled task
 
 `agent-bot daemon install` registers a per-user scheduled task named after
@@ -127,9 +168,9 @@ GeniusBar #46, agent-comms #127, and agent-bot #813.
 
 - `keyd`, `keychain` and the persona accounts: a Windows soul's App key
   stays in the file store above, as Homebrew and Linux installs do.
-- `agent-bot install` (the hooks, the `~/.local/bin` launcher, the PATH
-  block) and soul homes as symlinks: the GeniusBar slice of ADR-0046
-  (`.cmd` shims, copies in place of links, bundled MinGit).
+- The optional `gh` shim remains a POSIX shell entrypoint; native Windows
+  `gh` interception is not established here. Packaged soul files that themselves
+  require arbitrary symlinks still need a separate Windows packaging strategy.
 
 ## Signed-in supervisor acceptance
 

@@ -23,7 +23,6 @@ const LAUNCH_PATHS = {
   'wake-resume.mjs': [1, 'filtered: harness turn env from composeTurnEnv'],
   'harness-auth.mjs': [1, 'filtered: the turn env from composeTurnEnv, on the daemon and the CLI path'],
   'comms-relay.mjs': [2, 'filtered: agent-comms under minimalChildEnv plus the broker location'],
-  'comms-membership.mjs': [2, 'filtered: agent-comms join and leave under soulEnvironment'],
   'agent-hook.mjs': [4, 'filtered: spawn hooks and their agent-comms join get minimalChildEnv; policy hooks run in the harness\'s own hook process and env; git'],
   'soul-home.mjs': [2, 'filtered: npm ci under minimalChildEnv (soulInstallEnv); git init with PATH only'],
   'soul-runtimes.mjs': [1, 'filtered: uv under minimalChildEnv; tar is an OS tool'],
@@ -35,11 +34,11 @@ const LAUNCH_PATHS = {
   'muse-acp.mjs': [1, 'harness-side: muse inherits the adapter\'s turn env, already filtered, plus the provider grants it needs'],
   // Caller context: the caller already holds the env it passes.
   'cli/identity.mjs': [2, 'caller context: runs the caller\'s command with the caller\'s own env plus identity; git'],
-  'soul-join.mjs': [4, 'caller context: the owner\'s `soul join` runs agent-comms join; git'],
+  'soul-join.mjs': [3, 'caller context: git for the owner\'s soul join; membership dispatch is classified in windows-git-shell'],
   'identity/uninstalled-identity-hook.mjs': [3, 'caller context: git config and gh in the user\'s session'],
   // First-party agent-bot code.
   'agent-daemon.mjs': [3, 'first-party: the daemon re-executing its own module; the login shell probe for PATH; git'],
-  'bootstrap.mjs': [1, 'first-party: the installed agent-bot'],
+  'bootstrap.mjs': [2, 'first-party: the installed agent-bot, through validated Node launcher metadata on Windows'],
   'install.mjs': [3, 'first-party: the installed agent-bot; git'],
   'identity/install-gh-shim.mjs': [1, 'owner-run: zsh-profile via ensureBlock, from the owner\'s install'],
   'cli/dispatch.mjs': [2, 'first-party: agent-bot subcommands'],
@@ -65,6 +64,8 @@ const LAUNCH_PATHS = {
   'comms-windows.mjs': [2, 'OS tool: powershell for the pipe relay, under legacyPowerShellEnv'],
   'identity/soul-credentials.mjs': [2, 'OS tool: security, or powershell for the file store ACL'],
   'windows-account-custody.mjs': [1, 'OS tool: Windows account commands'],
+  'windows-install-path.mjs': [1, 'OS tool: a fixed native directory-handle lookup in the installer caller\'s environment'],
+  'windows-git-shell.mjs': [3, 'git --exec-path selects its shipped shell; CLI dispatch retains the supplied caller env or the soulEnvironment filtered by comms-membership, adding only Git utilities to PATH'],
   // git.
   'identity/agent-binding.mjs': [2, 'git'],
   'identity/agent-identity.mjs': [1, 'git'],

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { assertPrivateGitDir, createBindingRegistry, readBinding } from '../agent-binding.mjs';
@@ -334,10 +334,12 @@ test('Windows native custody and named-pipe preflight uses disposable state', {
 test('Windows native binding registry and secret use owner-only custody across restart', {
   skip: process.platform !== 'win32', timeout: 180_000,
 }, () => {
-  // Hosted-runner scratch directories may allow other accounts to mutate
-  // ancestors. Binding state belongs under the real account's local data.
-  assert.ok(process.env.LOCALAPPDATA && path.isAbsolute(process.env.LOCALAPPDATA));
-  const root = path.join(process.env.LOCALAPPDATA, `agent-bot-native-binding-${randomUUID()}`);
+  // AppData may grant packaged-app capabilities mutation rights. Use the same
+  // profile state boundary as the production binding registry; do not weaken
+  // parent-custody checks to make a scratch location eligible.
+  const state = path.join(homedir(), '.local', 'state');
+  mkdirSync(state, { recursive: true });
+  const root = path.join(state, `agent-bot-native-binding-${randomUUID()}`);
   const custody = createWindowsAccountCustody();
   const sid = custody.currentSid();
   try {

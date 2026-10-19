@@ -25,7 +25,7 @@
 //    a presented principal (GeniusBar, --principal-stdin) or the consent
 //    dialog. Without --wake the soul's wake state is reported, so a caller
 //    can tell it will not wake.
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -38,6 +38,7 @@ import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, setS
 import { describeSetting, ownerGate, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { initAgentSpace } from './agent-space.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
+import { execCliFile, cliCommandTimeout } from './windows-git-shell.mjs';
 import { daemonPreference, isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { pinnedSlug, readBinding, resolveAgentSlug } from './identity-soul.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulNpmHarnessDirs } from './soul-home.mjs';
@@ -176,13 +177,13 @@ function soulWorkspace(agentId, options) {
  * GeniusBar install names (AGENT_BOT_TOOL_PATH) comes first, so the bundled
  * agent-comms answers even when a stale copy is on PATH.
  */
-export function joinComms({ agentId, worktree, name, harness }, { env = process.env, run = execFile } = {}) {
+export function joinComms({ agentId, worktree, name, harness }, { env = process.env, run = execCliFile } = {}) {
   const { AGENT_BOT_BINDING: _ignored, ...hostEnv } = env;
   const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
   const soulEnv = { ...hostEnv, ...(tools ? { PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : {}),
     AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
   return new Promise((resolve, reject) => {
-    run('agent-comms', ['join', '--name', name, '--harness', harness], { cwd: worktree, env: soulEnv, timeout: 30_000 },
+    run('agent-comms', ['join', '--name', name, '--harness', harness], { cwd: worktree, env: soulEnv, timeout: cliCommandTimeout() },
       (error, stdout = '', stderr = '') => {
         let result = null;
         try { result = JSON.parse(String(stdout)); } catch { /* not JSON */ }

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
+import { windowsGitShell, gitShellEnvironment } from '../windows-git-shell.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const MODULES = new Map([
@@ -213,6 +214,10 @@ export function dispatchAgentBot(parsed) {
     const hook = join(ROOT, 'hooks', parsed.hook);
     if (!GIT_HOOK_NAMES.includes(parsed.hook) || !existsSync(hook)) {
       throw new Error(`unsupported hook: ${parsed.hook}`);
+    }
+    if (process.platform === 'win32') {
+      const shell = windowsGitShell();
+      return run(shell, [hook.replaceAll('\\', '/'), ...parsed.args], gitShellEnvironment(shell));
     }
     return run(hook, parsed.args);
   }

@@ -66,6 +66,20 @@ below.
    agent-bot bootstrap --worktree-only
    ```
 
+   On native Windows, start source bootstrap with `node agent-bot.mjs`
+   instead of `./agent-bot`. Installation creates a `.cmd` launcher and a
+   matching Git-shell launcher without symlink privileges, and registers the
+   current user's PATH. Use a new terminal or the full `.cmd` path afterward.
+   Keep the source checkout in place. Foreign or incomplete launcher pairs
+   are refused. See [Windows installation](../../../docs/windows.md).
+
+   On Windows, run `join` and `setup-worktree` from the soul's private work
+   area after installing agent-comms and configuring its broker. The runtime
+   uses junctions for existing space and checkout directory aliases. A moved
+   checkout can retain foreign mutation ACLs; repair only the agent-owned
+   checkout's custody rather than loosening binding validation. Native storage
+   requests have a separate deadline from quick daemon health probes.
+
 5. Complete the organization-owned shared skills and harness tooling through
    its governance procedure. The runtime installs its own CLI, hooks, optional
    `gh` shim, credentials, and worktree identity; it does not invent or vendor

@@ -14,7 +14,7 @@ IDENTITY_TOOL="$HOOK_DIR/../agent-identity.mjs"
 # the gate off; any other failure is an unreadable config, which must not
 # silently drop provenance.
 GATE=0
-node --input-type=module -e 'import(process.argv[1]).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 3)).catch((e) => { console.error("agent-bot: cannot read the github-identity gate: " + e.message); process.exit(1); })' "$HOOK_DIR/../config.mjs" || GATE=$?
+node --input-type=module -e 'import("node:url").then(({pathToFileURL}) => import(pathToFileURL(process.argv[1]).href)).then(({isGateEnabled}) => process.exit(isGateEnabled("github-identity") ? 0 : 3)).catch((e) => { console.error("agent-bot: cannot read the github-identity gate: " + e.message); process.exit(1); })' "$HOOK_DIR/../config.mjs" || GATE=$?
 case "$GATE" in
   0) ;;
   3) exit 0 ;;
