@@ -42,6 +42,45 @@ test('Windows install uses a canonical launcher pair without calling symlink', n
   assert.deepEqual(JSON.parse(result.stdout), ['argument with spaces', 'quote-free']);
 });
 
+// Exercise the installer's existing filesystem seams so this upgrade remains
+// covered even on Windows accounts that cannot create legacy file symlinks.
+function legacyLink(f, target) {
+  const executable = installationPaths(f.root).executable;
+  mkdirSync(path.dirname(executable), { recursive: true });
+  writeFileSync(executable, 'legacy-link-fixture');
+  return { executable, options: {
+    home: f.root, entrypoint: f.entrypoint,
+    lstat: file => file === executable ? { isSymbolicLink: () => true, isFile: () => false } : lstatSync(file),
+    readlink: file => { assert.equal(file, executable); return target; },
+    remove: file => { assert.equal(file, executable); rmSync(file); },
+  } };
+}
+
+for (const name of ['agent-bot', 'agent-bot.mjs']) test(`Windows install migrates its legacy ${name} symlink`, native, t => {
+  const f = fixture(t);
+  const target = path.join(path.dirname(f.entrypoint), name);
+  writeFileSync(target, 'legacy-runtime-preserved');
+  const linked = name === 'agent-bot' ? target : path.relative(path.dirname(installationPaths(f.root).executable), target);
+  const { executable, options } = legacyLink(f, linked);
+  assert.equal(installExecutable(options), executable);
+  assert.deepEqual(readWindowsLauncher(executable), { entry: path.join(path.dirname(f.entrypoint), 'agent-bot.mjs'), node: process.execPath });
+  assert.equal(readFileSync(target, 'utf8'), 'legacy-runtime-preserved');
+  assert.equal(installExecutable({ home: f.root, entrypoint: f.entrypoint }), executable);
+});
+
+test('Windows legacy migration preserves foreign symlinks and existing companions', native, t => {
+  const f = fixture(t);
+  const foreign = path.join(f.root, 'foreign', 'agent-bot');
+  const { executable, options } = legacyLink(f, foreign);
+  assert.throws(() => installExecutable(options));
+  assert.equal(readFileSync(executable, 'utf8'), 'legacy-link-fixture');
+  assert.equal(existsSync(executable + '.cmd'), false);
+  writeFileSync(executable + '.cmd', 'existing-companion');
+  assert.throws(() => installExecutable({ ...options, readlink: () => f.entrypoint }));
+  assert.equal(readFileSync(executable, 'utf8'), 'legacy-link-fixture');
+  assert.equal(readFileSync(executable + '.cmd', 'utf8'), 'existing-companion');
+});
+
 for (const suffix of ['', '.cmd']) test(`Windows install preserves foreign ${suffix || 'shell'} command`, native, t => {
   const f = fixture(t);
   mkdirSync(path.dirname(f.executable), { recursive: true });

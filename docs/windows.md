@@ -21,6 +21,8 @@ The installer writes a matching `agent-bot` shell launcher and `agent-bot.cmd`
 under `%USERPROFILE%\.local\bin`, without requiring symlink privileges. It
 registers that directory in the current user's PATH. Open a new terminal to
 inherit the registration, or invoke the `.cmd` by its full path. Existing
+managed symlinks to this runtime's `agent-bot` or `agent-bot.mjs` migrate to
+the launcher pair when no companion command exists. Existing
 foreign files, incomplete launcher pairs, and launchers belonging to a
 different runtime are refused rather than overwritten. Keep the installed
 source checkout at its original path.

@@ -207,7 +207,18 @@ export function installExecutable({
   embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
   const paths = installationPaths(home);
-  if (platform === 'win32') return installWindowsLauncher(paths.executable, { entrypoint });
+  if (platform === 'win32') {
+    const stat = optionalLstat(paths.executable, lstat);
+    // Older Windows installs used the same managed symlink as POSIX. Migrate
+    // only our runtime's link, and never replace an existing companion command.
+    if (stat?.isSymbolicLink() && isManagedExecutable(paths.executable, stat, entrypoint, readlink)) {
+      if (optionalLstat(paths.executable + '.cmd', lstat)) {
+        throw new Error(`${paths.executable}.cmd exists beside the legacy Windows symlink`);
+      }
+      remove(paths.executable);
+    }
+    return installWindowsLauncher(paths.executable, { entrypoint });
+  }
   const desired = managedEntrypoint(entrypoint, exists);
   mkdir(paths.binDir, { recursive: true });
   const stat = optionalLstat(paths.executable, lstat);
