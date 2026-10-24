@@ -27,6 +27,20 @@ import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
 import { isGateEnabled } from '../config.mjs';
 import { ensureBlock, zshStartupDir } from '../shell-path.mjs';
 
+// The config-module path the gh shim records must survive a Homebrew
+// upgrade (#1176). Node resolves the libexec entry through symlinks, so the
+// derived path is the versioned Cellar path
+// (<prefix>/Cellar/<name>/<version>/libexec/config.mjs), which brew deletes
+// on upgrade — the shim then refuses every GitHub operation until it is
+// reinstalled. When the derived path sits in a Cellar and the stable opt
+// path (<prefix>/opt/<name>/...) exists, record that instead.
+export function stableConfigModulePath(modulePath, { exists = (candidate) => { try { statSync(candidate); return true; } catch { return false; } } } = {}) {
+  const match = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/(.+)$/.exec(modulePath);
+  if (!match) return modulePath;
+  const candidate = `${match[1]}/opt/${match[2]}/${match[3]}`;
+  return exists(candidate) ? candidate : modulePath;
+}
+
 function optionalStat(path, lstat) {
   try {
     return lstat(path);
@@ -344,7 +358,7 @@ export function installGhShim({
 } = {}) {
   const binDir = join(home, '.config', 'agent-bot', 'bin');
   const shimPath = join(binDir, 'gh');
-  const shim = buildGhShim(null, { configModule: fileURLToPath(new URL('../config.mjs', import.meta.url)) });
+  const shim = buildGhShim(null, { configModule: stableConfigModulePath(fileURLToPath(new URL('../config.mjs', import.meta.url))) });
   if (!isGateEnabled('github-identity', { env, home })) {
     // An older managed shim has no invocation-time gate check and would keep
     // intercepting; replace it with this one, which passes through while off.
