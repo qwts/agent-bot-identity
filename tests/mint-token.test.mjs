@@ -576,8 +576,8 @@ test('an owner-approval refusal receipts the explicit App as denied and mints no
   const github = await installationServer([ORG]);
   try {
     // An explicit --app in the owner's account with no other identity marker
-    // needs owner approval. The child process reports a non-macOS platform,
-    // so the approval refuses without a dialog on every OS.
+    // needs owner approval. No keyd can ask in the child process, so the
+    // approval refuses (#1172) — never an administrator dialog.
     const env = operatorEnv(github.apiBase, github.routeEnv);
     delete env.GH_AGENT_APP;
     const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-owner-'));
@@ -586,7 +586,7 @@ test('an owner-approval refusal receipts the explicit App as denied and mints no
       nodeArgs: ['--import', 'data:text/javascript,Object.defineProperty(process,"platform",{value:"linux"})'],
     });
     assert.notEqual(refused.code, 0);
-    assert.match(refused.stderr, /owner approval needs the macOS authorization dialog/);
+    assert.match(refused.stderr, /agent-bot never asks for administrator credentials/);
     assert.equal(refused.stdout, '');
     assert.equal(github.requests.length, 0);
     const receipts = mintReceipts(env);
@@ -609,13 +609,13 @@ test('a bound checkout asking mint-token for another App goes through the owner 
     writeFileSync(join(cwd, '.git', 'agent-binding.json'), JSON.stringify({
       v: 1, agentId, secret: randomBytes(32).toString('base64url'), daemon: 'http://127.0.0.1:1/', account: 'test', parent: null,
     }), { mode: 0o600 });
-    // No keyd and a non-macOS platform: the gate cannot ask anyone, so it refuses.
+    // No keyd: the gate cannot ask anyone, so it refuses.
     const refused = await runMintCli(env, ['--app', 'you-claude-agent'], {
       cwd,
       nodeArgs: ['--import', 'data:text/javascript,Object.defineProperty(process,"platform",{value:"linux"})'],
     });
     assert.notEqual(refused.code, 0);
-    assert.match(refused.stderr, /owner approval needs the macOS authorization dialog/);
+    assert.match(refused.stderr, /agent-bot never asks for administrator credentials/);
     assert.equal(refused.stdout, '');
     assert.equal(github.requests.length, 0);
     const receipts = mintReceipts(env);

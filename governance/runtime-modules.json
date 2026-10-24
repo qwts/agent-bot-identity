@@ -599,7 +599,6 @@
         "assertSoulCoAuthor",
         "attestedOwnerKeys",
         "confirmOwnerPresence",
-        "consentOwner",
         "createOwnerChallenges",
         "createSessionGrants",
         "credentialStores",

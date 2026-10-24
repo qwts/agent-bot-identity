@@ -23,10 +23,14 @@
 //      #753) when presence is unavailable and a local SSH pin is enrolled
 //      that agent-bot-keyd vouches for on this request.
 //      This is a user-mediated terminal path, not a daemon decision route; or
-//    - the macOS authorization dialog (owner-approval.mjs, #204), which needs
-//      a person to authenticate as an administrator. It remains the fallback
-//      for enrollment/removal and actions with no enrolled owner keys. A
-//      person's "no" through keyd never falls back to it.
+//    Routine consent never escalates to the macOS administrator dialog
+//    (#1172): that dialog is indistinguishable from one any process can
+//    raise with an arbitrary payload, so asking for admin credentials here
+//    would train exactly the habit a spoof needs. When keyd cannot ask and
+//    no enrolled key answers, the action is refused. The administrator
+//    dialog survives only for trust-root pinning inside owner-presence.mjs
+//    (keyd cannot vouch for its own signer), reachable from owner-run
+//    commands, never from this gate.
 //
 // Same-account isolation is cooperative (agent-comms ADR-0003): a process
 // that can write the owner's state files can skip this gate entirely. The
@@ -35,7 +39,6 @@
 import process from 'node:process';
 import { readBinding } from './agent-binding.mjs';
 import { currentAgentId } from './agent-identity.mjs';
-import { requireOwnerApproval } from './owner-approval.mjs';
 import { keydPresence } from './owner-presence.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { boundedOwnerSummary } from './owner-text.mjs';
@@ -125,22 +128,33 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
   return boundedOwnerSummary(summary);
 }
 
-export async function consentOwner(action, { platform, run, summary = action } = {}) {
-  requireOwnerApproval({ prompt: `agent-bot wants to ${summary}. Approve only if you asked for this.`,
-    outcome: 'nothing was changed', platform, run });
-  return { method: 'consent' };
+// What the owner is told when no presence path can ask them (#1172). The
+// prose is the runtime's, not the caller's: it names the action in the
+// gate's own summary words, says what approval would mean, and warns off
+// the administrator-password dialog this gate never raises.
+export function presenceUnavailableError(action, summary) {
+  return Object.assign(new Error(
+    `${action} was not approved: agent-bot-keyd could not ask the owner here, so nobody approved "${summary}". `
+    + 'Install or fix agent-bot-keyd, or run the owner command from a signed-in GUI session on this Mac, then retry. '
+    + 'agent-bot never asks for administrator credentials: approve only the agent-bot-keyd prompt (Touch ID or your login password, which agent-bot cannot see). '
+    + 'If a dialog asks for an administrator password, cancel it — it did not come from agent-bot.',
+  ), { code: 'presence-unavailable' });
 }
 
-// keyd first (Touch ID or the login password). Only an unavailable presence
-// check may continue to the signed challenge hook or administrator dialog;
-// refusal and invalid challenge replies are final.
+// keyd presence first (Touch ID or the login password, asked by keyd with
+// its own prose and bound to this action's digest). Only an unavailable
+// presence check may continue to the signed challenge hook; refusal and
+// invalid challenge replies are final. There is no administrator-dialog
+// fallback (#1172): when nobody can be asked through keyd and no enrolled
+// key answers the challenge, the action is refused, not escalated to an
+// admin password prompt an agent could spoof.
 export async function presenceOrConsent(action, {
   env = process.env,
   presence = keydPresence,
-  consent = consentOwner,
   summarize = ownerActionSummary,
   listSouls = null,
   challenge = null,
+  onUnavailable = null,
 } = {}) {
   const summary = summarize(action, { env, listSouls });
   try {
@@ -154,7 +168,11 @@ export async function presenceOrConsent(action, {
     const proof = await challenge(action, { summary, env });
     if (proof) return proof;
   }
-  return consent(action, { summary });
+  // Callers with their own refusal wording (the daemon's loosening gate)
+  // name it through onUnavailable; it may only refuse, never approve —
+  // approval requires keyd presence or a verified challenge reply.
+  if (onUnavailable) return onUnavailable(action, { summary, env });
+  throw presenceUnavailableError(action, summary);
 }
 
 // Deciding a soul's waiting tool request (#438) lets that soul act, so the

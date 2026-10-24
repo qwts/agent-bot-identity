@@ -20,9 +20,10 @@
 //
 // `unavailable` (code 'presence-unavailable') means nobody could be asked
 // through keyd: no keyd, no Developer ID signature, no GUI session, no login
-// password. The owner gate then falls back to its administrator dialog.
-// Every other failure is the owner's answer or a bad assertion, and the gate
-// refuses without asking again.
+// password. The owner gate refuses then (#1172); it never falls back to an
+// administrator dialog for routine consent. Every other failure is the
+// owner's answer or a bad assertion, and the gate refuses without asking
+// again.
 
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -96,7 +97,13 @@ function signerWords({ teamId, identifier }) {
 // Loosening who may sign keyd is the owner's call (#594): any Developer ID,
 // or another signer than the pin was taken under. keyd cannot vouch for
 // itself here, since its key is what is being pinned, so the owner answers
-// the administrator dialog.
+// the administrator dialog. TRUST-ROOT EXCEPTION to #1172: this and
+// approveRepinnedKey are the only remaining administrator-dialog uses.
+// They decide which code may vouch for the owner at all, they run only
+// while pinning that trust (owner-invoked setup/repair, and daemon or soul
+// callers get noAdministratorDialog instead), and their prompts name the
+// exact signer and key fingerprints being trusted. Routine consent —
+// minting, owner-gate actions — never reaches this dialog.
 function approveSigner(signer, { previous }) {
   const change = previous ? ` instead of ${signerWords(previous)}` : '';
   requireOwnerApproval({
@@ -303,6 +310,39 @@ export function verifyPinsAttestation(token, { key, nonce, now = Date.now() }) {
   if (!Number.isSafeInteger(generation) || generation < 0) throw invalid();
   if (digest === null ? generation !== 0 : (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest) || generation === 0)) throw invalid();
   return { digest, generation };
+}
+
+// One-line guidance printed before a presence ask on a terminal (#1172):
+// what will ask, what the owner enters, and who can see it. The prompt's
+// prose comes from keyd and this runtime; the agent asking for the
+// operation never writes the words the owner approves.
+export const OWNER_PRESENCE_GUIDANCE = 'agent-bot-keyd will ask for Touch ID or your login password for this Mac. '
+  + 'agent-bot cannot see what you enter. agent-bot never asks for administrator credentials — '
+  + 'if a dialog asks for an administrator password, cancel it: it did not come from agent-bot.';
+
+// Routine owner consent for CLI credential paths (mint-token,
+// worktree-token): keyd presence only, never the administrator dialog
+// (#1172). `action` is this runtime's own sentence naming the operation;
+// keyd shows it under its own "agent-bot wants to …" prose and signs a
+// digest of it. Unavailable presence refuses with the guidance above.
+export async function requireOwnerPresence(action, {
+  env = process.env,
+  presence = keydPresenceWithoutDialog,
+  writeGuidance = (text) => process.stderr.write(`${text}\n`),
+} = {}) {
+  writeGuidance(OWNER_PRESENCE_GUIDANCE);
+  try {
+    return await presence(action, { env });
+  } catch (error) {
+    if (error.code === 'presence-unavailable') {
+      throw Object.assign(new Error(
+        `owner approval was not obtained: agent-bot-keyd could not ask the owner here (${error.message}). `
+        + 'Install or fix agent-bot-keyd, or run this command from a signed-in GUI session on this Mac, then retry. '
+        + 'agent-bot never asks for administrator credentials — cancel any dialog that does.',
+      ), { code: 'presence-unavailable', cause: error });
+    }
+    throw error;
+  }
 }
 
 // Asks the owner through keyd to approve `action`, one line naming the soul

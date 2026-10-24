@@ -2,6 +2,16 @@
 // account with no stated bot identity — the ENG-0353 direction, ahead of the
 // recorded delegation marker the record describes.
 //
+// #1172 split: the administrator dialog in this file is no longer a routine
+// consent mechanism. Routine approval (mint-token, worktree-token, the
+// owner gate) goes through keyd presence — Touch ID or the login password,
+// asked by keyd with its own prose — and refuses when keyd cannot ask.
+// `requireOwnerApproval` below remains only for the trust-root pinning
+// decisions in owner-presence.mjs (which keyd signer and presence key to
+// trust), where keyd cannot vouch for itself; ownerApprovalRequired still
+// decides *whether* an unmarked mint needs the owner's approval, and the
+// approval itself is presence (requireOwnerPresence in owner-presence.mjs).
+//
 // A stated identity is the exception, not the rule: GH_AGENT_APP, a checkout
 // pin, an agent account, or harness env markers all resolve to a configured
 // App through the same resolver every consumer uses, and in those contexts

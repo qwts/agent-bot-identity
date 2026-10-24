@@ -1515,7 +1515,7 @@ async function askOwnerToLoosen({ agentId, tool, operation, action, summary, rec
 export function daemonModeFor({
   env = process.env, home = homedir(), config, now = () => new Date(),
   presence = keydPresenceWithoutDialog,
-  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, allowChallenge: false, consent: noLooseningDialog }) }),
+  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, allowChallenge: false, onUnavailable: noLooseningDialog }) }),
   log = (line) => process.stderr.write(`${line}\n`),
 } = {}) {
   // One question per soul and digest at a time, however many turns start.
@@ -1563,7 +1563,7 @@ const allowRulesOperation = (agentId, { source, files, digest }) => operationDig
 export function daemonClaudeOptionsFor({
   env = process.env, home = homedir(), config, now = () => new Date(),
   presence = keydPresenceWithoutDialog,
-  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, allowChallenge: false, consent: noLooseningDialog }) }),
+  ask = (action) => confirmOwnerPresence(action, { env, consent: (act, options) => presenceOrConsent(act, { ...options, presence, allowChallenge: false, onUnavailable: noLooseningDialog }) }),
   log = (line) => process.stderr.write(`${line}\n`),
 } = {}) {
   const asking = new Map();

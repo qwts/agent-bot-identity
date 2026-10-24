@@ -19,7 +19,7 @@ export { reconcileAppCredentials } from './credential-reconciler.mjs';
 export { mintForCaller } from './git-credential-bot.mjs';
 export { appStoreTarget, legacyAppFolderStatus, migrateAppMetadata, readAppMetadata, readManagedAppCredential, writeAppMetadata } from './identity-app-store.mjs';
 export { importIntoKeyd } from './keyd-client.mjs';
-export { assertOwnerAction, confirmOwnerPresence, consentOwner, ownerActionSummary, presenceOrConsent, soulMarkers } from './owner-gate.mjs';
+export { assertOwnerAction, confirmOwnerPresence, ownerActionSummary, presenceOrConsent, soulMarkers } from './owner-gate.mjs';
 export { attestedOwnerKeys, keydPresenceWithoutDialog } from './owner-presence.mjs';
 export { createOwnerChallenges, localHost, promptOwnerChallenge, readOwnerKeys, statementError, verifyOwnerChallenge } from './owner-statement.mjs';
 export { pinnedSlug, resolveAgentSlug } from './resolve-agent.mjs';

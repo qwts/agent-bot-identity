@@ -14,7 +14,7 @@ import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { appendSoulRevision, registeredSoulDir } from './soul-history.mjs';
 import { soulSpacePath } from './soul-memory.mjs';
-import { assertOwnerAction, consentOwner, ownerCredentialRequired, presenceOrConsent } from './owner-action.mjs';
+import { assertOwnerAction, ownerCredentialRequired, presenceOrConsent } from './owner-action.mjs';
 import { populationFile, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, classifyPath } from './soul-env-contract.mjs';
@@ -656,14 +656,9 @@ export function discardRevisionStaging(stagingPath) {
 export function revisionOwnerGate(action, { principal, target, presence, env, cwd } = {}) {
   return assertOwnerAction(action, {
     principal, target, env, cwd,
-    consent: (action, context) => presenceOrConsent(action, { ...context, presence,
-      consent: (action, context) => {
-        if (!process.stdin.isTTY || !process.stderr.isTTY) {
-          throw ownerCredentialRequired('owner consent requires an interactive terminal; --yes cannot approve');
-        }
-        return consentOwner(action, context);
-      },
-    }),
+    // Presence only (#1172): keyd asks, or the gate refuses. There is no
+    // administrator-dialog fallback for a non-interactive caller to reach.
+    consent: (action, context) => presenceOrConsent(action, { ...context, presence }),
   });
 }
 export async function revisionCommand(args, { assertSoulTarget = (id) => {

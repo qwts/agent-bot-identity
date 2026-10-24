@@ -10,7 +10,8 @@ import { readBinding } from '../agent-binding.mjs';
 import { appendAuditReceipt } from '../identity-format.mjs';
 import { mintForCaller } from '../git-credential-bot.mjs';
 import { MINT_USAGE, parseMintArgs, selectionReason } from '../mint-token.mjs';
-import { explicitAppArg, ownerApprovalRequired, requireOwnerApproval } from '../owner-approval.mjs';
+import { explicitAppArg, ownerApprovalRequired } from '../owner-approval.mjs';
+import { requireOwnerPresence } from '../owner-presence.mjs';
 import { formatMintGrant } from './mint-output.mjs';
 
 async function main() {
@@ -30,9 +31,9 @@ async function main() {
   if (approvalRequired) {
     const slug = explicitAppArg(process.argv);
     try {
-      requireOwnerApproval({
-        prompt: `Approve a GitHub App installation token for ${slug}[bot] — mint-token was run in the owner's account with no stated agent identity.`,
-      });
+      await requireOwnerPresence(
+        `mint a GitHub App installation token for ${slug}[bot], requested from the owner's account with no stated agent identity`,
+      );
     } catch (error) {
       operatorReceipt({ decision: 'denied', appSlug: slug, reason: 'owner-approval-refused' });
       throw error;
