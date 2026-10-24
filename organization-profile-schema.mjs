@@ -30,6 +30,7 @@ export const PROFILE_HARNESSES = Object.freeze([
   'hermes',
   'junie',
   'kilocode',
+  'kimicode',
   'kiro',
   'mcode',
   'mirror',

@@ -1,0 +1,1 @@
+- Agent-bot accepts the `kimicode` organization-profile harness key and resolves its active App identities from the rostered account name, without adding environment detectors (qwts/qwts-agent-org#76). Deploy a compatible runtime before publishing this profile key, and provision/install the GitHub Apps separately.
