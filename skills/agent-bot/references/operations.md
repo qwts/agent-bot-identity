@@ -348,6 +348,45 @@ applicable for worktree identity and must never be claimed by a repair
 command; a primary checkout in an agent account is verified like any worktree.
 
 
+## Recover after an upgrade or a daemon restart
+
+Every agent on the machine shares one daemon and one `gh` shim, so when
+either breaks, all agents lose GitHub access together. Recognize it by
+errors that name a Cellar version that no longer exists (`Cannot find
+module '/opt/homebrew/Cellar/agent-bot/<old>/…'`), by `session bind`
+reporting `no bind token is minted for this worktree` right after
+`setup-worktree` printed `bind token minted`, or by `no usable binding … for
+<slug>` in a worktree that worked before (#1179).
+
+Recover in this order, verifying each step before the next:
+
+1. **Shims.** Run `agent-bot install-gh-shim`. It rewrites the PATH shim and
+   the Codex runtime shim to the installed release. Releases with #1176
+   record the stable `opt` path, so an upgrade no longer needs this step.
+2. **Daemon (owner).** Compare `agent-bot --version` with the running
+   daemon: `ps -axo pid,ppid,command | grep agent-daemon.mjs`. If the daemon
+   runs an older Cellar path, the owner restarts it with
+   `launchctl kickstart -k gui/$(id -u)/dev.qwts.agent-bot.daemon` and stops
+   any orphaned old `agent-daemon.mjs` (parent pid 1). The restart affects
+   every agent on the machine, so ask the owner rather than running it
+   unprompted.
+3. **Each worktree, for each agent.** A restart drops existing live
+   bindings and unspent bind tokens. Mint a new token, then bind:
+
+   ```bash
+   agent-bot setup-worktree <app-slug> --name <worktree name> --branch <branch>
+   agent-bot session bind --transcript-id <session id> --provider <harness>
+   gh whoami   # expect the worktree's bot identity
+   ```
+
+   `setup-worktree` printing `not a live session binding` is expected; the
+   `session bind` that follows establishes it. A `session bind` alone after
+   a restart fails, because the token it needs was minted before the
+   restart.
+
+Never work around a failed bind with the owner's own `gh` login, a copied
+token or a shared credential. Report the failing step instead.
+
 ## Discover current governance
 
 Read-only: `agent-bot sop --json` resolves the selected org and SOP once for
