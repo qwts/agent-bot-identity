@@ -53,6 +53,11 @@ function claimedApp(env, cwd) {
   try { return resolveAgentSlug({ env, cwd, detect: false }); } catch { return null; }
 }
 
+function repin(cwd, key, value) {
+  execFileSync('git', ['config', 'extensions.worktreeConfig', 'true'], { cwd });
+  execFileSync('git', ['config', '--worktree', key, value], { cwd });
+}
+
 export async function sessionBind({
   cwd = process.cwd(),
   env = process.env,
@@ -64,6 +69,7 @@ export async function sessionBind({
   readBindTokenImpl = readBindToken,
   gitDirImpl = gitDirFor,
   resolveSlugImpl = claimedApp,
+  repinImpl = repin,
 } = {}) {
   const client = await clientFactory({ env, home: env.HOME, cwd });
 
@@ -74,14 +80,31 @@ export async function sessionBind({
     throw new Error('the soul binding in this checkout is unreadable — run `agent-bot doctor`, then `agent-bot setup-worktree` if it is corrupt');
   }
   if (existing) {
-    // Already bound: validate at the daemon (no secret leaves this process).
+    // Already bound: validate at the daemon (no secret leaves this process),
+    // then reconcile a differently selected App exactly as MCP bind does —
+    // a binding outlives its session, so a session run as another App
+    // reconciles here as a first bind would (#107). Without this the daemon
+    // keeps minting the previously recorded App and the newly selected slug
+    // is refused as an identity crossover.
     const binding = await client.binding(existing.secret);
-    return {
+    const result = {
       status: 'live',
       alreadyBound: true,
       agentId: binding.agentId,
       worktree: binding.worktree ?? cwd,
     };
+    const claimed = resolveSlugImpl(env, cwd);
+    if (claimed && typeof client.reconcileApp === 'function') {
+      let app = null;
+      try { ({ app = null } = await client.reconcileApp(existing.secret, claimed)); } catch { /* record unchanged */ }
+      if (app) {
+        result.app = app.status === 'reconciled'
+          ? (repinImpl(cwd, 'agentBot.app', app.claimed),
+            { ...app, next: 'run agent-bot setup-worktree in this checkout to commit as the reconciled App' })
+          : app;
+      }
+    }
+    return result;
   }
 
   if (!transcriptId) {
@@ -100,14 +123,8 @@ export async function sessionBind({
     app: resolveSlugImpl(env, cwd),
   });
   // The daemon may repin attribution; mirror the MCP tool's follow-up.
-  if (result.repinRequired) {
-    execFileSync('git', ['config', 'extensions.worktreeConfig', 'true'], { cwd });
-    execFileSync('git', ['config', '--worktree', 'agentBot.agentId', result.agentId], { cwd });
-  }
-  if (result.app?.status === 'reconciled') {
-    execFileSync('git', ['config', 'extensions.worktreeConfig', 'true'], { cwd });
-    execFileSync('git', ['config', '--worktree', 'agentBot.app', result.app.claimed], { cwd });
-  }
+  if (result.repinRequired) repinImpl(cwd, 'agentBot.agentId', result.agentId);
+  if (result.app?.status === 'reconciled') repinImpl(cwd, 'agentBot.app', result.app.claimed);
   const { secret, ...safe } = result;
   return { status: 'live', alreadyBound: false, ...safe };
 }

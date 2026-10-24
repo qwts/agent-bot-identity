@@ -78,3 +78,44 @@ test('session bind refuses without a transcript when no binding exists', async (
     /--transcript-id is required/,
   );
 });
+
+test('session bind reconciles a differently selected App on an existing binding, like MCP bind', async () => {
+  const secret = 'c'.repeat(43);
+  const repins = [];
+  let reconciledWith;
+  const result = await sessionBind({
+    cwd: '/worktree', env: {},
+    readBindingImpl: () => ({ agentId: 'agent_11111111-1111-4111-8111-111111111111', secret }),
+    resolveSlugImpl: () => 'qwts-other-agent',
+    repinImpl: (cwd, key, value) => repins.push([cwd, key, value]),
+    clientFactory: async () => ({
+      binding: async () => ({ agentId: 'agent_11111111-1111-4111-8111-111111111111', worktree: '/worktree' }),
+      reconcileApp: async (presented, app) => {
+        assert.equal(presented, secret);
+        reconciledWith = app;
+        return { app: { status: 'reconciled', claimed: 'qwts-other-agent' } };
+      },
+    }),
+  });
+  assert.equal(reconciledWith, 'qwts-other-agent');
+  assert.equal(result.alreadyBound, true);
+  assert.equal(result.app.status, 'reconciled');
+  assert.match(result.app.next, /setup-worktree/);
+  assert.deepEqual(repins, [['/worktree', 'agentBot.app', 'qwts-other-agent']]);
+  assert.doesNotMatch(JSON.stringify(result), /c{20,}/);
+});
+
+test('session bind on an existing binding survives a failed reconcile (record unchanged)', async () => {
+  const result = await sessionBind({
+    cwd: '/worktree', env: {},
+    readBindingImpl: () => ({ agentId: 'agent_11111111-1111-4111-8111-111111111111', secret: 'd'.repeat(43) }),
+    resolveSlugImpl: () => 'qwts-other-agent',
+    repinImpl: () => assert.fail('no repin without reconciliation'),
+    clientFactory: async () => ({
+      binding: async () => ({ agentId: 'agent_11111111-1111-4111-8111-111111111111', worktree: '/worktree' }),
+      reconcileApp: async () => { throw new Error('daemon busy'); },
+    }),
+  });
+  assert.equal(result.status, 'live');
+  assert.equal(result.app, undefined);
+});
