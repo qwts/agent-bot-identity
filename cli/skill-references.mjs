@@ -21,6 +21,7 @@ export const SKILL_REFERENCES = Object.freeze({
   'signed-commit': 'verified-publish.md',
   identity: 'execution-identities.md',
   binding: 'execution-identities.md',
+  session: 'execution-identities.md',
   population: 'execution-identities.md',
   soul: 'execution-identities.md',
   wake: 'execution-identities.md',

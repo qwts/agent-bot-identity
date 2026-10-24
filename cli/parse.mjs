@@ -9,6 +9,7 @@ const PUBLIC_COMMANDS = new Set([
   'population',
   'principal',
   'binding',
+  'session',
   'soul',
   'harness',
   'daemon',

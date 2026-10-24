@@ -37,6 +37,22 @@ a distinct execution identity intentionally.
 5. Resolve provenance through the local identity record, not by guessing from
    bot username or branch name.
 
+## Live session binding
+
+A worktree pin and a live session binding are separate facts. `agent-bot
+doctor` reports them as distinct checks (`worktree.binding` and
+`worktree.session_binding`). A bound worktree whose session is not live-bound
+still refuses `gh`. Bind the current harness session from any harness —
+including ones with no MCP surface — with:
+
+```bash
+agent-bot session bind --transcript-id <session-id>
+```
+
+Use `--soul-workspace <path>` when the checkout is not under the soul's
+worktree root. Where the harness exposes an MCP `bind` tool, that remains an
+equivalent path to the same daemon binding.
+
 ## Bindings, spawned souls, and wakes
 
 A bind leaves a binding file in the worktree's private git dir:

@@ -4,6 +4,16 @@ Bot-authored commits on a qwts repository are signed. `agent-bot signed-commit` 
 Git Data API, verifies the returned signature and tree, then updates the remote
 branch under a force-with-lease equivalent.
 
+## Gate: live session binding (step 0, before anything else)
+
+Verify this session's live binding before shaping commits or calling
+GitHub. Run `agent-bot session bind --transcript-id <session-id>` — with
+an existing binding it only validates it at the daemon — or establish it
+with the MCP `bind` tool. If the binding is missing and cannot be
+established in this harness, stop here and report that exact blocker.
+Do not substitute another identity, a real-binary path, an override
+variable, or human credentials. Only a verified live binding proceeds.
+
 ## Preconditions
 
 1. Work under a stated bot identity: the agent account, `--app`,
