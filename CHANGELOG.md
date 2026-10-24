@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.0
+
+- Worktree binding and live session binding are now reported as separate facts: `setup-worktree` names both, `doctor` carries a distinct `worktree.session_binding` check — a warning when a soul-bound session has no live binding, a failure when the binding is unreadable — and the bundled verified-publish workflow gates on the live binding before any GitHub work (#1167, #1168, #1169).
+  - New `agent-bot session bind` establishes or validates a live session binding from the CLI — the sanctioned path for harnesses without MCP `bind` — using the same daemon surrender as the MCP tool and never printing the binding secret (#1170).
+- The skills guide directs users to `agent-bot skill agent-bot` and `agent-bot skill agent-space` for guidance paired with the installed executable, avoiding stale org/SOP runtime pins (#1157).
+- Owner consent never asks for administrator credentials (#1172): routine approval (owner gate, `mint-token`, `worktree-token`) goes through agent-bot-keyd presence — Touch ID or the login password, asked by keyd with its own prose and bound to the action — and refuses with remediation when keyd cannot ask, instead of falling back to the macOS administrator dialog that any process can spoof. Prompts and refusals now say what is being approved and warn that agent-bot never asks for an administrator password. The administrator dialog remains only for keyd trust-root pinning (which signer and presence key to trust), where keyd cannot vouch for itself.
+- The GitHub App inbox now retains all subscribed discussion, issue, comment, pull request, review and review-thread notices, including merges. Inbox records and push notifications identify the event and action, with merge/review state and subject context; existing mention/review-request kinds and self-comment suppression remain compatible (#1155).
+- Complete native Windows CLI and worktree setup without symlink privileges: migrate this runtime's legacy managed symlink, preserve foreign commands, use junctions for directory aliases, dispatch hooks and membership through Git for Windows, and retain scheduler paths and storage deadlines needed for secure daemon binding (#1158).
+
 ## 0.12.0
 
 - Org and SOP governance now resolves current default branches at each use, recording immutable SHAs without recurring SOP pin bumps; explicit local refs remain binding, SOP-owned relative skills use the same snapshot, and installed CLI bundles stay version-paired (qwts/qwts-agent-org#66).

@@ -1,1 +1,0 @@
-- The GitHub App inbox now retains all subscribed discussion, issue, comment, pull request, review and review-thread notices, including merges. Inbox records and push notifications identify the event and action, with merge/review state and subject context; existing mention/review-request kinds and self-comment suppression remain compatible (#1155).
