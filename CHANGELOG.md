@@ -1,10 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Worktree binding and live session binding are now reported as separate facts: `setup-worktree` names both, `doctor` carries a distinct `worktree.session_binding` check — a warning when a soul-bound session has no live binding, a failure when the binding is unreadable, and the bundled verified-publish workflow gates on the live binding before any GitHub work (#1167, #1168, #1169).
-- New `agent-bot session bind` establishes or validates a live session binding from the CLI — the sanctioned path for harnesses without MCP `bind` — using the same daemon surrender as the MCP tool and never printing the binding secret (#1170).
-
 ## 0.12.0
 
 - Org and SOP governance now resolves current default branches at each use, recording immutable SHAs without recurring SOP pin bumps; explicit local refs remain binding, SOP-owned relative skills use the same snapshot, and installed CLI bundles stay version-paired (qwts/qwts-agent-org#66).
