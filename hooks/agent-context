@@ -42,6 +42,7 @@ agent_bot_agent_context() {
   [ "$HERMES_AGENT" = "1" ] && return 0
   [ "$JUNIE_AGENT" = "1" ] && return 0
   [ "$KILOCODE_AGENT" = "1" ] && return 0
+  [ "$KIMICODE_AGENT" = "1" ] && return 0
   [ "$KIRO_AGENT" = "1" ] && return 0
   [ "$MCODE_AGENT" = "1" ] && return 0
   [ "$MIRROR_AGENT" = "1" ] && return 0
