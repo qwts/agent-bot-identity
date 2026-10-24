@@ -75,6 +75,7 @@ const LAUNCH_PATHS = {
   'metrics.mjs': [1, 'git'],
   'identity/resolve-agent.mjs': [1, 'git'],
   'setup-worktree.mjs': [2, 'git'],
+  'session-bind.mjs': [5, 'git; first-party: the installed agent-bot under the caller\'s own env'],
   'identity/signed-commit.mjs': [1, 'git'],
   'sop.mjs': [1, 'git'],
   'soul-coauthor.mjs': [1, 'git'],

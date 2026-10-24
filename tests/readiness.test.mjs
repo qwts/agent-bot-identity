@@ -762,6 +762,12 @@ function linkedWorktreeFixture() {
     `!'${installationPaths(home).executable}' credential ${slug}`,
   );
   worktreeGit('remote', 'add', 'origin', 'https://github.com/qwts/example.git');
+  // A complete identity boundary includes the durable live-session binding
+  // file the gh gate reads (#1168); without it doctor must not read ready.
+  const gitDir = worktreeGit('rev-parse', '--absolute-git-dir');
+  writeFileSync(join(gitDir, 'agent-binding.json'), JSON.stringify({
+    v: 1, agentId: id, parent: null, account: 'test', secret: 's'.repeat(43), daemon: 'http://127.0.0.1:65535/',
+  }), { mode: 0o600 });
   const collectOptions = {
     command: 'doctor',
     scope: 'worktree',
@@ -2577,6 +2583,25 @@ for (const state of ['missing', 'unreadable', 'live', 'human', 'missing-without-
       },
     });
     const check = report.worktree.checks.find(({ id }) => id === 'worktree.binding');
+    const sessionCheck = report.worktree.checks.find(({ id }) => id === 'worktree.session_binding');
+    assert.ok(sessionCheck, 'a distinct live session binding check is reported');
+    if (state === 'live') {
+      assert.equal(sessionCheck.status, 'ready');
+      assert.equal(sessionCheck.code, null);
+    } else if (state === 'human') {
+      assert.equal(sessionCheck.status, 'not_applicable');
+    } else if (state === 'unreadable') {
+      assert.equal(sessionCheck.status, 'failed');
+      assert.equal(sessionCheck.code, 'session-binding-unreadable');
+      assert.equal(report.ready, false);
+      assert.match(sessionCheck.action, /agent-bot session bind/);
+    } else {
+      // Missing is a warning, not a failure: bootstrap verifies a cold
+      // machine before any harness session exists to bind.
+      assert.equal(sessionCheck.status, 'warning');
+      assert.equal(sessionCheck.code, 'session-binding-missing');
+      assert.match(sessionCheck.action, /agent-bot session bind/);
+    }
     assert.equal(bindingReads, state === 'human' ? 0 : 1);
     if (state === 'live' || state === 'human') {
       assert.equal(check.status, 'ready');

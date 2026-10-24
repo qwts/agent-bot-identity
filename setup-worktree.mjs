@@ -83,6 +83,18 @@ export function prepareWorktreeBinding(options) {
   return 'bind token minted';
 }
 
+// The two binding states setup-worktree must never blur (#1167): the
+// worktree binding it configures, and the live session binding it does
+// not establish. Exported so the wording is tested, not just printed.
+export function bindingStatusLines({ worktreeBindingPresent }) {
+  return [
+    worktreeBindingPresent
+      ? 'worktree binding: present'
+      : 'worktree binding: bind token minted (not a live session binding)',
+    'live session binding: not established by setup-worktree — run `agent-bot session bind --transcript-id <session-id>` or MCP bind',
+  ];
+}
+
 function git(...args) {
   return execFileSync('git', args, {
     encoding: 'utf8',
@@ -340,7 +352,8 @@ async function configureSoulWithoutApp({ gitDir, config, daemon, identity }) {
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
   const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;
   process.stdout.write(
-    `worktree configured as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`,
+    `worktree configured as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`
+    + `${bindingStatusLines({ worktreeBindingPresent: bindState === 'binding reused' }).join('\n')}\n`,
   );
 }
 
@@ -457,7 +470,8 @@ async function configure({ identity, options, config,
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
   const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;
   process.stdout.write(
-    `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`,
+    `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`
+    + `${bindingStatusLines({ worktreeBindingPresent: bindState === 'binding reused' }).join('\n')}\n`,
   );
 }
 

@@ -711,7 +711,7 @@ function readinessGitEnv(env) {
 // roster is a real misconfiguration of the worktree being diagnosed, not a
 // machine-wide observation, and a diagnostic that quietly tolerated it would
 // misreport what this session can actually act as.
-function currentWorktreeBindingCheck({ cwd, env, git, roster, isSoulBoundImpl, readBindingImpl }) {
+function currentWorktreeBindingChecks({ cwd, env, git, roster, isSoulBoundImpl, readBindingImpl }) {
   // Read the pin through the injected git, exactly as the other worktree probes
   // do. `pinnedSlug` cannot be used here: it forwards no env to its subprocess.
   const probeEnv = readinessGitEnv(env);
@@ -736,52 +736,91 @@ function currentWorktreeBindingCheck({ cwd, env, git, roster, isSoulBoundImpl, r
     if (slug || !readable) break;
   }
   if (!readable) {
-    return readinessCheck({
+    return [readinessCheck({
       id: 'worktree.binding',
       status: 'not_applicable',
       message: 'the current directory is not a readable Git worktree',
-    });
+    })];
   }
   if (!slug) {
-    return readinessCheck({
+    return [readinessCheck({
       id: 'worktree.binding',
       status: 'warning',
       code: 'worktree-binding-absent',
       message: 'the current worktree is not bound to an App, so identity-bound capabilities will refuse it',
       action: 'bind this worktree with: agent-bot setup-worktree',
       evidence: { worktree: cwd, app_slug: null },
-    });
+    })];
   }
   // An empty roster means no App is configured, not that every App is allowed.
   // Treating absence as allow-all would make this failure unreachable on an
   // account with no mappings — exactly when a pin has nothing to reconcile with.
   const known = roster ?? [];
   if (known.length === 0) {
-    return readinessCheck({
+    return [readinessCheck({
       id: 'worktree.binding',
       status: 'warning',
       code: 'worktree-binding-no-roster',
       message: `the current worktree is bound to ${slug}, but no App roster is configured to verify it against`,
       action: 'configure the App mapping, then bind again with: agent-bot setup-worktree',
       evidence: { worktree: cwd, app_slug: slug, roster: known },
-    });
+    })];
   }
   const inRoster = known.includes(slug);
-  if (inRoster && isSoulBoundImpl({ env, cwd })) {
-    let usable = false;
-    try { usable = Boolean(readBindingImpl({ env, cwd })); } catch { /* unreadable is unusable */ }
-    if (!usable) {
-      return readinessCheck({
-        id: 'worktree.binding',
-        status: 'warning',
-        code: 'worktree-binding-unusable',
-        message: `the current worktree is bound to ${slug}, but this session has no live daemon binding for it, so gh will refuse to run`,
-        action: 'check in as that soul (agent-bot join --name NAME --harness HARNESS) or re-bind this checkout to the session soul with: agent-bot setup-worktree',
-        evidence: { worktree: cwd, app_slug: slug, roster: known, session_soul: env.AGENT_BOT_ID || env.QWTS_AGENT_ID || null },
-      });
-    }
+  // The live session binding is a separate fact from the worktree pin
+  // (#1168): read the durable binding once and report both checks from it.
+  const soulBound = isSoulBoundImpl({ env, cwd });
+  let binding = null;
+  let bindingUnreadable = false;
+  if (soulBound) {
+    try { binding = readBindingImpl({ env: probeEnv, cwd }); } catch { bindingUnreadable = true; }
   }
-  return readinessCheck({
+  const sessionEvidence = {
+    worktree: cwd, app_slug: slug,
+    session_soul: env.AGENT_BOT_ID || env.QWTS_AGENT_ID || null,
+  };
+  const sessionCheck = !soulBound
+    ? readinessCheck({
+      id: 'worktree.session_binding',
+      status: 'not_applicable',
+      message: 'this is not a soul-bound session, so no live session binding is required here',
+      evidence: sessionEvidence,
+    })
+    : bindingUnreadable
+      ? readinessCheck({
+        id: 'worktree.session_binding',
+        status: 'failed',
+        code: 'session-binding-unreadable',
+        message: 'this session\'s live session binding could not be read, so gh will refuse to run',
+        action: 'run `agent-bot setup-worktree` if the binding is corrupt, then bind with `agent-bot session bind --transcript-id <session-id>` or MCP bind',
+        evidence: sessionEvidence,
+      })
+      : binding
+        ? readinessCheck({
+          id: 'worktree.session_binding',
+          status: 'ready',
+          message: `live session binding is present for ${slug}`,
+          evidence: sessionEvidence,
+        })
+        : readinessCheck({
+          id: 'worktree.session_binding',
+          status: 'warning',
+          code: 'session-binding-missing',
+          message: `this session has no live session binding for ${slug}, so gh will refuse to run`,
+          action: 'bind this session with `agent-bot session bind --transcript-id <session-id>` or MCP bind',
+          evidence: sessionEvidence,
+        });
+  if (inRoster && soulBound && !binding) {
+    return [readinessCheck({
+      id: 'worktree.binding',
+      status: 'warning',
+      code: 'worktree-binding-unusable',
+      message: `the current worktree is bound to ${slug}, but this session has no live daemon binding for it, so gh will refuse to run`,
+      action: 'check in as that soul (agent-bot join --name NAME --harness HARNESS) or re-bind this checkout to the session soul with: agent-bot setup-worktree',
+      evidence: { worktree: cwd, app_slug: slug, roster: known, session_soul: sessionEvidence.session_soul },
+    }), sessionCheck];
+  }
+  return [readinessCheck({
     id: 'worktree.binding',
     status: inRoster ? 'ready' : 'failed',
     code: inRoster ? null : 'worktree-binding-not-in-roster',
@@ -790,7 +829,7 @@ function currentWorktreeBindingCheck({ cwd, env, git, roster, isSoulBoundImpl, r
       : `the current worktree is bound to ${slug}, which is not in the configured roster`,
     action: inRoster ? null : 'reconcile the App mapping, then bind again with: agent-bot setup-worktree',
     evidence: { worktree: cwd, app_slug: slug, roster: known },
-  });
+  }), sessionCheck];
 }
 
 // git copies config.worktree into each worktree it adds (#648), so a linked
@@ -2981,13 +3020,16 @@ export async function collectReadiness({
     // status is recomputed from the complete list because this check can fail,
     // and a section that reports `ready` while holding a `failed` check would
     // leave report.ready true and doctor exiting 0 on an identity failure.
-    const bindingCheck = currentWorktreeBindingCheck({
+    const bindingChecks = [...worktree.checks, ...currentWorktreeBindingChecks({
       cwd, env, git, roster: configValid ? roster : [],
       isSoulBoundImpl, readBindingImpl,
-    });
-    const bindingChecks = [...worktree.checks, bindingCheck];
+    })];
     worktree = {
+      // A failed live-session-binding check is an identity failure even
+      // when the directory classification said not_applicable: the pin
+      // was readable enough to know GitHub operations would refuse.
       status: worktree.status === 'not_applicable'
+        && !bindingChecks.some((check) => check.id === 'worktree.session_binding' && check.status === 'failed')
         ? 'not_applicable'
         : sectionStatus(bindingChecks),
       checks: bindingChecks,
