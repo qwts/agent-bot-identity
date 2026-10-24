@@ -231,7 +231,8 @@ ADR-0753 extends the fallback in [owner-action.mjs](../owner-action.mjs).
 When presence is unavailable and a local SSH owner key is enrolled, an
 interactive terminal offers a fresh signed challenge. A verified reply returns
 `{ method: 'statement', via: 'ssh', key, fingerprint }`. With no owner keys
-enrolled, the administrator dialog remains available. Enrolled keys that this
+enrolled, the action is refused when keyd cannot ask (#1172) — there is no
+administrator-dialog fallback for routine consent. Enrolled keys that this
 CLI path cannot use, a noninteractive caller, cancellation or an invalid reply
 refuse the action without administrator fallback. Enrollment and removal
 never use a challenge; they go through `owner/pins-attest` (below). See [owner statements](owner-statements.md) for the built CLI contract;
@@ -473,8 +474,7 @@ throw:
 
 On any of these the reader trusts no pin and does what it did before the
 pins were vouched for: `owner verify` answers `owner-pins-unprotected`, and
-the owner gate keeps keyd presence or the administrator dialog (a refusal
-where nobody can see it). An untrusted record is deliberately not a refusal
+the owner gate keeps keyd presence or refuses (where nobody can see it). An untrusted record is deliberately not a refusal
 here, unlike `-32002` from `owner/presence`: it means the pins are not
 vouched for, which is where every host stood before #753, while the owner
 can still be asked another way.
@@ -758,7 +758,7 @@ Tests named here are `node:test` titles, or Rust test functions under
 | No record, an unsigned binary (never run) or a malformed answer pins nothing | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "no keyd, an unsigned keyd or a malformed answer pins nothing" |
 | An unparseable pin file is a damaged pin: pinned again from the signed binary only with the owner's approval; a record that cannot be checked counts as an earlier pin | — | `pinnedPresenceKey` | `tests/owner-presence.test.mjs`: "a corrupt pin is replaced from the binary only with the owner, and left owner-only", "a pin record that cannot be checked counts as a pin, never as a first pin" |
 | `presence-unavailable` vs `owner-declined` (timeout included) | — | `keydPresence` | `tests/owner-presence.test.mjs`: "keydPresence tells \"nobody can be asked\" apart from \"the owner said no\"" |
-| The administrator dialog only when keyd cannot ask and no owner keys are enrolled, or the trust-root command disables challenges; a refusal is final | — | wired `presenceOrConsent`, `assertOwnerAction` | `tests/owner-statement.test.mjs`: "hosts with no enrolled owner keys retain the existing administrator fallback", "challenge refusal, cancellation, and disabled challenge paths never approve or fall through"; `tests/owner-gate.test.mjs`: "revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback" |
+| No administrator-dialog fallback for routine consent (#1172): keyd cannot ask and no verified challenge answers → the action is refused; a refusal is final | — | wired `presenceOrConsent`, `assertOwnerAction` | `tests/owner-statement.test.mjs`: "hosts with no enrolled owner keys are refused when keyd cannot ask (#1172)", "challenge refusal, cancellation, and disabled challenge paths never approve or fall through"; `tests/owner-gate.test.mjs`: "revision edit treats keyd refusal as final, without reaching the terminal-only dialog fallback" |
 | An SSH reply answers one pending CLI challenge, binding the raw-action digest and separately rendered summary, host, key, nonce and expiry; current pins are rechecked after waiting | owner SSH signer | `verifyOwnerChallenge`, wired owner gate | `tests/owner-statement.test.mjs`: "an owner challenge binds the displayed action summary and can be answered once by an enrolled SSH key", "the owner-action presence wrapper checks presence once before the challenge flow", "owner challenge refuses keyd-only pins and rechecks SSH pins after waiting" |
 | `owner/sign` signs exactly the segment it was sent, with the owner statement key and never the presence key, only on the owner's approval of keyd's own words for the payload; nobody to ask is `-32001`, a decline `-32000` | keyd-side | keyd `owner/sign` | `keyd/src/server.rs`: `signs_a_statement_only_when_the_owner_approves`; `keyd/src/statement.rs`: `matches_the_shared_vectors`, `reads_a_statement_and_a_challenge`; `keyd/src/store.rs`: `memory_store_round_trips` |
 | A payload agent-bot's verifier would refuse, an expired one, or one naming another key is `-32602` without asking; a statement key keyd does not control signs nothing (`-32002`); both methods are owner-channel only | keyd-side | keyd `owner/sign`, `owner/statement-key` | `keyd/src/server.rs`: `refuses_owner_sign_requests_without_asking`; `keyd/src/statement.rs`: `refuses_what_agent_bot_would_refuse`; `keyd/src/store.rs`: `an_untrusted_pin_is_typed_not_absent` |

@@ -30,7 +30,8 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isSoulBound, mintCredential, mintForCaller } from './git-credential-bot.mjs';
-import { ownerApprovalRequired, requireOwnerApproval } from './owner-approval.mjs';
+import { ownerApprovalRequired } from './owner-approval.mjs';
+import { requireOwnerPresence } from './owner-presence.mjs';
 import { configuredAccountIdentity, accountName, detectAgentHarness } from '../detect-harness.mjs';
 import { isGateEnabled, loadConfig } from '../config.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
@@ -117,9 +118,9 @@ async function main() {
     const slug = process.argv[appFlag + 1];
     if (!slug || slug.startsWith('--')) throw new Error('--mint-app requires an App slug');
     if (!soulBound && ownerApprovalRequired({ argv: ['node', 'mint-token.mjs', '--app', slug] })) {
-      requireOwnerApproval({
-        prompt: `Approve a GitHub App installation token for ${slug}[bot] — mint-token was run in the owner's account with no stated agent identity.`,
-      });
+      await requireOwnerPresence(
+        `mint a GitHub App installation token for ${slug}[bot], requested from the owner's account with no stated agent identity`,
+      );
     }
     const grant = soulBound
       ? await mintCredential({ slug, soulBound })

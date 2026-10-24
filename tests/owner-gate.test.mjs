@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mintAgentIdentity } from '../agent-identity.mjs';
 import { auditFile } from '../identity-format.mjs';
-import { assertOwnerAction, confirmOwnerPresence, consentOwner, soulMarkers, verifyPrincipalOwner } from '../owner-action.mjs';
+import { assertOwnerAction, confirmOwnerPresence, soulMarkers, verifyPrincipalOwner } from '../owner-action.mjs';
 import { computePackageRevision } from '../soul-package.mjs';
 import { adoptSoulPackage, listSoulProposals, proposeSoulRevision, revisionCommand, revisionHistory } from '../soul-revisions.mjs';
 import { fileURLToPath } from 'node:url';
@@ -65,13 +65,13 @@ test('a soul with its markers unset is still refused when the principal does not
   assert.equal(revisionHistory(f.id, f.options).length, 1);
 });
 
-test('a soul with its markers unset is refused when the consent dialog is cancelled', async (t) => {
+test('a soul with its markers unset is refused when owner presence declines', async (t) => {
   const f = fixture(t);
-  const cancelled = () => { const e = new Error('execution error: User canceled. (-128)'); e.stderr = 'User canceled. (-128)'; throw e; };
-  const assertUser = gate({ markers: () => [], consent: (action) => consentOwner(action, { platform: 'darwin', run: cancelled }) });
+  const declined = () => { throw Object.assign(new Error('the owner did not approve'), { code: 'owner-declined' }); };
+  const assertUser = gate({ markers: () => [], consent: declined });
   for (const args of [['approve', f.id, f.proposal.proposalId, 'r'], ['reject', f.id, f.proposal.proposalId, 'r'],
     ['edit', f.id, f.packagePath, 'r'], ['adopt', f.id, f.packagePath, 'r']]) {
-    await assert.rejects(revisionCommand(args, { ...f.options, assertUser }), /owner approval was cancelled — nothing was changed/);
+    await assert.rejects(revisionCommand(args, { ...f.options, assertUser }), /the owner did not approve/);
   }
   assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');
   assert.equal(revisionHistory(f.id, f.options).length, 1);
@@ -93,16 +93,14 @@ test('the owner is accepted through the principal and the record names the princ
   }
 });
 
-test('the owner is accepted through the consent dialog, which names the action', async (t) => {
+test('the owner is accepted through keyd presence, which names the action', async (t) => {
   const f = fixture(t);
   const prompts = [];
-  const granted = (argv) => { prompts.push(argv.at(-1)); return ''; };
   const assertUser = gate({ markers: () => [], verifyPrincipal: () => assert.fail('no principal was presented'),
-    consent: (action) => consentOwner(action, { platform: 'darwin', run: granted }) });
+    consent: (action) => { prompts.push(action); return { method: 'presence', via: 'agent-bot-keyd' }; } });
   const rejected = await revisionCommand(['reject', f.id, f.proposal.proposalId, 'Not now'], { ...f.options, assertUser });
-  assert.deepEqual(rejected.authorization, { method: 'consent' });
+  assert.deepEqual(rejected.authorization, { method: 'presence', via: 'agent-bot-keyd' });
   assert.match(prompts[0], new RegExp(`soul revision reject ${f.id}`));
-  await assert.rejects(consentOwner('x', { platform: 'linux', run: granted }), /refusing on this platform/);
 });
 
 test('a bound soul is refused even when the principal and the dialog would pass', async (t) => {
@@ -210,7 +208,7 @@ test('unmarked CLI without a credential refuses noninteractive consent and audit
       cwd: f.root, env: { ...f.options.env, AGENT_BOT_STATE_HOME: f.options.stateDir }, encoding: 'utf8',
     });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /owner-credential-required: owner consent requires an interactive terminal/);
+    assert.match(result.stderr, /owner-credential-required: .*agent-bot-keyd could not ask the owner/);
   }
   assert.equal(readFileSync(auditFile(f.options), 'utf8').trim().split('\n').length, 4);
   assert.equal(listSoulProposals(f.id, f.options)[0].status, 'pending');

@@ -14,7 +14,7 @@ import {
   PRESENCE_AUDIENCE, PRESENCE_KEY_UNTRUSTED, PRESENCE_UNAVAILABLE_RPC, actionDigest, attestedOwnerKeys, createPinsGenerationFloor,
   developerIdRequirement, keydAttestPins, keydPresence,
   keydPresenceWithoutDialog, pinSetDigest, pinnedPresenceKey, pinnedPresenceKeyWithoutDialog, presenceKeyFingerprint, presencePinPath,
-  presenceSignerPath, verifyPinsAttestation, verifyPresence,
+  presenceSignerPath, requireOwnerPresence, verifyPinsAttestation, verifyPresence,
 } from '../owner-presence.mjs';
 import { ed25519KeyLine, parseSshPublicKey, sshFingerprint } from '../owner-statement.mjs';
 import { rawEd25519 } from './helpers/ed25519-raw.mjs';
@@ -700,7 +700,7 @@ test('an untrusted keyd item refuses the owner action with its code, never falli
     consent: () => assert.fail('an untrusted item never falls back'), summarize: (text) => text }), { code: 'keyd-untrusted' });
 });
 
-test('the gate asks keyd first and falls back to the administrator dialog only when keyd cannot ask', async () => {
+test('the gate asks keyd first and refuses when keyd cannot ask — no administrator dialog (#1172)', async () => {
   const action = `soul comms ${ID} off`;
   const souls = [{ id: ID, name: 'Bill - Starter' }];
   const summarize = (text) => ownerActionSummary(text, { souls });
@@ -712,8 +712,9 @@ test('the gate asks keyd first and falls back to the administrator dialog only w
 
   asked.length = 0;
   const unavailable = () => { throw Object.assign(new Error('no GUI session'), { code: 'presence-unavailable' }); };
-  assert.deepEqual(await presenceOrConsent(action, { presence: unavailable, consent, summarize }), { method: 'consent' });
-  assert.deepEqual(asked, [['consent', action, `turn agent comms off for Bill - Starter (${ID})`]]);
+  await assert.rejects(presenceOrConsent(action, { presence: unavailable, summarize }),
+    (error) => error.code === 'presence-unavailable' && /never asks for administrator credentials/.test(error.message));
+  assert.deepEqual(asked, [], 'an unavailable presence never escalates to a dialog');
 
   asked.length = 0;
   for (const code of ['owner-declined', 'presence-invalid']) {
@@ -762,13 +763,10 @@ test('prompts name the soul by name and Agent ID, and the change', () => {
   assert.ok(say(`trusting SOP repository ${'x'.repeat(500)}`).length <= 400);
 });
 
-test('with no keyd installed the gate uses the administrator dialog, as before', async (t) => {
+test('with no keyd installed the gate refuses instead of raising an administrator dialog (#1172)', async (t) => {
   const { env } = home(t);
-  const seen = [];
-  const consent = (action, options) => presenceOrConsent(action, { ...options,
-    consent: (text, { summary }) => { seen.push(summary); return { method: 'consent' }; } });
-  assert.deepEqual(await assertOwnerAction(`soul comms ${ID} off`, { env, markers: () => [], consent }), { method: 'consent' });
-  assert.deepEqual(seen, [`turn agent comms off for ${ID}`]);
+  await assert.rejects(assertOwnerAction(`soul comms ${ID} off`, { env, markers: () => [] }),
+    (error) => error.code === 'presence-unavailable' && /agent-bot-keyd could not ask the owner/.test(error.message));
 });
 
 test('a long prompt is cut by code point, never inside an emoji', () => {
@@ -803,4 +801,35 @@ test('the organization profile names the keyd signer and never loosens it', () =
   for (const bad of [ANY_DEVELOPER_ID, 'keyd" or anchor apple', '']) {
     assert.throws(() => validateOrganizationProfile(profile({ keyd_identifier: bad })), /keyd_identifier/);
   }
+});
+
+test('routine CLI consent asks through keyd presence only, with informative prose (#1172)', async () => {
+  const action = 'mint a GitHub App installation token for you-claude-agent[bot]';
+  const guidance = [];
+  const asked = [];
+  const proof = await requireOwnerPresence(action, {
+    env: {},
+    writeGuidance: (text) => guidance.push(text),
+    presence: async (askedAction) => { asked.push(askedAction); return { method: 'presence', via: 'agent-bot-keyd' }; },
+  });
+  assert.deepEqual(proof, { method: 'presence', via: 'agent-bot-keyd' });
+  assert.deepEqual(asked, [action], 'keyd is asked with the runtime sentence naming the operation');
+  assert.match(guidance[0], /Touch ID or your login password/);
+  assert.match(guidance[0], /never asks for administrator credentials/);
+
+  // Unavailable presence refuses with remediation — never an admin dialog.
+  await assert.rejects(requireOwnerPresence(action, {
+    env: {},
+    writeGuidance: () => {},
+    presence: async () => { throw Object.assign(new Error('no GUI session'), { code: 'presence-unavailable' }); },
+  }), (error) => error.code === 'presence-unavailable'
+    && /Install or fix agent-bot-keyd/.test(error.message)
+    && /cancel any dialog that does/.test(error.message));
+
+  // A decline is the owner's answer and is not softened or re-asked.
+  await assert.rejects(requireOwnerPresence(action, {
+    env: {},
+    writeGuidance: () => {},
+    presence: async () => { throw Object.assign(new Error('the owner did not approve'), { code: 'owner-declined' }); },
+  }), { code: 'owner-declined' });
 });

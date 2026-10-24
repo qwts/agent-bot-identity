@@ -20,7 +20,7 @@ import {
 import { verifyPrincipalOwner } from './owner-principal.mjs';
 import { attestedOwnerKeys } from './identity-soul.mjs';
 
-export { consentOwner, soulMarkers } from './identity-soul.mjs';
+export { soulMarkers } from './identity-soul.mjs';
 export { ownerCredentialRequired } from './identity-format.mjs';
 export { verifyPrincipalOwner } from './owner-principal.mjs';
 export { keydPresenceWithoutDialog } from './identity-soul.mjs';
@@ -57,14 +57,14 @@ function sharedGateOptions(options) {
   // count only when keyd vouches for them, on this request (#753): when
   // presence is unavailable, keyd is asked once more for its signed record of
   // the owner keys, and any doubt (no keyd, another key set, an untrusted or
-  // older record) leaves the gate on the administrator dialog, as before.
+  // older record) leaves the gate refused — never on an administrator
+  // dialog (#1172).
   const allowChallenge = options.allowChallenge !== false;
   const attest = options.attestPins ?? attestedOwnerKeys;
   return {
     ...options,
     env,
     presence: options.presence,
-    consent: options.fallbackConsent ?? gate.consentOwner,
     listSouls: options.listSouls ?? list,
     // A daemon decision route brings its own challenge hook (a ledger's,
     // behind the daemon's own default-off guard), so it never prompts on the
@@ -120,10 +120,7 @@ export function confirmOwnerPresence(action, options = {}) {
 }
 
 export function presenceOrConsent(action, options = {}) {
-  return gate.presenceOrConsent(action, {
-    ...sharedGateOptions(options),
-    consent: options.consent ?? options.fallbackConsent ?? gate.consentOwner,
-  });
+  return gate.presenceOrConsent(action, sharedGateOptions(options));
 }
 
 export function ownerActionSummary(action, options = {}) {

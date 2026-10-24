@@ -193,8 +193,10 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
      daemon).
 2. **Verify the first token mint without triggering owner-approval prompts.**
    In the owner's account, `agent-bot mint-token --app <slug>` from an unpinned
-   context with no stated identity fires the macOS owner-approval gate and
-   prompts for administrator credentials on every call:
+   context with no stated identity fires the owner-approval gate and asks the
+   owner through agent-bot-keyd (Touch ID or login password — never
+   administrator credentials; cancel any dialog that asks for those) on
+   every call:
    - **Bound soul/daemon path (`store: "keyd"` and `store: "pass-cli"`
      backends):** Neither backend has an unbound `GH_AGENT_APP=<slug>` path
      (`keyd` rejects unbound callers and `passCliStore` refuses soul-marked

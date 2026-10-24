@@ -469,14 +469,14 @@ test('a soul holding the daemon token and a software key cannot approve its own 
     const asked = await decide();
     assert.equal(asked.status, 403);
     const refusal = await asked.json();
-    assert.match(refusal.error, /the dialog was reached/);
+    assert.match(refusal.error, /agent-bot-keyd could not ask the owner/);
     assert.equal(refusal.challenges, undefined);
     // A challenge the soul made up and signed with the software key.
     const action = `approve Bash for ${AGENT_ID}: push`;
     const [forged] = createOwnerChallenges(action, action, [software.pin]);
     const viaStatement = await decide({ statement: signChallenge(forged.payload, software.keyPath).token });
     assert.equal(viaStatement.status, 403);
-    assert.match((await viaStatement.json()).error, /the dialog was reached/);
+    assert.match((await viaStatement.json()).error, /agent-bot-keyd could not ask the owner/);
 
     // With a security key pinned as well, the soul's key still cannot answer.
     writeOwnerKeys([software.pin, ownerKey(root, env).pin], { env });
@@ -503,7 +503,7 @@ for (const [label, challenges] of [
   ['no ledger', () => null],
   ['pins keyd does not vouch for', (env) => createChallengeLedger({ env, attest: unvouched })],
   ['no keyd to vouch', (env) => createChallengeLedger({ env })],
-]) test(`with ${label}, a decision route asks only keyd or the dialog`, async () => {
+]) test(`with ${label}, a decision route asks only keyd — never a dialog (#1172)`, async () => {
   const { root, env } = scratch();
   const forged = ownerKey(root, env, 'forged');
   writeOwnerKeys([forged.pin], { env });
@@ -517,18 +517,17 @@ for (const [label, challenges] of [
     const response = await call('/v0/approvals/decide', {
       method: 'POST', body: { proposalId: row.proposalId, decision: 'approve', digest: row.operationDigest, statement: signed(challenge.payload, forged) },
     });
-    assert.equal(response.status, 200);
-    assert.equal(asked.length, 1);
-    assert.deepEqual(await waiting, { decision: 'approve' });
-    const [receipt] = audits(env).filter((entry) => entry.event === 'approval-decision' && entry.decision === 'approved');
-    assert.equal(receipt.detail, 'risk: external; authorized: consent');
+    assert.equal(response.status, 403);
+    assert.equal(asked.length, 0, 'no dialog fallback remains to approve');
+    assert.deepEqual((await (await call('/v0/approvals')).json()).proposals.map((row) => row.status), ['open']);
+    assert.equal(audits(env).some((entry) => entry.event === 'approval-decision' && entry.decision === 'approved'), false);
     assert.equal(audits(env).some((entry) => entry.decision === 'owner-challenged'), false);
   } finally {
     await close();
   }
 });
 
-test('a malformed pin file never blocks a decision: the dialog asks', async () => {
+test('a malformed pin file never approves a decision: refused, no dialog (#1172)', async () => {
   for (const challenges of [null, 'ledger']) {
     const { env } = scratch();
     const file = ownerKeysPath({ env });
@@ -545,9 +544,8 @@ test('a malformed pin file never blocks a decision: the dialog asks', async () =
       const response = await call('/v0/approvals/decide', {
         method: 'POST', body: { proposalId: row.proposalId, decision: 'deny', digest: row.operationDigest },
       });
-      assert.equal(response.status, 200, String(challenges));
-      assert.equal(asked.length, 1);
-      assert.deepEqual(await waiting, { decision: 'deny' });
+      assert.equal(response.status, 403, String(challenges));
+      assert.equal(asked.length, 0);
     } finally {
       await close();
     }
@@ -605,7 +603,7 @@ test('agent-bot approvals prints the challenges to sign and passes a signed stat
 // stubs and nothing can prompt; keyd is a fake owner.sock here. With keyd's
 // record of exactly the pinned set the route answers with a challenge, so
 // the default always asks keyd; with any other record it never does, and
-// the dialog (refused here) decides.
+// the gate refuses — no administrator dialog decides (#1172).
 const HELPERS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'helpers');
 for (const [label, vouches, ownHome] of [
   ['keyd vouches for the pins', true, false],
@@ -673,7 +671,7 @@ for (const [label, vouches, ownHome] of [
       } else {
         assert.equal(result.status, 403);
         assert.match(result.error, /the owner did not confirm this decision/);
-        assert.equal(dialogs, process.platform === 'darwin' ? 1 : 0, 'the dialog decides, and nobody answers it here');
+        assert.equal(dialogs, 0, 'no administrator dialog is raised (#1172)');
       }
       const audit = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8');
       assert.equal(audit.includes('"owner-challenged"'), vouches);

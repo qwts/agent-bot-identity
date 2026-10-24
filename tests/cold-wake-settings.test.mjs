@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { coldWakeCommand, coldWakeFile, readColdWakeSettings, setColdWake } from '../cold-wake-settings.mjs';
-import { assertOwnerAction, consentOwner } from '../owner-action.mjs';
+import { assertOwnerAction, presenceOrConsent } from '../owner-action.mjs';
 
 const id = 'agent_12345678-1234-4123-8123-123456789abc';
 const cli = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -84,10 +84,13 @@ test('cold wake: a principal on stdin reaches the gate; a bound soul is refused 
     await assert.rejects(owned(soulEnv, gate).run(['off']), /owner only/);
   }
   assert.equal(readColdWakeSettings({ env })[id], true);
-  // The consent path names the action and soul in the dialog.
+  // The presence path names the action and soul in keyd's prompt prose.
   const prompts = [];
-  const consent = owned(env, (action) => consentOwner(action, { platform: 'darwin', run: (argv) => { prompts.push(argv.at(-1)); return ''; } }));
-  assert.deepEqual(await consent.run(['off']), { method: 'consent' });
+  const consent = owned(env, (action) => presenceOrConsent(action, {
+    presence: (summary) => { prompts.push(summary); return { method: 'presence', via: 'agent-bot-keyd' }; },
+    summarize: (text) => text,
+  }));
+  assert.deepEqual(await consent.run(['off']), { method: 'presence', via: 'agent-bot-keyd' });
   assert.match(prompts[0], new RegExp(`soul cold-wake ${id} off`));
 }));
 

@@ -194,16 +194,16 @@ test('every reader refuses a vouched pin the profile does not list, and accepts 
     { env, home, write: () => {}, attestPins: attest });
 
   writeConfig(home, { ownerKeys: [unlisted] });
-  assert.deepEqual(await gate(), { method: 'consent' });
+  await assert.rejects(gate(), { code: 'presence-unavailable' });
   assert.equal(await ledger.hook({ request: 'p1' })(action, { summary: action }), null);
   const refused = await verify();
   assert.deepEqual([refused.ok, refused.code, refused.pins.code], [false, 'owner-pins-unprotected', 'pins-unlisted']);
   assert.deepEqual(seen.map((result) => result.code), ['pins-unlisted', 'pins-unlisted', 'pins-unlisted']);
-  assert.equal(dialog.length, 1);
+  assert.equal(dialog.length, 0, 'no dialog fallback remains (#1172)');
 
   writeConfig(home, { ownerKeys: [unlisted, declared(owner.pin)] });
   assert.equal((await gate()).method, 'statement');
   await assert.rejects(ledger.hook({ request: 'p2' })(action, { summary: action }), { code: 'owner-challenge-required' });
   assert.equal((await verify()).ok, true);
-  assert.equal(dialog.length, 1);
+  assert.equal(dialog.length, 0);
 });

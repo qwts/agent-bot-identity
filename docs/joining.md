@@ -75,10 +75,11 @@ are delivered to its inbox but nothing wakes it.
    soul being changed (name and Agent ID), or says a new soul is created.
    The wake is turned on before agent-comms registers the soul, so a message
    delivered meanwhile wakes it; a failed registration restores the old setting. The owner approves with
-   Touch ID or the macOS approval dialog (`--principal-stdin` is refused with `owner-credential-required` for now, #1063). The
-   dialog asks for an administrator's password: that is the gate's proof
-   that a person, not a soul, approved. No launch agent or system setting
-   is involved.
+   Touch ID or the login password through agent-bot-keyd (`--principal-stdin` is refused with `owner-credential-required` for now, #1063). Keyd
+   asks with its own prompt and signs the approval; that is the gate's proof
+   that a person, not a soul, approved. The gate never asks for an
+   administrator password (#1172): if keyd cannot ask, the command refuses.
+   No launch agent or system setting is involved.
 
 Running it again from the same checkout reuses the soul. A checkout already
 pinned to another soul is refused.
@@ -156,8 +157,9 @@ each layer before opening a PR:
      daemon.
 2. **Verify first token minting without triggering owner-approval prompts.** Do
    not run `agent-bot mint-token --app <slug>` from an unpinned checkout with no
-   stated identity in the owner's account — that path triggers the macOS
-   owner-approval gate and prompts for administrator credentials on every call:
+   stated identity in the owner's account — that path triggers the
+   owner-approval gate and asks the owner through agent-bot-keyd (Touch ID or
+   login password, never administrator credentials) on every call:
    - **Bound soul/daemon path (`store: "keyd"` and `store: "pass-cli"`
      backends):** Neither backend has an unbound `GH_AGENT_APP=<slug>` path
      (`keyd` rejects unbound callers and `passCliStore` refuses soul-marked

@@ -291,7 +291,7 @@ test('the challenge gate reaches the terminal reply flow only after unavailable 
 // that clears its markers can pin a software-made "security key" and sign
 // its own challenge. The terminal gate trusts the pins only when keyd vouches
 // for them on this request; otherwise keyd or the administrator dialog decides.
-test('the owner gate ignores a forged pin keyd does not vouch for, and asks the dialog', async (t) => {
+test('the owner gate ignores a forged pin keyd does not vouch for, and refuses (#1172)', async (t) => {
   const ctx = command(t);
   const forged = securityKey();
   writeOwnerKeys([pinFor(forged, { name: 'forged' })], { env: ctx.env });
@@ -307,19 +307,19 @@ test('the owner gate ignores a forged pin keyd does not vouch for, and asks the 
     attestPins: unvouched, challengePrompt: () => assert.fail('pins keyd does not vouch for raise no challenge'),
     fallbackConsent: async (asked) => { dialog.push(asked); return { method: 'consent' }; },
   };
-  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
-  assert.deepEqual(await presenceOrConsent(action, options), { method: 'consent' });
+  await assert.rejects(assertOwnerAction(action, options), { code: 'presence-unavailable' });
+  await assert.rejects(presenceOrConsent(action, options), { code: 'presence-unavailable' });
   // With no keyd here at all (the default attester, a scratch HOME), the same.
   const { attestPins: _, ...noKeyd } = options;
-  assert.deepEqual(await assertOwnerAction(action, noKeyd), { method: 'consent' });
+  await assert.rejects(assertOwnerAction(action, noKeyd), { code: 'presence-unavailable' });
   // An attester that throws is no vouching either.
-  assert.deepEqual(await assertOwnerAction(action, { ...options, attestPins: async () => { throw new Error('keyd crashed'); } }), { method: 'consent' });
-  assert.deepEqual(dialog, [action, action, action, action]);
+  await assert.rejects(assertOwnerAction(action, { ...options, attestPins: async () => { throw new Error('keyd crashed'); } }), { code: 'presence-unavailable' });
+  assert.deepEqual(dialog, [], 'no administrator dialog is ever raised');
   // Vouched for, the same signature would answer: keyd's record is what stops it.
   assert.equal((await assertOwnerAction(action, { ...options, attestPins: vouched, challengePrompt: async (challenges) => sign(challenges) })).method, 'statement');
-  // A pin file that cannot be read never blocks the dialog either.
+  // A pin file that cannot be read never approves either.
   writeFileSync(ownerKeysPath({ env: ctx.env }), '{ not json');
-  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
+  await assert.rejects(assertOwnerAction(action, options), { code: 'presence-unavailable' });
 });
 
 // keys.json is swapped between the gate's read and keyd's answer: the gate
@@ -346,7 +346,7 @@ test('the terminal gate never trusts a pin file swapped between its read and key
     },
     fallbackConsent: async (asked) => { dialog.push(asked); return { method: 'consent' }; },
   };
-  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
+  await assert.rejects(assertOwnerAction(action, options), { code: 'presence-unavailable' });
   assert.deepEqual(seen.map((result) => result.code), ['pins-mismatch']);
   assert.deepEqual(readOwnerKeys({ env: ctx.env }), [owner], 'the file was swapped');
   // Unswapped, the same keyd vouches for a forged set it did record: the
@@ -354,10 +354,10 @@ test('the terminal gate never trusts a pin file swapped between its read and key
   writeOwnerKeys([forgedPin], { env: ctx.env });
   const recorded = keydVouching({ approved: () => [forgedPin] });
   assert.equal((await assertOwnerAction(action, { ...options, attestPins: recorded })).method, 'statement');
-  assert.equal(dialog.length, 1);
+  assert.equal(dialog.length, 0);
 });
 
-test('a keyd record older than one seen is pins-stale through the terminal gate: the dialog asks', async (t) => {
+test('a keyd record older than one seen is pins-stale through the terminal gate: refused', async (t) => {
   const ctx = command(t);
   const key = securityKey();
   const pin = pinFor(key);
@@ -380,8 +380,8 @@ test('a keyd record older than one seen is pins-stale through the terminal gate:
   };
   assert.equal((await assertOwnerAction(action, options)).method, 'statement');
   generation = 3;
-  assert.deepEqual(await assertOwnerAction(action, options), { method: 'consent' });
-  assert.deepEqual([prompts, dialog.length], [1, 1]);
+  await assert.rejects(assertOwnerAction(action, options), { code: 'presence-unavailable' });
+  assert.deepEqual([prompts, dialog.length], [1, 0]);
   assert.deepEqual(seen.map((result) => (result.attested ? result.generation : result.code)), [5, 5, 'pins-stale']);
 });
 
@@ -433,13 +433,12 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
   }), { code: 'statement-scope-mismatch' });
   assert.equal(fallback, 0, 'an invalid reply is final');
 
-  const disabled = await assertOwnerAction(action, {
+  await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable, allowChallenge: false,
     attestPins: vouched, challengePrompt: () => assert.fail('enrollment and removal never use the signed fallback'),
     fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
-  });
-  assert.deepEqual(disabled, { method: 'consent' });
-  assert.equal(fallback, 1, 'disabling challenge retains the old consent path');
+  }), { code: 'presence-unavailable' });
+  assert.equal(fallback, 0, 'disabling challenge no longer reaches any dialog (#1172)');
 
   await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: async () => { throw Object.assign(new Error('declined'), { code: 'owner-declined' }); },
@@ -448,17 +447,16 @@ test('challenge refusal, cancellation, and disabled challenge paths never approv
   }), { code: 'owner-declined' });
 });
 
-test('hosts with no enrolled owner keys retain the existing administrator fallback', async (t) => {
+test('hosts with no enrolled owner keys are refused when keyd cannot ask (#1172)', async (t) => {
   const ctx = command(t);
   let fallback = 0;
-  const proof = await assertOwnerAction('owner action without enrolled pins', {
+  await assert.rejects(assertOwnerAction('owner action without enrolled pins', {
     env: ctx.env, cwd: ctx.dir, markers: () => [],
     presence: async () => { throw Object.assign(new Error('headless'), { code: 'presence-unavailable' }); },
     attestPins: vouched, challengePrompt: () => assert.fail('an empty pin store does not produce a challenge'),
     fallbackConsent: async () => { fallback += 1; return { method: 'consent' }; },
-  });
-  assert.deepEqual(proof, { method: 'consent' });
-  assert.equal(fallback, 1);
+  }), { code: 'presence-unavailable' });
+  assert.equal(fallback, 0, 'no dialog fallback remains');
 });
 
 test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting', async (t) => {
@@ -505,13 +503,13 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
   }), { code: 'owner-unreachable' });
   assert.equal(fallback, 0, 'a replacement key cannot inherit an old challenge');
 
-  // keyd stops vouching while the owner signs: the reply goes unused and the
-  // dialog asks, once; keyd was asked about the pins as they were re-read.
+  // keyd stops vouching while the owner signs: the reply goes unused and
+  // the gate refuses; keyd was asked about the pins as they were re-read.
   writeOwnerKeys([pin], { env: ctx.env });
   const asked = [];
   let prompts = 0;
   const flipping = async (pins) => { asked.push(pins); return asked.length === 1 ? vouched() : unvouched(); };
-  const proof = await assertOwnerAction(action, {
+  await assert.rejects(assertOwnerAction(action, {
     env: ctx.env, cwd: ctx.dir, markers: () => [], presence: unavailable, attestPins: flipping,
     challengePrompt: async ([challenge]) => {
       prompts += 1;
@@ -520,9 +518,8 @@ test('owner challenge refuses keyd-only pins and rechecks SSH pins after waiting
       return armorStatement(`s1.${segment}.${key.sshsig(Buffer.from(segment)).toString('base64url')}`);
     },
     fallbackConsent: () => { fallback += 1; return { method: 'consent' }; },
-  });
-  assert.deepEqual(proof, { method: 'consent' });
-  assert.deepEqual([prompts, fallback], [1, 1]);
+  }), { code: 'presence-unavailable' });
+  assert.deepEqual([prompts, fallback], [1, 0]);
   assert.deepEqual(asked, [[pin], [pin]]);
 });
 
