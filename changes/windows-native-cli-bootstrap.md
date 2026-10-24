@@ -1,1 +1,0 @@
-- Complete native Windows CLI and worktree setup without symlink privileges: migrate this runtime's legacy managed symlink, preserve foreign commands, use junctions for directory aliases, dispatch hooks and membership through Git for Windows, and retain scheduler paths and storage deadlines needed for secure daemon binding (#1158).
