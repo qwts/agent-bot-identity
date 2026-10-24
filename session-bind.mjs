@@ -10,10 +10,9 @@ import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { readBinding, readBindToken } from './identity/agent-binding.mjs';
+import { readBinding, readBindToken, resolveAgentSlug } from './identity-cli.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
-import { resolveAgentSlug } from './identity-host.mjs';
 
 export const SESSION_BIND_USAGE = `usage: agent-bot session bind [--transcript-id ID] [--provider NAME] [--parent-agent-id ID] [--json]
 
