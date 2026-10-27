@@ -23,6 +23,7 @@ export { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
 export { createIdentityAppJobs, identityAppFailure, identityAppOperation, listIdentityApps } from './identity-apps.mjs';
 export { createIdentityRoutes, spawnChildIdentity } from './identity-routes.mjs';
 export { createInboxTaker, inboxError } from './inbox-take.mjs';
+export { createServerNotices } from './server-notices.mjs';
 export { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydMcpServerEntry, keydPaths, keydPolicyRules, keydRequest, keydStatus, keydVersionAction, readKeydRecord } from './keyd-client.mjs';
 export { mint } from './mint-token.mjs';
 export { verifyOwnerDecisionPresence } from './owner-decision-action.mjs';

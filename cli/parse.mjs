@@ -34,6 +34,7 @@ const PUBLIC_COMMANDS = new Set([
   'metrics',
   'diagnostics',
   'server',
+  'notices',
 ]);
 
 const INTERNAL_COMMANDS = new Set([

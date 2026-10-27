@@ -163,7 +163,11 @@ and a soul binding, are refused on each owner route.
 | `GET /v0/binding` | binding | |
 | `DELETE /v0/binding` | binding | |
 | `POST /v0/credential` | binding | The soul's own App token. |
-| `POST /v0/inbox/take` | binding | |
+| `POST /v0/inbox/take` | binding | Deprecated: in server mode it takes one notice and auto-acks. Use `/v0/notices/*`. |
+| `POST /v0/notices/take` | binding | Leases notices from the agent-bot server (see docs/notices.md). |
+| `POST /v0/notices/peek` | binding | |
+| `POST /v0/notices/ack` | binding | |
+| `POST /v0/notices/release` | binding | |
 | `POST /v0/grants/request` | binding | Approving the grant asks the owner against its digest (#108). |
 | `POST /v0/grants/spend` | binding | Spends an already approved grant once. |
 | `POST /v0/keyd/grant` | binding | |

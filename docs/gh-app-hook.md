@@ -1,5 +1,9 @@
 # gh-app-hook: deploying the GitHub App mailbox
 
+> **Superseded in server mode.** With `AGENT_BOT_SERVER` set, point each App's webhook at
+> `<server>/apps/webhook/<app slug>` and use `agent-bot notices` / `take_notices` instead of
+> `take_inbox`; see [notices.md](notices.md). This Worker remains for setups without the server.
+
 `identity/gh-app-hook.mjs` is a Cloudflare Worker with one Durable Object. GitHub
 posts each App's webhook deliveries to it; it stores supported repository
 notices, pushes them to subscribers, and lets a bound session take

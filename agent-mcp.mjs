@@ -99,9 +99,46 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'take_notices',
+    description:
+      'Lease up to `count` GitHub notices (mentions, review requests, reviews, comments, issue/PR/discussion changes) for this '
+      + 'bound soul\'s App from the agent-bot server, oldest first. Each has an `id` and a `lease`; call ack_notices with the '
+      + 'leases once handled, or they come back after lease_seconds (`attempts` counts takes). Requires bind and server mode.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      count: { type: 'integer', minimum: 1, maximum: 50, description: 'default 10' },
+      type: { type: 'string', description: 'comma list of discussion, issue, pr, review, comment (plural ok)' },
+      kind: { type: 'string', description: 'comma list, e.g. mention, review_requested, issues.opened' },
+      repo: { type: 'string', description: 'comma list of owner/name' },
+      since: { type: 'string', description: 'RFC3339 or unix time' },
+      lease_seconds: { type: 'integer', minimum: 10, maximum: 3600, description: 'default 300' },
+    } },
+  },
+  {
+    name: 'peek_notices',
+    description: 'List visible notices (same filters as take_notices) without leasing them. Requires bind and server mode.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      count: { type: 'integer', minimum: 1, maximum: 50 }, type: { type: 'string' }, kind: { type: 'string' },
+      repo: { type: 'string' }, since: { type: 'string' },
+    } },
+  },
+  {
+    name: 'ack_notices',
+    description: 'Delete handled notices. Pass the `lease` tokens from take_notices (a stale lease is reported, not acked).',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['ids'], properties: {
+      ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 },
+    } },
+  },
+  {
+    name: 'release_notices',
+    description: 'Hand leased notices back to the queue early, unhandled.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['ids'], properties: {
+      ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 },
+    } },
+  },
+  {
     name: 'take_inbox',
     description:
-      'Take the next subscribed GitHub notice (including mentions, review requests, '
+      'DEPRECATED: use take_notices + ack_notices. In server mode this takes one notice for the bound repository and acks it. Take the next subscribed GitHub notice (including mentions, review requests, '
       + 'merges, reviews, issue changes and discussion changes) for the App and '
       + 'repository this bound worktree is. The call returns the event and '
       + 'marks it pulled (the record stays until its push deliveries settle '
@@ -384,6 +421,17 @@ async function callTool(state, name, args = {}) {
     }
     case 'take_inbox':
       return takeInbox(state, args);
+    case 'take_notices':
+    case 'peek_notices':
+    case 'ack_notices':
+    case 'release_notices': {
+      if (!state.secret) throw new Error('not bound — call the bind tool first');
+      try {
+        return await state.client.notices(state.secret, name.slice(0, -'_notices'.length), args ?? {});
+      } catch (error) {
+        throw new Error(`${name} failed: ${daemonDetail(error)}`, { cause: error });
+      }
+    }
     case 'request_grant':
     case 'spend_grant': {
       if (!state.secret) throw new Error('not bound — call the bind tool first');

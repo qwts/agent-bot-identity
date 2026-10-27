@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Server-mode notices replace `take_inbox`: new `agent-bot notices take|peek|ack|release` and MCP tools `take_notices`, `peek_notices`, `ack_notices`, `release_notices` lease GitHub App notices from the agent-bot server (filters: `--count`, `--type discussion|issue|pr|review|comment`, `--kind`, `--repo`, `--since`, `--lease`). Un-acked notices come back after their lease. See [docs/notices.md](docs/notices.md).
+  - `take_inbox` is deprecated. With `AGENT_BOT_SERVER` set it is a shim that takes one notice for the bound repository and acks it, without reading the gh-app-hook bearer; without it, it still pulls from the gh-app-hook Worker.
+
 ## 0.13.0
 
 - Worktree binding and live session binding are now reported as separate facts: `setup-worktree` names both, `doctor` carries a distinct `worktree.session_binding` check — a warning when a soul-bound session has no live binding, a failure when the binding is unreadable — and the bundled verified-publish workflow gates on the live binding before any GitHub work (#1167, #1168, #1169).

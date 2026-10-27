@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { credentialVault, inboxBearerItem, itemTitle } from './identity-format.mjs';
 import { createProtonPassAdapter } from './secret-providers/proton-pass.mjs';
 import { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
+import { createServerNotices } from './server-notices.mjs';
 
 export const INBOX_TIMEOUT_MS = 10_000;
 export const INBOX_BEARER_TITLE = itemTitle(inboxBearerItem());
@@ -197,9 +198,18 @@ export async function takeFromBroker({ inboxUrl, token, bearerSource = 'pass-cli
 // Takes for one App and repository run one at a time in this daemon, so two
 // sessions on the same worktree can never be handed the same record even by
 // a broker that does not serialize its own takes.
-export function createInboxTaker({ env = process.env, readBearer = () => resolveInboxBearer({ env }), fetchImpl = globalThis.fetch } = {}) {
+// In server mode (AGENT_BOT_SERVER) take_inbox is a deprecated shim over the
+// server's notices queue: take one for the bound repository, ack it, return it
+// in the legacy { event } shape. No inbox bearer is read.
+export function createInboxTaker({ env = process.env, readBearer = () => resolveInboxBearer({ env }), fetchImpl = globalThis.fetch, serverNotices = null } = {}) {
   const queues = new Map();
+  const notices = serverNotices ?? createServerNotices({ env, fetchImpl });
   return function take({ app, repo }) {
+    if (notices.enabled()) {
+      return notices.takeOne({ app, repo }).catch((error) => {
+        throw inboxError(error.code ?? 'inbox-unavailable', `take_inbox failed: agent-bot server notices: ${error.message}`, { cause: error, statusCode: error.statusCode ?? 502 });
+      });
+    }
     const key = `${app}\n${repo}`;
     const previous = queues.get(key) ?? Promise.resolve();
     // An unconfigured URL is refused before the bearer is ever read.

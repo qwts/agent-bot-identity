@@ -88,6 +88,22 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
       assert.equal(proof.payload.htu, url);
       assert.equal(proof.payload.ath, crypto.createHash('sha256').update(tok).digest('base64url'));
       if (u.pathname === '/api/daemon/whoami') return signed(200, { device: { id: t.device, management: 'managed' } }, proof.payload.jti);
+      if (u.pathname.startsWith('/api/daemon/notices')) {
+        s.notices ??= [];
+        const body = init.body ? JSON.parse(init.body) : Object.fromEntries(u.searchParams);
+        s.noticeBodies = [...(s.noticeBodies ?? []), { path: u.pathname, method: init.method, body }];
+        const vis = s.notices.filter((n) => !n.lease && (!body.repo || n.repo === body.repo) && (!body.type || body.type.split(',').some((t) => n.type.includes(t.replace(/s$/, '')))));
+        if (u.pathname === '/api/daemon/notices/take') {
+          const got = vis.slice(0, body.count ?? 10);
+          for (const n of got) { n.lease = `${n.id}.L`; n.attempts = (n.attempts ?? 0) + 1; }
+          return signed(200, { harness: body.harness ?? 'grok', notices: got.map((n) => ({ ...n })), remaining: vis.length - got.length, lease_seconds: 300 }, proof.payload.jti);
+        }
+        if (u.pathname === '/api/daemon/notices') return signed(200, { notices: vis, visible: vis.length, leased: 0 }, proof.payload.jti);
+        const ids = body.ids.map((x) => x.split('.')[0]);
+        if (u.pathname.endsWith('/ack')) { s.notices = s.notices.filter((n) => !ids.includes(n.id)); return signed(200, { acked: ids, stale: [], missing: [] }, proof.payload.jti); }
+        for (const n of s.notices) if (ids.includes(n.id)) delete n.lease;
+        return signed(200, { released: ids, stale: [], missing: [] }, proof.payload.jti);
+      }
       if (u.pathname === '/api/daemon/installation-token') {
         const body = JSON.parse(init.body);
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
@@ -242,4 +258,46 @@ test('a failed first signed check keeps the enrollment and marks it unverified',
   assert.equal(dev.verified, false);
   assert.match(dev.verify_error, /signature/);
   assert.equal(loadDevice({ env }).device_id, dev.device_id);
+});
+
+test('notices: take/peek/ack/release through the signed session, filters and the take_inbox shim', async () => {
+  const { createServerNotices, parseNoticesArgs, noticeQuery, harnessForApp, main: noticesMain } = await import('../identity/server-notices.mjs');
+  const { createInboxTaker } = await import('../identity/inbox-take.mjs');
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  srv.notices = [
+    { id: 'd1', kind: 'mention', repo: 'a/b', type: ['discussion', 'comment'], number: 1 },
+    { id: 'd2', kind: 'issues.opened', repo: 'a/b', type: ['issue'], number: 2 },
+    { id: 'd3', kind: 'pull_request.opened', repo: 'a/c', type: ['pr'], number: 3 },
+  ];
+  const n = createServerNotices({ env, fetchImpl: srv.fetch });
+  assert.equal(n.enabled(), true);
+  const t = await n.take({ count: 5, type: 'discussions' });
+  assert.deepEqual(t.notices.map((x) => x.id), ['d1']);
+  assert.equal(t.notices[0].lease, 'd1.L');
+  assert.deepEqual(srv.noticeBodies.at(-1).body, { count: 5, type: 'discussions' });
+  assert.equal((await n.peek({ repo: 'a/b' })).visible, 1);
+  assert.equal(srv.noticeBodies.at(-1).method, 'GET');
+  assert.deepEqual((await n.release({ ids: ['d1.L'] })).released, ['d1']);
+  assert.deepEqual((await n.ack({ ids: 'd1.L' })).acked, ['d1']);
+  await assert.rejects(() => n.ack({ ids: [] }), /1\.\.100/);
+  assert.throws(() => noticeQuery({ count: 99 }), /1\.\.50/);
+  assert.deepEqual(noticeQuery({ type: ['pr', 'issue'], kind: 'mention' }), { type: 'pr,issue', kind: 'mention' });
+  assert.deepEqual(parseNoticesArgs(['take', '--count', '5', '--type', 'discussion', '--type', 'pr']), { sub: 'take', ids: [], json: false, count: '5', type: 'discussion,pr' });
+  assert.throws(() => parseNoticesArgs(['bogus']), /unknown notices command/);
+  assert.equal(harnessForApp('grok', { harnesses: ['grok', 'x'] }), 'grok');
+  assert.equal(harnessForApp('other', { harnesses: ['only'] }), 'only');
+  assert.throws(() => harnessForApp('other', { harnesses: ['a', 'b'] }), /not enrolled for harness/);
+  // take_inbox shim: one notice for the repo, acked, legacy { event } shape
+  const take = createInboxTaker({ env, serverNotices: n, readBearer: () => { throw new Error('bearer must not be read'); } });
+  const r = await take({ app: 'grok', repo: 'a/c' });
+  assert.equal(r.event.id, 'd3');
+  assert.equal(r.event.lease, undefined);
+  assert.ok(!srv.notices.some((x) => x.id === 'd3'), 'shim acks what it returns');
+  assert.deepEqual(await take({ app: 'grok', repo: 'a/c' }), { event: null });
+  // CLI
+  let out = '';
+  assert.equal(await noticesMain(['take', '--json'], { env, fetchImpl: srv.fetch, out: { write: (x) => { out += x; } }, err: { write: () => {} } }), 0);
+  assert.deepEqual(JSON.parse(out).notices.map((x) => x.id), ['d2']);
 });

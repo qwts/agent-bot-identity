@@ -58,7 +58,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   assertAuthorized, assertPrivateGitDir, assignAgentApp, bindAgentLineage, childBindingPath,
   consumeBindToken, createBindingRegistry, createIdentityAppJobs, createIdentityRoutes,
-  createInboxTaker, ensureAgentIdentity, extractToken, identityAppFailure, identityAppOperation,
+  createInboxTaker, createServerNotices, ensureAgentIdentity, extractToken, identityAppFailure, identityAppOperation,
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
@@ -388,7 +388,8 @@ export function createDaemonServer({
   keydCall = keydRequest,
   // take_inbox's broker call (#229): ({ app, repo }) => { event }. The default
   // reads the bearer from pass-cli and the URL from this process's env.
-  inboxTake = createInboxTaker({ env }),
+  serverNotices = createServerNotices({ env }),
+  inboxTake = createInboxTaker({ env, serverNotices }),
   spawnHook = runSpawnHooks,
   now = () => new Date(),
   // Delegation grants (#108): one ledger per daemon, since approved grants
@@ -584,6 +585,7 @@ export function createDaemonServer({
     bindWorktreeConversation, reconcileSoulApp, ownerGate,
     mintImpl, keydCall, signingKey,
     inboxTake,
+    serverNotices,
     grantLedger, grantActor, grantView, grantFailure,
     soulCredentialsDeclaration, soulDirectory, populationFile,
   });
