@@ -352,7 +352,8 @@
     "identity/owner-decision-trust.mjs": "identity",
     "identity/presence-verifier.mjs": "identity",
     "cold-wake-lock.mjs": "shared",
-    "wake-webhook-store.mjs": "comms"
+    "wake-webhook-store.mjs": "comms",
+    "identity/server-client.mjs": "identity"
   },
   "assets": {
     "hooks/": "identity",
@@ -450,7 +451,8 @@
     "wake-plane.mjs": "Daemon side of the agent-comms wake plane (agent-comms ADR-0008): launches souls on wakes, so it composes soul and comms.",
     "windows-account-custody.mjs": "Shared (owner decision on #645, F11, 2026-10-11): Windows SID and ACL checks used by identity (vouch.mjs) and comms (comms-windows.mjs). It reads ownership and attributes, never a file's contents, so it holds no credential.",
     "cold-wake-lock.mjs": "Shared synchronous settings lock/path mechanism, with ephemeral lock-held tokens; reads no settings or credentials.",
-    "wake-webhook-store.mjs": "Internal comms-owned webhook storage. Helpers require the active shared cold-wake lock before the per-soul webhook lock; existing public access stays in wake-webhook.mjs."
+    "wake-webhook-store.mjs": "Internal comms-owned webhook storage. Helpers require the active shared cold-wake lock before the per-soul webhook lock; existing public access stays in wake-webhook.mjs.",
+    "identity/server-client.mjs": "Identity: opt-in agent-bot server mode (docs/server-mode.md) — device enrollment, DPoP-bound access tokens and server-minted installation tokens; identity/mint-token.mjs delegates to it when AGENT_BOT_SERVER is set."
   },
   "computed_imports": {},
   "contracts": {

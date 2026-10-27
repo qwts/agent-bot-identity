@@ -415,8 +415,26 @@ function validateSettings(config) {
   ownerKeysSetting(config);
   diagnosticsOtlpEndpointSetting(config);
   keydSignerSetting(config);
+  if (settings.agentBotServer !== undefined) validateAgentBotServer(settings.agentBotServer);
   rosterScope(config);
   validateFeatures(config);
+}
+
+// settings.agentBotServer: the agent-bot server URL (server-client.mjs).
+// Checked here without importing that module so config stays a leaf.
+function validateAgentBotServer(value) {
+  if (value === null || value === '') return;
+  if (typeof value !== 'string') throw new Error('invalid settings.agentBotServer: expected a URL string');
+  let url;
+  try { url = new URL(value); } catch { throw new Error('invalid settings.agentBotServer: expected an https URL'); }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('invalid settings.agentBotServer: must be https (http only for localhost)');
+  }
+  // Same rules as server-client.mjs validateServerUrl, so a config that loads is one that mints.
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('invalid settings.agentBotServer: no credentials, query or fragment');
+  }
 }
 
 function validateFeatures(config) {

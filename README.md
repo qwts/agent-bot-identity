@@ -1355,6 +1355,10 @@ execution-provenance requests into focused references while all executable
 behavior remains in this zero-dependency runtime. Orders that arrive on a
 GitHub thread are `skills/thread-orders`.
 
+## Server mode (agent-bot server)
+
+Opt-in: set `AGENT_BOT_SERVER=https://…` (or `settings.agentBotServer`) and run `agent-bot server enroll --harness <name>`. Approve the device in the browser, or set `AGENT_BOT_ENROLL_TOKEN` on a cloud VM. After that, `mint-token` gets repo-scoped installation tokens from the server instead of a local App key. Auth uses a 0600 P-256 device key, 15-minute DPoP-bound tokens that are refreshed automatically, and server responses pinned to an Ed25519 key. With the setting unset, nothing changes. See [docs/server-mode.md](docs/server-mode.md).
+
 ## How it works
 
 ```
