@@ -255,6 +255,11 @@ export function pickInstallation(installations, owner) {
 // receipt the attempt whatever its outcome. It is never given key material.
 export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null, permissions = null, selected = null } = {}) {
   const config = loadConfig({ env });
+  // Server mode (AGENT_BOT_SERVER): the agent-bot server holds the App keys
+  // and mints repo-scoped tokens; no local .pem is read.
+  const { serverUrl } = await import('./server-client.mjs');
+  const server = serverUrl({ env, config });
+  if (server) return mintThroughServer({ server, slug, env, config, permissions, selected });
   const argv = slug ? ['node', 'mint-token.mjs', '--app', slug] : process.argv;
   const resolved = appConfig({ argv, env, config, agentId });
   if (selected) selected({ appSlug: resolved.slug, reason: selectionReason({ argv, env }) });
@@ -287,6 +292,19 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
 
   const grant = await gh(base, 'POST', `/app/installations/${installationId}/access_tokens`, jwt, permissions ? { permissions } : null);
   return { token: grant.token, expires_at: grant.expires_at, installation_id: Number(installationId) };
+}
+
+async function mintThroughServer({ server, slug, env, config, permissions, selected }) {
+  if (permissions) throw new Error('--permissions is not available in server mode; the server mints the App\'s installation grant');
+  const { ambientHarness, mintViaServer, repoFromCheckout } = await import('./server-client.mjs');
+  const { harnessForSlug } = await import('../config.mjs');
+  const explicit = slug ?? (process.argv.includes('--app') ? process.argv[process.argv.indexOf('--app') + 1] : null);
+  // The same identity order as a local mint (ENG-0079), mapped to the
+  // server's harness name; AGENT_BOT_SERVER_HARNESS / GROK_AGENT override.
+  const resolvedSlug = ambientHarness(env) ? explicit : resolveAgentSlug({ explicit, env, cwd: process.cwd(), config });
+  const harness = ambientHarness(env) ?? (resolvedSlug ? harnessForSlug(resolvedSlug, config) : null);
+  if (selected) selected({ appSlug: resolvedSlug, reason: 'agent-bot-server' });
+  return mintViaServer({ base: server, harness, repo: repoFromCheckout(process.cwd(), env), env });
 }
 
 // The command line lives in cli/mint-token.mjs, with its output format in

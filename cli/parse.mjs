@@ -33,6 +33,7 @@ const PUBLIC_COMMANDS = new Set([
   'sandbox',
   'metrics',
   'diagnostics',
+  'server',
 ]);
 
 const INTERNAL_COMMANDS = new Set([
