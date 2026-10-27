@@ -77,7 +77,7 @@ export function serverHarness(name) {
 }
 
 export function ambientHarness(env = process.env) {
-  if (env.AGENT_BOT_SERVER_HARNESS) return env.AGENT_BOT_SERVER_HARNESS;
+  if (env.AGENT_BOT_SERVER_HARNESS) return serverHarness(env.AGENT_BOT_SERVER_HARNESS);
   if (env.GROK_AGENT === '1') return 'grok';
   return null;
 }
@@ -159,6 +159,12 @@ export function loadPinnedServerKey(opts = {}) {
 
 // ---- HTTP ----
 
+// Never follow redirects: a 3xx could forward device-key assertions or DPoP
+// headers to another origin, or get a foreign key pinned on first use.
+function noRedirect(fetchImpl) {
+  return (url, init = {}) => fetchImpl(url, { ...init, redirect: 'error' });
+}
+
 async function readJson(res) {
   const text = await res.text();
   try { return JSON.parse(text); } catch { return { error: `non-JSON response (${res.status})` }; }
@@ -176,7 +182,8 @@ function oauthError(prefix, body) {
   return e;
 }
 
-export async function pinServerKey(base, opts = {}, { fetchImpl = fetch } = {}) {
+export async function pinServerKey(base, opts = {}, { fetchImpl: rawFetch = fetch } = {}) {
+  const fetchImpl = noRedirect(rawFetch);
   const pinned = loadPinnedServerKey(opts);
   if (pinned) return pinned;
   const res = await fetchImpl(`${base}/.well-known/agent-bot-server-key`);
@@ -203,8 +210,9 @@ export function defaultPlatform(env = process.env) {
 export async function enroll({
   base, env = process.env, home, harnesses = [], deviceName = hostname(), platform = defaultPlatform(env),
   tags = [], enrollToken = env.AGENT_BOT_ENROLL_TOKEN, force = false,
-  fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onPrompt = () => {},
+  fetchImpl: rawFetch = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onPrompt = () => {},
 } = {}) {
+  const fetchImpl = noRedirect(rawFetch);
   const opts = { env, home };
   if (!force && loadDevice(opts)) throw new Error('already enrolled; run `agent-bot server logout` first (or pass --force)');
   if (force) logout(opts);
@@ -247,9 +255,14 @@ export async function enroll({
   };
   saveDevice(opts, record);
   // Prove the enrollment works end to end and learn what the server reports.
-  const session = new ServerSession({ base, env, home, fetchImpl });
-  const who = await session.whoami();
-  if (who?.device?.management) saveDevice(opts, { ...record, management: who.device.management });
+  // The enrollment is already real on the server, so a failed check is a
+  // warning on the saved record, not an error that strands a retry.
+  try {
+    const who = await new ServerSession({ base, env, home, fetchImpl: rawFetch }).whoami();
+    saveDevice(opts, { ...record, management: who?.device?.management ?? record.management, verified: true });
+  } catch (e) {
+    saveDevice(opts, { ...record, verified: false, verify_error: e.message });
+  }
   return loadDevice(opts);
 }
 
@@ -264,7 +277,7 @@ export class ServerSession {
   constructor({ base, env = process.env, home, fetchImpl = fetch } = {}) {
     this.opts = { env, home };
     this.base = base ?? serverUrl({ env });
-    this.fetch = fetchImpl;
+    this.fetch = noRedirect(fetchImpl);
     this.token = null;
   }
 
@@ -414,6 +427,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
       ...(a.name ? { deviceName: a.name } : {}), ...(a.platform ? { platform: a.platform } : {}),
       onPrompt: (p) => err.write(`Approve this device at ${p.verification_uri_complete}\n  code: ${p.user_code}\n  key:  ${p.jkt}\nWaiting for approval…\n`),
     });
+    if (record.verified === false) err.write(`warning: enrolled, but the first signed check failed: ${record.verify_error}; run \`agent-bot server status\`\n`);
     out.write(a.json ? `${JSON.stringify(record)}\n` : `enrolled ${record.device_id} (${record.management}, harnesses: ${record.harnesses.join(', ')})\n`);
     return 0;
   } catch (e) {

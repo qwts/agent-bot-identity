@@ -431,6 +431,10 @@ function validateAgentBotServer(value) {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
     throw new Error('invalid settings.agentBotServer: must be https (http only for localhost)');
   }
+  // Same rules as server-client.mjs validateServerUrl, so a config that loads is one that mints.
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('invalid settings.agentBotServer: no credentials, query or fragment');
+  }
 }
 
 function validateFeatures(config) {

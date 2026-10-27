@@ -39,6 +39,7 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
     const u = new URL(url);
     const f = init.body instanceof URLSearchParams ? Object.fromEntries(init.body) : null;
     s.calls.push(u.pathname);
+    assert.equal(init.redirect, 'error', `${u.pathname} must not follow redirects`);
     if (u.pathname === '/.well-known/agent-bot-server-key') return json(200, { keys: [{ kty: 'OKP', crv: 'Ed25519', kid: 'kid1', x }] });
     if (u.pathname === '/oauth/device_authorization' || u.pathname === '/oauth/device_enroll') {
       const d = decode(f.proof);
@@ -114,6 +115,10 @@ test('server mode is off unless AGENT_BOT_SERVER or settings.agentBotServer is s
   assert.throws(() => validateServerUrl('http://evil.test'), /https/);
   assert.throws(() => parseConfig('{"settings":{"agentBotServer":"http://evil.test"}}'), /agentBotServer/);
   assert.doesNotThrow(() => parseConfig('{"settings":{"agentBotServer":"https://agent-bot-gold.vercel.app"}}'));
+  for (const bad of ['https://u:p@x.test', 'https://x.test/?a=1', 'https://x.test/#f']) {
+    assert.throws(() => parseConfig(JSON.stringify({ settings: { agentBotServer: bad } })), /no credentials/);
+    assert.throws(() => validateServerUrl(bad), /no credentials/);
+  }
 });
 
 test('argument parsing and harness names', () => {
@@ -223,4 +228,18 @@ test('mint() in server mode never reads a local App key and refuses --permission
   const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_HARNESS: 'grok', AGENT_BOT_SERVER_REPO: 'a/b' };
   await assert.rejects(mint({ env, permissions: { contents: 'read' } }), /not available in server mode/);
   await assert.rejects(mint({ env }), /not enrolled/);
+});
+
+test('AGENT_BOT_SERVER_HARNESS is normalized like --harness', async () => {
+  const { ambientHarness } = await import('../identity/server-client.mjs');
+  assert.equal(ambientHarness({ AGENT_BOT_SERVER_HARNESS: 'claude-code' }), 'claude');
+});
+
+test('a failed first signed check keeps the enrollment and marks it unverified', async () => {
+  const env = sandbox();
+  const srv = fakeServer({ tamper: true });
+  const dev = await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  assert.equal(dev.verified, false);
+  assert.match(dev.verify_error, /signature/);
+  assert.equal(loadDevice({ env }).device_id, dev.device_id);
 });
