@@ -41,7 +41,10 @@ export async function fetchProviderKey({ provider, env = process.env, home, sess
   try {
     out = await s.call('GET', `/api/daemon/provider-key?provider=${encodeURIComponent(provider)}&operation_id=${encodeURIComponent(operationId)}&profile=${encodeURIComponent(profile)}`);
   } catch (error) {
-    receipt({ decision: 'failed', reason: error.code ?? 'error' });
+    // The server's own answer when it has one (e.g. a key saved under
+    // another provider name), never the error text.
+    const named = /\b(provider_key_not_configured|vault_locked|operation_conflict)\b/.exec(error.message ?? '')?.[1]?.replaceAll('_', '-');
+    receipt({ decision: 'failed', reason: error.code ?? named ?? (error.status ? `http-${error.status}` : 'error') });
     throw error;
   }
   if (out.operation_id !== operationId || out.provider !== provider || typeof out.key !== 'string' || !out.key || !out.issuance_id) {

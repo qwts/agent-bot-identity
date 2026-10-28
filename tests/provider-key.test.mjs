@@ -110,6 +110,10 @@ test('a failed fetch is receipted and leaves nothing held; device revocation dro
   await assert.rejects(fetchProviderKey({ provider: 'anthropic', env, home: root, session: failing.session }), (e) => e.code === 'credential-unavailable');
   assert.equal(providerKeyStatus(), null);
   assert.equal(receipts(env).at(-1).reason, 'credential-unavailable');
+  // A server refusal is receipted by its name, never as a bare error.
+  const unconfigured = fakeSession({ fail: Object.assign(new Error('agent-bot server /api/daemon/provider-key?provider=x: 404 provider_key_not_configured (no key)'), { status: 404 }) });
+  await assert.rejects(fetchProviderKey({ provider: 'anthropic', env, home: root, session: unconfigured.session }));
+  assert.equal(receipts(env).at(-1).reason, 'provider-key-not-configured');
   await fetchProviderKey({ provider: 'anthropic', env, home: root, session: fakeSession().session });
   assert.ok(providerKeyStatus());
   // ServerSession.revoked() fires the listeners provider-key registered.
