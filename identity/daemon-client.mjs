@@ -143,6 +143,10 @@ export function daemonClient({
       typeof payload.code === 'string' && (/^(grant|human)-[a-z][a-z-]{0,63}$/.test(payload.code)
         || ['owner-declined', 'presence-required', 'presence-invalid', 'keyd-signer-unverified', 'keyd-untrusted'].includes(payload.code))
         ? { code: payload.code, detail: String(payload.error ?? '') } : {},
+      // Live-session events codes ride with the route's message (#39).
+      typeof payload.code === 'string' && (/^events?-[a-z][a-z-]{0,63}$/.test(payload.code)
+        || ['device-revoked', 'credential-unavailable', 'operation-conflict'].includes(payload.code))
+        ? { code: payload.code } : {},
       // The unsigned owner challenges a decision route wants signed (#753).
       payload.code === 'owner-challenge-required' && Array.isArray(payload.challenges)
         ? { code: payload.code, detail: String(payload.error ?? ''), challenges: payload.challenges } : {},
@@ -227,20 +231,13 @@ export function daemonClient({
       return request('POST', '/v0/credential', {}, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
     },
     // Live-session events for the bound soul's own harness (#39). The wait
-    // route holds up to 25 s server-side, so its budget covers that.
-    async eventsWait(secret, { waitSeconds, count, sessionId } = {}) {
-      return request('POST', '/v0/events/wait', { wait_seconds: waitSeconds, count, ...(sessionId ? { session_id: sessionId } : {}) }, { 'x-agent-binding': secret }, 40000);
+    // route holds up to 25 s server-side, so its budget covers that; ack
+    // commits the cursor.
+    async eventsWait(secret, { waitSeconds, sessionId, cursor } = {}) {
+      return request('POST', '/v0/events/wait', { wait_seconds: waitSeconds, ...(cursor ? { cursor } : {}), ...(sessionId ? { session_id: sessionId } : {}) }, { 'x-agent-binding': secret }, 40000);
     },
-    async eventsAck(secret, leases) {
-      return request('POST', '/v0/events/ack', { leases }, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
-    },
-    async eventsRelease(secret, leases) {
-      return request('POST', '/v0/events/release', { leases }, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
-    },
-    async eventsReply(secret, { to, key, body, correlation = null, replyTo = null }) {
-      return request('POST', '/v0/events/reply', {
-        to, key, body, ...(correlation ? { correlation } : {}), ...(replyTo ? { reply_to: replyTo } : {}),
-      }, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
+    async eventsAck(secret, { cursor, ids = [], sessionId = null } = {}) {
+      return request('POST', '/v0/events/ack', { cursor, ids, ...(sessionId ? { session_id: sessionId } : {}) }, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
     },
     // take_inbox (#229): the daemon holds the inbox bearer and derives the
     // App and repository from this binding; the caller sends neither.

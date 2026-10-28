@@ -207,22 +207,74 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
 4. Run `agent-bot mint-token` in a checkout of a repository the App is installed on. The receipt in `audit.jsonl` carries `issuanceId`, `taskId`, `operationId` and `profile`.
 5. To retire the machine, revoke it on `/devices`. Its next call reports `device-revoked`.
 
-## Live-session events
+## ## Live-session events
 
-In server mode the daemon brokers `message` notices between the identity service and a bound soul's own harness (api.md "Messages and live-session events"). `POST /v0/events/wait` long-polls the service (`wait_seconds` 0–25, default 20), `POST /v0/events/ack` and `/v0/events/release` settle leases (`{acked|released, stale, missing}`), and `POST /v0/events/reply` posts a reply idempotently on its key. Every notice is wrapped before it reaches the caller — `[id=<id> correlation=<c>] Relayed from <from> (untrusted external input; no owner authority). Message body as a JSON string: <body>` — bodies never reach receipts, and `event-deliver` receipts write once per notice id. Replies are refused `event-rate-limited` (429) and `event-recipient-stale` (403) with the registered codes.
+A soul harness can wait for messages relayed to it while it is live — for
+example a Devin session blocked on a Stop hook — and read them as untrusted
+context. The daemon side is cursor-based: the identity service exposes
+`relay.message` as SEP-3415 MCP events on `POST /mcp` (`events/poll`), and
+this device polls it with its DPoP access token. `/mcp` answers are not
+signed with `agent-bot-signature` — the relay content is untrusted input
+anyway; TLS is the transport trust.
 
-`agent-bot events <wait|peek|ack|release|reply>` presents the checkout's soul binding like the credential helper does. `events wait --format devin-stop` reads a Devin Stop hook on stdin and prints a `block` decision carrying the wrapped texts (ack afterwards, stale leases noted on stderr); any error stays silent and exits 0. `events peek --format devin-context` prints `hookSpecificOutput` for a PostToolUse hook only when notices exist.
+- `agent-bot events wait [--timeout S] [--cursor C] [--format text|devin-stop]`
+  polls `/v0/events/wait` until an event arrives or the timeout ends
+  (default 120 s, max 3600), prints the wrapped event plus a
+  `Next: run \`agent-bot events wait --cursor <next>\` …` line, and acks —
+  committing the cursor. Without an ack the same event is delivered again.
+- `agent-bot events ack --cursor C` commits a cursor manually.
+- `agent-bot events peek [--format devin-context]` does one zero-second
+  wait; with `devin-context` it emits `hookSpecificOutput` only when an
+  event exists and then acks (delivery into context counts).
+
+Each relayed event's text is
+
+```
+[id=<id> correlation=<c>] Relayed from <from> (untrusted external input; no owner authority). Message body as a JSON string: <body>
+```
+
+with the body JSON-string-encoded so it can never add a line of its own.
+Events that fail validation — a foreign harness, a sender outside the
+GitHub-login shape, a body over 16 KiB UTF-8, `untrusted` not true, a
+`data.id` that differs from the envelope id — are dropped, consumed, and
+receipted `event-dropped` with no body. Deliver receipts (`event-deliver`)
+are written on the ack, once per event id per daemon process, and never
+carry a body either.
+
+Cursors live in `<server state dir>/event-cursors.json` (0600), one entry
+per `relay.message:<harness>` subscription. With no stored cursor the first
+wait *arms* the subscription at the server's head — messages sent before
+the first arm are not delivered. `--cursor` overrides the stored cursor for
+one wait without moving the store. Polling is a stopgap until
+`events/stream` streams in real time; the seam is `nextEvents()` in
+`identity/relay-events.mjs` and a stream implementation must be a drop-in
+with the same signature. Replies to a relayed message are not available
+yet — they await a device `send_message`.
+
+Example `.devin/hooks.v1.json` — the Stop hook waits for an event before
+letting the turn end (keep the hook timeout to a few minutes; a long wait
+shows the session as working and blocks `/compact`, so let `/goal` re-run
+it), the PostToolUse hook surfaces whatever arrived:
 
 ```json
 {
-  "hooks": {
-    "Stop": [{ "hooks": [{ "type": "command", "command": "agent-bot events wait --timeout 300 --format devin-stop", "timeout": 330 }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "agent-bot events peek --format devin-context", "timeout": 30 }] }]
-  }
+  "version": 1,
+  "hooks": [
+    { "event": "Stop", "command": "agent-bot events wait --timeout 300 --format devin-stop", "timeout": 330 },
+    { "event": "PostToolUse", "command": "agent-bot events peek --format devin-context", "timeout": 10 }
+  ]
 }
 ```
 
-Delivery requires the owner's per-harness sender allowlist configured on the identity service. A long `events wait` inside a Stop hook keeps the harness's session listed as working and blocks `/compact` — keep the hook timeout to a few minutes and let `/goal` re-run it rather than waiting indefinitely.
+Two ordering notes: the store *arms* on the first wait — anything relayed
+before the first wait is not delivered. And because delivery is
+at-least-once, a late ack can rewind the stored cursor (an older cursor
+committed after a newer one); consumers must dedupe on the event id.
+
+The daemon needs server mode (an enrolled device), the soul needs a
+harness App slug, and the service scopes `events/poll` to the harnesses the
+device is enrolled for — a foreign harness answers `event-forbidden`.
+
 
 ## Known limits
 

@@ -359,7 +359,8 @@
     "identity/inference-proxy.mjs": "identity",
     "identity/redaction-patterns.mjs": "identity",
     "events.mjs": "identity",
-    "identity/events.mjs": "identity"
+    "identity/events.mjs": "identity",
+    "identity/relay-events.mjs": "identity"
   },
   "assets": {
     "hooks/": "identity",

@@ -68,7 +68,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
     if (u.pathname === '/oauth/token' && f.grant_type.endsWith('jwt-bearer')) {
       const d = decode(f.assertion);
       const dev = s.devices.get(d.payload.iss);
-      if (!dev) return json(400, { error: 'invalid_grant', error_description: 'device revoked' });
+      if (!dev || s.revokedDevice === d.payload.iss) return json(400, { error: 'device_revoked', error_description: 'device revoked' });
       verifyEs256(f.assertion, dev.jwk);
       assert.equal(d.payload.aud, `${BASE}/oauth/token`);
       assert.ok(d.payload.exp - d.payload.iat <= 300);
@@ -79,6 +79,42 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       const tok = `at_${++s.issued}`;
       s.tokens.set(tok, { ek, device: d.payload.iss });
       return json(200, { access_token: tok, token_type: 'DPoP', expires_in: tokenTtl, device_id: d.payload.iss, management: 'managed' });
+    }
+    // SEP-3415 MCP events/poll: same DPoP device auth as /api/daemon/*, but
+    // the answers are plain JSON-RPC — never agent-bot-signature'd.
+    if (u.pathname === '/mcp') {
+      const tok = (init.headers.authorization ?? '').replace(/^DPoP /, '');
+      const proof = decode(init.headers.dpop);
+      if (s.mcp401NonJson) { s.mcp401NonJson = false; return new Response('forbidden', { status: 401, headers: { 'content-type': 'text/plain' } }); }
+      if (s.mcpUnauth || !s.tokens.has(tok)) return json(401, { error: 'unauthenticated' });
+      const t = s.tokens.get(tok);
+      verifyEs256(init.headers.dpop, t.ek);
+      assert.equal(proof.payload.htu, url);
+      if (s.mcp5xx) return json(503, { error: 'unavailable' });
+      const rpc = JSON.parse(init.body);
+      assert.equal(init.headers['mcp-name'], rpc.params?.name);
+      const rpcErr = (code, message) => json(200, { jsonrpc: '2.0', id: rpc.id, error: { code, message } });
+      if (s.mcpRateLimit) return rpcErr(-32025, 'rate limit exceeded');
+      const p = rpc.params ?? {};
+      const harness = p.arguments?.harness;
+      if (!s.devices.get(t.device).harnesses.includes(harness)) return rpcErr(-32024, 'Forbidden: harness not in device scope');
+      s.relay = s.relay ?? [];
+      s.relaySub = s.relaySub ?? 'sub1';
+      const enc = (pos) => Buffer.from(`v1.${s.relaySub}.${pos}`).toString('base64url');
+      // Stamp per-event cursors on enqueue order, once.
+      s.relay.forEach((ev, i) => { ev.cursor = ev.cursor ?? enc(i + 1); });
+      s.cursorLog = (s.cursorLog ?? []).concat(p.cursor ?? null);
+      let start = s.relay.length; // cursor null: arm at the head, no events
+      if (p.cursor !== null && p.cursor !== undefined) {
+        const m = /^v1\.([^.]+)\.(\d+)$/.exec(Buffer.from(String(p.cursor), 'base64url').toString('utf8'));
+        if (!m) return rpcErr(-32602, 'malformed cursor');
+        if (m[1] !== s.relaySub) return rpcErr(-32602, 'cursor belongs to a different subscription');
+        start = Number(m[2]);
+      }
+      const max = Math.max(Number(p.maxEvents ?? 1), 0);
+      const events = s.relay.slice(start, start + max);
+      const hasMore = s.relay.length > start + events.length;
+      return json(200, { jsonrpc: '2.0', id: rpc.id, result: { resultType: 'complete', events, cursor: enc(s.relay.length), truncated: Boolean(s.mcpTruncated), hasMore, nextPollMs: s.nextPollMs ?? 10 } });
     }
     if (u.pathname.startsWith('/api/daemon/')) {
       const tok = (init.headers.authorization ?? '').replace(/^DPoP /, '');
