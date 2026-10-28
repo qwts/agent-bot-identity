@@ -28,6 +28,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { enforcementProfile } from './identity-format.mjs';
+import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
 
 export const GRANT_DEVICE_CODE = 'urn:ietf:params:oauth:grant-type:device_code';
 export const GRANT_JWT_BEARER = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
@@ -350,7 +351,11 @@ export class ServerSession {
     try {
       return await this.fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     } catch (error) {
-      throw serverError('credential-unavailable', `the identity service is unreachable (${error?.name === 'TimeoutError' ? 'timed out' : 'network error'}); nothing was issued`);
+      // No connection was made (refused, no route, no DNS): nothing can have
+      // reached the service. A timeout or reset after connecting might have.
+      const code = error?.cause?.code ?? error?.code;
+      const neverSent = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
+      throw serverError('credential-unavailable', `the identity service is unreachable (${error?.name === 'TimeoutError' ? 'timed out' : code ?? 'network error'})`, { neverSent });
     }
   }
 
@@ -390,18 +395,27 @@ export class ServerSession {
       const dpop = signJws(tok.ek, { alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk(tok.ek) }, {
         htm: method, htu: url, iat: now(), jti, ath: b64u(crypto.createHash('sha256').update(tok.value).digest()),
       });
-      const res = await this.send(url, {
-        method,
-        headers: { authorization: `DPoP ${tok.value}`, dpop, accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}) },
-        body: payload ? JSON.stringify(payload) : undefined,
-      });
+      // A failed write (POST) may still have reached the service: such an
+      // outcome is `ambiguous`, and a credential caller looks the operation
+      // up before anything is retried (T06). A GET changes nothing.
+      const ambiguous = method !== 'GET';
+      let res;
+      try {
+        res = await this.send(url, {
+          method,
+          headers: { authorization: `DPoP ${tok.value}`, dpop, accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}) },
+          body: payload ? JSON.stringify(payload) : undefined,
+        });
+      } catch (error) { throw Object.assign(error, { ambiguous: ambiguous && !error.neverSent }); }
       let buf;
       try { buf = Buffer.from(await res.arrayBuffer()); } catch {
-        throw serverError('credential-unavailable', `the identity service connection dropped while answering ${route}`);
+        throw serverError('credential-unavailable', `the identity service connection dropped while answering ${route}`, { ambiguous });
       }
       // An unsigned 5xx (a proxy, the platform) grants nothing: unavailable.
+      // A 503 means the request was not served; a 502 or 504 after a write
+      // may have been, so that write's outcome is ambiguous.
       if (res.status >= 500 && !res.headers.get('agent-bot-signature')) {
-        throw serverError('credential-unavailable', `the identity service answered ${res.status} for ${route}; nothing was issued`);
+        throw serverError('credential-unavailable', `the identity service answered ${res.status} for ${route}`, { ambiguous: ambiguous && res.status !== 503 });
       }
       verifyServerResponse(serverKey, { status: res.status, body: buf, requestJti: jti, headers: res.headers });
       let json;
@@ -458,6 +472,93 @@ export function repoFromCheckout(cwd = process.cwd(), env = process.env) {
 }
 
 // Mint through the server: same shape as the local mint() result.
+// The credential request as an action-ledger entry (0.4 §7, T06): recorded
+// before it is sent; an ambiguous failure is looked up, never re-sent blind.
+async function mintRecorded(session, { harness, repo, taskId, operationId, profile, stateDir }) {
+  const request = { kind: 'github_installation_token', harness: serverHarness(harness), repo };
+  // An operation already in the ledger is never overwritten: an unknown one
+  // is reconciled by lookup; any other is a reused operation_id.
+  const existing = readAction(stateDir, operationId);
+  if (existing?.state === 'unknown') return reconcileCredential(session, { stateDir, operationId, profile });
+  if (existing) throw serverError('operation-conflict', `credential operation ${operationId} was already used (${existing.state}); use a new operation`, { operationId });
+  writeAction(stateDir, { operation_id: operationId, task_id: taskId, ...request, state: 'prepared', created_at: new Date().toISOString() });
+  transition(stateDir, operationId, 'submitted');
+  try {
+    const out = await session.credential({ harness, repo, taskId, operationId, profile });
+    transition(stateDir, operationId, 'succeeded', { issuance_id: out.issuance_id, replayed: Boolean(out.replayed) });
+    return out;
+  } catch (error) {
+    const unknown = error.code === 'outcome-unknown' || (error.code === 'credential-unavailable' && error.ambiguous);
+    if (!unknown) {
+      transition(stateDir, operationId, 'rejected', { reason: error.code ?? 'error' });
+      throw error;
+    }
+    transition(stateDir, operationId, 'unknown', { reason: error.code });
+    return reconcileCredential(session, { stateDir, operationId, profile, cause: error });
+  }
+}
+
+/**
+ * Settles one `unknown` credential action by lookup: `issued` replays the
+ * same operation (the service returns the same issuance; nothing new is
+ * minted), `none` records `rejected`, and anything else stays `unknown` and
+ * throws `outcome-unknown`. Never sends a fresh request for the operation.
+ */
+export async function reconcileCredential(session, { stateDir, operationId, profile = enforcementProfile().profile, cause = null }) {
+  const action = readAction(stateDir, operationId);
+  if (!action) throw new Error(`no action recorded for ${operationId}`);
+  if (action.state !== 'unknown') return action;
+  let found;
+  try {
+    found = await session.issuance(operationId);
+  } catch (error) {
+    if (error.code === 'device-revoked') throw error;
+    throw serverError('outcome-unknown', `the outcome of credential operation ${operationId} is unknown and could not be looked up (${error.code ?? 'error'}); it was not retried`, { operationId, cause });
+  }
+  // Issued, but its credential has expired: it can never be replayed (the
+  // service answers operation_conflict), so the action settles as rejected
+  // instead of staying unknown for ever.
+  const expired = (reason) => {
+    transition(stateDir, operationId, 'rejected', { reason, issuance_id: found.issuance_id ?? null, reconciled: true });
+    return serverError('credential-unavailable', `credential operation ${operationId} was issued but its credential has expired (reconciled by lookup); it was not re-sent`, { operationId });
+  };
+  if (found?.state === 'issued' && found.expires_at && Date.parse(found.expires_at) <= Date.now()) throw expired('reconciled-expired');
+  if (found?.state === 'issued') {
+    let out;
+    try {
+      out = await session.credential({ harness: action.harness, repo: action.repo, taskId: action.task_id, operationId, profile });
+    } catch (error) {
+      if (error.code === 'operation-conflict') throw expired('reconciled-conflict');
+      throw error;
+    }
+    if (out.issuance_id !== found.issuance_id) throw new Error(`the identity service replayed a different issuance for ${operationId}; refusing it`);
+    transition(stateDir, operationId, 'succeeded', { issuance_id: out.issuance_id, replayed: true, reconciled: true });
+    return out;
+  }
+  if (found?.state === 'none') {
+    transition(stateDir, operationId, 'rejected', { reason: 'reconciled-none', reconciled: true });
+    throw serverError('credential-unavailable', `credential operation ${operationId} was not issued (reconciled by lookup); nothing was minted`, { operationId });
+  }
+  throw serverError('outcome-unknown', `the identity service still reports credential operation ${operationId} as unknown until ${found?.expires_at ?? 'later'}; it was not retried`, { operationId, resolvesAt: found?.expires_at ?? null });
+}
+
+/** Reconciles every `unknown` credential action (daemon start, `agent-bot server reconcile`). */
+export async function reconcilePendingCredentials({ base, env = process.env, home, fetchImpl = fetch, session = null } = {}) {
+  const stateDir = serverStateDir({ env, ...(home ? { home } : {}) });
+  const s = session ?? new ServerSession({ base: base ?? serverUrl({ env }), env, home, fetchImpl });
+  const results = [];
+  for (const action of listActions(stateDir, { state: 'unknown' })) {
+    try {
+      await reconcileCredential(s, { stateDir, operationId: action.operation_id });
+      results.push({ operation_id: action.operation_id, state: readAction(stateDir, action.operation_id).state });
+    } catch (error) {
+      results.push({ operation_id: action.operation_id, state: readAction(stateDir, action.operation_id)?.state ?? 'unknown', code: error.code ?? 'error' });
+      if (error.code === 'device-revoked') break;
+    }
+  }
+  return results;
+}
+
 // One credential per task and operation (credential/v1). The token goes to
 // the caller for this one operation and is never cached or reused; receipts
 // carry the issuance reference instead.
@@ -468,7 +569,8 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
   const task = taskId ?? taskIdFor({ env, operationId: op });
   if (!ID_PART.test(op) || !ID_PART.test(task)) throw new Error('task and operation IDs are 1-128 characters of [A-Za-z0-9._:-]');
   const profile = enforcementProfile({ env, ...(home ? { home } : {}) }).profile;
-  const out = await (session ?? new ServerSession({ base, env, home, fetchImpl })).credential({ harness, repo, taskId: task, operationId: op, profile });
+  const s = session ?? new ServerSession({ base, env, home, fetchImpl });
+  const out = await mintRecorded(s, { harness, repo, taskId: task, operationId: op, profile, stateDir: serverStateDir({ env, ...(home ? { home } : {}) }) });
   return {
     token: out.token, expires_at: out.expires_at, installation_id: null, repo: out.repo ?? repo, git_author: out.git_author,
     source: 'agent-bot-server', issuance_id: out.issuance_id, task_id: out.task_id, operation_id: out.operation_id,
@@ -481,6 +583,7 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
 export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
        agent-bot server status [--json]
        agent-bot server logout
+       agent-bot server reconcile [--json]
 
 Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
 enroll uses the device grant (approve in the browser), or AGENT_BOT_ENROLL_TOKEN
@@ -502,7 +605,7 @@ export function parseServerArgs(argv) {
     else if (a === '--platform') out.platform = val();
     else throw new Error(`unknown option: ${a}\n${SERVER_USAGE}`);
   }
-  if (!['enroll', 'status', 'logout', undefined, 'help', '--help', '-h'].includes(sub)) throw new Error(`unknown server command: ${sub}\n${SERVER_USAGE}`);
+  if (!['enroll', 'status', 'logout', 'reconcile', undefined, 'help', '--help', '-h'].includes(sub)) throw new Error(`unknown server command: ${sub}\n${SERVER_USAGE}`);
   return out;
 }
 
@@ -510,6 +613,13 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
   try {
     const a = parseServerArgs(argv);
     if (!a.sub || ['help', '--help', '-h'].includes(a.sub)) { out.write(SERVER_USAGE); return 0; }
+    if (a.sub === 'reconcile') {
+      // Settle credential actions whose outcome went missing, by lookup only (T06).
+      const results = await reconcilePendingCredentials({ env, fetchImpl });
+      const lines = results.map((r) => `${r.operation_id}: ${r.state}${r.code ? ` (${r.code})` : ''}\n`).join('');
+      out.write(a.json ? `${JSON.stringify({ reconciled: results })}\n` : (lines || 'no pending credential actions\n'));
+      return results.some((r) => r.state === 'unknown') ? 1 : 0;
+    }
     if (a.sub === 'logout') {
       logout({ env });
       out.write('removed local server enrollment; also revoke this device on the server\'s /devices page\n');
