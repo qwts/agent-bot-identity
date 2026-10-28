@@ -1,3 +1,5 @@
+> **Retired (2026-10-27).** [ADR-1183](decisions/ADR-1183-agent-bot-splits-into-hq-and-plugins.md) retires this extraction: `qwts/agent-identity` is not created, and the runtime splits into agent-bot-daemon (HQ) and plugins instead. This page is kept as the record of the retired plan.
+
 # Extraction plan for qwts/agent-identity
 
 This is ADR-0645 migration step 8. It says how identity leaves this

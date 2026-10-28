@@ -33,7 +33,8 @@ supersede them instead.
 | [ADR-0332](ADR-0332-souls-are-the-agents-territory.md) | Souls are the agent's territory | Accepted |
 | [ADR-0583](ADR-0583-the-soul-root-owns-the-environment.md) | The soul root owns the environment | Accepted |
 | [ADR-0603](ADR-0603-imported-skills-keep-local-snapshots-and-upstream-provenance.md) | Soul skills have distinct import, install, learn, and dream operations | Accepted |
-| [ADR-0645](ADR-0645-one-runtime-repository-four-owned-modules.md) | Owned modules and contracts first, then identity becomes its own repository | Accepted |
+| [ADR-0645](ADR-0645-one-runtime-repository-four-owned-modules.md) | Owned modules and contracts first, then identity becomes its own repository | Superseded by ADR-1183 |
 | [ADR-0753](ADR-0753-owner-signed-statements.md) | Owner-signed statements | Accepted |
 | [ADR-0815](ADR-0815-the-soul-is-a-git-co-author.md) | The soul is a Git co-author; commits stay Verified | Accepted |
 | [ADR-0983](ADR-0983-local-first-diagnostics-and-optional-otlp-export.md) | Local-first diagnostics, stable error codes and optional OTLP export | Accepted |
+| [ADR-1183](ADR-1183-agent-bot-splits-into-hq-and-plugins.md) | agent-bot splits into an HQ daemon and plugins; the identity extraction is retired | Accepted |
