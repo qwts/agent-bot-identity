@@ -1,1 +1,0 @@
-- The installed `gh` shim now records the runtime config module through Homebrew's stable `opt` path instead of the versioned Cellar path (#1176), so `brew upgrade` no longer breaks every `gh` call until the shim is reinstalled. After upgrading to this release, run `agent-bot install-gh-shim` once to rewrite the recorded path.
