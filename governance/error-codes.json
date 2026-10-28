@@ -465,6 +465,30 @@
       "kind": "refusal",
       "summary": "The identity service pins this soul to another enrolled device; it vouches only from that device (#1196).",
       "registered": "0.14.1"
+    },
+    {
+      "n": 59,
+      "code": "event-rate-limited",
+      "component": "events",
+      "kind": "refusal",
+      "summary": "The identity service rate-limited a live-session events request (429 rate_limited); the caller backs off.",
+      "registered": "0.14.1"
+    },
+    {
+      "n": 60,
+      "code": "events-no-harness",
+      "component": "events",
+      "kind": "refusal",
+      "summary": "A live-session events request reached the daemon from a soul with no harness App slug to send as; refused instead of guessing.",
+      "registered": "0.14.1"
+    },
+    {
+      "n": 61,
+      "code": "event-recipient-stale",
+      "component": "events",
+      "kind": "refusal",
+      "summary": "The reply target has not messaged this harness recently enough (403 recipient_stale); the reply is refused, not held.",
+      "registered": "0.14.1"
     }
   ]
 }

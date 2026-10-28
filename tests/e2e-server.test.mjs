@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { run } from '../scripts/e2e-server.mjs';
-import { BASE, fakeServer, sandbox, sleep } from './server-client.test.mjs';
+import { BASE, fakeServer, sandbox, sleep } from './helpers/fake-identity-server.mjs';
 
 const ENROLL_TOKEN = 'abe_good';
 

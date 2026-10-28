@@ -20,7 +20,7 @@ import { brokeredProviderEnv, dropProviderKey, fetchProviderKey, startInferenceP
 import { ServerSession, enroll, mintViaServer, reconcilePendingCredentials } from '../identity/server-client.mjs';
 // The signed fake identity service is shared with the server-client suite
 // (#1202); importing it runs that suite's tests as well.
-import { BASE, fakeServer, sandbox, sleep } from './server-client.test.mjs';
+import { BASE, fakeServer, sandbox, sleep } from './helpers/fake-identity-server.mjs';
 
 const REGISTRY = JSON.parse(readFileSync(new URL('../governance/redaction-patterns.json', import.meta.url), 'utf8'));
 

@@ -207,6 +207,23 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
 4. Run `agent-bot mint-token` in a checkout of a repository the App is installed on. The receipt in `audit.jsonl` carries `issuanceId`, `taskId`, `operationId` and `profile`.
 5. To retire the machine, revoke it on `/devices`. Its next call reports `device-revoked`.
 
+## Live-session events
+
+In server mode the daemon brokers `message` notices between the identity service and a bound soul's own harness (api.md "Messages and live-session events"). `POST /v0/events/wait` long-polls the service (`wait_seconds` 0–25, default 20), `POST /v0/events/ack` and `/v0/events/release` settle leases (`{acked|released, stale, missing}`), and `POST /v0/events/reply` posts a reply idempotently on its key. Every notice is wrapped before it reaches the caller — `Relayed from <from> (untrusted external input; no owner authority): <body>` — bodies never reach receipts, and `event-deliver` receipts write once per notice id. Replies are refused `event-rate-limited` (429) and `event-recipient-stale` (403) with the registered codes.
+
+`agent-bot events <wait|peek|ack|release|reply>` presents the checkout's soul binding like the credential helper does. `events wait --format devin-stop` reads a Devin Stop hook on stdin and prints a `block` decision carrying the wrapped texts (ack afterwards, stale leases noted on stderr); any error stays silent and exits 0. `events peek --format devin-context` prints `hookSpecificOutput` for a PostToolUse hook only when notices exist.
+
+```json
+{
+  "hooks": {
+    "Stop": [{ "hooks": [{ "type": "command", "command": "agent-bot events wait --timeout 300 --format devin-stop", "timeout": 330 }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "agent-bot events peek --format devin-context", "timeout": 30 }] }]
+  }
+}
+```
+
+Delivery requires the owner's per-harness sender allowlist configured on the identity service. A long `events wait` inside a Stop hook keeps the harness's session listed as working and blocks `/compact` — keep the hook timeout to a few minutes and let `/goal` re-run it rather than waiting indefinitely.
+
 ## Known limits
 
 - The device key is a software key (`key_storage=software`). Hardware-backed keys (Secure Enclave, TPM, Android Keystore) are future work, so the profile stays `managed cooperative`. See the server's `docs/daemon-client.md`.

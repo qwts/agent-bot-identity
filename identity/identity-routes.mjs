@@ -22,8 +22,33 @@ import { appendAuditReceipt } from './identity-format.mjs';
 import { boundRepository, inboxError } from './inbox-take.mjs';
 import { grantTarget, KEYD_TOOL_NAMES, mintViaKeyd, signKeydGrant } from './keyd-client.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { newOperationId, taskIdFor } from './server-client.mjs';
+import { newOperationId, taskIdFor, ServerSession, serverUrl } from './server-client.mjs';
 import { stateDirectory } from '../state-paths.mjs';
+
+function eventsRefuse(res, error, sendJson) {
+  const status = {
+    'credential-unavailable': 503, 'device-revoked': 403, 'operation-conflict': 409,
+    'event-rate-limited': 429, 'event-recipient-stale': 403,
+  }[error?.code] ?? error?.statusCode ?? 502;
+  sendJson(res, status, { error: error?.message ?? 'the identity service failed the events request', ...(error?.code ? { code: error.code } : {}) });
+  return true;
+}
+
+// The events caller is the binding soul; its harness is the soul's own App
+// slug, never a request field. Server mode only — nothing else holds a
+// service session to poll.
+function eventsSession(req, bindings, { env, home, config, requireBinding, serverFetch }) {
+  const binding = requireBinding(req, bindings);
+  const identity = readAgentIdentity(binding.agentId, { stateDir: stateDirectory({ env, home }) });
+  const harness = boundAppSlug(binding, identity, { env, home, config });
+  if (!harness) throw Object.assign(new Error('this soul has no harness App slug to receive events as'), { statusCode: 409, code: 'events-no-harness' });
+  const base = serverUrl({ env, config });
+  if (!base) throw Object.assign(new Error('live-session events need an enrolled device (AGENT_BOT_SERVER)'), { statusCode: 503, code: 'credential-unavailable' });
+  const session = new ServerSession({ base, env, home, fetchImpl: serverFetch });
+  session.agentId = binding.agentId;
+  session.harness = harness;
+  return session;
+}
 
 function boundAppSlug(binding, identity, { env, home, config }) {
   const recorded = identity.github?.appSlug ?? null;
@@ -54,6 +79,9 @@ export function createIdentityRoutes({
   requireBinding, presentedCredential, grantBinding,
   bindWorktreeConversation, reconcileSoulApp, ownerGate,
   mintImpl, keydCall, signingKey, serverFetch = fetch,
+  // A bounded seen-set receipted per daemon process: a re-delivered notice
+  // (lease lapsed, ack stale) never writes event-deliver twice.
+  deliveredNoticeIds = new Set(),
   inboxTake,
   grantLedger, grantActor, grantView, grantFailure,
   soulCredentialsDeclaration, soulDirectory, populationFile,
@@ -247,6 +275,92 @@ export function createIdentityRoutes({
       // the caller's binding is. The fleet-wide inbox bearer stays in the
       // daemon, from its own GH_APP_HOOK_INBOX_TOKEN if set, else pass-cli; the App comes from the bound soul's own
       // record and the repository from the bound worktree, never from the
+      // Live-session events (api.md): a soul takes, acks, releases and
+      // replies to message notices for ITS harness — the soul's own App
+      // slug, never a caller parameter. Server mode only; the notices are
+      // untrusted external input and bodies never reach receipts.
+      case 'POST /v0/events/wait': {
+        const body = parseJsonBody(await readBody(req));
+        const waitSeconds = Math.min(Math.max(Number(body.wait_seconds ?? 20) || 0, 0), 25);
+        const count = Math.min(Math.max(Number(body.count ?? 10) || 0, 1), 10);
+        // The harness hook's session id rides the request so deliver receipts
+        // can name the session; it is identifier-shaped only — never prompt text.
+        if (body.session_id !== undefined && (typeof body.session_id !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(body.session_id))) {
+          sendJson(res, 400, { error: 'session_id must be 1-128 characters of [A-Za-z0-9._:-]' });
+          return true;
+        }
+        let session;
+        try { session = eventsSession(req, bindings, { env, home, config, requireBinding, serverFetch }); }
+        catch (error) { return eventsRefuse(res, error, sendJson); }
+        let taken;
+        try {
+          taken = await session.takeEvents({ harness: session.harness, waitSeconds, count, leaseSeconds: 60 });
+        } catch (error) { return eventsRefuse(res, error, sendJson); }
+        // Malformed notices are acked immediately (else they redeliver
+        // forever) and receipted without a body; only shaped ones reach the
+        // soul, wrapped so the untrusted body is one JSON string on one line.
+        const badLeases = taken.dropped.map((d) => d.lease).filter(Boolean);
+        for (const d of taken.dropped) {
+          appendAuditReceipt({ event: 'event-dropped', agentId: session.agentId, operation: 'take', decision: 'denied', reason: 'live-session-event', issuanceId: d.id, detail: `notice ${d.id ?? 'unknown'} dropped: ${d.reason}` }, { env, home, now });
+        }
+        if (badLeases.length) {
+          try { await session.ackEvents({ harness: session.harness, leases: badLeases }); } catch { /* a failed drop-ack just lets the notice redeliver */ }
+        }
+        const events = taken.notices.map((n) => {
+          // Bounded FIFO: 512 notice ids per daemon process receipt once.
+          if (deliveredNoticeIds.size >= 512) deliveredNoticeIds.delete(deliveredNoticeIds.values().next().value);
+          if (!deliveredNoticeIds.has(n.id)) {
+            deliveredNoticeIds.add(n.id);
+            appendAuditReceipt({ event: 'event-deliver', agentId: session.agentId, operation: 'take', decision: 'delivered', reason: 'live-session-event', issuanceId: n.id, detail: `notice ${n.id} for ${session.harness} from ${n.from}${body.session_id ? ` session ${body.session_id}` : ''}` }, { env, home, now });
+          }
+          return {
+            id: n.id, lease: n.lease, from: n.from, key: n.key,
+            ...(n.correlation ? { correlation: n.correlation } : {}), ...(n.reply_to ? { reply_to: n.reply_to } : {}),
+            received_at: n.received_at ?? null,
+            text: `Relayed from ${n.from} (untrusted external input; no owner authority). Message body as a JSON string: ${JSON.stringify(n.body)}`,
+          };
+        });
+        sendJson(res, 200, { events, ...(taken.dropped.length ? { dropped: taken.dropped.length } : {}) });
+        return true;
+      }
+      case 'POST /v0/events/ack':
+      case 'POST /v0/events/release': {
+        const body = parseJsonBody(await readBody(req));
+        const leases = Array.isArray(body.leases) ? body.leases.slice(0, 10) : [];
+        if (!leases.length || leases.some((lease) => typeof lease !== 'string')) {
+          sendJson(res, 400, { error: 'leases must name 1-10 lease strings' });
+          return true;
+        }
+        let session;
+        try { session = eventsSession(req, bindings, { env, home, config, requireBinding, serverFetch }); }
+        catch (error) { return eventsRefuse(res, error, sendJson); }
+        const acking = req.url.endsWith('/ack');
+        let answered;
+        try {
+          answered = acking
+            ? await session.ackEvents({ harness: session.harness, leases })
+            : await session.releaseEvents({ harness: session.harness, leases });
+        } catch (error) { return eventsRefuse(res, error, sendJson); }
+        sendJson(res, 200, answered);
+        return true;
+      }
+      case 'POST /v0/events/reply': {
+        const body = parseJsonBody(await readBody(req));
+        if (typeof body.to !== 'string' || typeof body.key !== 'string' || typeof body.body !== 'string') {
+          sendJson(res, 400, { error: 'to, key and body are required strings' });
+          return true;
+        }
+        let session;
+        try { session = eventsSession(req, bindings, { env, home, config, requireBinding, serverFetch }); }
+        catch (error) { return eventsRefuse(res, error, sendJson); }
+        let out;
+        try {
+          out = await session.postReply({ harness: session.harness, to: body.to, key: body.key, body: body.body, correlation: body.correlation ?? null, replyTo: body.reply_to ?? null });
+        } catch (error) { return eventsRefuse(res, error, sendJson); }
+        appendAuditReceipt({ event: 'event-reply', agentId: session.agentId, operation: 'reply', decision: 'delivered', reason: 'live-session-event', issuanceId: out.id ?? null, detail: `reply ${out.id ?? ''} for ${session.harness} to ${body.to}` }, { env, home, now });
+        sendJson(res, 200, { id: out.id, ...(out.replayed ? { replayed: true } : {}) });
+        return true;
+      }
       // request.
       case 'POST /v0/inbox/take': {
         await readBody(req);

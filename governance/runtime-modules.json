@@ -357,7 +357,9 @@
     "identity/action-ledger.mjs": "identity",
     "identity/provider-key.mjs": "identity",
     "identity/inference-proxy.mjs": "identity",
-    "identity/redaction-patterns.mjs": "identity"
+    "identity/redaction-patterns.mjs": "identity",
+    "events.mjs": "identity",
+    "identity/events.mjs": "identity"
   },
   "assets": {
     "hooks/": "identity",
@@ -414,7 +416,8 @@
     "soul-genesis.mjs": "identity/soul-genesis.mjs",
     "uninstalled-identity-hook.mjs": "identity/uninstalled-identity-hook.mjs",
     "vouch.mjs": "identity/vouch.mjs",
-    "worktree-token.mjs": "identity/worktree-token.mjs"
+    "worktree-token.mjs": "identity/worktree-token.mjs",
+    "events.mjs": "identity/events.mjs"
   },
   "notes": {
     "acp-registry.mjs": "Spawn rows select and launch harnesses, so soul owns them (ADR-0276, ADR-0322). Descriptive columns are candidates for agent-harness descriptors.",
