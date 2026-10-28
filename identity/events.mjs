@@ -9,6 +9,11 @@ import path from 'node:path';
 import { readBinding } from './agent-binding.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { daemonClient } from './daemon-client.mjs';
+import { ServerSession, serverUrl, ambientHarness } from './server-client.mjs';
+import { nextEvents, commitCursor, loadCursor, ID_RE, CURSOR_RE } from './relay-events.mjs';
+import { soulMarkers } from './owner-gate.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
+import { loadConfig, slugForHarness } from '../config.mjs';
 
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 const readStdin = async () => {
@@ -42,20 +47,32 @@ const arg = (args, name) => {
   return i >= 0 ? args[i + 1] : null;
 };
 
-const nextLine = (cursor) => `Next: run \`agent-bot events wait --cursor ${cursor}\` to wait for the next message.`;
+const nextLine = (cursor, ide = false) => `Next: run \`agent-bot events wait${ide ? ' --ide' : ''} --cursor ${cursor}\` to wait for the next message.`;
+
+// The Devin hook adapters are an optional extra for keeping agent sessions
+// up to date — off unless `settings.eventHooks: true` in the agent-bot
+// config or AGENT_BOT_EVENT_HOOKS=1 (env wins; 0 forces off). Text formats
+// are explicit CLI use and stay available regardless.
+function eventHooksEnabled(env = process.env) {
+  const value = env.AGENT_BOT_EVENT_HOOKS;
+  if (value !== undefined) return value === '1';
+  return loadConfig({ env }).settings?.eventHooks === true;
+}
 
 // Poll /v0/events/wait in ≤25 s chunks until an event or the deadline.
 // Network errors and 5xx back off 1 s doubling to 60 s; device-revoked
 // stops immediately. Returns {events, cursor, error}; never throws except
 // for revocation.
-async function takeLoop({ client, binding, timeoutMs, sessionId, cursor }) {
+async function takeLoop({ client, binding, poll = null, timeoutMs, sessionId, cursor }) {
+  const daemonPoll = async ({ waitSeconds, cursor: c }) => client.eventsWait(binding.secret, { waitSeconds, sessionId, cursor: c });
+  const doPoll = poll ?? daemonPoll;
   const deadline = Date.now() + timeoutMs;
   let backoff = 1000;
   let lastError = null;
   for (;;) {
     const waitSeconds = Math.min(25, Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
     try {
-      const out = await client.eventsWait(binding.secret, { waitSeconds, sessionId, cursor });
+      const out = await doPoll({ waitSeconds, cursor });
       // The route's cursor may have moved past drops the daemon committed;
       // carry it so the next chunk never re-fetches them.
       if (typeof out?.cursor === 'string' && out.cursor !== cursor) cursor = out.cursor;
@@ -77,12 +94,198 @@ async function ackQuietly(client, binding, { cursor, ids, sessionId = null }) {
   await client.eventsAck(binding.secret, { cursor, ids, sessionId }).catch(() => {});
 }
 
+// ---- --ide mode: the owner's own IDE/web-chat session, no soul. It talks
+// to the identity service directly with this account's enrolled device —
+// a caller carrying any soul marker must stay on the daemon/binding path.
+const HARNESS_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38})$/;
+const codedError = (code, message) => Object.assign(new Error(message), { code });
+
+// Build the direct session + harness + cursor key, refusing with the same
+// coded errors the daemon route uses.
+function ideContext({ env, cwd, args }) {
+  // Only STATED identities refuse: detect:false drops harness detection
+  // (WINDSURF_*/Devin env), which the owner's own IDE session always shows
+  // — detection alone is the owner's delegate, never a soul (AGENTS.md).
+  const markers = soulMarkers({ env, cwd, detect: false });
+  if (markers.length) {
+    throw codedError('events-soul-caller', `a soul-bound caller (${markers.join(', ')}) must use the daemon events path, not --ide`);
+  }
+  let session;
+  try {
+    if (!serverUrl({ env })) throw new Error('no identity service configured');
+    session = new ServerSession({ env });
+    session.device();
+  } catch (error) {
+    if (error?.code) throw error;
+    throw codedError('credential-unavailable', error?.message ?? 'this machine is not enrolled with the agent-bot server; run `agent-bot server enroll`');
+  }
+  const override = arg(args, '--harness');
+  let harness = null;
+  if (override !== null) {
+    if (!HARNESS_SLUG_RE.test(override)) throw codedError('events-no-harness', `--harness ${override} is not an App slug`);
+    harness = override;
+  } else {
+    const ambient = ambientHarness(env);
+    harness = ambient ? slugForHarness(ambient, loadConfig({ env })) : null;
+    if (!harness) throw codedError('events-no-harness', 'no ambient harness maps to an App slug; pass --harness <slug>');
+  }
+  return { session, harness, key: `ide:relay.message:${harness}` };
+}
+
+// One wait chunk against /mcp directly: arming on first use, drops-only
+// advances committed at once, deliveries committed only by the caller.
+async function idePoll({ env, home, session, harness, key, waitSeconds, cursor }) {
+  const opts = { env, home };
+  let at = cursor ?? loadCursor(opts, key);
+  if (at === null || at === undefined) {
+    const head = await session.mcpEventsPoll({ name: 'relay.message', args: { harness }, cursor: null, maxEvents: 0 });
+    if (typeof head?.cursor === 'string') commitCursor(opts, key, head.cursor);
+    return { events: [], cursor: head?.cursor ?? null };
+  }
+  const out = await nextEvents({ session, harness, cursor: at, waitMs: waitSeconds * 1000, maxEvents: 1 });
+  for (const d of out.dropped) {
+    try {
+      appendAuditReceipt({
+        event: 'event-dropped', transport: 'ide', appSlug: harness,
+        detail: `relay event ${ID_RE.test(d.id) ? d.id : 'malformed'} dropped: ${d.reason} harness ${harness}`,
+        ...(ID_RE.test(d.id) ? { issuanceId: d.id } : {}),
+      }, { env, home });
+    } catch { /* a receipt never blocks the event path */ }
+  }
+  if (!out.events.length && out.dropped.length && typeof out.cursor === 'string' && CURSOR_RE.test(out.cursor)) {
+    try { commitCursor(opts, key, out.cursor); } catch { /* malformed cursor stays uncommitted */ }
+  }
+  const events = out.events.map((ev) => ({
+    id: ev.id,
+    from: ev.from,
+    ...(ev.correlation ? { correlation: ev.correlation } : {}),
+    ...(ev.reply_to ? { reply_to: ev.reply_to } : {}),
+    received_at: ev.received_at,
+    text: `[id=${ev.id}${ev.correlation && ID_RE.test(ev.correlation) ? ` correlation=${ev.correlation}` : ''}] Relayed from ${ev.from} (untrusted external input; no owner authority). Message body as a JSON string: ${JSON.stringify(ev.body)}`,
+  }));
+  return { events, cursor: out.cursor, dropped: out.dropped.length || undefined };
+}
+
+// Commit a delivered cursor under the ide key, one deliver receipt per id.
+function ideAck({ env, home, harness, key, cursor, ids = [], sessionId = null }) {
+  if (typeof cursor !== 'string' || !CURSOR_RE.test(cursor)) return;
+  try {
+    commitCursor({ env, home }, key, cursor);
+    for (const id of ids) {
+      appendAuditReceipt({
+        event: 'event-deliver', transport: 'ide', appSlug: harness,
+        detail: `relay event ${id} to harness ${harness}${sessionId ? ` session ${sessionId}` : ''}`,
+        ...(ID_RE.test(id) ? { issuanceId: id } : {}),
+      }, { env, home });
+    }
+  } catch { /* a lost commit redelivers — never receipts */ }
+}
+
 async function main(argv) {
   const [first, ...rest] = argv;
   const [sub, ...args] = first === 'events' ? rest : [first, ...rest];
   const env = process.env;
   const cwd = process.cwd();
   if (!sub || !['wait', 'peek', 'ack'].includes(sub)) return usage();
+  const ide = args.includes('--ide');
+  const home = env.HOME ?? env.USERPROFILE;
+  const format = arg(args, '--format') ?? 'text';
+  // --ide: the owner's own IDE/web-chat caller uses the device path
+  // directly — no daemon, no binding. A soul marker refuses the path.
+  const hookFormat = format === 'devin-stop' || format === 'devin-context';
+  if (hookFormat && !eventHooksEnabled(env)) {
+    // Disabled: no network, no cursor move, nothing on stdout — the turn
+    // simply ends as if no event ever arrived.
+    process.stderr.write('agent-bot events: hook adapters are disabled (settings.eventHooks); letting the turn end\n');
+    return 0;
+  }
+  const reportIdeError = (error) => {
+    const line = `agent-bot events: ${error?.code ?? 'error'}: ${error?.message ?? 'events unavailable'}`;
+    if (hookFormat) { process.stderr.write(`${line} — letting the turn end\n`); return 0; }
+    process.stderr.write(`${line}\n`);
+    return 1;
+  };
+  if (ide) {
+    let ctx;
+    try { ctx = ideContext({ env, cwd, args }); }
+    catch (error) { return reportIdeError(error); }
+    const { session, harness, key } = ctx;
+    if (sub === 'ack') {
+      const cursor = arg(args, '--cursor');
+      if (!cursor) return usage();
+      ideAck({ env, home, harness, key, cursor, ids: args.filter((a, i) => args[i - 1] === '--id') });
+      process.stdout.write(`${JSON.stringify({ committed: true })}\n`);
+      return 0;
+    }
+    if (sub === 'peek') {
+      const hook = format === 'devin-context' ? await readStdin() : null;
+      let out;
+      try {
+        out = await idePoll({ env, home, session, harness, key, waitSeconds: 0, cursor: arg(args, '--cursor') });
+      } catch (error) { return reportIdeError(error); }
+      const events = out.events ?? [];
+      if (format === 'devin-context') {
+        if (!events.length) return 0;
+        process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: hook.hook_event_name ?? 'UserPromptSubmit', additionalContext: events.map((event) => event.text).join('\n') } })}\n`);
+        ideAck({ env, home, harness, key, cursor: out.cursor, ids: events.map((event) => event.id), sessionId: typeof hook?.session_id === 'string' ? hook.session_id : null });
+        return 0;
+      }
+      // A plain peek does not consume: the cursor is left for a later wait.
+      process.stdout.write(`${JSON.stringify({ events, cursor: out.cursor })}\n`);
+      return 0;
+    }
+    // wait
+    const timeout = Math.min(Number(arg(args, '--timeout') ?? 120) || 0, 3600);
+    const cursorArg = arg(args, '--cursor');
+    const poll = ({ waitSeconds, cursor }) => idePoll({ env, home, session, harness, key, waitSeconds, cursor });
+    if (format === 'devin-stop') {
+      const hook = await readStdin();
+      const sessionId = typeof hook.session_id === 'string' ? hook.session_id : null;
+      const blocksKey = sessionId ?? 'unknown';
+      const counting = hook.stop_hook_active === true;
+      if (!counting) {
+        const counts = readStopBlocks({ env, home });
+        if (blocksKey in counts) { delete counts[blocksKey]; writeStopBlocks({ env, home }, counts); }
+      }
+      try {
+        const { events, cursor, error: takeError } = await takeLoop({ poll, timeoutMs: timeout * 1000, sessionId, cursor: cursorArg });
+        if (!events.length) {
+          if (counting) { const counts = readStopBlocks({ env, home }); delete counts[blocksKey]; writeStopBlocks({ env, home }, counts); }
+          if (takeError) process.stderr.write(`agent-bot events: ${takeError?.code ?? takeError?.message ?? 'events unavailable'} — letting the turn end\n`);
+          return 0;
+        }
+        if (counting) {
+          const counts = readStopBlocks({ env, home });
+          const blocked = (counts[blocksKey] ?? 0) + 1;
+          if (blocked > STOP_BLOCK_CAP) {
+            process.stderr.write(`agent-bot events: ${STOP_BLOCK_CAP} consecutive blocks for this session — letting the stop through\n`);
+            return 0;
+          }
+          counts[blocksKey] = blocked;
+          writeStopBlocks({ env, home }, counts);
+        }
+        const reason = `${events.map((event) => event.text).join('\n')}\n${nextLine(cursor, true)}`;
+        process.stdout.write(`${JSON.stringify({ decision: 'block', reason })}\n`);
+        ideAck({ env, home, harness, key, cursor, ids: events.map((event) => event.id), sessionId });
+      } catch (error) {
+        process.stderr.write(`agent-bot events: ${error?.code ?? error?.message ?? 'events unavailable'} — letting the turn end\n`);
+      }
+      return 0;
+    }
+    try {
+      const { events, cursor, error } = await takeLoop({ poll, timeoutMs: timeout * 1000, cursor: cursorArg });
+      if (!events.length) {
+        if (error) { process.stderr.write(`agent-bot events: ${error?.code ?? 'error'}: ${error?.message ?? 'events unavailable'}\n`); return 1; }
+        return 0;
+      }
+      process.stdout.write(`${events.map((event) => event.text).join('\n')}\n${nextLine(cursor, true)}\n`);
+      ideAck({ env, home, harness, key, cursor, ids: events.map((event) => event.id) });
+      return 0;
+    } catch (error) {
+      process.stderr.write(`agent-bot events: ${error?.code ?? 'error'}: ${error?.message ?? 'events unavailable'}\n`);
+      return 1;
+    }
+  }
   const binding = readBinding({ env, cwd });
   if (!binding) { process.stderr.write('agent-bot events: no soul binding in this checkout\n'); return 1; }
   const client = daemonClient({ env, cwd });
@@ -94,7 +297,6 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify(out)}\n`);
     return 0;
   }
-  const format = arg(args, '--format') ?? 'text';
   if (sub === 'wait') {
     const timeout = Math.min(Number(arg(args, '--timeout') ?? 120) || 0, 3600);
     const cursorArg = arg(args, '--cursor');
@@ -160,7 +362,7 @@ async function main(argv) {
     const hook = hookEnv;
     if (!events.length) return 0;
     // Delivery into context counts: commit the cursor after printing.
-    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: hook.hook_event_name ?? 'PostToolUse', additionalContext: events.map((event) => event.text).join('\n') } })}\n`);
+    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: hook.hook_event_name ?? 'UserPromptSubmit', additionalContext: events.map((event) => event.text).join('\n') } })}\n`);
     await ackQuietly(client, binding, { cursor: out.cursor, ids: events.map((event) => event.id), sessionId: hook?.session_id ?? null });
     return 0;
   }
