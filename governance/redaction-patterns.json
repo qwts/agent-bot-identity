@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "description": "Secret shapes that must never appear in receipts, logs or diagnostics. Shared with true-line/agent-bot; RE2- and ECMAScript-compatible.",
+  "patterns": [
+    {
+      "id": "github-installation-token",
+      "regex": "\\bghs_[A-Za-z0-9]{20,}"
+    },
+    {
+      "id": "github-oauth-token",
+      "regex": "\\bgho_[A-Za-z0-9]{20,}"
+    },
+    {
+      "id": "github-user-token",
+      "regex": "\\bghu_[A-Za-z0-9]{20,}"
+    },
+    {
+      "id": "github-personal-token",
+      "regex": "\\bghp_[A-Za-z0-9]{20,}"
+    },
+    {
+      "id": "github-fine-grained-token",
+      "regex": "\\bgithub_pat_[A-Za-z0-9_]{20,}"
+    },
+    {
+      "id": "provider-api-key",
+      "regex": "\\bsk-[A-Za-z0-9_-]{16,}"
+    },
+    {
+      "id": "inference-proxy-token",
+      "regex": "\\babp_[0-9a-f]{48}"
+    },
+    {
+      "id": "jwt",
+      "regex": "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"
+    },
+    {
+      "id": "bearer-credential",
+      "regex": "\\b[Bb]earer [A-Za-z0-9._~+/-]{16,}=*"
+    }
+  ]
+}

@@ -12,7 +12,7 @@ import {
 import { parseConfig } from '../config.mjs';
 import { readAction } from '../identity/action-ledger.mjs';
 
-const BASE = 'https://agent-bot.test';
+export const BASE = 'https://agent-bot.test';
 
 function decode(jws) {
   const [h, p, s] = jws.split('.');
@@ -26,7 +26,7 @@ function verifyEs256(jws, jwk) {
 }
 
 // A fake agent-bot server that checks the wire format the Go server enforces.
-function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
+export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
   const sign = crypto.generateKeyPairSync('ed25519');
   const x = sign.publicKey.export({ format: 'jwk' }).x;
   const s = { devices: new Map(), tokens: new Map(), seenEk: new Set(), polls: 0, calls: [], issued: 0 };
@@ -160,11 +160,11 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
   return s;
 }
 
-function sandbox() {
+export function sandbox() {
   const dir = mkdtempSync(join(tmpdir(), 'agent-bot-server-'));
   return { AGENT_BOT_SERVER_STATE: join(dir, 'server'), AGENT_BOT_CONFIG: join(dir, 'none.json'), HOME: dir };
 }
-const sleep = async () => {};
+export const sleep = async () => {};
 
 test('server mode is off unless AGENT_BOT_SERVER or settings.agentBotServer is set', () => {
   const env = sandbox();
