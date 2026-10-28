@@ -116,6 +116,8 @@ An answer that went missing after the request may have reached the server makes 
 
 Connection refusals and DNS failures cannot have reached the server, and they stay plain `credential-unavailable`.
 
+**No retry under a new name.** While an operation is `unknown`, the daemon does not mint for the same task, harness and repository under a new `operation_id`. Before it sends a new operation, it settles the old one by lookup. If the old one settles as `issued` or `none`, the new one goes ahead. If it is still unknown, the new one is refused with `outcome-unknown`. `agent-bot server reconcile` settles it, or the lookup does once the server's hold ends (one hour).
+
 ## Enforcement profile
 
 The daemon's `/v0/health` and every audit receipt name the enforcement profile in force (Soul Agent Platform 0.4 R8):
@@ -142,7 +144,12 @@ This is the one named exception to short-lived credentials (owner decision D2). 
   - A new `key_id` replaces it, and `provider_key_not_configured` drops it.
 - **Owner's side:** the owner sets the key on the server's `/devices` page, and sets the spend cap and rotation with the provider.
 - **The provider names must match.** The provider saved with the key, `settings.pilotProvider`, and the provider the soul declares for its harness must all be the same provider ID: `anthropic` for Claude Code, `openai` for Codex or OpenCode, and so on (see `soul-providers.mjs`). A harness name such as `opencode` is not a provider ID. When the names don't match, the launch fails with `provider-secret-missing`, rather than the key being injected under the wrong variable.
-- **Exit:** a loopback inference proxy ends the exception (#1190).
+- **Exit:** a loopback inference proxy ends the exception (#1190). It must land before any `managed protected` claim, or at stage 3 exit, whichever comes first.
+- **The limits, as decided (Q1, 2026-10-27):**
+  - the declared provider only;
+  - daemon memory only;
+  - each fetch and use receipted as `provider-key-exception`;
+  - the proxy tracked as the exit criterion.
 
 ## Setting up a machine with no local keys
 
