@@ -6,10 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  ServerSession, agentBotServerSetting, enroll, jwkThumbprint, loadDevice, logout, main, mintViaServer, onDeviceRevoked, taskIdFor,
+  ServerSession, agentBotServerSetting, enroll, jwkThumbprint, loadDevice, logout, main, mintViaServer, onDeviceRevoked, reconcilePendingCredentials, taskIdFor,
   parseServerArgs, serverHarness, serverUrl, signatureMessage, statePaths, validateServerUrl,
 } from '../identity/server-client.mjs';
 import { parseConfig } from '../config.mjs';
+import { readAction } from '../identity/action-ledger.mjs';
 
 const BASE = 'https://agent-bot.test';
 
@@ -38,7 +39,7 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
   s.ops = new Map();
   s.fetch = async (url, init = {}) => {
     const u = new URL(url);
-    if (s.down) throw new TypeError('fetch failed');
+    if (s.down) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
     if (s.unsigned5xx && u.pathname.startsWith('/api/daemon/')) return json(503, { error: 'Service Unavailable' });
     const f = init.body instanceof URLSearchParams ? Object.fromEntries(init.body) : null;
     s.calls.push(u.pathname);
@@ -99,13 +100,21 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
         const prior = s.ops.get(body.operation_id);
         if (prior && (prior.task_id !== body.task_id || prior.repo !== body.repo)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
+        if (s.outcomeUnknown) {
+          s.unknownOps = (s.unknownOps ?? new Set()).add(body.operation_id);
+          return signed(503, { error: 'outcome_unknown', retryable: false, operation_id: body.operation_id }, proof.payload.jti);
+        }
         const issued = prior ?? { issuance_id: `iss_${s.ops.size + 1}`, task_id: body.task_id, operation_id: body.operation_id, repo: body.repo, token: `ghs_op${s.ops.size + 1}` };
+        if (!prior) s.minted = (s.minted ?? 0) + 1;
         s.ops.set(body.operation_id, issued);
+        if (s.dropAfterMint) { s.dropAfterMint = false; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); }
         const echo = s.badEcho ? { ...issued, operation_id: 'op_other' } : issued;
         return signed(prior ? 200 : 201, { ...echo, expires_at: '2026-10-27T23:00:00Z', profile: body.profile, replayed: Boolean(prior), git_author: 'qwts-grok-agent[bot] <1+qwts-grok-agent[bot]@users.noreply.github.com>' }, proof.payload.jti);
       }
       if (u.pathname.startsWith('/api/daemon/issuances/')) {
         const op = decodeURIComponent(u.pathname.split('/').at(-1));
+        s.lookups = (s.lookups ?? 0) + 1;
+        if (s.unknownOps?.has(op)) return signed(200, { operation_id: op, state: s.unknownResolved ? 'none' : 'unknown', expires_at: '2026-10-28T03:00:00Z' }, proof.payload.jti);
         const issued = s.ops.get(op);
         return signed(200, issued ? { operation_id: op, state: 'issued', issuance_id: issued.issuance_id, task_id: issued.task_id } : { operation_id: op, state: 'none' }, proof.payload.jti);
       }
@@ -296,6 +305,46 @@ test('device-revoked drops cached tokens at once, persists, and requires re-enro
   const again = await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep, force: true });
   assert.equal(loadDevice({ env }).revoked_at, undefined);
   assert.notEqual(again.device_id, dev.device_id);
+});
+
+test('T06: a mint whose answer was lost is looked up and replayed, never minted twice', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  srv.dropAfterMint = true; // the service mints, then the connection resets
+  const minted = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.t06' });
+  assert.equal(srv.minted, 1, 'exactly one credential was minted upstream');
+  assert.equal(srv.lookups, 1, 'the outcome was looked up before anything was re-sent');
+  assert.deepEqual([minted.token, minted.issuance_id, minted.replayed], ['ghs_op1', 'iss_1', true]);
+  const action = readAction(statePaths({ env }).dir, minted.operation_id);
+  assert.deepEqual([action.state, action.issuance_id, action.reconciled], ['succeeded', 'iss_1', true]);
+  assert.doesNotMatch(JSON.stringify(action), /ghs_/, 'the ledger never holds a credential');
+});
+
+test('T06: an unknown upstream outcome stays unknown, is not retried, and settles by lookup later', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  srv.outcomeUnknown = true;
+  let operationId;
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, operationId: 'op_t06-unknown' }),
+    (error) => { operationId = error.operationId; return error.code === 'outcome-unknown' && /not retried/.test(error.message); });
+  assert.equal(operationId, 'op_t06-unknown');
+  srv.outcomeUnknown = false;
+  const dir = statePaths({ env }).dir;
+  assert.equal(readAction(dir, operationId).state, 'unknown');
+  assert.equal(srv.minted ?? 0, 0, 'nothing was minted or re-sent');
+  // Still unknown upstream: reconciliation leaves it unknown and sends nothing new.
+  assert.deepEqual(await reconcilePendingCredentials({ base: BASE, env, fetchImpl: srv.fetch }), [{ operation_id: operationId, state: 'unknown', code: 'outcome-unknown' }]);
+  // Once the service reports none (its hold passed), the action settles as rejected.
+  srv.unknownResolved = true;
+  assert.deepEqual(await reconcilePendingCredentials({ base: BASE, env, fetchImpl: srv.fetch }), [{ operation_id: operationId, state: 'rejected', code: 'credential-unavailable' }]);
+  assert.equal(srv.minted ?? 0, 0);
+  // A plain refusal (signed 503 credential_unavailable) is rejected outright, with no lookup.
+  srv.signedUnavailable = true;
+  const lookups = srv.lookups;
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch }), (error) => error.code === 'credential-unavailable');
+  assert.equal(srv.lookups, lookups);
 });
 
 test('revoked device surfaces invalid_grant with a re-enroll hint; logout wipes local state', async () => {

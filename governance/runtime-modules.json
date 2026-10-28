@@ -353,7 +353,8 @@
     "identity/presence-verifier.mjs": "identity",
     "cold-wake-lock.mjs": "shared",
     "wake-webhook-store.mjs": "comms",
-    "identity/server-client.mjs": "identity"
+    "identity/server-client.mjs": "identity",
+    "identity/action-ledger.mjs": "identity"
   },
   "assets": {
     "hooks/": "identity",
@@ -452,7 +453,8 @@
     "windows-account-custody.mjs": "Shared (owner decision on #645, F11, 2026-10-11): Windows SID and ACL checks used by identity (vouch.mjs) and comms (comms-windows.mjs). It reads ownership and attributes, never a file's contents, so it holds no credential.",
     "cold-wake-lock.mjs": "Shared synchronous settings lock/path mechanism, with ephemeral lock-held tokens; reads no settings or credentials.",
     "wake-webhook-store.mjs": "Internal comms-owned webhook storage. Helpers require the active shared cold-wake lock before the per-soul webhook lock; existing public access stays in wake-webhook.mjs.",
-    "identity/server-client.mjs": "Identity: opt-in agent-bot server mode (docs/server-mode.md) — device enrollment, DPoP-bound access tokens and server-minted installation tokens; identity/mint-token.mjs delegates to it when AGENT_BOT_SERVER is set."
+    "identity/server-client.mjs": "Identity: opt-in agent-bot server mode (docs/server-mode.md) — device enrollment, DPoP-bound access tokens and server-minted installation tokens; identity/mint-token.mjs delegates to it when AGENT_BOT_SERVER is set.",
+    "identity/action-ledger.mjs": "Identity: the durable action ledger for credential requests to the identity service (prepared, submitted, succeeded, rejected, unknown); an unknown outcome is reconciled by lookup, never re-sent blind (0.4 T06, #1184)."
   },
   "computed_imports": {},
   "contracts": {
