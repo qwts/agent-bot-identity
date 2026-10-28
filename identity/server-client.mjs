@@ -504,7 +504,10 @@ export class ServerSession {
   // input, so /mcp answers carry no agent-bot-signature and are not verified
   // — TLS is the transport trust. A 401 retries once on a forced token; a
   // revoked device surfaces device-revoked through the token endpoint.
-  async mcpEventsPoll({ name, args = {}, cursor = null, maxEvents = 1 } = {}) {
+  // Shared DPoP JSON-RPC plumbing for POST /mcp — unsigned answers (TLS is
+  // the transport trust), one forced-token retry on 401 before any JSON
+  // parse, 5xx and transport failures as credential-unavailable.
+  async mcpCall(method, params, { name } = {}) {
     this.device();
     const url = `${this.base}/mcp`;
     for (let attempt = 0; ; attempt += 1) {
@@ -515,7 +518,7 @@ export class ServerSession {
       const res = await this.send(url, {
         method: 'POST',
         headers: { authorization: `DPoP ${tok.value}`, dpop, accept: 'application/json', 'content-type': 'application/json', 'mcp-name': name },
-        body: JSON.stringify({ jsonrpc: '2.0', id: newJti(), method: 'events/poll', params: { name, arguments: args, cursor, maxEvents } }),
+        body: JSON.stringify({ jsonrpc: '2.0', id: newJti(), method, params }),
       });
       if (res.status >= 500) throw serverError('credential-unavailable', `the identity service answered ${res.status} for /mcp`);
       // 401 before JSON: a platform 401 may not be a JSON body, and the
@@ -529,9 +532,9 @@ export class ServerSession {
         throw serverError('credential-unavailable', 'the identity service answered /mcp with a body that is not JSON');
       }
       if (json?.error) {
-        const code = { [-32024]: 'event-forbidden', [-32602]: 'event-cursor-invalid', [-32025]: 'event-rate-limited' }[json.error.code] ?? 'credential-unavailable';
-        const e = serverError(code, `the identity service events/poll refused: ${json.error.message ? String(json.error.message).slice(0, 200) : `JSON-RPC ${json.error.code}`}`);
-        e.status = { 'event-forbidden': 403, 'event-cursor-invalid': 409, 'event-rate-limited': 429 }[code] ?? 503;
+        const code = { [-32024]: 'event-forbidden', [-32602]: 'event-cursor-invalid', [-32025]: 'event-rate-limited', [-32026]: 'event-edge-unsupported' }[json.error.code] ?? 'credential-unavailable';
+        const e = serverError(code, `the identity service ${method} refused: ${json.error.message ? String(json.error.message).slice(0, 200) : `JSON-RPC ${json.error.code}`}`);
+        e.status = { 'event-forbidden': 403, 'event-cursor-invalid': 409, 'event-rate-limited': 429, 'event-edge-unsupported': 400 }[code] ?? 503;
         throw e;
       }
       if (!json || typeof json.result !== 'object' || json.result === null) {
@@ -539,6 +542,16 @@ export class ServerSession {
       }
       return json.result;
     }
+  }
+
+  mcpEventsPoll({ name, args = {}, cursor = null, maxEvents = 1 } = {}) {
+    return this.mcpCall('events/poll', { name, arguments: args, cursor, maxEvents }, { name });
+  }
+
+  // An edge push ticket for the subscription: short-lived bearer (never
+  // logged or receipted), carrying the edge endpoints the server advertises.
+  mcpEdgeTicket({ name, args = {}, cursor = null } = {}) {
+    return this.mcpCall('events/edgeTicket', { name, arguments: args, cursor }, { name });
   }
 
   installationToken({ harness, repo }) {

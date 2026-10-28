@@ -5,6 +5,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { loadConfig } from '../config.mjs';
 import { serverStateDir } from './server-client.mjs';
 
 export const RELAY_EVENT = 'relay.message';
@@ -46,41 +47,211 @@ const defaultSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms);
 // cursor sits after the last returned-or-dropped event so malformed events
 // are never redelivered; when the server sends more than maxEvents the
 // cursor stays at the last event the caller was given — nothing is skipped.
-export async function nextEvents({ session, harness, cursor = null, waitMs = 0, maxEvents = 1, sleep = defaultSleep }) {
+// Event transport: 'auto' (edge push, falling back to poll), 'poll', or
+// 'edge'. Resolution order: option > AGENT_BOT_EVENT_TRANSPORT >
+// settings.eventTransport > 'auto'.
+function eventTransport(env) {
+  const envValue = env?.AGENT_BOT_EVENT_TRANSPORT;
+  const value = envValue !== undefined ? envValue : loadConfig({ env }).settings?.eventTransport;
+  return ['auto', 'poll', 'edge'].includes(value) ? value : 'auto';
+}
+
+const EDGE_UNSUPPORTED_MS = 5 * 60 * 1000;
+const FRAME_MAX = 64 * 1024;
+const EDGE_REMINT_REASONS = new Set(['revoked', 'revalidation_unavailable', 'ticket_expired']);
+const edgeError = (message, cursor = null) => Object.assign(new Error(message), { edge: true, cursor });
+
+// Server cursors are v1.<sub>.<pos>; only advance, never rewind.
+function cursorAhead(candidate, current) {
+  if (typeof candidate !== 'string' || !CURSOR_RE.test(candidate) || candidate === current) return false;
+  const pos = (c) => /^v1\.([^.]+)\.(\d+)$/.exec(Buffer.from(c, 'base64url').toString('utf8'));
+  const a = pos(candidate); const b = pos(current ?? '!');
+  if (a && b && a[1] === b[1]) return Number(a[2]) > Number(b[2]);
+  return true; // different subscription or shape — the server moved on
+}
+
+// The advertised SSE endpoint must be https — loopback http only so tests
+// can run without TLS.
+function sseUrlOk(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:') return true;
+    return u.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(u.hostname);
+  } catch { return false; }
+}
+
+function edgeTicketKey(harness) { return harness; }
+function ticketValid(t) { return t && Date.parse(t.expiresAt) - 30000 > Date.now(); }
+
+async function edgeTicket(session, harness, cursor) {
+  const cache = (session._edgeTickets ??= new Map());
+  const key = edgeTicketKey(harness);
+  const held = cache.get(key);
+  if (ticketValid(held)) return held;
+  const t = await session.mcpEdgeTicket({ name: RELAY_EVENT, args: { harness }, cursor });
+  // The ticket is a bearer secret: it is held in memory only, never
+  // logged, receipted, or interpolated into any thrown message.
+  const held2 = { ticket: String(t.ticket), expiresAt: t.expiresAt, cursor: t.cursor ?? null, sse: t.sse ?? null };
+  cache.set(key, held2);
+  return held2;
+}
+function dropTicket(session, harness) { session._edgeTickets?.delete(edgeTicketKey(harness)); }
+
+// One SSE subscription attempt against the edge. Throws `edge` errors on
+// any failure the caller may fall back from; returns the same event shape
+// as nextEvents plus transport:'edge'.
+async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }) {
+  const deadline = Date.now() + waitMs;
+  const want = maxEvents;
+  const fetchImpl = session.edgeFetch ?? session.fetch ?? fetch;
+  let at = cursor;
+  const dropped = [];
+  const events = [];
+  let truncated = false;
+  let remints = 0;
+  if (typeof session.mcpEdgeTicket !== 'function') throw edgeError('this session cannot mint edge tickets', at);
+  for (;;) {
+    const ticket = await edgeTicket(session, harness, at);
+    if (!sseUrlOk(ticket.sse)) { dropTicket(session, harness); throw edgeError('the edge advertised a non-https sse endpoint', at); }
+    const url = `${ticket.sse}?cursor=${encodeURIComponent(at ?? ticket.cursor ?? '')}`;
+    const ctl = new AbortController();
+    const timeout = setTimeout(() => { ctl.abort(); }, Math.max(deadline - Date.now(), 1));
+    let res;
+    try {
+      res = await fetchImpl(url, { headers: { authorization: `Bearer ${ticket.ticket}`, accept: 'text/event-stream' }, signal: ctl.signal });
+    } catch (e) {
+      clearTimeout(timeout);
+      if (Date.now() >= deadline) return { events, dropped, cursor: at, truncated, transport: 'edge' };
+      throw edgeError(`edge sse fetch failed: ${e?.name ?? 'error'}`, at);
+    }
+    if (res.status === 401) {
+      clearTimeout(timeout);
+      dropTicket(session, harness);
+      if (remints < 1) { remints += 1; continue; }
+      throw edgeError('the edge refused the minted ticket', at);
+    }
+    if (!res.ok) { clearTimeout(timeout); throw edgeError(`the edge answered ${res.status} for the sse stream`, at); }
+    // Read frames: split on blank lines, cap each frame at 64 KiB.
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let streamEnded = false;
+    let fail = null;
+    try {
+      while (events.length < want && Date.now() < deadline) {
+        const { done, value } = await reader.read();
+        if (done) { streamEnded = true; break; }
+        buf += dec.decode(value, { stream: true });
+        if (buf.length > FRAME_MAX) { fail = edgeError('an edge frame exceeded the 64 KiB cap', at); break; }
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let data = '';
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('data:')) data += line.slice(5).trimStart();
+          }
+          if (!data) continue;
+          let note;
+          try { note = JSON.parse(data); } catch { fail = edgeError('an edge frame carried malformed JSON', at); break; }
+          const p = note?.params ?? note ?? {};
+          const method = note?.method ?? '';
+          if (method.endsWith('/event')) {
+            const ev = { ...p, cursor: p.cursor ?? p.event?.cursor };
+            const v = validateRelayEvent(ev, harness);
+            if (v.ok) events.push(v.event);
+            else dropped.push({ id: v.id, reason: v.reason });
+            if (typeof ev?.cursor === 'string' && CURSOR_RE.test(ev.cursor) && cursorAhead(ev.cursor, at)) at = ev.cursor;
+          } else if (method.endsWith('/active') || method.endsWith('/heartbeat')) {
+            if (p?.truncated === true) truncated = true;
+            if (cursorAhead(p?.cursor, at)) at = p.cursor;
+          } else if (method.endsWith('/error')) {
+            const reason = p?.error?.data?.reason;
+            if (EDGE_REMINT_REASONS.has(reason)) dropTicket(session, harness);
+            fail = edgeError(`the edge stream ended with an error frame${reason ? ` (${reason})` : ''}`, at);
+            streamEnded = true;
+          }
+          if (events.length >= want || fail || streamEnded) break;
+        }
+        if (fail || streamEnded || events.length >= want) break;
+      }
+    } catch (e) {
+      if (ctl.signal.aborted || Date.now() >= deadline) break;
+      fail = edgeError(`the edge stream failed: ${e?.name ?? 'error'}`, at);
+    } finally {
+      clearTimeout(timeout);
+      try { await reader.cancel(); } catch { /* best effort */ }
+    }
+    if (events.length || Date.now() >= deadline) return { events: events.slice(0, want), dropped, cursor: at, truncated, transport: 'edge' };
+    if (fail) throw fail;
+    // A clean stream end returns whatever the stream yielded — 'auto'
+    // falls through to polling; the next call opens a fresh stream.
+    break;
+  }
+  return { events: events.slice(0, want), dropped, cursor: at, truncated, transport: 'edge' };
+}
+
+export async function nextEvents({ session, harness, cursor = null, waitMs = 0, maxEvents = 1, sleep = defaultSleep, transport = null } = {}) {
+  const mode = transport ?? eventTransport(session?.opts?.env);
   const want = Math.max(Number(maxEvents) || 0, 1);
   const deadline = Date.now() + waitMs;
   let at = cursor;
-  const dropped = [];
+  const edgeDrops = [];
+  if (mode !== 'poll' && !(session._edgeUnsupportedUntil > Date.now())) {
+    try {
+      const out = await edgeEvents({ session, harness, cursor: at, waitMs: Math.max(deadline - Date.now(), 0), maxEvents: want, sleep });
+      if (out.events.length || mode === 'edge') return { ...out, dropped: edgeDrops.concat(out.dropped) };
+      // auto, edge produced no events (clean end or the wait burned out):
+      // poll always runs next — even an immediate check — from wherever
+      // the stream advanced the cursor.
+      at = out.cursor;
+      edgeDrops.push(...out.dropped);
+    } catch (e) {
+      if (mode === 'edge') throw e;
+      // Coded service refusals (scope, cursor, credential) are not
+      // transport failures — they surface exactly like the poll path.
+      if (e?.code === 'event-edge-unsupported') session._edgeUnsupportedUntil = Date.now() + EDGE_UNSUPPORTED_MS;
+      else if (!e?.edge) throw e;
+      // Resume poll from wherever the edge attempt got — never backwards.
+      if (cursorAhead(e?.cursor, at)) at = e.cursor;
+    }
+  }
+  if (mode === 'edge') {
+    if (session._edgeUnsupportedUntil > Date.now()) {
+      const e = new Error('edge transport unavailable: the service reported events/edgeTicket unsupported');
+      e.code = 'event-edge-unsupported';
+      throw e;
+    }
+    // edge asked for but skipped above (should not reach here)
+  }
+  const want2 = want;
+  const dropped = edgeDrops;
   for (;;) {
     const sent = at;
-    const out = await session.mcpEventsPoll({ name: RELAY_EVENT, args: { harness }, cursor: at, maxEvents: want });
+    const out = await session.mcpEventsPoll({ name: RELAY_EVENT, args: { harness }, cursor: at, maxEvents: want2 });
     const events = [];
     let last = at;
     for (const ev of out?.events ?? []) {
-      if (events.length >= want) break;
+      if (events.length >= want2) break;
       const v = validateRelayEvent(ev, harness);
       if (v.ok) events.push(v.event);
       else dropped.push({ id: v.id, reason: v.reason });
-      // Only a well-formed cursor can name a position; an event whose
-      // own cursor is malformed is dropped but cannot be advanced past
-      // (a prod cursor is server-generated base64url — always well-formed).
       if (typeof ev?.cursor === 'string' && CURSOR_RE.test(ev.cursor)) last = ev.cursor;
     }
     const next = last !== sent ? last : (typeof out?.cursor === 'string' ? out.cursor : sent);
     at = next;
     if (events.length || Date.now() >= deadline) {
-      return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated) };
+      return { events: events.slice(0, want2), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
     }
-    // Drops only: hasMore means another page is ready — keep walking without
-    // sleeping only when this poll actually moved the cursor; a stuck
-    // cursor falls through to the sleep path so a buggy server cannot
-    // hot-loop us until the deadline.
     if (out?.hasMore && next !== sent) continue;
     const nap = Math.min(Math.max(Number(out?.nextPollMs) || 5000, 1000), 60000, Math.max(deadline - Date.now(), 0));
-    if (nap <= 0) return { events, dropped, cursor: next, truncated: Boolean(out?.truncated) };
+    if (nap <= 0) return { events, dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
     await sleep(nap);
   }
 }
+
+// Kept for old call sites that passed positional args; the body moved above.
+void 0;
 
 // Cursors live under the device state directory: one entry per
 // (event name, harness) subscription, 0600, atomic tmp+rename.

@@ -245,10 +245,21 @@ Cursors live in `<server state dir>/event-cursors.json` (0600), one entry
 per `relay.message:<harness>` subscription. With no stored cursor the first
 wait *arms* the subscription at the server's head — messages sent before
 the first arm are not delivered. `--cursor` overrides the stored cursor for
-one wait without moving the store. Polling is a stopgap until
-`events/stream` streams in real time; the seam is `nextEvents()` in
-`identity/relay-events.mjs` and a stream implementation must be a drop-in
-with the same signature. Replies to a relayed message are not available
+one wait without moving the store. Polling is still the baseline; an edge push
+transport (SSE, `events/edgeTicket`) is already wired behind the same
+seam. `nextEvents()` takes `transport` — `'auto'` (default) tries the
+edge and falls back to polling for the remaining wait from wherever the
+stream advanced the cursor; `'poll'` never mints a ticket; `'edge'`
+surfaces errors instead of falling back. Resolution order:
+`AGENT_BOT_EVENT_TRANSPORT`, then `settings.eventTransport`, then
+`'auto'`. A `-32026` edge-unsupported answer is remembered on the session
+for five minutes so retries do not re-mint uselessly. The edge ticket is
+a short-lived bearer secret — it is held in memory only and never
+appears in logs, errors or receipts.
+
+`identity/relay-events.mjs` keeps `nextEvents()` as the single seam; a
+future `events/stream` implementation must be a drop-in with the same
+signature. Replies to a relayed message are not available
 yet — they await a device `send_message`.
 
 The Devin hook adapters — `--format devin-stop`, `--format devin-context`,

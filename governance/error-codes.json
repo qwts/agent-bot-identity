@@ -513,6 +513,14 @@
       "kind": "refusal",
       "summary": "An events --ide request came from a caller carrying a soul marker (Agent ID, binding or App identity); souls must use the daemon/binding path, refused instead of mixing trust planes.",
       "registered": "0.15.0"
+    },
+    {
+      "n": 65,
+      "code": "event-edge-unsupported",
+      "component": "events",
+      "kind": "failure",
+      "summary": "The identity service answered events/edgeTicket with -32026 Unsupported: edge push is not configured for this deployment; callers fall back to events/poll.",
+      "registered": "0.15.0"
     }
   ]
 }
