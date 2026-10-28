@@ -35,6 +35,7 @@ const TOKEN_PATTERNS = [
   /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /\babp_[0-9a-f]{48}\b/g, // inference-proxy bearer tokens (#1202)
   /\b\d{6,}:[A-Za-z0-9_-]{30,}\b/g, // bot tokens of the `id:secret` shape
 ];
 const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
