@@ -26,6 +26,10 @@ import {
 } from '../agent-space-pack.mjs';
 import { startMockGistGitHub } from './helpers/mock-gist-github.mjs';
 
+// These tests exercise minting with an App key held on this host: legacy
+// local custody, which is off unless the owner opts in (#1184).
+process.env.AGENT_BOT_LEGACY_LOCAL_CUSTODY = '1';
+
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const ID = 'agent_11111111-1111-4111-8111-111111111111';
 const OTHER_ID = 'agent_22222222-2222-4222-8222-222222222222';

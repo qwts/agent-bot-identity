@@ -57,8 +57,8 @@ test('model settings and cache round-trip atomically with private permissions an
   assert.deepEqual(JSON.parse(readFileSync(soulModelFile(opts))), { schemaVersion: 1, settings: readSoulModels(opts) });
   assert.equal(statSync(soulModelFile(opts)).mode & 0o777, 0o600);
   assert.deepEqual(readdirSync(path.dirname(soulModelFile(opts))).filter((name) => /\.tmp$|\.lock$/.test(name)), []);
-  assert.deepEqual(before[0], { at, event: 'soul-model', agentId: ID, operation: 'set', decision: 'provider/model' });
-  assert.deepEqual(receipts(opts).at(-1), { at, event: 'soul-model', agentId: ID, operation: 'clear', decision: 'default' });
+  assert.deepEqual(before[0], { at, event: 'soul-model', profile: 'managed cooperative', agentId: ID, operation: 'set', decision: 'provider/model' });
+  assert.deepEqual(receipts(opts).at(-1), { at, event: 'soul-model', profile: 'managed cooperative', agentId: ID, operation: 'clear', decision: 'default' });
 });
 
 test('valid 120-character models audit without truncation; invalid values and corrupt settings fail closed', (t) => {

@@ -641,7 +641,7 @@ test('launch persists the selected model after census recording and before the f
   assert.equal(f.reports[0].status, 'launched');
   assert.deepEqual(seen, ['chosen']);
   const receipt = JSON.parse(readFileSync(auditFile(options), 'utf8').trim());
-  assert.deepEqual(receipt, { at: '2026-10-05T00:00:00.000Z', event: 'soul-model', agentId, operation: 'set', decision: 'chosen' });
+  assert.deepEqual(receipt, { at: '2026-10-05T00:00:00.000Z', event: 'soul-model', profile: 'managed cooperative', agentId, operation: 'set', decision: 'chosen' });
   const before = readFileSync(auditFile(options), 'utf8');
   await handler({ ...event, requestId: 'no-model' }, f.ports);
   assert.deepEqual(seen, ['chosen', 'chosen']);

@@ -76,7 +76,7 @@ import { OWNER_DECIDER, createProposal, decideProposal, listProposals, operation
 import { createGrantLedger } from './delegation-grants.mjs';
 import { createGrantActor } from './grant-github.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
-import { appendAuditReceipt, isComputerUse, validateAgentId } from './identity-format.mjs';
+import { appendAuditReceipt, assertProfileClaim, enforcementProfile, isComputerUse, validateAgentId } from './identity-format.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
 import {
   confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, ownerChallengeMessage, keydPresenceWithoutDialog, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner,
@@ -595,6 +595,15 @@ export function createDaemonServer({
         return;
       }
       const url = new URL(req.url, 'http://127.0.0.1');
+      // A caller that requires a stronger enforcement profile than the one in
+      // force is refused before anything else runs (0.4 T21, #1184).
+      if (req.headers['agent-bot-profile'] !== undefined) {
+        try { assertProfileClaim(req.headers['agent-bot-profile'], { env, home, now }); } catch (error) {
+          appendAuditReceipt({ event: 'profile-claim', operation: `${req.method} ${url.pathname}`.slice(0, 40), decision: 'refused', reason: 'profile-insufficient' }, { env, home, now });
+          sendJson(res, 403, { error: error.message, code: 'profile-insufficient', profile: enforcementProfile({ env, home, now }).profile });
+          return;
+        }
+      }
       if (url.pathname === '/ui' || url.pathname.startsWith('/ui/')) {
         await web.handle(req, res, url);
         return;
@@ -760,7 +769,10 @@ export function createDaemonServer({
         case 'GET /v0/health': {
           // `busy`: souls with any daemon turn in flight, beside
           // the warm pool's connected harnesses.
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, warmPool: warmPool.list(),
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid,
+            // The enforcement profile in force (0.4 R8): never stronger than shown.
+            profile: enforcementProfile({ env, home, now }),
+            warmPool: warmPool.list(),
             busy: server.wakePlane?.busy?.() ?? turns.busy(),
             souls: withRoles(listSouls({ file: populationFile({ env, home }) }), { file: populationFile({ env, home }), env, home }),
             computerUse: computerUse.list().map(({ agentId, since }) => ({ agentId, since })) });
@@ -1807,6 +1819,11 @@ async function serveDaemon({
   startedAt = Date.now(),
 } = {}) {
   assertLoopbackHost(host);
+  // An owner who requires a stronger enforcement profile than this host can
+  // show gets a refused start, never a daemon that reads stronger than it is
+  // (0.4 T21, #1184).
+  const requiredProfile = env.AGENT_BOT_REQUIRE_PROFILE ?? (config ?? loadConfig({ env, home }))?.settings?.requireProfile;
+  if (requiredProfile !== undefined && requiredProfile !== null && requiredProfile !== '') assertProfileClaim(requiredProfile, { env, home, now });
   const requestedPort = Number(port);
   if (!Number.isSafeInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
     throw new Error('daemon port must be an integer between 0 and 65535');

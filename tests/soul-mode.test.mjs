@@ -49,7 +49,7 @@ test('soul modes default to safe and round-trip beside cold wake with private at
   assert.equal(JSON.parse(readFileSync(soulModeFile(opts))).schemaVersion, 1);
   assert.deepEqual(readdirSync(path.dirname(soulModeFile(opts))).filter((name) => name.endsWith('.tmp')), []);
   const rows = readFileSync(auditFile(opts), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(rows[0], { at: '2026-10-05T00:00:00.000Z', event: 'soul-mode', agentId: ID, operation: 'set', decision: 'autopilot' });
+  assert.deepEqual(rows[0], { at: '2026-10-05T00:00:00.000Z', event: 'soul-mode', profile: 'managed cooperative', agentId: ID, operation: 'set', decision: 'autopilot' });
 });
 
 test('invalid modes and agent ids are refused without writing; corrupt stored settings fail closed', (t) => {

@@ -335,7 +335,7 @@ function installationServer(installations) {
 function mintEnv(apiBase, owner) {
   const configPath = join(mkdtempSync(join(tmpdir(), 'agent-bot-mint-')), 'config.json');
   writeFileSync(configPath, `${JSON.stringify({ owner, apiBase })}\n`);
-  return { AGENT_BOT_CONFIG: configPath, GH_APP_ID: '98765', GH_APP_PRIVATE_KEY: pem };
+  return { AGENT_BOT_CONFIG: configPath, GH_APP_ID: '98765', GH_APP_PRIVATE_KEY: pem, AGENT_BOT_LEGACY_LOCAL_CUSTODY: '1' };
 }
 
 test('mint succeeds for an App with one installation whatever "owner" says', async () => {
@@ -488,6 +488,7 @@ function operatorEnv(apiBase, routeEnv = {}) {
     XDG_STATE_HOME: join(root, 'state'),
     AGENT_BOT_CONFIG: configPath,
     AGENT_BOT_INTERACTION_HOME: join(root, 'interaction'),
+    AGENT_BOT_LEGACY_LOCAL_CUSTODY: '1',
     GH_AGENT_APP: 'you-claude-agent',
     ...routeEnv,
   };

@@ -41,6 +41,10 @@ import {
 } from './helpers/cold-home.mjs';
 import { MOCK_BOT_UID, startMockGitHubApp } from './helpers/mock-github-app.mjs';
 
+// These tests exercise minting with an App key held on this host: legacy
+// local custody, which is off unless the owner opts in (#1184).
+process.env.AGENT_BOT_LEGACY_LOCAL_CUSTODY = '1';
+
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const LAUNCHER = join(ROOT, 'agent-bot');
 const SLUG = 'cold-codex-agent';

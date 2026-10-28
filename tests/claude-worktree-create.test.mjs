@@ -26,6 +26,10 @@ import { ensureClaudeWorktreeAdapter } from '../sync-hooks.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
 
+// These tests exercise minting with an App key held on this host: legacy
+// local custody, which is off unless the owner opts in (#1184).
+process.env.AGENT_BOT_LEGACY_LOCAL_CUSTODY = '1';
+
 const AGENT_BOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const HOOK = join(AGENT_BOT, 'claude-worktree-create.mjs');
 const WRAPPER = join(AGENT_BOT, 'claude-worktree-create');
@@ -328,6 +332,7 @@ test('concurrent user-level Claude adapters share only the same bound session (#
     AGENT_BOT_STATE_HOME: stateDir,
     AGENT_BOT_SPACES_HOME: join(home, 'spaces'),
     AGENT_BOT_POPULATION_PATH: populationPath,
+    AGENT_BOT_LEGACY_LOCAL_CUSTODY: '1',
   });
   const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim();
   git(repo, 'init', '--quiet', '-b', 'main');

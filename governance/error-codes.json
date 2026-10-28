@@ -401,6 +401,22 @@
       "kind": "refusal",
       "registered": "0.10.64",
       "summary": "A team start's Python or uv-tool installs were not approved by the owner, so nothing was installed."
+    },
+    {
+      "n": 51,
+      "code": "profile-insufficient",
+      "component": "daemon",
+      "kind": "refusal",
+      "registered": "0.14.0",
+      "summary": "A caller or setting claimed a stronger enforcement profile than the one in force (0.4 T21); nothing was done."
+    },
+    {
+      "n": 52,
+      "code": "legacy-local-custody-off",
+      "component": "credential",
+      "kind": "refusal",
+      "registered": "0.14.0",
+      "summary": "Minting with an App key held on this host is off (legacy local custody); mint through the identity service or opt in before the removal date."
     }
   ]
 }
