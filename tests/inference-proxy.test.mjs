@@ -18,14 +18,14 @@ const roots = [];
 after(async () => { await stopInferenceProxy(); for (const r of roots) rmSync(r, { recursive: true, force: true }); });
 const KEY = 'sk-NOT-A-REAL-PILOT-KEY-123456';
 
-async function withProxy(fn, { now, maxBodyBytes } = {}) {
+async function withProxy(fn, { now, maxBodyBytes, onRequest } = {}) {
   const seen = [];
   const fetchImpl = async (url, init) => {
     seen.push({ url: String(url), headers: init.headers, body: init.body?.toString() });
     return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('data: one\n\n')); c.enqueue(new TextEncoder().encode('data: two\n\n')); c.close(); } }),
       { status: 200, headers: { 'content-type': 'text/event-stream', 'x-request-id': 'r1', 'set-cookie': 'session=upstream' } });
   };
-  const p = createInferenceProxy({ upstreams: { openai: 'https://opencode.ai/zen/go/v1' }, keyFor: (id) => (id === 'openai' ? KEY : null), fetchImpl, ...(now ? { now } : {}), ...(maxBodyBytes ? { maxBodyBytes } : {}) });
+  const p = createInferenceProxy({ upstreams: { openai: 'https://opencode.ai/zen/go/v1' }, keyFor: (id) => (id === 'openai' ? KEY : null), fetchImpl, ...(now ? { now } : {}), ...(maxBodyBytes ? { maxBodyBytes } : {}), ...(onRequest ? { onRequest } : {}) });
   const port = await p.listen(0);
   try { await fn({ p, port, seen }); } finally { await p.close(); }
 }
@@ -130,6 +130,59 @@ test('the proxy port is fixed, and a loopback baseUrl on the port or the proxy p
   assert.equal(isProxyBaseUrl('http://127.0.0.1:11434/v1', 8787), false, 'a local model server is not the proxy');
   assert.equal(isProxyBaseUrl('https://opencode.ai/zen/go/v1', 8787), false);
   assert.equal(isProxyBaseUrl(null, 8787), false);
+});
+
+test('every request past token lookup writes exactly one receipt — and pre-auth refusals write none (#1203)', async () => {
+  const receipts = [];
+  const onRequest = (r) => receipts.push(r);
+  await withProxy(async ({ p, port }) => {
+    const base = proxyBaseUrl(port, 'openai');
+    const token = p.issue({ agentId: 'agent_x', providerId: 'openai' });
+    const call = (url, init) => fetch(`${base}${url}`, init);
+    // Pre-token-lookup refusals: nothing receipted, so strangers can't flood the log.
+    await call('/chat/completions', { method: 'POST', body: '{}' });
+    await call('/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${KEY}` }, body: '{}' });
+    await call('/../x', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' });
+    assert.equal(receipts.length, 0);
+    // A forwarded request: one receipt, the forwarded path without its query.
+    const res = await call('/chat/completions?stream=1', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{"model":"glm-5.3"}' });
+    assert.equal(res.status, 200);
+    assert.equal(receipts.length, 1);
+    const r = receipts[0];
+    assert.deepEqual([r.agentId, r.providerId, r.method, r.path, r.status, r.outcome],
+      ['agent_x', 'openai', 'POST', '/zen/go/v1/chat/completions', 200, 'forwarded']);
+    assert.equal(r.bytesIn, '{"model":"glm-5.3"}'.length);
+    assert.equal(r.bytesOut, 'data: one\n\ndata: two\n\n'.length);
+    assert.ok(Number.isFinite(r.durationMs) && r.durationMs >= 0);
+    assert.doesNotMatch(JSON.stringify(receipts), /NOT-A-REAL|abp_/, 'a receipt never holds the key or the token');
+  }, { onRequest });
+});
+
+test('request receipts cover key-not-held, too-large and upstream-unreachable (#1203)', async () => {
+  const receipts = [];
+  let key = null;
+  let failUpstream = false;
+  const fetchImpl = async () => {
+    if (failUpstream) throw new Error('ECONNREFUSED');
+    return new Response('ok', { status: 200 });
+  };
+  const p = createInferenceProxy({
+    upstreams: { openai: 'https://opencode.ai/zen/go/v1' }, keyFor: () => key, fetchImpl,
+    maxBodyBytes: 16, onRequest: (r) => receipts.push(r),
+  });
+  const port = await p.listen(0);
+  try {
+    const token = p.issue({ agentId: 'agent_x', providerId: 'openai' });
+    const auth = { authorization: `Bearer ${token}` };
+    const call = (init) => fetch(`${proxyBaseUrl(port, 'openai')}/chat/completions`, { method: 'POST', headers: auth, ...init });
+    assert.equal((await call({ body: '{}' })).status, 503);
+    key = KEY; failUpstream = true;
+    assert.equal((await call({ body: '{}' })).status, 502);
+    failUpstream = false;
+    assert.equal((await call({ headers: { ...auth, 'content-length': '17' }, body: 'x'.repeat(17) })).status, 413);
+    assert.deepEqual(receipts.map((r) => [r.outcome, r.status]),
+      [['key-not-held', 503], ['upstream-unreachable', 502], ['too-large', 413]]);
+  } finally { await p.close(); }
 });
 
 test('a soul whose baseUrl is on the proxy gets a proxy token, never the key, receipted as brokered-inference', async () => {
