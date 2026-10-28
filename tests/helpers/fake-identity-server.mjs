@@ -82,6 +82,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
     }
     // SEP-3415 MCP events/poll: same DPoP device auth as /api/daemon/*, but
     // the answers are plain JSON-RPC — never agent-bot-signature'd.
+    if (u.pathname === '/v1/events/sse') return s.sseFetch(url, init);
     if (u.pathname === '/mcp') {
       const tok = (init.headers.authorization ?? '').replace(/^DPoP /, '');
       const proof = decode(init.headers.dpop);
@@ -98,6 +99,22 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       const p = rpc.params ?? {};
       const harness = p.arguments?.harness;
       if (!s.devices.get(t.device).harnesses.includes(harness)) return rpcErr(-32024, 'Forbidden: harness not in device scope');
+      if (rpc.method === 'events/edgeTicket') {
+        s.ticketCalls = (s.ticketCalls ?? 0) + 1;
+        if (s.noEdge) return rpcErr(-32026, 'Unsupported: edge push is not configured');
+        s.relaySub = s.relaySub ?? 'sub1';
+        const enc = (pos) => Buffer.from(`v1.${s.relaySub}.${pos}`).toString('base64url');
+        s.tickets = s.tickets ?? new Map();
+        if (p.cursor !== null && p.cursor !== undefined) {
+          const m = /^v1\.([^.]+)\.(\d+)$/.exec(Buffer.from(String(p.cursor), 'base64url').toString('utf8'));
+          if (!m) return rpcErr(-32602, 'malformed cursor');
+          if (m[1] !== s.relaySub) return rpcErr(-32602, 'cursor belongs to a different subscription');
+        }
+        const ticket = `tkt_${s.ticketCalls}`;
+        s.tickets.set(ticket, { harness });
+        return json(200, { jsonrpc: '2.0', id: rpc.id, result: { resultType: 'complete', ticket, expiresAt: new Date(Date.now() + (s.ticketTtlMs ?? 600000)).toISOString(), cursor: enc((s.relay ?? []).length), truncated: false, ticketMethod: 'GET', websocket: 'wss://events.test/ws', sse: s.sseUrl ?? `${u.origin}/v1/events/sse`, docs: 'https://events.test/docs' } });
+      }
+      if (rpc.method !== 'events/poll') return rpcErr(-32601, `no such method ${rpc.method}`);
       s.relay = s.relay ?? [];
       s.relaySub = s.relaySub ?? 'sub1';
       const enc = (pos) => Buffer.from(`v1.${s.relaySub}.${pos}`).toString('base64url');
@@ -291,6 +308,28 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       }
     }
     return json(404, { error: 'not found' });
+  };
+  // Scriptable edge SSE: (url, init) -> Response streaming
+  // notifications from s.sseScript = [{method, params}]. s.sseStatus fails
+  // before the stream; bad tickets -> 401 invalid_ticket; s.sseAbort ends it.
+  s.sseFetch = async (url, init = {}) => {
+    const tok = (init.headers?.authorization ?? '').replace(/^Bearer /, '');
+    if (s.sseStatus && s.sseStatus !== 200) return new Response(JSON.stringify({ error: 'edge unavailable' }), { status: s.sseStatus });
+    if (!s.tickets?.has(tok)) return new Response(JSON.stringify({ error: 'invalid_ticket' }), { status: 401, headers: { 'content-type': 'application/json' } });
+    s.sseOpened = (s.sseOpened ?? 0) + 1;
+    const script = s.sseScript ?? [];
+    const stream = new ReadableStream({
+      async start(ctl) {
+        init.signal?.addEventListener('abort', () => { try { ctl.close(); } catch { /* closed */ } });
+        for (const frame of script) {
+          const data = JSON.stringify({ jsonrpc: '2.0', method: frame.method, params: frame.params });
+          try { ctl.enqueue(Buffer.from(`event: message\ndata: ${data}\n\n`)); } catch { return; }
+          await new Promise((r) => { setTimeout(r, frame.delayMs ?? 0); });
+        }
+        if (!s.sseHold) { try { ctl.close(); } catch { /* closed */ } }
+      },
+    });
+    return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
   };
   return s;
 }

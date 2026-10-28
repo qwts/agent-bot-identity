@@ -56,7 +56,13 @@ const nextLine = (cursor, ide = false) => `Next: run \`agent-bot events wait${id
 function eventHooksEnabled(env = process.env) {
   const value = env.AGENT_BOT_EVENT_HOOKS;
   if (value !== undefined) return value === '1';
-  return loadConfig({ env }).settings?.eventHooks === true;
+  try {
+    return loadConfig({ env }).settings?.eventHooks === true;
+  } catch {
+    // A config the hooks cannot read fails the opt-in closed: disabled,
+    // the turn ends quietly like any other unhooked run.
+    return false;
+  }
 }
 
 // Poll /v0/events/wait in ≤25 s chunks until an event or the deadline.

@@ -728,6 +728,18 @@ test('hook formats stay silent when the opt-in is off (--ide path)', async (t) =
   assert.equal(srv.calls.length, calls, 'no service request was made');
 });
 
+test('a malformed config cannot enable the adapters — fail closed', async (t) => {
+  const { run, srv, env } = await fixture(t);
+  delete env.AGENT_BOT_EVENT_HOOKS;
+  writeFileSync(env.AGENT_BOT_CONFIG, '{ broken json');
+  const calls = srv.calls.length;
+  const out = await run(['events', 'wait', '--format', 'devin-stop', '--timeout', '2'], JSON.stringify({ hook_event_name: 'Stop', session_id: 's' }));
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /hook adapters are disabled/);
+  assert.equal(srv.calls.length, calls);
+});
+
 test('settings.eventHooks enables the adapters; AGENT_BOT_EVENT_HOOKS=0 overrides it', async (t) => {
   const { run, srv, env } = await fixture(t);
   delete env.AGENT_BOT_EVENT_HOOKS;
