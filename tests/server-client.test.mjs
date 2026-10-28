@@ -126,6 +126,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
             return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
           }
           if (gh.status >= 500) {
+            if (gh.status === 502 && s.github502Unavailable) return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
             if (gh.status === 502) {
               s.unknownOps = (s.unknownOps ?? new Set()).add(body.operation_id);
               s.unknownTasks = (s.unknownTasks ?? new Set()).add(body.task_id);

@@ -83,6 +83,17 @@ test('github-5xx: the mock GitHub drives 503, 502-after-mint and the in-flight g
   assert.match(row.detail, /502:outcome-unknown\/unknown mints:1 retry:outcome-unknown new-op:operation-conflict extra-mints:0 ok:issued/);
 });
 
+test('github-5xx fails when a counted 502 mint answers credential-unavailable', async () => {
+  const port = await freePort();
+  const { rows } = await drive({
+    mockGithub: port,
+    flags: { githubBase: `http://127.0.0.1:${port}`, github502Unavailable: true },
+  });
+  const row = byName(rows, 'github-5xx');
+  assert.equal(row.result, 'failed', row.detail);
+  assert.match(row.detail, /502:credential-unavailable/, 'the ambiguous mint must not read as retriable');
+});
+
 test('github-5xx skips without --mock-github', async () => {
   const { rows } = await drive();
   assert.equal(byName(rows, 'github-5xx').result, 'skipped');

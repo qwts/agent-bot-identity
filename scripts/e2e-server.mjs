@@ -223,8 +223,11 @@ export async function run({
         const codeC = await code(() => device.session.credential({ harness, repo, taskId: freshTask, operationId: newOperationId() }));
 
         const aOk = codeA === 'credential-unavailable' && lookupA !== 'issued';
-        const bOk = (codeB === 'outcome-unknown' || codeB === 'credential-unavailable') && lookupB !== 'issued'
-          && mintsForB === 1 && (codeRetry === 'outcome-unknown' || codeRetry === 'issued')
+        // A 502 after a possible mint must read as outcome-unknown — never
+        // credential-unavailable, which would let a daemon retry under a new
+        // operation and mint twice.
+        const bOk = codeB === 'outcome-unknown' && lookupB !== 'issued'
+          && mintsForB === 1 && codeRetry === 'outcome-unknown'
           && codeNewOp === 'operation-conflict' && extraMints === 0;
         const cOk = codeC === 'issued';
         return outcome(aOk && bOk && cOk,
