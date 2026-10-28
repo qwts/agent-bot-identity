@@ -449,6 +449,14 @@
       "kind": "refusal",
       "summary": "An operation ID was reused for a different credential request or after its credential expired (0.4 operation_conflict).",
       "registered": "0.14.0"
+    },
+    {
+      "n": 57,
+      "code": "inference-proxy-unavailable",
+      "component": "launch",
+      "kind": "failure",
+      "summary": "The soul's provider baseUrl is on the loopback inference proxy, which is not running there; the launch is refused rather than given the key (#1190).",
+      "registered": "0.14.1"
     }
   ]
 }

@@ -8,12 +8,86 @@
 
 import { appendAuditReceipt, enforcementProfile } from './identity-format.mjs';
 import { ServerSession, newOperationId, onDeviceRevoked, serverUrl } from './server-client.mjs';
+import { createInferenceProxy, isProxyBaseUrl } from './inference-proxy.mjs';
 
 export const PROVIDER_KEY_TASK = 'daemon-start';
 const REFETCH_MARGIN_MS = 10 * 60_000;
 
 let held = null; // { provider, key, keyId, issuanceId, operationId, expiresAt }
-onDeviceRevoked(() => { held = null; });
+let proxy = null; // { origin, instance } while the loopback inference proxy runs (#1190)
+onDeviceRevoked(() => { held = null; proxy?.instance.revokeAll(); });
+
+/**
+ * Starts the loopback inference proxy (#1190) on `port`, forwarding each
+ * provider id to its `upstreams` URL with the held key swapped in. Returns
+ * its origin. The key stays in this module.
+ */
+export async function startInferenceProxy({ port, upstreams, now = () => new Date() } = {}) {
+  await stopInferenceProxy();
+  const instance = createInferenceProxy({
+    upstreams,
+    keyFor: (providerId) => {
+      dropIfExpired(now);
+      return held && held.provider === providerId ? held.key : null;
+    },
+  });
+  const bound = await instance.listen(port);
+  proxy = { origin: `http://127.0.0.1:${bound}`, instance };
+  return proxy.origin;
+}
+
+/** Stops the proxy and invalidates every token it issued. */
+export async function stopInferenceProxy() {
+  if (!proxy) return;
+  const { instance } = proxy;
+  proxy = null;
+  instance.revokeAll();
+  await instance.close();
+}
+
+/** The proxy's origin while it runs, else null. */
+export function inferenceProxyOrigin() {
+  return proxy?.origin ?? null;
+}
+
+/**
+ * The env patch for a launch whose provider baseUrl is this proxy: a
+ * short-lived proxy token under `envKey`, never the key (brokered
+ * inference, 0.4). Receipted as `brokered-inference`. Null when the proxy
+ * does not run, the baseUrl is not on it, or the key is not held.
+ */
+export function brokeredProviderEnv({ providerId, envKey, baseUrl, agentId = null, harness = null, env = process.env, home, now = () => new Date() } = {}) {
+  dropIfExpired(now);
+  if (!proxy || !held || held.provider !== providerId || !envKey || typeof baseUrl !== 'string' || !baseUrl.startsWith(`${proxy.origin}/`)) return null;
+  const notAfter = held.expiresAt === null ? Infinity : Date.parse(held.expiresAt);
+  const token = proxy.instance.issue({ agentId, providerId, notAfter });
+  if (!token) return null;
+  appendAuditReceipt({
+    event: 'provider-key-use', agentId, operation: harness ?? providerId, decision: 'brokered', reason: 'brokered-inference',
+    detail: `the ${providerId} key (${held.keyId ?? 'no key id'}) stays in the daemon; the harness holds a proxy token for ${proxy.origin}`,
+    issuanceId: held.issuanceId, taskId: PROVIDER_KEY_TASK, operationId: held.operationId,
+  }, { env, ...(home ? { home } : {}), now });
+  return { env: { [envKey]: token }, envKey, provider: { harness, id: providerId, envKey, credential: null, source: 'inference-proxy', keyId: held.keyId } };
+}
+
+/**
+ * The provider env for a launch, failing closed on the proxy (#1190): a soul
+ * whose baseUrl is on the loopback inference proxy (`proxyPort`, or the
+ * proxy path on loopback) gets a proxy token or a refused launch, never the
+ * key. Coded `inference-proxy-unavailable` when the proxy is not running on
+ * that origin, `provider-secret-missing` when the key is not held. Any other
+ * soul takes the pilot exception (`heldProviderEnv`). Null when neither
+ * applies, so the caller decides.
+ */
+export function launchProviderEnv({ providerId, envKey, baseUrl, proxyPort, agentId = null, harness = null, env = process.env, home, now = () => new Date() } = {}) {
+  if (!isProxyBaseUrl(baseUrl, proxyPort)) return heldProviderEnv({ providerId, envKey, agentId, harness, env, home, now });
+  const brokered = brokeredProviderEnv({ providerId, envKey, baseUrl, agentId, harness, env, home, now });
+  if (brokered) return brokered;
+  if (!proxy || !baseUrl.startsWith(`${proxy.origin}/`)) {
+    throw Object.assign(new Error(`${harness ?? providerId}'s provider ${providerId} uses the inference proxy at ${baseUrl}, which is not running there; the key is never handed to the harness instead (set settings.inferenceProxy and restart the daemon)`), { code: 'inference-proxy-unavailable' });
+  }
+  return null;
+}
 
 /** Drops the held key (device revoked, shutdown, tests). */
 export function dropProviderKey() {
