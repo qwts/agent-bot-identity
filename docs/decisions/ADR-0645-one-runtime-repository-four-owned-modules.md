@@ -1,6 +1,6 @@
 # ADR-0645: Owned modules and contracts first, then identity becomes its own repository
 
-**Status:** Accepted (2026-10-09, by the owner, relayed in chat)
+**Status:** Superseded by ADR-1183 (accepted 2026-10-09, by the owner, relayed in chat; superseded 2026-10-27. ADR-1183 retires the identity extraction and carries this record's module structure forward unchanged)
 **Date:** 2026-10-08
 **Issue:** [qwts/agent-bot-identity#645](https://github.com/qwts/agent-bot-identity/issues/645)
 

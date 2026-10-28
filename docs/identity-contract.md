@@ -2,13 +2,12 @@
 
 This is ADR-0645 migration step 7. It says what the rest of the runtime may
 call in identity, in which form, and what identity persists. Soul, host, cli
-and comms use only what is listed here. After step 9, identity ships as
-`qwts/agent-identity` inside each agent-bot release at a pinned version
-(answer 3). Everything here then comes from that pinned package, and nothing
-else in identity can be reached.
+and comms use only what is listed here. It stays the contract as identity
+becomes the agent-bot-identity plugin of the HQ daemon
+([ADR-1183](decisions/ADR-1183-agent-bot-splits-into-hq-and-plugins.md)).
 
-How identity leaves this repository is
-[identity-extraction-plan.md](identity-extraction-plan.md) (step 8).
+The earlier plan to extract identity into `qwts/agent-identity`
+([identity-extraction-plan.md](identity-extraction-plan.md)) is retired.
 Background and line references are in
 [identity-contract-inventory.md](identity-contract-inventory.md). The owner
 decisions that shaped this are recorded there in §8.
