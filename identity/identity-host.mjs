@@ -36,3 +36,4 @@ export { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 export { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
 export { validateApprovalScope } from './session-approvals.mjs';
 export { loadOrCreateVouchKey, signSoulToken, vouchPublicKeyPem, vouchStateDir } from './vouch.mjs';
+export { dropProviderKey, ensureProviderKey, fetchProviderKey, heldProviderEnv, providerKeyStale, providerKeyStatus } from './provider-key.mjs';
