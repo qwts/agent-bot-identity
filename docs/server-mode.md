@@ -148,6 +148,7 @@ This is the one named exception to short-lived credentials (owner decision D2). 
   - **Setup:** set `settings.inferenceProxy` to `{ "port": 8787, "upstreams": { "openai": "https://opencode.ai/zen/go/v1" } }`, and declare the soul's provider `baseUrl` as `http://127.0.0.1:8787/v0/inference/openai`.
   - **What changes:** the harness then gets a short-lived proxy token in place of the key. The daemon swaps the key in on the way upstream, so the key never reaches a member process.
   - **Receipts** say `brokered-inference`.
+  - **Fails closed:** when the proxy is not running on that port (a bad port, a failed start), the soul's launch is refused with `inference-proxy-unavailable`. The key is never put in its environment instead. The port must be fixed; `0` is refused.
   - **Other souls:** a soul whose `baseUrl` is not on the proxy keeps the exception below. It must land before any `managed protected` claim, or at stage 3 exit, whichever comes first.
 - **The limits, as decided (Q1, 2026-10-27):**
   - the declared provider only;

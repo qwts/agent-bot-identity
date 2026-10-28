@@ -92,7 +92,7 @@ export const LAUNCH_CODES = new Set(['soul-paused', 'sandbox-not-ready', 'sandbo
   'runtime-download-failed', 'runtime-checksum-mismatch', 'runtime-unsupported-platform', 'runtime-install-failed', 'runtime-override-invalid', 'runtime-override-unsupported-platform',
   'runtime-approval-required',
   'tool-home-unwritable', 'tool-home-record-invalid',
-  'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid',
+  'provider-secret-missing', 'provider-secret-unreadable', 'provider-declaration-invalid', 'inference-proxy-unavailable',
   'harness-signed-out', 'harness-unknown', 'harness-disabled', 'harness-tool-missing',
   'policy-denied', 'policy-unavailable', 'policy-denied-audit-failed', 'policy-unavailable-audit-failed']);
 // The launch codes that are expected refusals (the owner's choice, policy or
