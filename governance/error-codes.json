@@ -489,6 +489,22 @@
       "kind": "refusal",
       "summary": "The reply target has not messaged this harness recently enough (403 recipient_stale); the reply is refused, not held.",
       "registered": "0.14.1"
+    },
+    {
+      "n": 62,
+      "code": "event-forbidden",
+      "component": "events",
+      "kind": "refusal",
+      "summary": "The identity service refused an events/poll: the device's scope does not cover the harness (-32024); refused, never retried as another harness.",
+      "registered": "0.14.1"
+    },
+    {
+      "n": 63,
+      "code": "event-cursor-invalid",
+      "component": "events",
+      "kind": "refusal",
+      "summary": "The identity service rejected an events/poll cursor (-32602): malformed or from a different subscription; the stored cursor is left in place for the owner to reset.",
+      "registered": "0.14.1"
     }
   ]
 }

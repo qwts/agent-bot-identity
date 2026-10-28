@@ -500,57 +500,46 @@ export class ServerSession {
 
   whoami() { return this.call('GET', '/api/daemon/whoami'); }
 
-  // Live-session events (api.md "Messages and live-session events"): a soul's
-  // harness takes, acks, releases and replies to `message` notices. Bodies are
-  // untrusted external input and are never larger than 16 KiB.
-  async takeEvents({ harness, waitSeconds = 0, count = 10, leaseSeconds = 60 }) {
-    const out = await this.call('POST', '/api/daemon/notices/take', {
-      harness: serverHarness(harness), type: 'message',
-      wait_seconds: waitSeconds, count, lease_seconds: leaseSeconds,
-    });
-    // Malformed notices are skipped, never trusted: each must name itself,
-    // its lease, sender, key and a bounded text body.
-    const notices = [];
-    // A malformed notice is a {id, lease, reason} the caller must still ack —
-    // skipping without an ack would re-deliver it forever. `from` is a strict
-    // sender slug set by the service; anything else could smuggle a fake
-    // "Relayed from" line into the harness's context.
-    const dropped = [];
-    for (const n of Array.isArray(out?.notices) ? out.notices : []) {
-      const reason = !(n && typeof n === 'object') ? 'not an object'
-        : typeof n.id !== 'string' ? 'no id'
-        : !/^[A-Za-z0-9._:-]{1,128}$/.test(n.id) ? 'bad id'
-        : typeof n.lease !== 'string' ? 'no lease'
-        : typeof n.from !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(n.from) ? 'bad sender'
-        : typeof n.key !== 'string' ? 'no key'
-        : typeof n.body !== 'string' || Buffer.byteLength(n.body, 'utf8') > 16384 ? 'bad body'
-        : (n.correlation !== undefined && n.correlation !== null && (typeof n.correlation !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(n.correlation))) ? 'bad correlation'
-        : (n.reply_to !== undefined && n.reply_to !== null && typeof n.reply_to !== 'string') ? 'bad reply_to'
-        : null;
-      if (reason === null) notices.push(n);
-      else dropped.push({ id: typeof n?.id === 'string' ? n.id : null, lease: typeof n?.lease === 'string' ? n.lease : null, reason });
+  // SEP-3415 MCP events/poll on POST /mcp: the relay is untrusted external
+  // input, so /mcp answers carry no agent-bot-signature and are not verified
+  // — TLS is the transport trust. A 401 retries once on a forced token; a
+  // revoked device surfaces device-revoked through the token endpoint.
+  async mcpEventsPoll({ name, args = {}, cursor = null, maxEvents = 1 } = {}) {
+    this.device();
+    const url = `${this.base}/mcp`;
+    for (let attempt = 0; ; attempt += 1) {
+      const tok = await this.accessToken({ force: attempt > 0 });
+      const dpop = signJws(tok.ek, { alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk(tok.ek) }, {
+        htm: 'POST', htu: url, iat: now(), jti: newJti(), ath: b64u(crypto.createHash('sha256').update(tok.value).digest()),
+      });
+      const res = await this.send(url, {
+        method: 'POST',
+        headers: { authorization: `DPoP ${tok.value}`, dpop, accept: 'application/json', 'content-type': 'application/json', 'mcp-name': name },
+        body: JSON.stringify({ jsonrpc: '2.0', id: newJti(), method: 'events/poll', params: { name, arguments: args, cursor, maxEvents } }),
+      });
+      if (res.status >= 500) throw serverError('credential-unavailable', `the identity service answered ${res.status} for /mcp`);
+      // 401 before JSON: a platform 401 may not be a JSON body, and the
+      // forced-token retry must happen regardless.
+      if (res.status === 401) {
+        if (attempt === 0) continue;
+        throw serverError('credential-unavailable', 'the identity service refused the device token for /mcp');
+      }
+      let json;
+      try { json = await res.json(); } catch {
+        throw serverError('credential-unavailable', 'the identity service answered /mcp with a body that is not JSON');
+      }
+      if (json?.error) {
+        const code = { [-32024]: 'event-forbidden', [-32602]: 'event-cursor-invalid', [-32025]: 'event-rate-limited' }[json.error.code] ?? 'credential-unavailable';
+        const e = serverError(code, `the identity service events/poll refused: ${json.error.message ? String(json.error.message).slice(0, 200) : `JSON-RPC ${json.error.code}`}`);
+        e.status = { 'event-forbidden': 403, 'event-cursor-invalid': 409, 'event-rate-limited': 429 }[code] ?? 503;
+        throw e;
+      }
+      if (!json || typeof json.result !== 'object' || json.result === null) {
+        throw serverError('credential-unavailable', 'the identity service answered /mcp without a result object');
+      }
+      return json.result;
     }
-    return { notices, dropped };
   }
-
-  ackEvents({ harness, leases }) {
-    return this.call('POST', '/api/daemon/notices/ack', { harness: serverHarness(harness), ids: leases });
-  }
-
-  releaseEvents({ harness, leases }) {
-    return this.call('POST', '/api/daemon/notices/release', { harness: serverHarness(harness), ids: leases });
-  }
-
-  async postReply({ harness, to, key, body, correlation = null, replyTo = null }) {
-    if (typeof body !== 'string' || body.length > 16384) throw new Error('reply body must be a string of at most 16 KiB');
-    if (typeof key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(key)) throw new Error('reply key must be 1-128 characters of [A-Za-z0-9._:-]');
-    const out = await this.call('POST', '/api/daemon/replies', {
-      harness: serverHarness(harness), to, key, body,
-      ...(correlation ? { correlation } : {}), ...(replyTo ? { reply_to: replyTo } : {}),
-    });
-    return out;
-  }
-
 
   installationToken({ harness, repo }) {
     return this.call('POST', '/api/daemon/installation-token', { harness: serverHarness(harness), repo });
