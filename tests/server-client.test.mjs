@@ -507,6 +507,13 @@ test('revocation racing an in-flight mint: the late caller gets device-revoked a
   // with the revoked code — never an unsettled caller.
   assert.ok(done.ok === false ? done.error.code === 'device-revoked' : typeof done.out.issuance_id === 'string');
   await assert.rejects(session.call('GET', '/api/daemon/whoami'), /device-revoked|revoked/, 'no cached access token survives the revocation');
+  assert.equal(session.token, null, 'the cached access token is dropped');
+  const calls = srv.lookups;
+  // The revocation is persisted: a brand-new session over the same state
+  // refuses locally on its first token request instead of asking the service.
+  const fresh = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  await assert.rejects(fresh.accessToken(), (error) => error.code === 'device-revoked', 'a fresh session refuses a persisted revocation without a request');
+  assert.equal(srv.lookups, calls, 'no network call was needed');
 });
 
 test('two callers racing one operation_id settle on one issuance, never two', async () => {
