@@ -106,6 +106,12 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       }
       if (u.pathname === '/api/daemon/credentials') {
         const body = JSON.parse(init.body);
+        s.credentialOps = (s.credentialOps ?? []).concat(body.operation_id);
+        s.inFlight = s.inFlight ?? 0;
+        if (s.revokeOnConcurrentMint && s.inFlight > 0) { s.revokedDevice = t.device; return signed(401, { error: 'device_revoked' }, proof.payload.jti); }
+        s.inFlight += 1;
+        if (s.holdCredentials) await new Promise((r) => setTimeout(r, s.holdCredentials));
+        s.inFlight -= 1;
         s.lastCredential = body;
         if (s.signedUnavailable) return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
         if (s.describeError && body.harness === 'grok') return signed(400, s.describeError, proof.payload.jti);
@@ -681,4 +687,73 @@ test('issuance lookup: none settles a pending unknown as rejected; unknown stays
   await reconcilePendingCredentials({ base: BASE, env, fetchImpl: srv.fetch });
   const settled = readAction(stateDir, op);
   assert.deepEqual([settled.state, settled.reason, settled.reconciled], ['rejected', 'reconciled-none', true]);
+});
+
+// Credential races (#1207).
+test('revocation racing an in-flight mint: the late caller gets device-revoked and no token is cached afterwards', async () => {
+  const env = sandbox();
+  const srv = fakeServer();
+  srv.holdCredentials = 60;
+  srv.revokeOnConcurrentMint = true;
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  const opA = 'op_race_a';
+  const first = session.credential({ harness: 'grok', repo: 'o/r', taskId: 't1', operationId: opA }).then((out) => ({ ok: true, out }), (error) => ({ ok: false, error }));
+  await new Promise((r) => setTimeout(r, 30));
+  const second = await session.credential({ harness: 'grok', repo: 'o/r', taskId: 't2', operationId: 'op_race_b' }).then((out) => ({ ok: true, out }), (error) => ({ ok: false, error }));
+  assert.equal(second.ok, false);
+  assert.equal(second.error.code, 'device-revoked');
+  const done = await first;
+  // The in-flight mint either issued before the revocation landed or failed
+  // with the revoked code — never an unsettled caller.
+  assert.ok(done.ok === false ? done.error.code === 'device-revoked' : typeof done.out.issuance_id === 'string');
+  await assert.rejects(session.call('GET', '/api/daemon/whoami'), /device-revoked|revoked/, 'no cached access token survives the revocation');
+});
+
+test('two callers racing one operation_id settle on one issuance, never two', async () => {
+  const env = sandbox();
+  const srv = fakeServer();
+  srv.holdCredentials = 40;
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  const call = () => session.credential({ harness: 'grok', repo: 'o/r', taskId: 't1', operationId: 'op_same' }).then((out) => ({ ok: true, out }), (error) => ({ ok: false, error }));
+  const [a, b] = await Promise.all([call(), call()]);
+  const outcomes = [a, b];
+  const issued = outcomes.filter((o) => o.ok).map((o) => o.out.issuance_id);
+  const refused = outcomes.filter((o) => !o.ok).map((o) => o.error.code ?? o.error.message);
+  // Exactly the allowed outcomes: both callers see the one issuance, or one
+  // sees it and the loser is refused operation-conflict — never
+  // device-revoked (nothing revoked) and never a second mint.
+  assert.ok(issued.length >= 1, 'at least one caller got the credential');
+  if (issued.length === 2) assert.equal(issued[0], issued[1], 'a replay returns the same issuance');
+  for (const code of refused) assert.equal(code, 'operation-conflict', `only operation-conflict may refuse (got ${code})`);
+  assert.equal(srv.minted, 1, 'the service minted exactly once');
+});
+
+test('a new operation for the same task waits on an unknown one, then settles', async () => {
+  const env = sandbox();
+  const srv = fakeServer();
+  srv.outcomeUnknown = true;
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  await assert.rejects(
+    mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 't1', operationId: 'op_a' }),
+    (error) => error.code === 'outcome-unknown');
+  const pending = mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 't1', operationId: 'op_b', sleep })
+    .then((out) => ({ ok: true, out }), (error) => ({ ok: false, error }));
+  // While op_a is unknown the task mints nothing else: no credential request
+  // for op_b ever reaches the service — the caller is refused, not queued.
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(srv.minted ?? 0, 0, 'nothing minted while the task outcome is unknown');
+  assert.ok(!(srv.credentialOps ?? []).includes('op_b'), 'no credentials request went out for op_b');
+  const second = await pending;
+  assert.equal(second.ok, false, 'op_b is refused while the task outcome is unknown');
+  assert.equal(second.error.code, 'outcome-unknown');
+  // Once op_a settles, the same operation proceeds and mints exactly once.
+  srv.unknownResolved = true;
+  srv.outcomeUnknown = false; // the service is healthy again once the task settles
+  await reconcilePendingCredentials({ base: BASE, env, fetchImpl: srv.fetch });
+  const retry = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 't1', operationId: 'op_b' });
+  assert.match(retry.issuance_id, /^iss_/, 'op_b issued after the task settled');
+  assert.ok((srv.credentialOps ?? []).includes('op_b'), 'op_b minted once the unknown operation settled');
+  assert.equal(srv.minted, 1, 'one mint total: op_b after settle, never op_a twice');
 });
