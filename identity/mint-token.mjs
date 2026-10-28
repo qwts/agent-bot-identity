@@ -269,14 +269,14 @@ export function pickInstallation(installations, owner) {
 // `selected` (#107), when given, is told which App was chosen and why, as
 // soon as it is resolved and before anything is minted, so a caller can
 // receipt the attempt whatever its outcome. It is never given key material.
-export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null, permissions = null, selected = null, taskId = null, operationId = null } = {}) {
+export async function mint({ slug, env = process.env, agentId = null, viaKeyd = null, permissions = null, selected = null, taskId = null, operationId = null, fetchImpl } = {}) {
   const config = loadConfig({ env });
   // Server mode (AGENT_BOT_SERVER): the identity service holds the App keys
   // and mints one repo-scoped credential per task and operation; no local
   // .pem is read and nothing is cached.
   const { serverUrl } = await import('./server-client.mjs');
   const server = serverUrl({ env, config });
-  if (server) return mintThroughServer({ server, slug, env, config, permissions, selected, taskId, operationId });
+  if (server) return mintThroughServer({ server, slug, env, config, permissions, selected, taskId, operationId, fetchImpl });
   // Everything below reads an App key on this host (a key store, keyd's App
   // items, GH_APP_PRIVATE_KEY*): legacy local custody, off unless the owner
   // opts in, and refused outright after its removal date (#1184).
@@ -315,7 +315,7 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
   return { token: grant.token, expires_at: grant.expires_at, installation_id: Number(installationId) };
 }
 
-async function mintThroughServer({ server, slug, env, config, permissions, selected, taskId = null, operationId = null }) {
+async function mintThroughServer({ server, slug, env, config, permissions, selected, taskId = null, operationId = null, fetchImpl }) {
   if (permissions) throw new Error('--permissions is not available in server mode; the server mints the App\'s installation grant');
   const { ambientHarness, mintViaServer, repoFromCheckout } = await import('./server-client.mjs');
   const { harnessForSlug } = await import('../config.mjs');
@@ -332,7 +332,7 @@ async function mintThroughServer({ server, slug, env, config, permissions, selec
     ?? (resolvedSlug && scope.includes(resolvedSlug) ? resolvedSlug : null)
     ?? (resolvedSlug ? harnessForSlug(resolvedSlug, config) : null);
   if (selected) selected({ appSlug: resolvedSlug, reason: 'agent-bot-server' });
-  return mintViaServer({ base: server, harness, repo: repoFromCheckout(process.cwd(), env), env, taskId, operationId });
+  return mintViaServer({ base: server, harness, repo: repoFromCheckout(process.cwd(), env), env, taskId, operationId, fetchImpl });
 }
 
 // The command line lives in cli/mint-token.mjs, with its output format in

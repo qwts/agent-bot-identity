@@ -53,7 +53,7 @@ export function createIdentityRoutes({
   readBody, parseJsonBody, sendJson,
   requireBinding, presentedCredential, grantBinding,
   bindWorktreeConversation, reconcileSoulApp, ownerGate,
-  mintImpl, keydCall, signingKey,
+  mintImpl, keydCall, signingKey, serverFetch = fetch,
   inboxTake,
   grantLedger, grantActor, grantView, grantFailure,
   soulCredentialsDeclaration, soulDirectory, populationFile,
@@ -190,6 +190,7 @@ export function createIdentityRoutes({
         try {
           grant = await mintImpl({
             slug: appSlug, env, agentId: binding.agentId, taskId, operationId,
+            fetchImpl: serverFetch,
             viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
           });
         } catch (error) {

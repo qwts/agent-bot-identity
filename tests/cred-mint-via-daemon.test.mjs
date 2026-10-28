@@ -1,7 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -454,3 +454,149 @@ test('mintForCaller treats registered multi-org Apps for the same soul harness a
   assert.equal(calls.gate.length, 1);
 });
 
+
+// #1205: server mode end-to-end. A real daemon (its real /v0/credential route,
+// real binding auth, real task/operation ids) mints through the enrolled
+// identity service — the installed gh shim and the git credential helper see
+// only their own token, receipts never carry it, and a down or revoking
+// service fails closed with the stable code.
+test('server mode: the gh shim and credential helper mint through the daemon, not a local key', async (t) => {
+  const { BASE, fakeServer, sleep } = await import('./server-client.test.mjs');
+  const { enroll, mintViaServer } = await import('../identity/server-client.mjs');
+  const { createDaemonServer } = await import('../agent-daemon.mjs');
+  const { ensureAgentIdentity } = await import('../agent-identity.mjs');
+  const { stateDirectory } = await import('../state-paths.mjs');
+  const { mintBindToken } = await import('../agent-binding.mjs');
+  const { readFileSync, readdirSync } = await import('node:fs');
+
+  const srv = fakeServer();
+  const stateDir = mkdtempSync(join(tmpdir(), 'shim-server-mint-'));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const env = {
+    ...process.env,
+    AGENT_BOT_SERVER: BASE,
+    AGENT_BOT_SERVER_HARNESS: 'grok',
+    AGENT_BOT_SERVER_STATE: join(stateDir, 'server'),
+    XDG_STATE_HOME: join(stateDir, 'state'),
+    AGENT_BOT_SPACES_HOME: join(stateDir, 'spaces'),
+    AGENT_BOT_POPULATION_PATH: join(stateDir, 'population.json'),
+    AGENT_BOT_INTERACTION_HOME: join(stateDir, 'interaction'),
+    AGENT_BOT_DAEMON_STATE_PATH: join(stateDir, 'daemon.json'),
+  };
+  await enroll({ base: BASE, env, harnesses: ['grok'], enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  ensureAgentIdentity({
+    gate: () => true, appSlug: slug, botUid: '308462948', harness: 'codex',
+    transcript: { provider: 'codex', id: 'thread-server' },
+    stateDir: stateDirectory({ env, home: '/nonexistent' }),
+    idFactory: () => agentId, now: () => new Date('2026-08-12T08:00:00.000Z'),
+  });
+  // The real mint() routing runs: server mode is chosen by AGENT_BOT_SERVER,
+  // and the only transport it may use is the fake service — any call that
+  // reached a local App key would hit api.github.com through global fetch.
+  const globalCalls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (...args) => { globalCalls.push(String(args[0])); return realFetch(...args); };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const daemon = createDaemonServer({
+    env, home: '/nonexistent', config: { features: { 'github-identity': true } },
+    serverFetch: srv.fetch,
+  });
+  await new Promise((resolve) => { daemon.listen(0, '127.0.0.1', resolve); });
+  const port = daemon.address().port;
+  t.after(() => new Promise((resolve) => { daemon.close(resolve); }));
+  const cwd = checkout(t);
+  const gitDir = join(cwd, '.git');
+  const bindToken = mintBindToken({ gitDir, worktree: cwd, agentId });
+  const bindRes = await fetch(`http://127.0.0.1:${port}/v0/bind`, {
+    method: 'POST', headers: { authorization: `Bearer ${daemon.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ gitDir, token: bindToken.token, transcript: { provider: 'codex', id: 'thread-server' } }),
+  });
+  const bound = await bindRes.json();
+  assert.equal(bindRes.status, 200, JSON.stringify(bound));
+  assert.match(bound.secret, /^[A-Za-z0-9_-]{43}$/);
+  writeFileSync(join(gitDir, 'agent-binding.json'), JSON.stringify({
+    v: 1, agentId, secret: bound.secret, daemon: `http://127.0.0.1:${port}/`, account: 'test', parent: null,
+  }), { mode: 0o600 });
+
+  // The installed gh shim: a fake agent-bot CLI and a fake gh that records
+  // the token it is handed.
+  const home = join(cwd, 'home');
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  const runtime = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
+  writeFileSync(join(home, '.local', 'bin', 'agent-bot'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(runtime)} "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(cwd, 'shim'), buildGhShim());
+  writeFileSync(join(cwd, 'fake-gh'), '#!/bin/sh\ntouch "$TEST_GH_CALLED"\necho "$GH_TOKEN" > "$TEST_GH_TOKEN_OUT"\n', { mode: 0o755 });
+  const shimEnv = { ...env, HOME: home, AGENT_BOT_REAL_GH: join(cwd, 'fake-gh'), TEST_GH_CALLED: join(cwd, 'gh-called'), TEST_GH_TOKEN_OUT: join(cwd, 'gh-token') };
+  // Async spawn, never spawnSync: the daemon lives on this process's event
+  // loop, and a synchronous child would freeze it and starve every request.
+  const run = (file, args, { input, ...options }) => new Promise((resolve) => {
+    const child = spawn(file, args, options);
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => { stdout += chunk; });
+    child.stderr?.on('data', (chunk) => { stderr += chunk; });
+    if (input !== undefined) { child.stdin.write(input); child.stdin.end(); }
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  const runShim = (extra = {}) => run('/bin/sh', [join(cwd, 'shim'), 'api', 'repos/test/repo'], { cwd, env: { ...shimEnv, ...extra } });
+  const runHelper = (extra = {}) => run(process.execPath, [fileURLToPath(new URL('../git-credential-bot.mjs', import.meta.url)), slug, 'get'], {
+    cwd, input: 'protocol=https\nhost=github.com\n\n', env: { ...env, ...extra },
+  });
+
+  // Two shim calls mint two operations of one task, recorded by the service.
+  for (const n of [1, 2]) {
+    rmSync(join(cwd, 'gh-token'), { force: true });
+    const result = await runShim();
+    assert.equal(result.status, 0, result.stderr);
+    const issued = readFileSync(join(cwd, 'gh-token'), 'utf8').trim();
+    assert.match(issued, /^ghs_op\d+$/);
+    const opIds = [...srv.ops.keys()];
+    assert.equal(opIds.length, n);
+  }
+  const records = [...srv.ops.values()];
+  assert.equal(records.length, 2);
+  assert.equal(records[0].task_id, records[1].task_id, 'the same conversation is the same task');
+  assert.notEqual(records[0].operation_id, records[1].operation_id, 'a fresh operation per request');
+  const helper = await runHelper();
+  assert.equal(helper.status, 0, helper.stderr);
+  assert.match(helper.stdout, /ghs_op3/, 'the helper prints the minted token');
+  assert.equal(srv.ops.size, 3);
+
+  // The local App-key path never ran: nothing reached the GitHub API (or any
+  // host) through the ambient transport, and no App key exists to try.
+  assert.deepEqual(globalCalls.filter((u) => !u.startsWith('http://127.0.0.1')), [], `no ambient fetch: ${globalCalls}`);
+
+  // The token lives only on the wire: never a receipt, never a ledger file.
+  const audit = readFileSync(join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8');
+  assert.doesNotMatch(audit, /ghs_/, 'no token in audit receipts');
+  const mints = audit.trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.event === 'credential-mint');
+  assert.ok(mints.every((row) => row.taskId === records[0].task_id && /^op_/.test(row.operationId)));
+  // The action ledger records identifiers and states only — scan it too.
+  for (const file of readdirSync(join(env.AGENT_BOT_SERVER_STATE, 'actions'))) {
+    assert.doesNotMatch(readFileSync(join(env.AGENT_BOT_SERVER_STATE, 'actions', file), 'utf8'), /ghs_/, `no token in the ledger (${file})`);
+  }
+
+  // Service down: both entrypoints fail closed — no token, no stock gh run.
+  srv.signedUnavailable = true;
+  rmSync(join(cwd, 'gh-called'), { force: true });
+  const downShim = await runShim();
+  assert.equal(downShim.status, 1);
+  assert.equal(downShim.stdout, '');
+  assert.match(downShim.stderr, /credential/);
+  assert.equal(existsSync(join(cwd, 'gh-called')), false, 'stock gh never ran');
+  const downHelper = await runHelper();
+  assert.equal(downHelper.status, 1);
+  assert.equal(downHelper.stdout, '');
+  assert.match(downHelper.stderr, /credential/);
+  assert.doesNotMatch(downHelper.stderr + downShim.stderr, /ghs_op/);
+  srv.signedUnavailable = false;
+
+  // Device revoked: same fail-closed path, and the token cache helps nobody.
+  srv.revokedDevice = [...srv.devices.keys()][0];
+  for (const revoked of [await runShim(), await runHelper()]) {
+    assert.equal(revoked.status, 1);
+    assert.equal(revoked.stdout, '');
+    assert.match(revoked.stderr, /daemon|revoked|credential/);
+    assert.doesNotMatch(revoked.stderr, /ghs_op/);
+  }
+});
