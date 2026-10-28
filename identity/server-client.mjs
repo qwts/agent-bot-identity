@@ -519,11 +519,12 @@ export class ServerSession {
     for (const n of Array.isArray(out?.notices) ? out.notices : []) {
       const reason = !(n && typeof n === 'object') ? 'not an object'
         : typeof n.id !== 'string' ? 'no id'
+        : !/^[A-Za-z0-9._:-]{1,128}$/.test(n.id) ? 'bad id'
         : typeof n.lease !== 'string' ? 'no lease'
         : typeof n.from !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(n.from) ? 'bad sender'
         : typeof n.key !== 'string' ? 'no key'
-        : typeof n.body !== 'string' || n.body.length > 16384 ? 'bad body'
-        : (n.correlation !== undefined && n.correlation !== null && typeof n.correlation !== 'string') ? 'bad correlation'
+        : typeof n.body !== 'string' || Buffer.byteLength(n.body, 'utf8') > 16384 ? 'bad body'
+        : (n.correlation !== undefined && n.correlation !== null && (typeof n.correlation !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(n.correlation))) ? 'bad correlation'
         : (n.reply_to !== undefined && n.reply_to !== null && typeof n.reply_to !== 'string') ? 'bad reply_to'
         : null;
       if (reason === null) notices.push(n);

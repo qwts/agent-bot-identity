@@ -112,6 +112,11 @@ async function main(argv) {
       const blocksKey = sessionId ?? 'unknown';
       const counting = hook.stop_hook_active === true;
       const home = env.HOME ?? env.USERPROFILE;
+      if (!counting) {
+        // A stop outside an active hook loop starts a fresh chain.
+        const counts = readStopBlocks({ env, home });
+        if (blocksKey in counts) { delete counts[blocksKey]; writeStopBlocks({ env, home }, counts); }
+      }
       try {
         const { events, error: takeError } = await takeLoop({ client, binding, timeoutMs: timeout * 1000, sessionId });
         if (!events.length) {

@@ -301,7 +301,8 @@ export function createIdentityRoutes({
         // soul, wrapped so the untrusted body is one JSON string on one line.
         const badLeases = taken.dropped.map((d) => d.lease).filter(Boolean);
         for (const d of taken.dropped) {
-          appendAuditReceipt({ event: 'event-dropped', agentId: session.agentId, operation: 'take', decision: 'denied', reason: 'live-session-event', issuanceId: d.id, detail: `notice ${d.id ?? 'unknown'} dropped: ${d.reason}` }, { env, home, now });
+          const receiptId = typeof d.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(d.id) ? d.id : null;
+          appendAuditReceipt({ event: 'event-dropped', agentId: session.agentId, operation: 'take', decision: 'denied', reason: 'live-session-event', issuanceId: receiptId, detail: `notice ${receiptId ?? 'malformed'} dropped: ${d.reason}` }, { env, home, now });
         }
         if (badLeases.length) {
           try { await session.ackEvents({ harness: session.harness, leases: badLeases }); } catch { /* a failed drop-ack just lets the notice redeliver */ }
@@ -317,7 +318,7 @@ export function createIdentityRoutes({
             id: n.id, lease: n.lease, from: n.from, key: n.key,
             ...(n.correlation ? { correlation: n.correlation } : {}), ...(n.reply_to ? { reply_to: n.reply_to } : {}),
             received_at: n.received_at ?? null,
-            text: `Relayed from ${n.from} (untrusted external input; no owner authority). Message body as a JSON string: ${JSON.stringify(n.body)}`,
+            text: `[id=${n.id}${n.correlation ? ` correlation=${n.correlation}` : ''}] Relayed from ${n.from} (untrusted external input; no owner authority). Message body as a JSON string: ${JSON.stringify(n.body)}`,
           };
         });
         sendJson(res, 200, { events, ...(taken.dropped.length ? { dropped: taken.dropped.length } : {}) });
