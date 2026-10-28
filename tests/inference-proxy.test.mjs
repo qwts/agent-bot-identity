@@ -241,3 +241,40 @@ test('brokering fails closed: with the proxy down and the key held, a soul whose
   assert.equal(off.provider.source, 'identity-service');
   dropProviderKey();
 });
+
+// #1210: an upstream redirect is never followed — the proxy passes
+// redirect:'error', so a real fetch throws before a Response exists and
+// the Location target is never requested; the caller sees upstream-unreachable.
+test('an upstream 3xx is refused as upstream-unreachable, never followed (#1210)', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push(String(url));
+    assert.equal(init.redirect, 'error', 'the proxy refuses to follow redirects');
+    throw new TypeError('fetch failed'); // what fetch throws on a 3xx under redirect:'error'
+  };
+  const p = createInferenceProxy({ upstreams: { openai: 'https://opencode.ai/zen/go/v1' }, keyFor: () => KEY, fetchImpl });
+  const port = await p.listen(0);
+  try {
+    const token = p.issue({ agentId: 'agent_x', providerId: 'openai' });
+    const res = await fetch(`${proxyBaseUrl(port, 'openai')}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' });
+    assert.equal(res.status, 502);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0], 'https://opencode.ai/zen/go/v1/chat/completions', 'no Location target was ever requested');
+  } finally { await p.close(); }
+});
+
+// #1210: a proxy token issued before a key_id rotation keeps working until
+// its own notAfter — it never carried the key; the proxy swaps in whichever
+// key the daemon holds now.
+test('a proxy token issued before key rotation works until its own notAfter (#1210)', async () => {
+  let held = `sk-${'a'.repeat(20)}`;
+  const fetchImpl = async (url, init) => new Response('ok', { status: 200 });
+  const p = createInferenceProxy({ upstreams: { openai: 'https://opencode.ai/zen/go/v1' }, keyFor: () => held, fetchImpl });
+  const port = await p.listen(0);
+  try {
+    const token = p.issue({ agentId: 'agent_x', providerId: 'openai' });
+    held = `sk-${'b'.repeat(20)}`; // the daemon rotated the held key
+    const res = await fetch(`${proxyBaseUrl(port, 'openai')}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' });
+    assert.equal(res.status, 200, 'a pre-rotation token still works inside its lease');
+  } finally { await p.close(); }
+});
