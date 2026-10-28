@@ -162,7 +162,10 @@ This is the one named exception to short-lived credentials (owner decision D2). 
 `~/.config/agent-bot/config.json`, or `AGENT_BOT_SOUL_TOKENS=v2` (the
 environment wins; anything else is v1). It requires an identity service that
 serves `POST /api/daemon/soul-token` and an agent-comms broker that accepts
-v2 tokens — without both, vouching fails closed. Switching a paired daemon to
+v2 tokens — without both, vouching fails closed. **Opted in but not enrolled
+fails closed:** `/v0/vouch` answers `credential-unavailable` instead of
+falling back to the v1 host key, `pair-comms` refuses, and `/v0/health`
+reports `soulTokens: 'v2-unavailable'`. Switching a paired daemon to
 v2 means re-running `agent-bot daemon pair-comms` so the broker learns the
 issuer instead of a host key. The default flips in a later release.
 
@@ -177,7 +180,12 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
   it. No `vouch-key.pem` is read or created on this path.
 - `agent-bot daemon pair-comms` sends `soulTokens: { v: 2, issuer, device }`
   in place of the host's SPKI public key, so the broker verifies v2 tokens
-  against the service, not a file on this host. An existing `vouch-key.pem`
+  against the service, not a file on this host. The `issuer` comes from the
+  service's public JWKS (`GET <server>/.well-known/agent-bot/soul-keys.json`),
+  which can differ from this deployment's URL — a fixed
+  `https://agents.true-line.ai` versus a preview host. It is pinned into the
+  server state directory at pairing, and `/v0/vouch` refuses a token minted
+  under another issuer. An existing `vouch-key.pem`
   can be deleted once the broker is re-paired.
 - `GET /v0/health` reports `soulTokens: 'v2' | 'v1'` and, in v2 mode,
   `vouchKeyOnHost` (a stat, never a read).

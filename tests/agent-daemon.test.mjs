@@ -18,7 +18,7 @@ import {
   startDaemon,
   stopDaemon,
   soulPromptIdentity,
-  soulTokensV2,
+  soulTokensMode,
 } from '../agent-daemon.mjs';
 import { displayName, recordSoulDisplayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { initSoulSpace } from '../agent-space.mjs';
@@ -1657,13 +1657,70 @@ test('v2: settings.soulTokens "v2" in config opts in, and env wins over config',
     },
   });
   // env beats config: an explicit non-v2 env value is v1 even with config v2.
-  assert.equal(soulTokensV2({
+  assert.equal(soulTokensMode({
     env: { ...env, AGENT_BOT_SOUL_TOKENS: 'v1' }, home: '/nonexistent',
     config: { settings: { soulTokens: 'v2' } },
-  }), null);
-  assert.equal(soulTokensV2({
+  }), 'v1');
+  assert.equal(soulTokensMode({
     env: { ...env, AGENT_BOT_SOUL_TOKENS: 'v2' }, home: '/nonexistent',
   })?.v, 2, 'env opt-in alone suffices');
+});
+
+test('v2: opted in but unenrolled fails closed — 503 credential-unavailable, no vouch key, never the v1 path', async () => {
+  const { root, env } = scratchEnv();
+  env.AGENT_BOT_SOUL_TOKENS = 'v2'; // opted in, no AGENT_BOT_SERVER and no device record
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  let called = 0;
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } } })).json();
+    const res = await call('/v0/vouch', { method: 'POST', token: null, body: { aud: 'agent-comms' }, headers: { 'x-agent-binding': bound.secret } });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).code, 'credential-unavailable');
+    assert.equal(called, 0, 'the identity service is never asked');
+    assert.equal(existsSync(vouchKeyPath(vouchStateDir({ env, home: '/nonexistent' }))), false, 'no vouch key is minted as a fallback');
+    assert.equal((await (await call('/v0/health')).json()).soulTokens, 'v2-unavailable');
+  }, {
+    soulTokenImpl: async () => { called += 1; throw new Error('unreachable'); },
+  });
+  const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line)).filter((receipt) => receipt.event === 'vouch');
+  assert.deepEqual(receipts.map((r) => [r.decision, r.reason]), [['denied', 'credential-unavailable']]);
+});
+
+test('v2: a token minted under another issuer than the paired one is refused and receipted', async () => {
+  const { root, env } = scratchEnv();
+  enrollServerFixture(root, env);
+  env.AGENT_BOT_SOUL_TOKENS = 'v2';
+  writeFileSync(path.join(env.AGENT_BOT_SERVER_STATE, 'soul-token-issuer.json'), JSON.stringify({ issuer: 'https://agents.true-line.ai' }));
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } } })).json();
+    const res = await call('/v0/vouch', { method: 'POST', token: null, body: { aud: 'agent-comms' }, headers: { 'x-agent-binding': bound.secret } });
+    assert.equal(res.status, 502);
+    const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line)).filter((receipt) => receipt.event === 'vouch');
+    assert.deepEqual(receipts.map((r) => [r.decision, r.reason]), [['denied', 'issuer-mismatch']]);
+  }, {
+    soulTokenImpl: async () => ({
+      token: 'h.c3VkK2p3dA.s', issuance_id: 'iss_x', task_id: 'soul-vouch', operation_id: 'op_x',
+      claims: { v: 2, iss: 'https://preview.agent-bot.example', sub: AGENT_ID, exp: 1_760_000_300 },
+    }),
+  });
+});
+
+test('v2: an unknown outcome still answers 503, never a fallthrough', async () => {
+  const { root, env } = scratchEnv();
+  enrollServerFixture(root, env);
+  env.AGENT_BOT_SOUL_TOKENS = 'v2';
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } } })).json();
+    const res = await call('/v0/vouch', { method: 'POST', token: null, body: { aud: 'agent-comms' }, headers: { 'x-agent-binding': bound.secret } });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).code, 'outcome-unknown');
+  }, {
+    soulTokenImpl: async () => { throw Object.assign(new Error('outcome unknown'), { code: 'outcome-unknown' }); },
+  });
 });
 
 test('v2: legacy local custody keeps the v1 path (host vouch key) even in server mode', async () => {
