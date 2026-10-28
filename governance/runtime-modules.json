@@ -509,6 +509,7 @@
         "mint",
         "mintAgentIdentity",
         "parseBindingProof",
+        "pilotProviderCheck",
         "principalsFile",
         "providerKeyStale",
         "providerKeyStatus",

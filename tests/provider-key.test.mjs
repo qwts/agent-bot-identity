@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { dropProviderKey, ensureProviderKey, fetchProviderKey, heldProviderEnv, providerKeyStale, providerKeyStatus } from '../identity/provider-key.mjs';
+import { dropProviderKey, ensureProviderKey, fetchProviderKey, heldProviderEnv, pilotProviderCheck, providerKeyStale, providerKeyStatus } from '../identity/provider-key.mjs';
 import { ServerSession } from '../identity/server-client.mjs';
 
 const roots = [];
@@ -100,6 +100,21 @@ test('the key is never used past its lease, is refetched near its end and after 
   answers.push(Object.assign(new Error('agent-bot server /api/daemon/provider-key: 404 provider_key_not_configured'), { status: 404 }));
   assert.equal(await ensure(), null);
   assert.equal(providerKeyStatus(), null);
+  dropProviderKey();
+});
+
+test('the launch provider stage passes on the held key for the declared provider only, never a local store, and writes no receipt', async () => {
+  const { root, env } = scratch();
+  dropProviderKey();
+  assert.throws(() => pilotProviderCheck({ providerId: 'openai', envKey: 'OPENAI_API_KEY', harness: 'opencode' }), (e) => e.code === 'provider-secret-missing');
+  await fetchProviderKey({ provider: 'openai', env, home: root, session: fakeSession().session });
+  const before = receipts(env).length;
+  assert.deepEqual(pilotProviderCheck({ providerId: 'openai', envKey: 'OPENAI_API_KEY', harness: 'opencode' }),
+    { harness: 'opencode', id: 'openai', envKey: 'OPENAI_API_KEY', credential: null, source: 'identity-service', keyId: 'pk_1' });
+  assert.throws(() => pilotProviderCheck({ providerId: 'anthropic', envKey: 'ANTHROPIC_API_KEY', harness: 'claude' }), (e) => e.code === 'provider-secret-missing');
+  assert.equal(receipts(env).length, before, 'the check itself is not a use');
+  assert.throws(() => pilotProviderCheck({ providerId: 'openai', envKey: 'OPENAI_API_KEY', now: () => new Date('2100-01-01T00:00:00Z') }),
+    (e) => e.code === 'provider-secret-missing', 'past the lease the key does not pass the check');
   dropProviderKey();
 });
 
