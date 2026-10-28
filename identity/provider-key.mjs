@@ -94,6 +94,23 @@ export async function ensureProviderKey({ provider, env = process.env, home, ses
 }
 
 /**
+ * The launch's provider stage with legacy local custody off: the summary of
+ * the held pilot key when it is for `providerId` and inside its lease, else
+ * a coded `provider-secret-missing`. Never reads a store on this host and
+ * never receipts (the use is receipted when the key is injected).
+ */
+export function pilotProviderCheck({ providerId, envKey, harness = null, now = () => new Date() } = {}) {
+  dropIfExpired(now);
+  if (held && held.provider === providerId) {
+    return { harness, id: providerId, envKey, credential: null, source: 'identity-service', keyId: held.keyId };
+  }
+  throw Object.assign(
+    new Error(`${harness ?? 'this harness'}'s provider ${providerId} needs the pilot provider key, which the daemon does not hold; set it on the identity service and settings.pilotProvider to ${providerId}`),
+    { code: 'provider-secret-missing' },
+  );
+}
+
+/**
  * The env patch for one harness launch, in the shape soulProviderEnv returns
  * (`{ env, envKey, provider }`), when the held key is for `providerId`; else
  * null. The use is receipted with the exception named, never the key.

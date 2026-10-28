@@ -62,7 +62,7 @@ import {
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
-  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, ensureProviderKey, heldProviderEnv, providerKeyStatus
+  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, ensureProviderKey, heldProviderEnv, pilotProviderCheck, providerKeyStatus
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
 import { createSoulRoutes } from './soul-routes.mjs';
@@ -2054,9 +2054,20 @@ async function serveDaemon({
     // The launched harness's provider secret is checked before the soul
     // joins (#583 slice 4): a missing one fails the launch with the
     // `soul secret set` command, not a harness that cannot authenticate.
+    // With legacy local custody off (#1184) the check is against the pilot
+    // provider key the daemon holds, never a store on this host; the key
+    // itself is injected (and receipted) by providerEnvFor at the turn.
     providers: {
       pending: ({ agentId, harness }) => pendingSoulProvider(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
-      check: ({ agentId, harness }) => checkSoulProvider(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+      check: ({ agentId, harness }) => {
+        if (legacyLocalCustody({ env, home, now }).enabled) return checkSoulProvider(agentId, { env, home, config, file: populationFile({ env, home }), harness });
+        const row = soulSecretsStatus(agentId, { env, home, config, file: populationFile({ env, home }) }).providers.find((p) => p.harness === harness && p.credential);
+        if (!row) return null;
+        try { return pilotProviderCheck({ providerId: row.id, envKey: row.envKey, harness, now }); } catch (error) {
+          ensurePilotKey().catch(() => {}); // fetch again in the background, within its backoff
+          throw error;
+        }
+      },
     },
     // The launched harness's sign-in, probed with the environment its turn
     // gets (#536): routed tool home, runtimes and provider env included, so
