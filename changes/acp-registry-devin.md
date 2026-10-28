@@ -1,0 +1,1 @@
+- ACP registry: a [?2004l row (disabled) for  — session markers stripped,  store, API-key auth path documented; enable once a key is supplied through the identity service under a named exception.

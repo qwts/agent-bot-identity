@@ -97,3 +97,17 @@ test('the kiro row is registered but disabled until a signed-in Kiro verifies it
   assert.equal(defaultHarnessFor(['kiro'], { available: () => false }), null, 'a disabled preference is never the default');
   assert.deepEqual(spawnCommand(row, '/nowhere'), { command: 'kiro-cli', args: ['acp'] });
 });
+
+test('the devin row is registered but disabled until the API-key path is decided', () => {
+  const row = ACP_SPAWN_REGISTRY.devin;
+  assert.ok(row, 'the devin row exists');
+  assert.equal(row.enabled, false);
+  assert.deepEqual([row.command, ...row.args], ['devin', 'acp']);
+  assert.throws(() => resolveSpawn(ACP_SPAWN_REGISTRY, 'devin'), /registered but not enabled: spike 2026-10-28/);
+  assert.equal(harnessLaunchProblem('devin', { env: { PATH: '/bin' } }), 'it is disabled in agent-bot');
+  assert.equal(defaultHarnessFor(['devin'], { available: () => false }), null, 'a disabled preference is never the default');
+  assert.deepEqual(spawnCommand(row, '/nowhere'), { command: 'devin', args: ['acp'] });
+  // Nesting markers are stripped; the API key is the auth channel and stays.
+  assert.ok(row.stripEnv.includes('WINDSURF_AGENT') && row.stripEnv.includes('DEVIN_AGENT'));
+  assert.ok(!row.stripEnv.includes('WINDSURF_API_KEY'));
+});

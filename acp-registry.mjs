@@ -227,6 +227,23 @@ export const ACP_SPAWN_REGISTRY = Object.freeze({
     auth: '`kiro-cli login` (Builder ID, Google, GitHub or Identity Center)',
     notes: 'native `kiro-cli acp` is unverified: initialize got no answer within 10 s on a Mac without a Kiro sign-in (#523); enable after a signed-in spike confirms the wire shape and MCP tool naming',
   }),
+  devin: Object.freeze({
+    harness: 'devin',
+    enabled: false,
+    command: 'devin',
+    args: Object.freeze(['acp']),
+    cli: 'devin',
+    installHint: 'install Devin CLI (https://devin.ai) and sign in',
+    // Session markers that would make the child read itself as nested; the
+    // API key (WINDSURF_API_KEY) is the auth channel and stays.
+    stripEnv: Object.freeze(['DEVIN_AGENT', 'WINDSURF_AGENT', 'ACP_BACKEND', 'AI_AGENT']),
+    // Sessions and CLI state; credentials live beside it in Devin's data dir.
+    store: '~/.local/share/devin',
+    // No signIn row: session/new refuses until the host authenticates, so a
+    // status reader cannot distinguish "signed out" from "needs an API key".
+    auth: 'a Devin API key via the ACP `authenticate` request (meta.api_key) or WINDSURF_API_KEY; local CLI credentials are not used in ACP mode',
+    notes: 'spike 2026-10-28 (devin 3000.11.228): initialize answers protocolVersion 1 with loadSession, MCP http+sse; session/new refuses until the host authenticates with an API key — enable once a key is supplied through the identity service under a named exception (owner decision pending)',
+  }),
 });
 
 function failRegistry(message) {
