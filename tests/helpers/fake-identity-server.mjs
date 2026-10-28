@@ -47,7 +47,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
     if (u.pathname === '/oauth/device_authorization' || u.pathname === '/oauth/device_enroll') {
       const d = decode(f.proof);
       assert.equal(d.header.typ, 'ab-enroll+jwt');
-      assert.equal(d.payload.aud, `${BASE}${u.pathname}`);
+      assert.equal(d.payload.aud, `${u.origin}${u.pathname}`);
       verifyEs256(f.proof, d.header.jwk);
       const id = `dev_${s.devices.size + 1}`;
       if (u.pathname === '/oauth/device_enroll') {
@@ -70,7 +70,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       const dev = s.devices.get(d.payload.iss);
       if (!dev || s.revokedDevice === d.payload.iss) return json(400, { error: 'device_revoked', error_description: 'device revoked' });
       verifyEs256(f.assertion, dev.jwk);
-      assert.equal(d.payload.aud, `${BASE}/oauth/token`);
+      assert.equal(d.payload.aud, `${u.origin}/oauth/token`);
       assert.ok(d.payload.exp - d.payload.iat <= 300);
       const ek = d.payload.cnf.jwk;
       assert.notEqual(jwkThumbprint(ek), jwkThumbprint(dev.jwk), 'ephemeral key differs from device key');

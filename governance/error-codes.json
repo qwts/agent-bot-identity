@@ -505,6 +505,14 @@
       "kind": "refusal",
       "summary": "The identity service rejected an events/poll cursor (-32602): malformed or from a different subscription; the stored cursor is left in place for the owner to reset.",
       "registered": "0.14.1"
+    },
+    {
+      "n": 64,
+      "code": "events-soul-caller",
+      "component": "events",
+      "kind": "refusal",
+      "summary": "An events --ide request came from a caller carrying a soul marker (Agent ID, binding or App identity); souls must use the daemon/binding path, refused instead of mixing trust planes.",
+      "registered": "0.15.0"
     }
   ]
 }

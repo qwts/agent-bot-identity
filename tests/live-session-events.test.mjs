@@ -73,7 +73,7 @@ async function fixture(t, { appSlug = 'grok' } = {}) {
     AGENT_BOT_INTERACTION_HOME: join(stateDir, 'interaction'),
     AGENT_BOT_DAEMON_STATE_PATH: join(stateDir, 'daemon.json'),
     AGENT_BOT_CONFIG: join(stateDir, 'config.json'), AGENT_BOT_ACCOUNT: 'test',
-    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', AGENT_BOT_EVENT_HOOKS: '1',
   };
   writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({ prefix: 'test', features: { 'github-identity': true } }));
   await enroll({ base: BASE, env, harnesses: [appSlug], enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
@@ -503,4 +503,241 @@ test('hasMore with an unchanged cursor sleeps instead of spinning and returns at
   assert.ok(sleeps.length >= 1, 'a stuck cursor sleeps between polls');
   assert.ok(polls < 100, `bounded polls (${polls}), not a hot loop`);
   assert.equal(out.cursor, 'c0');
+});
+
+// ---- --ide mode: owner IDE/web-chat caller, no soul, direct device path ----
+
+async function ideFixture(t, { harnessEnv = 'devin' } = {}) {
+  const { fakeServer, sleep } = await import('./helpers/fake-identity-server.mjs');
+  const { enroll } = await import('../identity/server-client.mjs');
+  const { createServer } = await import('node:http');
+  const srv = fakeServer();
+  // --ide callers fetch the service themselves, so the fake must sit on a
+  // real loopback port the child process can reach (DPoP htu follows base).
+  let base = null;
+  const http = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const headers = {};
+    for (const [k, v] of Object.entries(req.headers)) headers[k] = v;
+    try {
+      const raw = chunks.length ? Buffer.concat(chunks).toString('utf8') : undefined;
+      const body = headers['content-type'] === 'application/x-www-form-urlencoded' ? new URLSearchParams(raw) : raw;
+      const r = await srv.fetch(`${base}${req.url}`, { method: req.method, headers, redirect: 'error', body });
+      res.writeHead(r.status, Object.fromEntries(r.headers.entries()));
+      res.end(Buffer.from(await r.arrayBuffer()));
+    } catch { res.writeHead(503); res.end(); }
+  });
+  await new Promise((resolve) => { http.listen(0, '127.0.0.1', resolve); });
+  base = `http://127.0.0.1:${http.address().port}`;
+  t.after(() => new Promise((resolve) => { http.close(resolve); }));
+  const stateDir = mkdtemp('events-ide-');
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const env = {
+    PATH: process.env.PATH, HOME: stateDir, USER: 'chris',
+    AGENT_BOT_SERVER: base, AGENT_BOT_SERVER_STATE: join(stateDir, 'server'),
+    XDG_STATE_HOME: join(stateDir, 'state'), AGENT_BOT_POPULATION_PATH: join(stateDir, 'population.json'),
+    AGENT_BOT_INTERACTION_HOME: join(stateDir, 'interaction'),
+    AGENT_BOT_CONFIG: join(stateDir, 'config.json'), AGENT_BOT_ACCOUNT: 'chris',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', AGENT_BOT_EVENT_HOOKS: '1',
+    ...(harnessEnv ? { AGENT_BOT_SERVER_HARNESS: harnessEnv } : {}),
+  };
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({ prefix: 'qwts', features: {} }));
+  await enroll({ base, env, harnesses: ['qwts-devin-agent'], enrollToken: 'abe_good', fetchImpl: fetch, sleep });
+  // The fake's enrollment_token path registers 'grok'; rescope the device.
+  srv.devices.forEach((dev) => { dev.harnesses = ['qwts-devin-agent']; });
+  const worktree = mkdtemp('events-ide-wt-');
+  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+  const run = (args, input = '') => new Promise((resolve) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../events.mjs', import.meta.url)), ...args], { cwd: worktree, env });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.stdin.end(input);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  const cursors = () => JSON.parse(readFileSync(join(env.AGENT_BOT_SERVER_STATE, 'event-cursors.json'), 'utf8'));
+  return { srv, env, base, run, cursors, worktree };
+}
+
+test('--ide wait delivers, commits under the ide key, and never touches the soul key', async (t) => {
+  const { run, srv, cursors } = await ideFixture(t);
+  await run(['events', 'wait', '--ide', '--timeout', '1'], ''); // arm
+  srv.relay = [makeRelay({ data: { harness: 'qwts-devin-agent', body: 'to the IDE' } })];
+  const out = await run(['events', 'wait', '--ide', '--timeout', '10'], '');
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /Relayed from Qwts.*"to the IDE"/);
+  assert.match(out.stdout, /Next: run `agent-bot events wait --ide --cursor [A-Za-z0-9_-]+` to wait for the next message\./);
+  const keys = Object.keys(cursors());
+  assert.ok(keys.includes('ide:relay.message:qwts-devin-agent'), 'committed under the ide key');
+  assert.ok(!keys.includes('relay.message:qwts-devin-agent'), 'the soul key is untouched');
+});
+
+test('--ide refuses a soul caller without touching the network', async (t) => {
+  const { run, env, srv } = await ideFixture(t);
+  const lookups = () => (srv.cursorLog ?? []).length;
+  env.AGENT_BOT_ID = 'agent_12345678-1234-1234-1234-123456789abc';
+  const before = lookups();
+  const marked = await run(['events', 'wait', '--ide', '--timeout', '3'], '');
+  assert.equal(marked.status, 1);
+  assert.match(marked.stderr, /events-soul-caller/);
+  assert.equal(marked.stdout, '');
+  // A bound worktree marker refuses too.
+  delete env.AGENT_BOT_ID;
+  execFileSync('git', ['init', '--quiet'], { cwd: (await import('node:path')).join ? '.' : '.' });
+  const f2 = await ideFixture(t);
+  execFileSync('git', ['init', '--quiet'], { cwd: f2.worktree });
+  writeFileSync(join(f2.worktree, '.git', 'agent-binding.json'), JSON.stringify({ v: 1, agentId: 'agent_12345678-1234-1234-1234-123456789abc', secret: 's', daemon: 'http://127.0.0.1:1/', account: 'chris', parent: null }), { mode: 0o600 });
+  const hooks = await f2.run(['events', 'wait', '--ide', '--timeout', '3', '--format', 'devin-stop'], JSON.stringify({ hook_event_name: 'Stop', session_id: 's1' }));
+  assert.equal(hooks.status, 0, 'hook formats stay silent-success');
+  assert.match(hooks.stderr, /events-soul-caller/);
+  assert.equal(lookups(), before, 'no /mcp call was made');
+});
+
+test('--ide without enrollment answers credential-unavailable, silent in devin-stop', async (t) => {
+  const { run } = await ideFixture(t);
+  const stateless = mkdtemp('events-ide-fresh-');
+  t.after(() => rmSync(stateless, { recursive: true, force: true }));
+  const env2 = { PATH: process.env.PATH, HOME: stateless, USER: 'chris', AGENT_BOT_SERVER: 'http://127.0.0.1:9', AGENT_BOT_CONFIG: join(stateless, 'config.json'), AGENT_BOT_ACCOUNT: 'chris', AGENT_BOT_SERVER_HARNESS: 'devin', XDG_STATE_HOME: join(stateless, 'state'), AGENT_BOT_INTERACTION_HOME: join(stateless, 'int'), AGENT_BOT_POPULATION_PATH: join(stateless, 'pop.json'), AGENT_BOT_SERVER_STATE: join(stateless, 'srv'), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', AGENT_BOT_EVENT_HOOKS: '1' };
+  writeFileSync(env2.AGENT_BOT_CONFIG, JSON.stringify({ prefix: 'qwts' }));
+  const out = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../events.mjs', import.meta.url)), 'events', 'wait', '--ide', '--timeout', '2', '--format', 'devin-stop'], { cwd: mkdtemp('wt-x-'), env: env2 });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.stdin.end('{}');
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /credential-unavailable/);
+});
+
+test('--ide --harness overrides the ambient mapping; no derivable harness refuses', async (t) => {
+  const { run, srv, env } = await ideFixture(t, { harnessEnv: null });
+  const noHarness = await run(['events', 'wait', '--ide', '--timeout', '1'], '');
+  assert.equal(noHarness.status, 1);
+  assert.match(noHarness.stderr, /events-no-harness/);
+  srv.relay = [makeRelay({ data: { harness: 'qwts-devin-agent', body: 'override' } })];
+  const out = await run(['events', 'wait', '--ide', '--harness', 'qwts-devin-agent', '--cursor', Buffer.from('v1.sub1.0').toString('base64url'), '--timeout', '5'], '');
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /"override"/);
+  assert.equal(JSON.parse(readFileSync(join(env.AGENT_BOT_SERVER_STATE, 'event-cursors.json'), 'utf8'))['ide:relay.message:qwts-devin-agent'], /--cursor ([A-Za-z0-9_-]+)`/.exec(out.stdout)?.[1]);
+});
+
+test('--ide devin-stop blocks with the ide Next line and honours the cap', async (t) => {
+  const { run, srv } = await ideFixture(t);
+  await run(['events', 'wait', '--ide', '--timeout', '1'], ''); // arm
+  const hook = JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: true, session_id: 'ide_sess' });
+  srv.relay = (srv.relay ?? []).concat(makeRelay({ data: { harness: 'qwts-devin-agent', body: 'hold up' } }));
+  const out = await run(['events', 'wait', '--ide', '--format', 'devin-stop', '--timeout', '10'], hook);
+  assert.equal(out.status, 0);
+  const block = JSON.parse(out.stdout);
+  assert.equal(block.decision, 'block');
+  assert.match(block.reason, /Relayed from Qwts/);
+  assert.match(block.reason, /--ide --cursor/);
+});
+
+test('--ide devin-context prints only when an event exists', async (t) => {
+  const { run, srv } = await ideFixture(t);
+  const hook = JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's2' });
+  const empty = await run(['events', 'peek', '--ide', '--format', 'devin-context'], hook);
+  assert.equal(empty.stdout, '');
+  srv.relay = (srv.relay ?? []).concat(makeRelay({ data: { harness: 'qwts-devin-agent', body: 'ctx' } }));
+  const out = await run(['events', 'peek', '--ide', '--format', 'devin-context'], hook);
+  const payload = JSON.parse(out.stdout);
+  assert.equal(payload.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  // No hook_event_name at all still falls back to UserPromptSubmit.
+  srv.relay = (srv.relay ?? []).concat(makeRelay({ data: { harness: 'qwts-devin-agent', body: 'again' } }));
+  const bare = await run(['events', 'peek', '--ide', '--format', 'devin-context'], '{}');
+  assert.equal(JSON.parse(bare.stdout).hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(payload.hookSpecificOutput.additionalContext, /Relayed from Qwts/);
+});
+
+test('--ide commits a drops-only advance and receipts carry transport ide, never a body', async (t) => {
+  const { run, srv, env, cursors } = await ideFixture(t);
+  srv.relay = [
+    makeRelay({ data: { harness: 'qwts-devin-agent', from: 'bad!' } }),
+    makeRelay({ data: { harness: 'qwts-devin-agent', body: 'bodies are receipts-free' } }),
+  ];
+  const out = await run(['events', 'wait', '--ide', '--cursor', Buffer.from('v1.sub1.0').toString('base64url'), '--timeout', '10'], '');
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /bodies are receipts-free/);
+  const log = audit(env);
+  const ideReceipts = log.trim().split('\n').map((l) => JSON.parse(l));
+  const drops = ideReceipts.filter((r) => r.event === 'event-dropped');
+  const delivers = ideReceipts.filter((r) => r.event === 'event-deliver');
+  assert.ok(drops.length >= 1);
+  assert.equal(delivers.length, 1);
+  assert.equal(delivers[0].transport, 'ide');
+  assert.doesNotMatch(log, /bodies are receipts-free/);
+  assert.equal(Object.keys(cursors()).length, 1);
+});
+
+test('--ide proceeds on harness detection alone but refuses stated identities', async (t) => {
+  const { run, env, srv } = await ideFixture(t);
+  // Harness detection (the Devin IDE's own env) is the owner's delegate,
+  // never a soul — the path must proceed.
+  env.DEVIN_AGENT = '1';
+  env.AI_AGENT = 'windsurf';
+  srv.relay = [makeRelay({ data: { harness: 'qwts-devin-agent', body: 'hi' } })];
+  const ok = await run(['events', 'wait', '--ide', '--cursor', Buffer.from('v1.sub1.0').toString('base64url'), '--timeout', '5'], '');
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /Relayed from/);
+  // A stated App identity refuses.
+  env.GH_AGENT_APP = 'qwts-devin-agent';
+  const stated = await run(['events', 'wait', '--ide', '--timeout', '2'], '');
+  assert.equal(stated.status, 1);
+  assert.match(stated.stderr, /events-soul-caller/);
+  // So does an Agent ID.
+  delete env.GH_AGENT_APP;
+  env.AGENT_BOT_ID = 'agent_12345678-1234-1234-1234-123456789abc';
+  const byId = await run(['events', 'wait', '--ide', '--timeout', '2'], '');
+  assert.equal(byId.status, 1);
+  assert.match(byId.stderr, /events-soul-caller/);
+});
+
+// ---- hook adapters are an optional, off-by-default extra ----
+
+test('hook formats stay silent when the opt-in is off (daemon path)', async (t) => {
+  const { run, srv, env } = await fixture(t);
+  srv.relay = [makeRelay({})];
+  delete env.AGENT_BOT_EVENT_HOOKS;
+  const calls = srv.calls.length;
+  const out = await run(['events', 'wait', '--format', 'devin-stop', '--timeout', '2'], JSON.stringify({ hook_event_name: 'Stop', session_id: 's' }));
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /hook adapters are disabled/);
+  assert.equal(srv.calls.length, calls, 'no service request was made');
+  assert.equal(existsSync(join(env.AGENT_BOT_SERVER_STATE, 'event-cursors.json')), false, 'the subscription never armed');
+  const peek = await run(['events', 'peek', '--format', 'devin-context'], JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's' }));
+  assert.equal(peek.stdout, '');
+  assert.match(peek.stderr, /hook adapters are disabled/);
+});
+
+test('hook formats stay silent when the opt-in is off (--ide path)', async (t) => {
+  const { run, srv, env } = await ideFixture(t);
+  delete env.AGENT_BOT_EVENT_HOOKS;
+  const calls = srv.calls.length;
+  const out = await run(['events', 'wait', '--ide', '--format', 'devin-stop', '--timeout', '2'], JSON.stringify({ hook_event_name: 'Stop' }));
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /hook adapters are disabled/);
+  const peek = await run(['events', 'peek', '--ide', '--format', 'devin-context'], '{}');
+  assert.equal(peek.stdout, '');
+  assert.equal(srv.calls.length, calls, 'no service request was made');
+});
+
+test('settings.eventHooks enables the adapters; AGENT_BOT_EVENT_HOOKS=0 overrides it', async (t) => {
+  const { run, srv, env } = await fixture(t);
+  delete env.AGENT_BOT_EVENT_HOOKS;
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({ prefix: 'qwts', features: { 'github-identity': true }, settings: { eventHooks: true } }));
+  await run(['events', 'wait', '--format', 'devin-stop', '--timeout', '1'], JSON.stringify({ hook_event_name: 'Stop', session_id: 's' }));
+  srv.relay = [makeRelay({})];
+  const out = await run(['events', 'wait', '--format', 'devin-stop', '--timeout', '10'], JSON.stringify({ hook_event_name: 'Stop', session_id: 's' }));
+  assert.equal(JSON.parse(out.stdout).decision, 'block', 'config opt-in blocks as usual');
+  env.AGENT_BOT_EVENT_HOOKS = '0';
+  const off = await run(['events', 'wait', '--format', 'devin-stop', '--timeout', '2'], JSON.stringify({ hook_event_name: 'Stop', session_id: 's' }));
+  assert.equal(off.stdout, '');
+  assert.match(off.stderr, /hook adapters are disabled/, 'env 0 beats config true');
 });

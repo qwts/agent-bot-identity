@@ -251,7 +251,20 @@ one wait without moving the store. Polling is a stopgap until
 with the same signature. Replies to a relayed message are not available
 yet — they await a device `send_message`.
 
-Example `.devin/hooks.v1.json` — the Stop hook waits for an event before
+The Devin hook adapters — `--format devin-stop`, `--format devin-context`,
+and the `.devin/hooks.v1.json` snippets in this section — exist only as an
+**optional, off-by-default** extra behind a user-enabled flag; they are
+never a required delivery path. Enable them per machine with
+`settings.eventHooks: true` in `~/.config/agent-bot/config.json` or
+`AGENT_BOT_EVENT_HOOKS=1` (the env wins; `0` forces off). While disabled
+they do nothing — no network call, no cursor move, silent stdout. A hook
+that stalls on harness approval, times out, or is disabled fails closed:
+the turn simply ends, and delivery falls back to the server stream (MCP
+events / edge event stream, the production path) or the
+`agent-bot events wait` loop below.
+
+Example `.devin/hooks.v1.json` (optional; needs the opt-in above) — the Stop hook
+waits for an event before
 letting the turn end (keep the hook timeout to a few minutes; a long wait
 shows the session as working and blocks `/compact`, so let `/goal` re-run
 it), the PostToolUse hook surfaces whatever arrived:
@@ -274,6 +287,47 @@ committed after a newer one); consumers must dedupe on the event id.
 The daemon needs server mode (an enrolled device), the soul needs a
 harness App slug, and the service scopes `events/poll` to the harnesses the
 device is enrolled for — a foreign harness answers `event-forbidden`.
+
+### Harnesses without MCP events support
+
+For a harness that cannot consume MCP events itself (Devin today), the
+supported path is the agent running the CLI in its own shell:
+
+```
+agent-bot events wait [--ide] [--cursor C]
+```
+
+`wait` blocks until one message arrives (default `--timeout 120` seconds,
+max 3600), prints the wrapped event plus a
+`Next: run \`agent-bot events wait --cursor <next>\` …` line, acks, and
+exits 0. The agent re-runs it with that cursor for the next message. The
+hook adapters above are the optional, off-by-default extra on top of this.
+
+### IDE sessions (`--ide`)
+
+An owner IDE or web-chat session with **no soul binding** — for example a
+Devin IDE workspace in the owner's macOS account — can take the same relay
+events straight from the service with this account's enrolled device:
+`agent-bot events wait|peek|ack --ide`. It never talks to the daemon and
+never needs a binding; a caller carrying any soul marker (an Agent ID, a
+binding, a stated App) is refused `events-soul-caller` — souls keep the
+daemon path. The harness is `--harness <slug>` or the ambient harness's
+configured App slug; cursors live under a separate `ide:relay.message:<harness>`
+key so IDE use never moves the soul store. Its hook file is likewise the
+optional, off-by-default extra above — it only runs with
+`settings.eventHooks` or `AGENT_BOT_EVENT_HOOKS=1`:
+
+```json
+{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"agent-bot events wait --ide --harness qwts-devin-agent --format devin-stop --timeout 30","timeout":40}]}],"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"agent-bot events peek --ide --harness qwts-devin-agent --format devin-context","timeout":15}]}]}
+```
+
+Messages arriving after the 30-second wait window are still picked up: the
+`peek` on the next prompt injects whatever has accumulated into context. Substitute your harness's
+App slug for `qwts-devin-agent` (ambient detection alone does not name one
+inside an IDE, so the flag is required there). Because marker checks skip
+harness detection, an unstated soul running in the owner account is treated
+as the IDE — acceptable for reads: the device's harness scope bounds what
+`events/poll` may return.
 
 
 ## Known limits
