@@ -71,7 +71,11 @@ export async function mintCredential({
   if (typeof grant.token !== 'string' || !grant.token || !Number.isFinite(Date.parse(grant.expires_at))) {
     throw new Error('daemon returned an invalid GitHub credential');
   }
-  return { token: grant.token, expires_at: grant.expires_at, installation_id: grant.installation_id };
+  return {
+    token: grant.token, expires_at: grant.expires_at, installation_id: grant.installation_id,
+    // The identity service's reference for this one-operation credential.
+    credential_ref: grant.credential_ref ?? null, task_id: grant.task_id ?? null, operation_id: grant.operation_id ?? null,
+  };
 }
 
 // The mints that still run in the caller's process — `agent-bot mint-token`,

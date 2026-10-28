@@ -417,6 +417,38 @@
       "kind": "refusal",
       "registered": "0.14.0",
       "summary": "Minting with an App key held on this host is off (legacy local custody); mint through the identity service or opt in before the removal date."
+    },
+    {
+      "n": 53,
+      "code": "credential-unavailable",
+      "component": "credential",
+      "kind": "failure",
+      "summary": "The identity service is unreachable, timed out or answered unavailable (0.4 credential_unavailable); nothing was issued and local work continues.",
+      "registered": "0.14.0"
+    },
+    {
+      "n": 54,
+      "code": "device-revoked",
+      "component": "credential",
+      "kind": "refusal",
+      "summary": "The identity service revoked this device (0.4 device_revoked); cached credentials were dropped and nothing mints until re-enrollment.",
+      "registered": "0.14.0"
+    },
+    {
+      "n": 55,
+      "code": "outcome-unknown",
+      "component": "credential",
+      "kind": "failure",
+      "summary": "A credential request may have been fulfilled upstream but the answer was lost (0.4 outcome_unknown); reconcile by lookup, never retry blindly.",
+      "registered": "0.14.0"
+    },
+    {
+      "n": 56,
+      "code": "operation-conflict",
+      "component": "credential",
+      "kind": "refusal",
+      "summary": "An operation ID was reused for a different credential request or after its credential expired (0.4 operation_conflict).",
+      "registered": "0.14.0"
     }
   ]
 }

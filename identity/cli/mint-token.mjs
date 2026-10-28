@@ -54,7 +54,16 @@ async function main() {
     decision: 'granted',
     appSlug: selection?.appSlug,
     reason: approvalRequired ? 'owner-approved' : (selection?.reason ?? selectionReason()),
+    grant,
   });
+  // In a soul-bound checkout the caller is a member, and members get
+  // credential references only (#1184 goal): git and gh there authenticate
+  // per operation through the credential helper and the gh shim.
+  if (bound && grant.credential_ref) {
+    process.stdout.write(`${JSON.stringify({ schema_version: 1, credential_ref: grant.credential_ref, task_id: grant.task_id ?? null, operation_id: grant.operation_id ?? null, expires_at: grant.expires_at })}\n`);
+    console.error('mint-token: this checkout is soul-bound; members get a credential reference, not a token. git and gh here authenticate per operation.');
+    return;
+  }
   process.stdout.write(formatMintGrant(grant, { json: options.json }));
 }
 
@@ -63,9 +72,15 @@ async function main() {
 // reason code — never the token, the key, or an error's text. Writing it is
 // best effort: a receipt that cannot be written warns and never changes
 // whether a token is released.
-function operatorReceipt({ decision, appSlug = null, reason }) {
+function operatorReceipt({ decision, appSlug = null, reason, grant = null }) {
   try {
-    appendAuditReceipt({ event: 'credential-mint', operation: 'mint-token', decision, appSlug: appSlug ?? null, reason });
+    appendAuditReceipt({
+      event: 'credential-mint', operation: 'mint-token', decision, appSlug: appSlug ?? null, reason,
+      // The identity service's reference for this one credential, never the token.
+      ...(grant?.issuance_id ? { issuanceId: grant.issuance_id } : grant?.credential_ref ? { issuanceId: grant.credential_ref } : {}),
+      ...(grant?.task_id ? { taskId: grant.task_id } : {}),
+      ...(grant?.operation_id ? { operationId: grant.operation_id } : {}),
+    });
   } catch (error) {
     console.error(`mint-token: could not write the mint receipt: ${error.message}`);
   }

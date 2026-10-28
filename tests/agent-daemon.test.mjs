@@ -795,6 +795,63 @@ test('a conversation reuses the persisted identity without consuming a new token
   });
 });
 
+test('each /v0/credential is one operation of the soul\'s task; identity-service failures keep stable codes and local work goes on', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  const calls = [];
+  let mode = 'ok';
+  const server = createDaemonServer({
+    env,
+    home: '/nonexistent',
+    config: { features: { 'github-identity': true } },
+    mintImpl: async ({ slug, taskId, operationId }) => {
+      calls.push({ slug, taskId, operationId });
+      if (mode === 'down') throw Object.assign(new Error('the identity service is unreachable (network error); nothing was issued'), { code: 'credential-unavailable' });
+      if (mode === 'revoked') throw Object.assign(new Error('the identity service revoked this device'), { code: 'device-revoked' });
+      return { token: `ghs_${calls.length}`, expires_at: '2026-08-12T09:00:00.000Z', issuance_id: `iss_${calls.length}` };
+    },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const call = (pathname, { method = 'GET', body, headers = {} } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method, headers: { authorization: `Bearer ${server.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } } })).json();
+    const credential = () => call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } });
+    const first = await (await credential()).json();
+    const second = await (await credential()).json();
+    assert.deepEqual([first.credential_ref, second.credential_ref], ['iss_1', 'iss_2']);
+    assert.notEqual(first.operation_id, second.operation_id, 'one operation per request');
+    assert.equal(first.task_id, second.task_id, 'the same conversation is the same task');
+    assert.match(first.task_id, new RegExp(`^${AGENT_ID}\\.[0-9a-f]{16}$`));
+    assert.deepEqual(calls.map((c) => c.operationId), [first.operation_id, second.operation_id]);
+
+    mode = 'down';
+    const down = await credential();
+    assert.equal(down.status, 503);
+    assert.equal((await down.json()).code, 'credential-unavailable');
+    const health = await call('/v0/health');
+    assert.equal(health.status, 200, 'local work continues while the identity service is down');
+    mode = 'revoked';
+    const revoked = await credential();
+    assert.equal(revoked.status, 403);
+    assert.equal((await revoked.json()).code, 'device-revoked');
+
+    const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line)).filter((receipt) => receipt.event === 'credential-mint');
+    assert.deepEqual(receipts.map((r) => [r.decision, r.reason, r.issuanceId ?? null]), [
+      ['granted', 'bound-soul-own-app', 'iss_1'], ['granted', 'bound-soul-own-app', 'iss_2'],
+      ['failed', 'credential-unavailable', null], ['failed', 'device-revoked', null],
+    ]);
+    assert.ok(receipts.every((r) => r.taskId === first.task_id && /^op_/.test(r.operationId) && r.profile === 'managed cooperative'));
+    assert.doesNotMatch(JSON.stringify(receipts), /ghs_/);
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
+});
+
 test('tier-1 credential minting answers only a live binding and receipts both outcomes (#90)', async () => {
   const { root, env } = scratchEnv();
   const { gitDir, record } = mintWorktreeToken(env, root);

@@ -27,10 +27,55 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config.mjs';
+import { enforcementProfile } from './identity-format.mjs';
 
 export const GRANT_DEVICE_CODE = 'urn:ietf:params:oauth:grant-type:device_code';
 export const GRANT_JWT_BEARER = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const REFRESH_MARGIN_MS = 60_000;
+export const REQUEST_TIMEOUT_MS = 20_000;
+export const CREDENTIAL_CONTRACT = 'credential/v1';
+
+// Stable daemon codes (governance/error-codes.json) for the identity
+// service's answers (Soul Agent Platform 0.4 Appendix A names in brackets):
+//   credential-unavailable [credential_unavailable]: unreachable, timed out,
+//     an unsigned 5xx, or a signed 503; nothing was issued, local work goes on.
+//   device-revoked [device_revoked]: the device was revoked; cached tokens are
+//     dropped at once and nothing mints until `server enroll --force`.
+//   outcome-unknown [outcome_unknown]: the mint may have happened upstream;
+//     look the operation up, never retry it blindly.
+//   operation-conflict [operation_conflict]: an operation_id reused for a
+//     different request, or after its token expired.
+export function serverError(code, message, extra = {}) {
+  return Object.assign(new Error(message), { code, ...extra });
+}
+
+const ID_PART = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+/** A fresh operation_id: one per credential request, never reused (0.4 §7). */
+export function newOperationId() {
+  return `op_${crypto.randomUUID()}`;
+}
+/**
+ * The task a credential is minted for: AGENT_BOT_TASK_ID when the daemon set
+ * one for a turn, else the soul's conversation (Agent ID plus a digest of its
+ * transcript locator), else an ad hoc task named by the operation itself.
+ */
+export function taskIdFor({ env = process.env, agentId = null, transcript = null, operationId } = {}) {
+  if (env.AGENT_BOT_TASK_ID && ID_PART.test(env.AGENT_BOT_TASK_ID)) return env.AGENT_BOT_TASK_ID;
+  if (agentId && ID_PART.test(agentId)) {
+    if (!transcript) return agentId;
+    const locator = typeof transcript === 'string' ? transcript : JSON.stringify(transcript);
+    return `${agentId}.${crypto.createHash('sha256').update(locator).digest('hex').slice(0, 16)}`;
+  }
+  return `adhoc.${operationId}`;
+}
+
+// Callbacks run when the device is found revoked, so in-memory credentials
+// (session tokens, the pilot provider key) are dropped at once.
+const revokedListeners = new Set();
+export function onDeviceRevoked(listener) {
+  revokedListeners.add(listener);
+  return () => revokedListeners.delete(listener);
+}
 
 // ---- settings ----
 
@@ -285,7 +330,28 @@ export class ServerSession {
     const d = loadDevice(this.opts);
     if (!d) throw new Error('this machine is not enrolled with the agent-bot server; run `agent-bot server enroll`');
     if (d.server !== this.base) throw new Error(`enrolled with ${d.server}, not ${this.base}; run \`agent-bot server enroll --force\``);
+    if (d.revoked_at) throw serverError('device-revoked', `this device was revoked at the identity service (${d.revoked_at}); re-enroll with \`agent-bot server enroll --force\``);
     return d;
+  }
+
+  // The identity service said this device is revoked: drop the session token
+  // and everything listeners hold, and record it so no later process tries.
+  revoked(detail = 'device_revoked') {
+    this.token = null;
+    const d = loadDevice(this.opts);
+    if (d && !d.revoked_at) saveDevice(this.opts, { ...d, revoked_at: new Date().toISOString() });
+    for (const listener of revokedListeners) { try { listener(); } catch { /* a listener never blocks revocation */ } }
+    return serverError('device-revoked', `the identity service revoked this device (${detail}); cached credentials were dropped; re-enroll with \`agent-bot server enroll --force\``);
+  }
+
+  // One request to the identity service: transport failures and timeouts are
+  // credential-unavailable, never an authority decision.
+  async send(url, init) {
+    try {
+      return await this.fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    } catch (error) {
+      throw serverError('credential-unavailable', `the identity service is unreachable (${error?.name === 'TimeoutError' ? 'timed out' : 'network error'}); nothing was issued`);
+    }
   }
 
   async accessToken({ force = false } = {}) {
@@ -299,8 +365,10 @@ export class ServerSession {
       iss: dev.device_id, sub: dev.device_id, aud: `${this.base}/oauth/token`, iat: t, exp: t + 120, jti: newJti(),
       cnf: { jwk: publicJwk(ek) },
     });
-    const res = await this.fetch(`${this.base}/oauth/token`, form({ grant_type: GRANT_JWT_BEARER, assertion }));
+    const res = await this.send(`${this.base}/oauth/token`, form({ grant_type: GRANT_JWT_BEARER, assertion }));
+    if (res.status >= 500) throw serverError('credential-unavailable', `the identity service token endpoint answered ${res.status}; nothing was issued`);
     const body = await readJson(res);
+    if (body.error === 'device_revoked' || (body.error === 'invalid_grant' && /device_revoked/.test(body.error_description ?? ''))) throw this.revoked();
     if (!res.ok || !body.access_token) {
       const e = oauthError('agent-bot server token', body);
       if (body.error === 'invalid_grant') e.message += ' — the device may be revoked or expired; re-enroll';
@@ -322,18 +390,29 @@ export class ServerSession {
       const dpop = signJws(tok.ek, { alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk(tok.ek) }, {
         htm: method, htu: url, iat: now(), jti, ath: b64u(crypto.createHash('sha256').update(tok.value).digest()),
       });
-      const res = await this.fetch(url, {
+      const res = await this.send(url, {
         method,
         headers: { authorization: `DPoP ${tok.value}`, dpop, accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}) },
         body: payload ? JSON.stringify(payload) : undefined,
       });
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (res.status === 401 && attempt === 0) continue; // token expired early (sleep, clock): re-mint once
+      let buf;
+      try { buf = Buffer.from(await res.arrayBuffer()); } catch {
+        throw serverError('credential-unavailable', `the identity service connection dropped while answering ${route}`);
+      }
+      // An unsigned 5xx (a proxy, the platform) grants nothing: unavailable.
+      if (res.status >= 500 && !res.headers.get('agent-bot-signature')) {
+        throw serverError('credential-unavailable', `the identity service answered ${res.status} for ${route}; nothing was issued`);
+      }
       verifyServerResponse(serverKey, { status: res.status, body: buf, requestJti: jti, headers: res.headers });
       let json;
       try { json = JSON.parse(buf.toString('utf8')); } catch { json = {}; }
+      if (json.error === 'device_revoked') throw this.revoked();
+      if (res.status === 401 && attempt === 0) continue; // token expired early (sleep, clock): re-mint once
       if (!res.ok) {
-        const e = new Error(`agent-bot server ${route}: ${res.status} ${json.error ?? ''}`.trim());
+        const known = { credential_unavailable: 'credential-unavailable', outcome_unknown: 'outcome-unknown', operation_conflict: 'operation-conflict' }[json.error];
+        const e = known
+          ? serverError(known, `the identity service answered ${route}: ${json.error}${json.error_description ? ` (${json.error_description})` : ''}`, { body: json })
+          : new Error(`agent-bot server ${route}: ${res.status} ${json.error ?? ''}`.trim());
         e.status = res.status;
         throw e;
       }
@@ -345,6 +424,23 @@ export class ServerSession {
 
   installationToken({ harness, repo }) {
     return this.call('POST', '/api/daemon/installation-token', { harness: serverHarness(harness), repo });
+  }
+
+  // credential/v1: one credential for exactly one (task, operation). The
+  // answer must echo both, or it is refused.
+  async credential({ harness, repo, taskId, operationId, profile }) {
+    const out = await this.call('POST', '/api/daemon/credentials', {
+      task_id: taskId, operation_id: operationId, kind: 'github_installation_token', harness: serverHarness(harness), repo, profile,
+    });
+    if (out.task_id !== taskId || out.operation_id !== operationId || typeof out.token !== 'string' || !out.token || !out.issuance_id) {
+      throw new Error('the identity service answer does not match the requested task and operation; refusing it');
+    }
+    return out;
+  }
+
+  /** `{ state: issued|unknown|none, ... }` for one operation; never a token. */
+  issuance(operationId) {
+    return this.call('GET', `/api/daemon/issuances/${encodeURIComponent(operationId)}`);
   }
 }
 
@@ -362,12 +458,22 @@ export function repoFromCheckout(cwd = process.cwd(), env = process.env) {
 }
 
 // Mint through the server: same shape as the local mint() result.
-export async function mintViaServer({ base, harness, repo, env = process.env, home, fetchImpl = fetch } = {}) {
+// One credential per task and operation (credential/v1). The token goes to
+// the caller for this one operation and is never cached or reused; receipts
+// carry the issuance reference instead.
+export async function mintViaServer({ base, harness, repo, env = process.env, home, fetchImpl = fetch, taskId = null, operationId = null, session = null } = {}) {
   if (!harness) throw new Error('server mode needs a harness: pass --app, set AGENT_BOT_SERVER_HARNESS, or run inside a detected harness');
   if (!repo) throw new Error('server mode mints per repository: run inside a checkout with an origin remote, or set AGENT_BOT_SERVER_REPO=owner/name');
-  const out = await new ServerSession({ base, env, home, fetchImpl }).installationToken({ harness, repo });
-  if (!out?.token) throw new Error('agent-bot server returned no token');
-  return { token: out.token, expires_at: out.expires_at, installation_id: null, repo: out.repo ?? repo, git_author: out.git_author, source: 'agent-bot-server' };
+  const op = operationId ?? newOperationId();
+  const task = taskId ?? taskIdFor({ env, operationId: op });
+  if (!ID_PART.test(op) || !ID_PART.test(task)) throw new Error('task and operation IDs are 1-128 characters of [A-Za-z0-9._:-]');
+  const profile = enforcementProfile({ env, ...(home ? { home } : {}) }).profile;
+  const out = await (session ?? new ServerSession({ base, env, home, fetchImpl })).credential({ harness, repo, taskId: task, operationId: op, profile });
+  return {
+    token: out.token, expires_at: out.expires_at, installation_id: null, repo: out.repo ?? repo, git_author: out.git_author,
+    source: 'agent-bot-server', issuance_id: out.issuance_id, task_id: out.task_id, operation_id: out.operation_id,
+    profile: out.profile ?? profile, replayed: Boolean(out.replayed),
+  };
 }
 
 // ---- CLI ----
@@ -439,7 +545,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
 function formatStatus(s) {
   if (!s.enrolled) return `server: ${s.server}\nnot enrolled — run \`agent-bot server enroll --harness <name>\`\n`;
   const d = s.device;
-  return `server: ${s.server}\ndevice: ${d.device_id} (${d.management}${d.ephemeral ? ', ephemeral' : ''})\nharnesses: ${d.harnesses.join(', ')}${d.read_only ? ' (read-only)' : ''}\npinned key: ${s.pinned_key}\n${s.ok ? 'auth: ok' : `auth: FAILED — ${s.error}`}\n`;
+  const revoked = d.revoked_at ? `revoked: ${d.revoked_at} — re-enroll with \`agent-bot server enroll --force\`\n` : '';
+  return `server: ${s.server}\ndevice: ${d.device_id} (${d.management}${d.ephemeral ? ', ephemeral' : ''})\nharnesses: ${d.harnesses.join(', ')}${d.read_only ? ' (read-only)' : ''}\npinned key: ${s.pinned_key}\n${revoked}${s.ok ? 'auth: ok' : `auth: FAILED — ${s.error}`}\n`;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
