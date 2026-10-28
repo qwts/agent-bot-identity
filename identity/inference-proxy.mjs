@@ -56,7 +56,7 @@ function safeSegment(segment, index, all) {
  * real base URL (https only); `keyFor(providerId)` returns the held key or
  * null; `now` is injectable for tests.
  */
-export function createInferenceProxy({ upstreams = {}, keyFor, now = () => Date.now(), fetchImpl = fetch, maxBodyBytes = MAX_BODY_BYTES } = {}) {
+export function createInferenceProxy({ upstreams = {}, keyFor, now = () => Date.now(), fetchImpl = fetch, maxBodyBytes = MAX_BODY_BYTES, onRequest = null } = {}) {
   const tokens = new Map(); // token -> { agentId, providerId, expiresAt }
   const bases = new Map(); // provider id -> { origin, path }
   for (const [id, url] of Object.entries(upstreams)) {
@@ -115,9 +115,27 @@ export function createInferenceProxy({ upstreams = {}, keyFor, now = () => Date.
     const entry = lookup(presented(req));
     if (!entry) return deny(401, 'invalid or expired inference token');
     if (entry.providerId !== providerId) return deny(403, 'token is for another provider');
+    // One receipt per request that passed token lookup (#1203) — earlier
+    // refusals (404/400/401/403) stay unreceipted so unauthenticated callers
+    // cannot flood the audit log.
+    const startedAt = now();
+    const receipt = (outcome, status, bytesIn, bytesOut) => {
+      try {
+        onRequest?.({
+          agentId: entry.agentId, providerId, method: req.method, path: target.pathname,
+          status, bytesIn, bytesOut, durationMs: now() - startedAt, outcome,
+        });
+      } catch { /* a receipting fault must not break the response */ }
+    };
     const key = keyFor(providerId);
-    if (!key) return deny(503, 'provider key not held; the daemon fetches it from the identity service');
-    if (Number(req.headers['content-length'] ?? 0) > maxBodyBytes) return deny(413, 'request body too large', { connection: 'close' });
+    if (!key) {
+      receipt('key-not-held', 503, 0, 0);
+      return deny(503, 'provider key not held; the daemon fetches it from the identity service');
+    }
+    if (Number(req.headers['content-length'] ?? 0) > maxBodyBytes) {
+      receipt('too-large', 413, Number(req.headers['content-length'] ?? 0), 0);
+      return deny(413, 'request body too large', { connection: 'close' });
+    }
     const headers = {};
     for (const [name, value] of Object.entries(req.headers)) if (!HOP.has(name) && name !== 'authorization' && name !== 'x-api-key') headers[name] = value;
     // The real key, in the form the upstream API expects.
@@ -127,7 +145,10 @@ export function createInferenceProxy({ upstreams = {}, keyFor, now = () => Date.
     let size = 0;
     for await (const chunk of req) {
       size += chunk.length;
-      if (size > maxBodyBytes) return deny(413, 'request body too large', { connection: 'close' });
+      if (size > maxBodyBytes) {
+        receipt('too-large', 413, size, 0);
+        return deny(413, 'request body too large', { connection: 'close' });
+      }
       chunks.push(chunk);
     }
     let upstreamRes;
@@ -136,13 +157,24 @@ export function createInferenceProxy({ upstreams = {}, keyFor, now = () => Date.
         method: req.method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined, redirect: 'error',
       });
     } catch {
+      receipt('upstream-unreachable', 502, size, 0);
       return deny(502, 'upstream unreachable');
     }
     const out = {};
     upstreamRes.headers.forEach((value, name) => { if (!HOP.has(name) && name !== 'content-encoding' && name !== 'set-cookie') out[name] = value; });
+    let bytesOut = 0;
     res.writeHead(upstreamRes.status, out);
-    if (!upstreamRes.body) return res.end();
-    try { for await (const chunk of upstreamRes.body) res.write(chunk); } finally { res.end(); }
+    if (!upstreamRes.body) {
+      res.end();
+      receipt('forwarded', upstreamRes.status, size, bytesOut);
+      return;
+    }
+    try {
+      for await (const chunk of upstreamRes.body) { bytesOut += chunk.length; res.write(chunk); }
+    } finally {
+      res.end();
+      receipt('forwarded', upstreamRes.status, size, bytesOut);
+    }
   };
 
   const server = createServer((req, res) => { handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end(); }); });

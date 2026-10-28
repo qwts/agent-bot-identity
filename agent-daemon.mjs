@@ -1974,7 +1974,7 @@ async function serveDaemon({
   if (proxySetting && !validProxyPort(proxyPort)) {
     process.stderr.write('agent-daemon: inference proxy not started: settings.inferenceProxy.port must be a fixed port from 1 to 65535\n');
   } else if (proxySetting) {
-    try { await startInferenceProxy({ port: proxyPort, upstreams: proxySetting.upstreams ?? {}, now }); }
+    try { await startInferenceProxy({ port: proxyPort, upstreams: proxySetting.upstreams ?? {}, now, env, home }); }
     catch (error) { process.stderr.write(`agent-daemon: inference proxy not started: ${error.message}\n`); }
   }
   const requestedPort = Number(port);
