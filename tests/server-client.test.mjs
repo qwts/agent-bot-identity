@@ -47,7 +47,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
     if (u.pathname === '/.well-known/agent-bot/soul-keys.json') {
       s.soulSign = s.soulSign ?? crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
       const { x: jx, y: jy } = s.soulSign.publicKey.export({ format: 'jwk' });
-      return json(200, { issuer: BASE, keys: [{ kty: 'EC', crv: 'P-256', x: jx, y: jy, alg: 'ES256', use: 'sig', kid: 'sk1' }] });
+      return json(200, { issuer: s.jwksIssuer ?? BASE, keys: [{ kty: 'EC', crv: s.jwksCrv ?? 'P-256', x: jx, y: jy, alg: s.jwksAlg ?? 'ES256', use: 'sig', kid: 'sk1' }] });
     }
     if (u.pathname === '/.well-known/agent-bot-server-key') return json(200, { keys: [{ kty: 'OKP', crv: 'Ed25519', kid: 'kid1', x }] });
     if (u.pathname === '/oauth/device_authorization' || u.pathname === '/oauth/device_enroll') {
@@ -174,7 +174,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
           issuance_id: `iss_soul${s.soulOps.size + 1}`, iat, nbf: iat, exp: iat + (s.soulLife ?? 300), jti: `sjti_${s.soulOps.size + 1}`,
         };
         const token = prior?.token ?? (() => {
-          const input = `${Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'soul+jwt', kid: 'sk1' })).toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`;
+          const input = `${Buffer.from(JSON.stringify({ alg: s.soulAlg ?? 'ES256', typ: 'soul+jwt', kid: 'sk1' })).toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`;
           return `${input}.${crypto.sign('sha256', Buffer.from(input), { key: s.soulSign.privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
         })();
         const issued = prior ?? { agent_id: body.agent_id, task_id: body.task_id, operation_id: body.operation_id, token, claims, issuance_id: claims.issuance_id };

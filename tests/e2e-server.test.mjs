@@ -45,14 +45,30 @@ test('the runner exercises enroll through soul-token against a live service', as
   assert.equal(byName(rows, 'github-5xx').result, 'skipped');
 });
 
-test('provider_key_not_configured is a pass, not a failure', async () => {
-  const { rows } = await drive({ flags: { providerMissing: true } });
-  assert.equal(byName(rows, 'provider-key').result, 'passed');
+test('provider_key_not_configured is a skip without --require, a failure with it', async () => {
+  assert.equal(byName((await drive({ flags: { providerMissing: true } })).rows, 'provider-key').result, 'skipped');
+  assert.equal(byName((await drive({ flags: { providerMissing: true }, requireDevice: true })).rows, 'provider-key').result, 'failed');
 });
 
-test('a signing outage skips soul-token instead of failing', async () => {
-  const { rows } = await drive({ flags: { soulSigningDown: true } });
-  assert.equal(byName(rows, 'soul-token').result, 'skipped');
+test('a signing outage skips soul-token without --require, fails with it', async () => {
+  assert.equal(byName((await drive({ flags: { soulSigningDown: true } })).rows, 'soul-token').result, 'skipped');
+  assert.equal(byName((await drive({ flags: { soulSigningDown: true }, requireDevice: true })).rows, 'soul-token').result, 'failed');
+});
+
+test('a JWKS issuer, curve or token alg the contract does not name fails soul-token', async () => {
+  for (const flags of [{ jwksIssuer: 'https://other.test' }, { jwksCrv: 'P-384' }, { soulAlg: 'EdDSA' }]) {
+    const { rows } = await drive({ flags });
+    assert.equal(byName(rows, 'soul-token').result, 'failed', JSON.stringify(flags));
+  }
+});
+
+test('an enrolled throwaway device is revoked on exit, and --keep-device opts out', async () => {
+  const a = await drive();
+  assert.ok(a.srv.revokedDevice, 'the fake saw the cleanup revoke');
+  assert.deepEqual([byName(a.rows, 'cleanup').result, byName(a.rows, 'cleanup').detail], ['passed', 'revoked']);
+  const b = await drive({ keepDevice: true });
+  assert.equal(b.srv.revokedDevice, undefined);
+  assert.equal(byName(b.rows, 'cleanup').result, 'skipped');
 });
 
 test('github-5xx: the mock GitHub drives 503, 502-after-mint and the in-flight guard', async () => {

@@ -38,9 +38,9 @@ against a deployed identity service. The runner in
 ### End-to-end runner (#1206)
 
 `node scripts/e2e-server.mjs --base <https url> [--state dir] [--harness slug]
-[--repo owner/name] [--only a,b] [--include-revoke] [--mock-github port]
-[--mock-github-hold ms] [--require] [--keep-state] [--json]` enrolls a
-throwaway device via
+[--repo owner/name] [--only a,b] [--include-revoke] [--keep-device]
+[--mock-github port] [--mock-github-hold ms] [--require] [--keep-state]
+[--json]` enrolls a throwaway device via
 `AGENT_BOT_E2E_ENROLL_TOKEN`, then drives `enroll`, `mint-readback`,
 `replay-same-op`, `conflict-new-params`, `provider-key`,
 `legacy-route-disabled`, `soul-token` (including JWKS signature
@@ -48,7 +48,12 @@ verification), `outage` and `revoke` through the same
 `ServerSession`/`mintViaServer` code the daemon uses, printing one
 `PASS|FAIL|SKIP` line per scenario — or a JSON array with `--json`. Without
 an enrollment token the device scenarios report `skipped` and the run exits
-0 (`--require` exits 2). Tokens, keys and the enrollment token are never
+0 (`--require` exits 2; it also makes `soul-token` fail rather than skip on
+a signing outage and `provider-key` fail rather than skip when the service
+has no key configured). Once a device has enrolled the runner revokes it
+when the run ends, best-effort — a trailing `cleanup` row reports the
+outcome and `--keep-device` opts out. Tokens, keys and the enrollment token
+are never
 printed; `tests/e2e-server.test.mjs` runs the whole driver against the signed
 fixture server and asserts no secret shape reaches the output.
 

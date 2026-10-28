@@ -74,7 +74,7 @@ export async function run({
   base, env: outerEnv = process.env, harness = null, repo = null,
   only = null, includeRevoke = false, mockGithub = null, mockGithubHoldMs = 20_000,
   enrollToken = outerEnv.AGENT_BOT_E2E_ENROLL_TOKEN ?? null,
-  requireDevice = false, keepState = false, stateDir = null,
+  requireDevice = false, keepState = false, keepDevice = false, stateDir = null,
   fetchImpl = fetch, emit = () => {},
 } = {}) {
   const own = stateDir === null;
@@ -89,13 +89,15 @@ export async function run({
   const home = dir;
   const record = (scenario, out) => { const row = { scenario, ...out }; emit(row); return row; };
   const results = [];
+  const device = { enrolled: false, revoked: false, session: null };
   let mock = null;
+  let out = null;
   try {
     if (mockGithub !== null) mock = await startMockGithub({ port: mockGithub, holdMs: mockGithubHoldMs });
-    if (!enrollToken && requireDevice) return { results: [record('enroll', outcome(false, 'no enrollment token and --require was passed'))], failed: 1, noToken: true };
-
+    if (!enrollToken && requireDevice) {
+      out = { results: [record('enroll', outcome(false, 'no enrollment token and --require was passed'))], failed: 1, noToken: true };
+    } else {
     const picked = (name) => !only || only.includes(name);
-    const device = { enrolled: false, session: null };
     const ctx = { taskId: null, operationId: null, issuanceId: null };
 
     const steps = {
@@ -144,8 +146,11 @@ export async function run({
           const out = await device.session.call('GET', `/api/daemon/provider-key?provider=openai&operation_id=${encodeURIComponent(newOperationId())}&profile=e2e`);
           return outcome(true, `held key, key_id ${out.key_id ?? 'none reported'}`);
         } catch (error) {
-          return outcome(/provider_key_not_configured|provider-key-not-configured/.test(error?.message ?? error?.code ?? ''),
-            `answered ${error?.code ?? 'error'}${/provider_key_not_configured/.test(error?.message ?? '') ? ' (provider_key_not_configured)' : `: ${String(error?.message ?? '').slice(0, 60)}`}`);
+          if (/provider_key_not_configured|provider-key-not-configured/.test(error?.message ?? error?.code ?? '')) {
+            // Nothing configured is a clean answer — a skip, unless --require asked for a held key.
+            return requireDevice ? outcome(false, 'answered provider_key_not_configured') : outcome(null, 'answered provider_key_not_configured');
+          }
+          return outcome(false, `answered ${error?.code ?? 'error'}: ${String(error?.message ?? '').slice(0, 60)}`);
         }
       },
       async 'legacy-route-disabled'() {
@@ -162,18 +167,27 @@ export async function run({
           const out = await device.session.soulToken({
             agentId: freshId(), parent: null, account: 'e2e', taskId: 'e2e-soul', operationId,
           });
-          // Verify the JWS against the service's published JWKS.
+          // Verify the JWS against the service's published JWKS: the header
+          // must be ES256, the published JWK a P-256 ES256 key, and the
+          // payload's issuer must be the issuer the JWKS declares.
           const res = await fetchImpl(`${base}/.well-known/agent-bot/soul-keys.json`, { redirect: 'error' });
           const jwks = res?.ok ? await res.json() : null;
           const [h, p, s] = out.token.split('.');
-          const kid = JSON.parse(Buffer.from(h, 'base64url').toString('utf8')).kid;
-          const jwk = jwks?.keys?.find((k) => k.kid === kid);
-          const key = jwk ? createPublicKey({ key: jwk, format: 'jwk' }) : null;
-          const good = key ? jwsVerify('sha256', Buffer.from(`${h}.${p}`, 'ascii'), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(s, 'base64url')) : false;
-          return outcome(good, good ? `validated; jwks kid ${kid}` : 'the JWS did not verify against the published keys',
+          const header = JSON.parse(Buffer.from(h, 'base64url').toString('utf8'));
+          const claims = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+          const jwk = jwks?.keys?.find((k) => k.kid === header.kid);
+          const jwkOk = Boolean(jwk) && jwk.kty === 'EC' && jwk.crv === 'P-256' && (jwk.alg === undefined || jwk.alg === 'ES256');
+          const issOk = typeof jwks?.issuer === 'string' && claims.iss === jwks.issuer;
+          let key = null;
+          try { key = jwkOk ? createPublicKey({ key: jwk, format: 'jwk' }) : null; } catch { key = null; }
+          const good = header.alg === 'ES256' && jwkOk && issOk && key
+            ? jwsVerify('sha256', Buffer.from(`${h}.${p}`, 'ascii'), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(s, 'base64url')) : false;
+          return outcome(good, good ? `validated; jwks kid ${header.kid}` : 'the JWS did not verify against the published keys',
             { issuance_id: out.issuance_id, operation_id: operationId });
         } catch (error) {
-          if (error?.code === 'credential-unavailable') return outcome(null, `the signing key is unavailable (${error?.code})`);
+          if (error?.code === 'credential-unavailable') {
+            return requireDevice ? outcome(false, `the signing key is unavailable (${error.code})`) : outcome(null, `the signing key is unavailable (${error.code})`);
+          }
           throw error;
         }
       },
@@ -239,6 +253,7 @@ export async function run({
       async revoke() {
         if (!includeRevoke) return outcome(null, 'needs --include-revoke');
         await device.session.call('DELETE', '/api/daemon/device');
+        device.revoked = true;
         try {
           await device.session.call('GET', '/api/daemon/whoami');
           return outcome(false, 'the revoked device still answered');
@@ -261,11 +276,30 @@ export async function run({
         results.push(record(name, outcome(false, String(error?.message ?? error).slice(0, 120))));
       }
     }
-    return { results, failed: results.filter((r) => r.result === 'failed').length, noToken: !enrollToken };
+    out = { results, failed: results.filter((r) => r.result === 'failed').length, noToken: !enrollToken };
+    }
   } finally {
+    // The throwaway device is revoked best-effort once it enrolled — the
+    // same DELETE the `revoke` scenario proves. --keep-device opts out; an
+    // explicit `revoke` that already ran sets device.revoked.
+    if (device.enrolled && !device.revoked) {
+      if (keepDevice) {
+        results.push(record('cleanup', outcome(null, 'keep-device')));
+      } else {
+        try {
+          await device.session.call('DELETE', '/api/daemon/device');
+          results.push(record('cleanup', outcome(true, 'revoked')));
+        } catch (error) {
+          results.push(record('cleanup', outcome(error?.code === 'device-revoked',
+            error?.code === 'device-revoked' ? 'revoked' : (error?.code ?? String(error?.message ?? 'error').slice(0, 60)))));
+        }
+      }
+    }
     await stopMockGithub(mock);
     if (own && !keepState) rmSync(dir, { recursive: true, force: true });
   }
+  if (out) out.failed = out.results.filter((r) => r.result === 'failed').length;
+  return out;
 }
 
 function parseArgs(argv) {
@@ -280,12 +314,13 @@ function parseArgs(argv) {
     else if (arg === '--repo') opts.repo = take();
     else if (arg === '--only') opts.only = take().split(',').map((s) => s.trim());
     else if (arg === '--include-revoke') opts.includeRevoke = true;
+    else if (arg === '--keep-device') opts.keepDevice = true;
     else if (arg === '--mock-github') opts.mockGithub = Number(take());
     else if (arg === '--mock-github-hold') opts.mockGithubHoldMs = Number(take());
     else if (arg === '--require') opts.requireDevice = true;
     else if (arg === '--keep-state') opts.keepState = true;
     else if (arg === '--json') opts.json = true;
-    else throw new Error(`unknown option: ${arg}\nusage: node scripts/e2e-server.mjs --base <https url> [--state dir] [--harness slug] [--repo owner/name] [--only a,b] [--include-revoke] [--mock-github port] [--mock-github-hold ms] [--require] [--keep-state] [--json]`);
+    else throw new Error(`unknown option: ${arg}\nusage: node scripts/e2e-server.mjs --base <https url> [--state dir] [--harness slug] [--repo owner/name] [--only a,b] [--include-revoke] [--keep-device] [--mock-github port] [--mock-github-hold ms] [--require] [--keep-state] [--json]`);
   }
   if (!opts.base) throw new Error('--base is required');
   if (opts.mockGithub !== undefined && (!Number.isSafeInteger(opts.mockGithub) || opts.mockGithub < 1 || opts.mockGithub > 65535)) {
