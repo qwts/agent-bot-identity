@@ -52,6 +52,12 @@ test('the registry is schema-clean and RE2-safe', () => {
     const [positive, negative] = SAMPLES[pattern.id];
     assert.match(positive, new RegExp(pattern.regex), `${pattern.id} positive`);
     assert.doesNotMatch(negative, new RegExp(pattern.regex), `${pattern.id} negative`);
+    // Every pattern starts at a word boundary, so ordinary identifiers that
+    // merely contain a prefix (task-…, mask-…, debearer …) never match.
+    assert.ok(pattern.regex.startsWith('\\b'), `${pattern.id} starts at a word boundary`);
+  }
+  for (const benign of ['task-0123456789abcdefghij', 'mask-0123456789abcdefghij', 'xghs_0123456789abcdefghij', 'notabearer 0123456789abcdefghij']) {
+    assert.ok(!REGISTRY.patterns.some((p) => new RegExp(p.regex).test(benign)), `${benign} is not a secret`);
   }
   assert.deepEqual(new Set(REGISTRY.patterns.map((p) => p.id)), new Set(Object.keys(SAMPLES)), 'a sample pair per pattern');
 });
