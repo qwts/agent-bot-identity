@@ -484,6 +484,7 @@
         "createSecretProviderRegistry",
         "dropProviderKey",
         "ensureAgentIdentity",
+        "ensureProviderKey",
         "expandAlias",
         "extractToken",
         "fetchProviderKey",

@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { dropProviderKey, fetchProviderKey, heldProviderEnv, providerKeyStale, providerKeyStatus } from '../identity/provider-key.mjs';
+import { dropProviderKey, ensureProviderKey, fetchProviderKey, heldProviderEnv, providerKeyStale, providerKeyStatus } from '../identity/provider-key.mjs';
 import { ServerSession } from '../identity/server-client.mjs';
 
 const roots = [];
@@ -57,6 +57,49 @@ test('the key is fetched with a fresh operation, held in memory only, and receip
   for (const file of walk(root)) assert.doesNotMatch(readFileSync(file, 'utf8'), /pk-NOT-A-REAL-KEY/, file);
   dropProviderKey();
   assert.equal(providerKeyStatus(), null);
+});
+
+test('the key is never used past its lease, is refetched near its end and after a failure with backoff, and drops when unconfigured', async () => {
+  const { root, env } = scratch();
+  dropProviderKey();
+  let clock = Date.parse('2026-10-28T00:00:00Z');
+  const now = () => new Date(clock);
+  const answers = [];
+  const calls = [];
+  const session = Object.create(ServerSession.prototype);
+  session.call = async (method, route) => {
+    calls.push(route);
+    const next = answers.shift();
+    if (next instanceof Error) throw next;
+    const q = new URL(route, 'https://x.test').searchParams;
+    return { provider: 'anthropic', key: SECRET, issuance_id: `iss_${calls.length}`, operation_id: q.get('operation_id'), task_id: 'daemon-start', ...next };
+  };
+  const ensure = () => ensureProviderKey({ provider: 'anthropic', env, home: root, session, now });
+  // A failed start fetch (a locked vault) holds nothing and backs off.
+  answers.push(Object.assign(new Error('vault_locked'), { status: 423 }));
+  assert.equal(await ensure(), null);
+  assert.equal(calls.length, 1);
+  assert.equal(await ensure(), null, 'inside the backoff window nothing is sent');
+  assert.equal(calls.length, 1);
+  clock += 31_000;
+  answers.push({ key_id: 'pk_1', expires_at: new Date(clock + 3_600_000).toISOString() });
+  assert.equal((await ensure()).keyId, 'pk_1', 'refetched once the backoff passed');
+  assert.equal(await ensure() !== null && calls.length, 2, 'a fresh key is not refetched');
+  // Past the lease the key is never injected.
+  clock += 3_600_001;
+  assert.equal(heldProviderEnv({ providerId: 'anthropic', envKey: 'ANTHROPIC_API_KEY', env, home: root, now }), null);
+  assert.equal(providerKeyStatus(), null, 'an expired key is dropped');
+  // Near the lease end it is refetched; a rotated key_id replaces the old key.
+  answers.push({ key_id: 'pk_1', expires_at: new Date(clock + 5 * 60_000).toISOString() });
+  await ensure();
+  answers.push({ key_id: 'pk_2', expires_at: new Date(clock + 3_600_000).toISOString() });
+  assert.equal((await ensure()).keyId, 'pk_2', 'stale (inside the 10-minute margin) is refetched, and the new key_id replaces the old');
+  // The service saying the key is not configured drops it.
+  clock += 3_100_000;
+  answers.push(Object.assign(new Error('agent-bot server /api/daemon/provider-key: 404 provider_key_not_configured'), { status: 404 }));
+  assert.equal(await ensure(), null);
+  assert.equal(providerKeyStatus(), null);
+  dropProviderKey();
 });
 
 test('a failed fetch is receipted and leaves nothing held; device revocation drops the key at once', async () => {

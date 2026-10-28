@@ -62,7 +62,7 @@ import {
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
-  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, fetchProviderKey, heldProviderEnv, providerKeyStale, providerKeyStatus
+  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, ensureProviderKey, heldProviderEnv, providerKeyStatus
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
 import { createSoulRoutes } from './soul-routes.mjs';
@@ -1830,9 +1830,11 @@ async function serveDaemon({
   // memory only. A failure is receipted and leaves local work running; a
   // launch that needs the key then fails with its coded reason.
   const pilotProvider = (config ?? loadConfig({ env, home }))?.settings?.pilotProvider;
-  if (pilotProvider && !legacyLocalCustody({ env, home, now }).enabled && providerKeyStale({ now })) {
-    try { await fetchProviderKey({ provider: pilotProvider, env, home, now }); } catch { /* receipted by fetchProviderKey */ }
-  }
+  const pilotKeyActive = Boolean(pilotProvider) && !legacyLocalCustody({ env, home, now }).enabled;
+  const ensurePilotKey = () => (pilotKeyActive ? ensureProviderKey({ provider: pilotProvider, env, home, now }) : Promise.resolve(null));
+  await ensurePilotKey();
+  // Refetched before its lease ends, and after a failed fetch with backoff.
+  if (pilotKeyActive) setInterval(() => { ensurePilotKey().catch(() => {}); }, 60_000).unref();
   const requestedPort = Number(port);
   if (!Number.isSafeInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
     throw new Error('daemon port must be an integer between 0 and 65535');
@@ -1873,7 +1875,10 @@ async function serveDaemon({
       const row = soulSecretsStatus(agentId, { env, home, config, file: populationFile({ env, home }) }).providers.find((p) => p.harness === harness && p.credential);
       if (!row) return null;
       return heldProviderEnv({ providerId: row.id, envKey: row.envKey, agentId, harness, env, home, now })
-        ?? (() => { throw Object.assign(new Error(`${harness}'s provider ${row.id} needs the pilot provider key, which the daemon does not hold; enroll with the identity service and set the key there`), { code: 'provider-secret-missing' }); })();
+        ?? (() => {
+          // Not held (a failed start fetch, an expired lease): ask again in
+          // the background, within its backoff, and refuse this launch.
+          ensurePilotKey().catch(() => {}); throw Object.assign(new Error(`${harness}'s provider ${row.id} needs the pilot provider key, which the daemon does not hold; enroll with the identity service and set the key there`), { code: 'provider-secret-missing' }); })();
     },
   };
   // The ACP executor is off unless the user config turns it on (#259):

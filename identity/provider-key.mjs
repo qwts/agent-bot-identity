@@ -18,6 +18,7 @@ onDeviceRevoked(() => { held = null; });
 /** Drops the held key (device revoked, shutdown, tests). */
 export function dropProviderKey() {
   held = null;
+  backoff = { failures: 0, nextAt: 0 };
 }
 
 /** Non-secret facts about the held key, or null. */
@@ -58,12 +59,44 @@ export function providerKeyStale({ now = () => new Date() } = {}) {
   return held.expiresAt !== null && Date.parse(held.expiresAt) - now().getTime() < REFETCH_MARGIN_MS;
 }
 
+// A key past its lease (`expires_at`, the "fetch again by" time) is never
+// used: it is dropped, and the next ensure fetches it again.
+function dropIfExpired(now) {
+  if (held && held.expiresAt !== null && Date.parse(held.expiresAt) <= now().getTime()) held = null;
+}
+
+const BACKOFF_BASE_MS = 30_000;
+const BACKOFF_MAX_MS = 15 * 60_000;
+let backoff = { failures: 0, nextAt: 0 };
+
+/**
+ * Makes sure a usable key is held: fetches when none is held or the lease is
+ * near its end, at most once per backoff window after a failure (a locked
+ * vault, an outage). The service saying the key is not configured drops any
+ * held key; a refetch with a new key_id replaces the old one. Never throws.
+ */
+export async function ensureProviderKey({ provider, env = process.env, home, session = null, now = () => new Date() } = {}) {
+  dropIfExpired(now);
+  if (held?.provider === provider && !providerKeyStale({ now })) return providerKeyStatus();
+  if (now().getTime() < backoff.nextAt) return providerKeyStatus();
+  try {
+    await fetchProviderKey({ provider, env, home, session, now });
+    backoff = { failures: 0, nextAt: 0 };
+  } catch (error) {
+    backoff = { failures: backoff.failures + 1, nextAt: now().getTime() + Math.min(BACKOFF_BASE_MS * 2 ** backoff.failures, BACKOFF_MAX_MS) };
+    if (error.status === 404 || /provider_key_not_configured/.test(error.message ?? '')) held = null;
+    dropIfExpired(now);
+  }
+  return providerKeyStatus();
+}
+
 /**
  * The env patch for one harness launch, in the shape soulProviderEnv returns
  * (`{ env, envKey, provider }`), when the held key is for `providerId`; else
  * null. The use is receipted with the exception named, never the key.
  */
 export function heldProviderEnv({ providerId, envKey, agentId = null, harness = null, env = process.env, home, now = () => new Date() } = {}) {
+  dropIfExpired(now);
   if (!held || held.provider !== providerId || !envKey) return null;
   appendAuditReceipt({
     event: 'provider-key-use', agentId, operation: harness ?? providerId, decision: 'injected', reason: 'provider-key-exception',
