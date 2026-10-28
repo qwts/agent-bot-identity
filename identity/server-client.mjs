@@ -473,7 +473,9 @@ export class ServerSession {
       }
       verifyServerResponse(serverKey, { status: res.status, body: buf, requestJti: jti, headers: res.headers });
       let json;
-      try { json = JSON.parse(buf.toString('utf8')); } catch { json = {}; }
+      try { json = JSON.parse(buf.toString('utf8')); } catch {
+        throw serverError('credential-unavailable', `the identity service answered ${route} with a body that is not JSON`);
+      }
       if (json.error === 'device_revoked') throw this.revoked();
       if (res.status === 401 && attempt === 0) continue; // token expired early (sleep, clock): re-mint once
       if (!res.ok) {
