@@ -98,8 +98,12 @@ export function createInferenceProxy({ upstreams = {}, keyFor, now = () => Date.
     const base = bases.get(providerId);
     if (!base) return deny(404, 'unknown provider');
     if (!rest.every(safeSegment)) return deny(400, 'invalid path');
+    // Re-encoded segment by segment (":" kept, as in `model:generate`), so
+    // nothing forwarded can change the upstream's origin or path prefix.
+    const forwardPath = rest.map((segment) => encodeURIComponent(decodeURIComponent(segment)).replace(/%3A/gi, ':')).join('/');
+    const query = [...new URLSearchParams(search)].map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
     let target;
-    try { target = new URL(`${base.path}/${rest.join('/')}${search}`, base.origin); } catch { return deny(400, 'invalid path'); }
+    try { target = new URL(`${base.path}/${forwardPath}${query ? `?${query}` : ''}`, base.origin); } catch { return deny(400, 'invalid path'); }
     if (target.origin !== base.origin || !(target.pathname === base.path || target.pathname.startsWith(`${base.path}/`))) return deny(400, 'invalid path');
     const entry = lookup(presented(req));
     if (!entry) return deny(401, 'invalid or expired inference token');

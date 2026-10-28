@@ -87,6 +87,8 @@ test('a forwarded path cannot leave the upstream: //host, dot segments and encod
     assert.equal(seen.length, 0, 'nothing reached the upstream');
     assert.equal(await raw(port, '/v0/inference/openai/chat/completions?stream=true', auth), 200);
     assert.equal(seen[0].url, 'https://opencode.ai/zen/go/v1/chat/completions?stream=true');
+    assert.equal(await raw(port, '/v0/inference/openai/models/glm%205:generate?a=b%20c&d', auth), 200);
+    assert.equal(seen[1].url, 'https://opencode.ai/zen/go/v1/models/glm%205:generate?a=b%20c&d=', 'segments and query are re-encoded; ":" is kept');
   });
 });
 
