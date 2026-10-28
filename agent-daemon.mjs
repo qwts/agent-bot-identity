@@ -62,7 +62,7 @@ import {
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
-  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, ensureProviderKey, heldProviderEnv, pilotProviderCheck, providerKeyStatus
+  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, brokeredProviderEnv, ensureProviderKey, heldProviderEnv, pilotProviderCheck, providerKeyStatus, startInferenceProxy
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
 import { createSoulRoutes } from './soul-routes.mjs';
@@ -1835,6 +1835,14 @@ async function serveDaemon({
   await ensurePilotKey();
   // Refetched before its lease ends, and after a failed fetch with backoff.
   if (pilotKeyActive) setInterval(() => { ensurePilotKey().catch(() => {}); }, 60_000).unref();
+  // The loopback inference proxy (#1190): `settings.inferenceProxy` names a
+  // fixed loopback port and, per provider id, the upstream it forwards to.
+  // A soul whose baseUrl is on the proxy gets a proxy token, never the key.
+  const proxySetting = (config ?? loadConfig({ env, home }))?.settings?.inferenceProxy;
+  if (pilotKeyActive && proxySetting && Number.isSafeInteger(proxySetting.port)) {
+    try { await startInferenceProxy({ port: proxySetting.port, upstreams: proxySetting.upstreams ?? {}, now }); }
+    catch (error) { process.stderr.write(`agent-daemon: inference proxy not started: ${error.message}\n`); }
+  }
   const requestedPort = Number(port);
   if (!Number.isSafeInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
     throw new Error('daemon port must be an integer between 0 and 65535');
@@ -1874,7 +1882,8 @@ async function serveDaemon({
       if (legacyLocalCustody({ env, home, now }).enabled) return soulProviderEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness });
       const row = soulSecretsStatus(agentId, { env, home, config, file: populationFile({ env, home }) }).providers.find((p) => p.harness === harness && p.credential);
       if (!row) return null;
-      return heldProviderEnv({ providerId: row.id, envKey: row.envKey, agentId, harness, env, home, now })
+      return brokeredProviderEnv({ providerId: row.id, envKey: row.envKey, baseUrl: row.baseUrl, agentId, harness, env, home, now })
+        ?? heldProviderEnv({ providerId: row.id, envKey: row.envKey, agentId, harness, env, home, now })
         ?? (() => {
           // Not held (a failed start fetch, an expired lease): ask again in
           // the background, within its backoff, and refuse this launch.

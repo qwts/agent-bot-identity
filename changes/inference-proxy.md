@@ -1,0 +1,4 @@
+- The loopback inference proxy (#1190) means the pilot provider key no longer has to reach the harness. With `settings.inferenceProxy: { "port": <fixed loopback port>, "upstreams": { "<provider id>": "https://…" } }`, the daemon serves `http://127.0.0.1:<port>/v0/inference/<provider id>/…`. A soul whose declared provider `baseUrl` points there gets a short-lived proxy token in its `envKey`, never the key. The proxy checks the token, swaps in the key the daemon holds in memory, and streams the upstream answer back.
+  - Uses are receipted as `brokered-inference`, with neither the key nor the token in the receipt.
+  - Device revocation invalidates every proxy token at once.
+  - Souls whose `baseUrl` is not on the proxy keep the pilot exception (the key in the harness environment).

@@ -144,7 +144,11 @@ This is the one named exception to short-lived credentials (owner decision D2). 
   - A new `key_id` replaces it, and `provider_key_not_configured` drops it.
 - **Owner's side:** the owner sets the key on the server's `/devices` page, and sets the spend cap and rotation with the provider.
 - **The provider names must match.** The provider saved with the key, `settings.pilotProvider`, and the provider the soul declares for its harness must all be the same provider ID: `anthropic` for Claude Code, `openai` for Codex or OpenCode, and so on (see `soul-providers.mjs`). A harness name such as `opencode` is not a provider ID. When the names don't match, the launch fails with `provider-secret-missing`, rather than the key being injected under the wrong variable.
-- **Exit:** a loopback inference proxy ends the exception (#1190). It must land before any `managed protected` claim, or at stage 3 exit, whichever comes first.
+- **Exit: the loopback inference proxy (#1190).**
+  - **Setup:** set `settings.inferenceProxy` to `{ "port": 8787, "upstreams": { "openai": "https://opencode.ai/zen/go/v1" } }`, and declare the soul's provider `baseUrl` as `http://127.0.0.1:8787/v0/inference/openai`.
+  - **What changes:** the harness then gets a short-lived proxy token in place of the key. The daemon swaps the key in on the way upstream, so the key never reaches a member process.
+  - **Receipts** say `brokered-inference`.
+  - **Other souls:** a soul whose `baseUrl` is not on the proxy keeps the exception below. It must land before any `managed protected` claim, or at stage 3 exit, whichever comes first.
 - **The limits, as decided (Q1, 2026-10-27):**
   - the declared provider only;
   - daemon memory only;

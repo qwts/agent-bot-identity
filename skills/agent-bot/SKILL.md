@@ -4,8 +4,8 @@ description: Bootstrap, configure, and operate per-harness GitHub App identities
 metadata:
   qwts-contract: "1"
   qwts-cli: "agent-bot"
-  qwts-versions: ">=0.14.0 <0.15.0"
-  qwts-validated: "0.14.0"
+  qwts-versions: ">=0.13.0 <0.14.0"
+  qwts-validated: "0.13.0"
   qwts-side-effects: "remote-write"
 ---
 
