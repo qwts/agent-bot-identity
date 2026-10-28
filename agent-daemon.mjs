@@ -1013,7 +1013,9 @@ export function createDaemonServer({
       // Dream, inbox and grant codes are fixed identifiers, so clients can act on them.
       sendJson(res, failure.statusCode, { error: failure.message,
         ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES,
-          REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN].includes(error.code)
+          REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
+          // Identity-service outcomes a credential caller acts on (#1184 goal).
+          'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off'].includes(error.code)
           || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
         // The unsigned challenges a decision route asks the owner to sign (#753).
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });

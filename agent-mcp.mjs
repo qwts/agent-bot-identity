@@ -91,11 +91,11 @@ const TOOLS = [
   {
     name: 'credential',
     description:
-      'Mint a short-lived GitHub App installation token for the identity this '
-      + 'connection is bound to (requires bind). Tier 1 only: the token is the '
-      + 'bot\'s own — export it as GH_TOKEN for gh. Configured worktrees already '
-      + 'authenticate git through the credential helper, so git needs nothing. '
-      + 'Treat it as a secret; never write it to a file or commit.',
+      'Check that the identity this connection is bound to can obtain a GitHub '
+      + 'credential (requires bind). Returns a credential reference (the identity '
+      + 'service issuance ID, task and operation), never the token itself: git '
+      + 'and gh in a configured worktree mint their own per operation through the '
+      + 'credential helper and the gh shim.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -380,7 +380,15 @@ async function callTool(state, name, args = {}) {
     }
     case 'credential': {
       if (!state.secret) throw new Error('not bound — call the bind tool first');
-      return state.client.credential(state.secret);
+      // Members get credential references only (#1184 goal): a token in a
+      // tool result would enter the model's context. git and gh resolve a
+      // fresh credential per operation through the helper and the shim.
+      const grant = await state.client.credential(state.secret);
+      return {
+        agentId: grant.agentId, appSlug: grant.appSlug, credential_ref: grant.credential_ref ?? null,
+        task_id: grant.task_id ?? null, operation_id: grant.operation_id ?? null, expires_at: grant.expires_at,
+        use: 'git and gh in this worktree authenticate as the bot per operation; no token is handed to you',
+      };
     }
     case 'take_inbox':
       return takeInbox(state, args);

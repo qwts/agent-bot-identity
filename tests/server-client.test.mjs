@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  ServerSession, agentBotServerSetting, enroll, jwkThumbprint, loadDevice, logout, main, mintViaServer,
+  ServerSession, agentBotServerSetting, enroll, jwkThumbprint, loadDevice, logout, main, mintViaServer, onDeviceRevoked, taskIdFor,
   parseServerArgs, serverHarness, serverUrl, signatureMessage, statePaths, validateServerUrl,
 } from '../identity/server-client.mjs';
 import { parseConfig } from '../config.mjs';
@@ -35,8 +35,11 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
     const sig = crypto.sign(null, Buffer.from(signatureMessage(status, tamper ? Buffer.from('x') : buf, jti)), sign.privateKey).toString('base64url');
     return new Response(buf, { status, headers: { 'agent-bot-signature': sig, 'agent-bot-request-jti': jti, 'agent-bot-key-id': 'kid1' } });
   };
+  s.ops = new Map();
   s.fetch = async (url, init = {}) => {
     const u = new URL(url);
+    if (s.down) throw new TypeError('fetch failed');
+    if (s.unsigned5xx && u.pathname.startsWith('/api/daemon/')) return json(503, { error: 'Service Unavailable' });
     const f = init.body instanceof URLSearchParams ? Object.fromEntries(init.body) : null;
     s.calls.push(u.pathname);
     assert.equal(init.redirect, 'error', `${u.pathname} must not follow redirects`);
@@ -87,7 +90,25 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
       assert.equal(proof.payload.htm, init.method);
       assert.equal(proof.payload.htu, url);
       assert.equal(proof.payload.ath, crypto.createHash('sha256').update(tok).digest('base64url'));
+      if (s.revokedDevice === t.device) return signed(401, { error: 'device_revoked' }, proof.payload.jti);
       if (u.pathname === '/api/daemon/whoami') return signed(200, { device: { id: t.device, management: 'managed' } }, proof.payload.jti);
+      if (u.pathname === '/api/daemon/credentials') {
+        const body = JSON.parse(init.body);
+        s.lastCredential = body;
+        if (s.signedUnavailable) return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
+        if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
+        const prior = s.ops.get(body.operation_id);
+        if (prior && (prior.task_id !== body.task_id || prior.repo !== body.repo)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
+        const issued = prior ?? { issuance_id: `iss_${s.ops.size + 1}`, task_id: body.task_id, operation_id: body.operation_id, repo: body.repo, token: `ghs_op${s.ops.size + 1}` };
+        s.ops.set(body.operation_id, issued);
+        const echo = s.badEcho ? { ...issued, operation_id: 'op_other' } : issued;
+        return signed(prior ? 200 : 201, { ...echo, expires_at: '2026-10-27T23:00:00Z', profile: body.profile, replayed: Boolean(prior), git_author: 'qwts-grok-agent[bot] <1+qwts-grok-agent[bot]@users.noreply.github.com>' }, proof.payload.jti);
+      }
+      if (u.pathname.startsWith('/api/daemon/issuances/')) {
+        const op = decodeURIComponent(u.pathname.split('/').at(-1));
+        const issued = s.ops.get(op);
+        return signed(200, issued ? { operation_id: op, state: 'issued', issuance_id: issued.issuance_id, task_id: issued.task_id } : { operation_id: op, state: 'none' }, proof.payload.jti);
+      }
       if (u.pathname === '/api/daemon/installation-token') {
         const body = JSON.parse(init.body);
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
@@ -184,15 +205,97 @@ test('installation tokens come from the server; responses must carry a valid pin
   const srv = fakeServer();
   await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
   const minted = await mintViaServer({ base: BASE, harness: 'grok', repo: 'true-line/agent-bot', env, fetchImpl: srv.fetch });
-  assert.equal(minted.token, 'ghs_fake');
+  assert.equal(minted.token, 'ghs_op1');
   assert.equal(minted.source, 'agent-bot-server');
   assert.match(minted.git_author, /qwts-grok-agent/);
+  // credential/v1: one credential per task and operation, with the profile in force.
+  assert.equal(srv.lastCredential.kind, 'github_installation_token');
+  assert.equal(srv.lastCredential.profile, 'managed cooperative');
+  assert.match(srv.lastCredential.operation_id, /^op_[0-9a-f-]{36}$/);
+  assert.equal(srv.lastCredential.task_id, `adhoc.${srv.lastCredential.operation_id}`);
+  assert.deepEqual([minted.issuance_id, minted.task_id, minted.operation_id], ['iss_1', srv.lastCredential.task_id, srv.lastCredential.operation_id]);
   await assert.rejects(mintViaServer({ base: BASE, harness: 'codex', repo: 'a/b', env, fetchImpl: srv.fetch }), /403/);
   await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: null, env, fetchImpl: srv.fetch }), /owner\/name/);
 
   const evil = fakeServer({ tamper: true });
   evil.devices = srv.devices; // same devices, but a different (unpinned) signing key
   await assert.rejects(new ServerSession({ base: BASE, env, fetchImpl: evil.fetch }).whoami(), /signature is invalid/);
+});
+
+test('every mint is its own operation; a token is never reused, and a mismatched echo is refused', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const a = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.1' });
+  const b = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.1' });
+  assert.notEqual(a.operation_id, b.operation_id);
+  assert.notEqual(a.token, b.token);
+  assert.deepEqual([a.task_id, b.task_id], ['task.1', 'task.1']);
+  // The same operation replays its own issuance; a different request under it conflicts.
+  const replay = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.1', operationId: a.operation_id });
+  assert.deepEqual([replay.issuance_id, replay.replayed], [a.issuance_id, true]);
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/other', env, fetchImpl: srv.fetch, taskId: 'task.1', operationId: a.operation_id }),
+    (error) => error.code === 'operation-conflict');
+  srv.badEcho = true;
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch }), /does not match the requested task and operation/);
+  assert.equal(taskIdFor({ env: { AGENT_BOT_TASK_ID: 'turn.42' }, operationId: 'op_x' }), 'turn.42');
+  assert.match(taskIdFor({ env: {}, agentId: 'agent_11111111-1111-4111-8111-111111111111', transcript: { provider: 'codex', id: 't/1' }, operationId: 'op_x' }),
+    /^agent_11111111-1111-4111-8111-111111111111\.[0-9a-f]{16}$/);
+});
+
+test('credential-unavailable while the identity service is down, unsigned 5xx or a signed 503; nothing is issued', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  await session.whoami(); // a session token is held
+  for (const mode of ['down', 'unsigned5xx', 'signedUnavailable']) {
+    srv[mode] = true;
+    await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, session }),
+      (error) => error.code === 'credential-unavailable' && !/ghs_/.test(error.message), mode);
+    srv[mode] = false;
+  }
+  assert.equal(srv.ops.size, 0, 'nothing was issued during the outage');
+  // A fresh process during an outage fails the same way at the token endpoint.
+  srv.down = true;
+  await assert.rejects(new ServerSession({ base: BASE, env, fetchImpl: srv.fetch }).whoami(), (error) => error.code === 'credential-unavailable');
+  srv.down = false;
+  assert.equal((await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, session })).token, 'ghs_op1', 'works again once the service is back');
+});
+
+test('device-revoked drops cached tokens at once, persists, and requires re-enrollment', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  const dev = await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  await session.whoami();
+  assert.ok(session.token, 'a session token is cached');
+  let dropped = 0;
+  const unlisten = onDeviceRevoked(() => { dropped += 1; });
+  srv.revokedDevice = dev.device_id;
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, session }), (error) => error.code === 'device-revoked' && /re-enroll/.test(error.message));
+  assert.equal(session.token, null, 'the cached session token was dropped');
+  assert.equal(dropped, 1, 'in-memory credentials were told to drop');
+  assert.ok(loadDevice({ env }).revoked_at, 'revocation is recorded');
+  // Every later attempt, in any process, refuses without asking the network.
+  const before = srv.calls.length;
+  await assert.rejects(new ServerSession({ base: BASE, env, fetchImpl: srv.fetch }).whoami(), (error) => error.code === 'device-revoked');
+  assert.equal(srv.calls.length, before);
+  // The token endpoint's revocation answer maps the same way.
+  const env2 = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv2 = fakeServer();
+  await enroll({ base: BASE, env: env2, harnesses: ['grok'], fetchImpl: srv2.fetch, sleep });
+  srv2.devices.clear();
+  const revokedFetch = async (url, init) => (new URL(url).pathname === '/oauth/token'
+    ? new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'device_revoked' }), { status: 400 })
+    : srv2.fetch(url, init));
+  await assert.rejects(new ServerSession({ base: BASE, env: env2, fetchImpl: revokedFetch }).whoami(), (error) => error.code === 'device-revoked');
+  assert.ok(loadDevice({ env: env2 }).revoked_at);
+  unlisten();
+  // Re-enrollment replaces the revoked record.
+  const again = await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep, force: true });
+  assert.equal(loadDevice({ env }).revoked_at, undefined);
+  assert.notEqual(again.device_id, dev.device_id);
 });
 
 test('revoked device surfaces invalid_grant with a re-enroll hint; logout wipes local state', async () => {

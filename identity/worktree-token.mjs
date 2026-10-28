@@ -19,13 +19,12 @@
 // bot is the delegate and gets stock gh. The directory is not consulted at
 // all — a primary checkout in an agent account mints like any other.
 //
-// Soul-bound callers ask the daemon on every mint. Owner tokens are cached
-// per checkout inside the private git dir (never in the working tree) and
-// reused until 5 minutes before expiry. Outside a repository the owner cache
-// lives in the account's private agent-bot state directory, keyed by App.
+// Every call mints one credential for one operation (#1184): nothing is
+// cached or reused. Soul-bound callers ask the daemon; a token file an older
+// release cached in the private git dir or state directory is deleted.
 
 import process from 'node:process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -164,35 +163,13 @@ async function main() {
   }
   if (!slug && !soulBound) return; // human persona — print nothing
 
-  // A cached token cannot establish that this binding is still authorized.
-  // Soul callers always ask the daemon, even if a local cache exists.
-  if (soulBound) {
-    const grant = await mintCredential({ slug, soulBound });
-    process.stdout.write(`${grant.token}\n`);
-    return;
+  // One credential per operation: every gh invocation mints its own, and no
+  // token is cached on disk or reused for another operation (#1184 goal). A
+  // token left by an older release is removed, never read.
+  if (!soulBound) {
+    try { rmSync(cachePath(gitDir, slug), { force: true }); } catch { /* best effort */ }
   }
-
-  const cache = cachePath(gitDir, slug);
-  try {
-    const cached = JSON.parse(readFileSync(cache, 'utf8'));
-    if (cached.slug === slug && Date.parse(cached.expires_at) - Date.now() > 5 * 60 * 1000) {
-      process.stdout.write(`${cached.token}\n`);
-      return;
-    }
-  } catch {
-    /* no usable cache */
-  }
-
   const grant = await mintCredential({ slug, soulBound });
-  try {
-    writeFileSync(cache, `${JSON.stringify({ slug, token: grant.token, expires_at: grant.expires_at })}\n`, {
-      mode: 0o600,
-    });
-  } catch {
-    // Best-effort: a linked worktree's git dir lives under the MAIN
-    // checkout, which sandboxed harnesses (Codex) may not allow writes to.
-    // An uncached mint still succeeds — only a failed MINT may abort.
-  }
   process.stdout.write(`${grant.token}\n`);
 }
 

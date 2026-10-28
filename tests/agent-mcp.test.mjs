@@ -227,7 +227,9 @@ test('credential requires a live binding and presents only the connection secret
   await callTool(state, 'bind', { transcript_id: 'session-5' });
   const grant = await callTool(state, 'credential', {});
   assert.equal(grant.isError, false);
-  assert.match(grant.text, /ghs_grant/);
+  // Members get the reference, never the token (#1184 goal).
+  assert.doesNotMatch(grant.text, /ghs_grant/);
+  assert.match(grant.text, /credential_ref/);
   // The request carried no Agent ID and no App — only the held secret.
   const credentialCall = client.calls.find(([name]) => name === 'credential');
   assert.equal(credentialCall[1], 'a'.repeat(64));

@@ -22,6 +22,7 @@ import { appendAuditReceipt } from './identity-format.mjs';
 import { boundRepository, inboxError } from './inbox-take.mjs';
 import { grantTarget, KEYD_TOOL_NAMES, mintViaKeyd, signKeydGrant } from './keyd-client.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
+import { newOperationId, taskIdFor } from './server-client.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 
 function boundAppSlug(binding, identity, { env, home, config }) {
@@ -182,23 +183,36 @@ export function createIdentityRoutes({
           }, { env, home, now });
           throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409, code: githubOn ? 'credential-no-app' : 'credential-github-off' });
         }
+        // One credential per request: a fresh operation, for the task this
+        // soul's conversation is (0.4 §7). Nothing is cached for reuse.
+        const operationId = newOperationId();
+        const taskId = taskIdFor({ env, agentId: binding.agentId, transcript: binding.transcript ?? identity.transcript ?? null, operationId });
         try {
           grant = await mintImpl({
-            slug: appSlug, env, agentId: binding.agentId,
+            slug: appSlug, env, agentId: binding.agentId, taskId, operationId,
             viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
           });
         } catch (error) {
           // A verified binding whose mint fails must still leave a receipt —
           // the audit stream has to account for every attempt, not only the
-          // ones that reached a decision.
+          // ones that reached a decision. Identity-service answers keep their
+          // stable codes (credential-unavailable, device-revoked, ...).
+          const coded = ['credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off'].includes(error?.code) ? error.code : null;
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
             operation: 'tier1-app-token',
             decision: 'failed',
             appSlug,
-            reason: 'mint-failed',
+            reason: coded ?? 'mint-failed',
+            taskId,
+            operationId,
           }, { env, home, now });
+          if (coded) {
+            throw Object.assign(error, {
+              statusCode: { 'credential-unavailable': 503, 'outcome-unknown': 503, 'device-revoked': 403, 'operation-conflict': 409, 'legacy-local-custody-off': 409 }[coded],
+            });
+          }
           throw error;
         }
         // The App comes from the bound soul's own record, never the request.
@@ -209,7 +223,12 @@ export function createIdentityRoutes({
           decision: 'granted',
           appSlug,
           reason: 'bound-soul-own-app',
+          ...(grant.issuance_id ? { issuanceId: grant.issuance_id } : {}),
+          taskId,
+          operationId,
         }, { env, home, now });
+        // The token goes to the credential helper or the gh shim for this one
+        // operation; the reference is what anything else may keep.
         sendJson(res, 200, {
           schemaVersion: SCHEMA_VERSION,
           agentId: binding.agentId,
@@ -217,6 +236,9 @@ export function createIdentityRoutes({
           token: grant.token,
           expires_at: grant.expires_at,
           installation_id: Number.isSafeInteger(grant.installation_id) ? grant.installation_id : null,
+          credential_ref: grant.issuance_id ?? null,
+          task_id: taskId,
+          operation_id: operationId,
         });
         return true;
       }

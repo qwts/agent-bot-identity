@@ -177,10 +177,17 @@ function receiptDetail(value) {
 }
 
 export function appendAuditReceipt(
-  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null, bearerSource = null },
+  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null, bearerSource = null, issuanceId = null, taskId = null, operationId = null },
   { env = process.env, home = homedir(), now = () => new Date() } = {},
 ) {
   if (bearerSource !== null && !BEARER_SOURCES.has(bearerSource)) throw new Error('audit receipt bearerSource must be env or pass-cli');
+  // A credential's reference, never the credential (0.4 Appendix A): the
+  // identity service's issuance record ID and the task and operation it was
+  // minted for.
+  const reference = (name, value) => {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new Error(`audit receipt ${name} must be 1-128 characters of [A-Za-z0-9._:-]`);
+    return value;
+  };
   const receipt = {
     at: now().toISOString(),
     event: printableText('event', event, { max: 40 }),
@@ -196,6 +203,9 @@ export function appendAuditReceipt(
     ...(appSlug === null ? {} : { appSlug: printableText('appSlug', appSlug, { max: 100 }) }),
     ...(reason === null ? {} : { reason: printableText('reason', reason, { max: 40 }) }),
     ...(bearerSource === null ? {} : { bearerSource }),
+    ...(issuanceId === null ? {} : { issuanceId: reference('issuanceId', issuanceId) }),
+    ...(taskId === null ? {} : { taskId: reference('taskId', taskId) }),
+    ...(operationId === null ? {} : { operationId: reference('operationId', operationId) }),
   };
   const file = auditFile({ env, home });
   ensurePrivateDirectory(path.dirname(file));
