@@ -11,6 +11,7 @@ export const MODULES = new Map([
   ['setup-worktree', 'setup-worktree.mjs'],
   ['join', 'soul-join.mjs'],
   ['mint-token', 'cli/mint-token.mjs'],
+  ['events', 'events.mjs'],
   ['doctor', 'doctor.mjs'],
   ['identity', 'cli/identity.mjs'],
   ['space', 'agent-space.mjs'],

@@ -461,7 +461,7 @@ test('mintForCaller treats registered multi-org Apps for the same soul harness a
 // only their own token, receipts never carry it, and a down or revoking
 // service fails closed with the stable code.
 test('server mode: the gh shim and credential helper mint through the daemon, not a local key', async (t) => {
-  const { BASE, fakeServer, sleep } = await import('./server-client.test.mjs');
+  const { BASE, fakeServer, sleep } = await import('./helpers/fake-identity-server.mjs');
   const { enroll, mintViaServer } = await import('../identity/server-client.mjs');
   const { createDaemonServer } = await import('../agent-daemon.mjs');
   const { ensureAgentIdentity } = await import('../agent-identity.mjs');

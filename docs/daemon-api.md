@@ -163,6 +163,10 @@ and a soul binding, are refused on each owner route.
 | `GET /v0/binding` | binding | |
 | `DELETE /v0/binding` | binding | |
 | `POST /v0/credential` | binding | The soul's own App token. |
+| `POST /v0/events/wait` | binding | Long-poll message notices for the soul's own harness (api.md live-session events); returns untrusted text wrapped as `Relayed from <from> ...`. |
+| `POST /v0/events/ack` | binding | Acks notice leases; `{acked, stale, missing}` surfaces stale leases. |
+| `POST /v0/events/release` | binding | Releases notice leases back to the queue. |
+| `POST /v0/events/reply` | binding | Posts a reply for the soul's harness; `{id}` (200 replay on the same key). |
 | `POST /v0/inbox/take` | binding | |
 | `POST /v0/grants/request` | binding | Approving the grant asks the owner against its digest (#108). |
 | `POST /v0/grants/spend` | binding | Spends an already approved grant once. |

@@ -485,6 +485,8 @@ export class ServerSession {
           outcome_unknown: 'outcome-unknown',
           operation_conflict: 'operation-conflict',
           agent_bound_elsewhere: 'soul-bound-elsewhere',
+          rate_limited: 'event-rate-limited',
+          recipient_stale: 'event-recipient-stale',
         }[json.error];
         const e = known
           ? serverError(known, `the identity service answered ${route}: ${json.error}${json.error_description ? ` (${json.error_description})` : ''}`, { body: json })
@@ -497,6 +499,57 @@ export class ServerSession {
   }
 
   whoami() { return this.call('GET', '/api/daemon/whoami'); }
+
+  // Live-session events (api.md "Messages and live-session events"): a soul's
+  // harness takes, acks, releases and replies to `message` notices. Bodies are
+  // untrusted external input and are never larger than 16 KiB.
+  async takeEvents({ harness, waitSeconds = 0, count = 10, leaseSeconds = 60 }) {
+    const out = await this.call('POST', '/api/daemon/notices/take', {
+      harness: serverHarness(harness), type: 'message',
+      wait_seconds: waitSeconds, count, lease_seconds: leaseSeconds,
+    });
+    // Malformed notices are skipped, never trusted: each must name itself,
+    // its lease, sender, key and a bounded text body.
+    const notices = [];
+    // A malformed notice is a {id, lease, reason} the caller must still ack —
+    // skipping without an ack would re-deliver it forever. `from` is a strict
+    // sender slug set by the service; anything else could smuggle a fake
+    // "Relayed from" line into the harness's context.
+    const dropped = [];
+    for (const n of Array.isArray(out?.notices) ? out.notices : []) {
+      const reason = !(n && typeof n === 'object') ? 'not an object'
+        : typeof n.id !== 'string' ? 'no id'
+        : typeof n.lease !== 'string' ? 'no lease'
+        : typeof n.from !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(n.from) ? 'bad sender'
+        : typeof n.key !== 'string' ? 'no key'
+        : typeof n.body !== 'string' || n.body.length > 16384 ? 'bad body'
+        : (n.correlation !== undefined && n.correlation !== null && typeof n.correlation !== 'string') ? 'bad correlation'
+        : (n.reply_to !== undefined && n.reply_to !== null && typeof n.reply_to !== 'string') ? 'bad reply_to'
+        : null;
+      if (reason === null) notices.push(n);
+      else dropped.push({ id: typeof n?.id === 'string' ? n.id : null, lease: typeof n?.lease === 'string' ? n.lease : null, reason });
+    }
+    return { notices, dropped };
+  }
+
+  ackEvents({ harness, leases }) {
+    return this.call('POST', '/api/daemon/notices/ack', { harness: serverHarness(harness), ids: leases });
+  }
+
+  releaseEvents({ harness, leases }) {
+    return this.call('POST', '/api/daemon/notices/release', { harness: serverHarness(harness), ids: leases });
+  }
+
+  async postReply({ harness, to, key, body, correlation = null, replyTo = null }) {
+    if (typeof body !== 'string' || body.length > 16384) throw new Error('reply body must be a string of at most 16 KiB');
+    if (typeof key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(key)) throw new Error('reply key must be 1-128 characters of [A-Za-z0-9._:-]');
+    const out = await this.call('POST', '/api/daemon/replies', {
+      harness: serverHarness(harness), to, key, body,
+      ...(correlation ? { correlation } : {}), ...(replyTo ? { reply_to: replyTo } : {}),
+    });
+    return out;
+  }
+
 
   installationToken({ harness, repo }) {
     return this.call('POST', '/api/daemon/installation-token', { harness: serverHarness(harness), repo });
