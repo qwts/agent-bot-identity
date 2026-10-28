@@ -16,7 +16,7 @@ import { credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, 
 import { stateDirectory } from '../state-paths.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
 import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
-import { buildAppJwt, pickInstallation } from './mint-token.mjs';
+import { assertLegacyLocalCustody, buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd, removeAppFromKeyd } from './keyd-client.mjs';
 import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, readManagedAppCredential, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
 
@@ -86,7 +86,13 @@ function installations(rows) {
 async function github(method, route, credential, options) {
   const headers = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'agent-bot-identity' };
   const base = appJwtApiBase(options.config);
-  if (credential) headers.authorization = `Bearer ${buildAppJwt(credential.appId, credential.privateKeyPem, Math.floor(Date.now() / 1000))}`;
+  if (credential) {
+    // Signing an App JWT with a key on this host is legacy local custody,
+    // off unless the owner opted in before the removal date (#1184).
+    try { assertLegacyLocalCustody({ env: options.env ?? process.env, ...(options.home ? { home: options.home } : {}) }); }
+    catch (error) { fail(error.code, error.message); }
+    headers.authorization = `Bearer ${buildAppJwt(credential.appId, credential.privateKeyPem, Math.floor(Date.now() / 1000))}`;
+  }
   try {
     const response = await (options.fetchImpl ?? fetch)(`${base}${route}`, {
       method, headers, redirect: 'error', signal: AbortSignal.timeout(30_000),

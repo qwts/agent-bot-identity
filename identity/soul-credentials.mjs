@@ -527,8 +527,10 @@ export function appKeyStores(slug, { env = process.env, home = homedir(), config
 // The live check: an App JWT signed with the stored key, sent to GET /app.
 // It proves GitHub accepts the key without minting an installation token.
 export async function verifyAppCredential({ appId, privateKeyPem }, { env = process.env, fetchImpl = fetch } = {}) {
-  const { buildAppJwt } = await import('./mint-token.mjs');
+  const { assertLegacyLocalCustody, buildAppJwt } = await import('./mint-token.mjs');
   const { appJwtApiBase, loadConfig } = await import('../config.mjs');
+  // Signing with a key on this host is legacy local custody (#1184).
+  assertLegacyLocalCustody({ env });
   createPrivateKey(privateKeyPem);
   const base = appJwtApiBase(loadConfig({ env }));
   const jwt = buildAppJwt(appId, privateKeyPem, Math.floor(Date.now() / 1000));
