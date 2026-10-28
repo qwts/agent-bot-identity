@@ -136,3 +136,30 @@ test('a failed fetch is receipted and leaves nothing held; device revocation dro
   s.revoked();
   assert.equal(providerKeyStatus(), null, 'dropped at once on device revocation');
 });
+
+// #1210: a refetch whose answer carries a NEW key_id rotates the held key —
+// the injected value becomes the new key, receipts name the new id, and the
+// old key is never handed out again.
+test('a mid-lease key_id rotation swaps the held key and receipts the new id (#1210)', async () => {
+  const { root, env } = scratch();
+  dropProviderKey();
+  let clock = Date.parse('2026-10-28T00:00:00Z');
+  const now = () => new Date(clock);
+  const answers = [];
+  const session = Object.create(ServerSession.prototype);
+  session.call = async (method, route) => {
+    const q = new URL(route, 'https://x.test').searchParams;
+    return { provider: 'anthropic', issuance_id: `iss_${q.get('operation_id')}`, operation_id: q.get('operation_id'), task_id: 'daemon-start', ...answers.shift() };
+  };
+  const ensure = () => ensureProviderKey({ provider: 'anthropic', env, home: root, session, now });
+  answers.push({ key_id: 'pk_old', key: `sk-${'a'.repeat(20)}`, expires_at: new Date(clock + 3_600_000).toISOString() });
+  assert.equal((await ensure()).keyId, 'pk_old');
+  assert.equal(heldProviderEnv({ providerId: 'anthropic', envKey: 'ANTHROPIC_API_KEY', env, home: root, now }).env.ANTHROPIC_API_KEY, `sk-${'a'.repeat(20)}`);
+  // The lease nears its end: the refetch answers a rotated key_id.
+  clock += 3_200_000;
+  answers.push({ key_id: 'pk_new', key: `sk-${'b'.repeat(20)}`, expires_at: new Date(clock + 3_600_000).toISOString() });
+  assert.equal((await ensure()).keyId, 'pk_new', 'the refetched key_id replaces the held key');
+  assert.equal(heldProviderEnv({ providerId: 'anthropic', envKey: 'ANTHROPIC_API_KEY', env, home: root, now }).env.ANTHROPIC_API_KEY, `sk-${'b'.repeat(20)}`, 'only the new key is ever injected');
+  const details = receipts(env).map((r) => r.detail ?? '').join('\n');
+  assert.match(details, /pk_new/, 'a receipt names the new key id');
+});

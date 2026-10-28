@@ -563,3 +563,19 @@ test('a new operation for the same task waits on an unknown one, then settles', 
   assert.ok((srv.credentialOps ?? []).includes('op_b'), 'op_b minted once the unknown operation settled');
   assert.equal(srv.minted, 1, 'one mint total: op_b after settle, never op_a twice');
 });
+
+// #1210: a response signed by a key other than the pinned one is refused —
+// a server-key rotation requires re-enrollment; nothing is re-pinned.
+test('a response signed by a different keypair is refused and the pin never moves (#1210)', async () => {
+  const env = sandbox();
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  const pinFile = join(env.AGENT_BOT_SERVER_STATE, 'server-key.json');
+  assert.ok(existsSync(pinFile), 'enroll pinned a key');
+  const before = readFileSync(pinFile);
+  const evil = fakeServer();
+  evil.devices = srv.devices; // the same enrolled device, but a different signing key
+  const session = new ServerSession({ base: BASE, env, fetchImpl: evil.fetch });
+  await assert.rejects(session.call('GET', '/api/daemon/whoami'), /signature/, 'a foreign-key signature is refused');
+  assert.deepEqual(readFileSync(pinFile), before, 'the pinned key file is byte-identical — nothing re-pinned');
+});
