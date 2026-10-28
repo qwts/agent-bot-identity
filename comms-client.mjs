@@ -597,6 +597,9 @@ export async function pairDaemonComms({
   account = userInfo().username,
   publicKey = null,
   keyPairProvider = null,
+  // Soul tokens v2 (#1196): in server mode the broker learns the token issuer
+  // and device id instead of a host vouch key; no key is read or created.
+  soulTokens = null,
   paths = commsPaths({ env, home }),
   clientFactory = (options) => new CommsClient(options),
   uidOfImpl = uidOfAccount,
@@ -632,7 +635,13 @@ export async function pairDaemonComms({
     assertCommsOwnedDir(paths.proofs, brokerUid, { mode: mode === 'group' ? 0o1777 : 0o700 });
   }
   const resolvedPublicKey = publicKey ?? (keyPairProvider ? await keyPairProvider({ env, home }) : null);
-  if (typeof resolvedPublicKey !== 'string' || !resolvedPublicKey.includes('BEGIN PUBLIC KEY')) {
+  if (soulTokens !== null) {
+    if (typeof soulTokens !== 'object' || soulTokens.v !== 2
+      || typeof soulTokens.issuer !== 'string' || soulTokens.issuer === ''
+      || typeof soulTokens.device !== 'string' || soulTokens.device === '') {
+      fail('usage', 'soulTokens must be { v: 2, issuer, device }');
+    }
+  } else if (typeof resolvedPublicKey !== 'string' || !resolvedPublicKey.includes('BEGIN PUBLIC KEY')) {
     fail('usage', 'a daemon SPKI public key (PEM) is required for pairing');
   }
   const secret = randomBytes(32).toString('hex');
@@ -660,7 +669,9 @@ export async function pairDaemonComms({
       platform, windowsCustody, windowsCreateConnection,
     }));
     const result = await client.request(
-      { op: 'daemon-pair-request', account, secretHash, proof, publicKey: resolvedPublicKey },
+      soulTokens !== null
+        ? { op: 'daemon-pair-request', account, secretHash, proof, soulTokens }
+        : { op: 'daemon-pair-request', account, secretHash, proof, publicKey: resolvedPublicKey },
       { paths },
     );
     saveCommsCredential({ account, secret, brokerUid, brokerKey, mode, pairedAt: now().toISOString() }, {

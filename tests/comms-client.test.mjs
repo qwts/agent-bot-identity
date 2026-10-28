@@ -232,6 +232,33 @@ test('daemon pairing writes a proof file and persists the credential', async () 
   }
 });
 
+test('v2 pairing sends soulTokens instead of a public key and creates no vouch key (#1196)', async () => {
+  const world = scratchWorld();
+  const broker = await startFakeBroker(world.socket, (line, { send }) => {
+    assert.equal(line.op, 'daemon-pair-request');
+    assert.deepEqual(line.soulTokens, { v: 2, issuer: 'https://agent-bot.test', device: 'dev_1' });
+    assert.equal(line.publicKey, undefined, 'no host vouch key is offered');
+    send({ v: 1, id: line.id, ok: true, account: line.account, code: 'V2PAIR', state: 'pending' });
+  });
+  try {
+    const pairing = await pairDaemonComms({
+      env: world.env,
+      home: '/nonexistent',
+      brokerAccount: ME,
+      account: 'worker-daemon',
+      soulTokens: { v: 2, issuer: 'https://agent-bot.test', device: 'dev_1' },
+    });
+    assert.equal(pairing.code, 'V2PAIR');
+    assert.equal(existsSync(daemonVouchKeyFile({ env: world.env, home: '/nonexistent' })), false);
+    await assert.rejects(
+      pairDaemonComms({ env: world.env, home: '/nonexistent', brokerAccount: ME, account: 'worker-daemon', soulTokens: { v: 1 } }),
+      { code: 'usage' },
+    );
+  } finally {
+    await broker.close();
+  }
+});
+
 test('the pairing proof is 0644 even under a restrictive umask', async () => {
   const world = scratchWorld();
   let seenProofMode = null;

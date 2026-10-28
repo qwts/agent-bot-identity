@@ -27,6 +27,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config.mjs';
+import { canonicalJson } from '../canonical-json.mjs';
 import { enforcementProfile } from './identity-format.mjs';
 import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
 
@@ -423,7 +424,13 @@ export class ServerSession {
       if (json.error === 'device_revoked') throw this.revoked();
       if (res.status === 401 && attempt === 0) continue; // token expired early (sleep, clock): re-mint once
       if (!res.ok) {
-        const known = { credential_unavailable: 'credential-unavailable', outcome_unknown: 'outcome-unknown', operation_conflict: 'operation-conflict' }[json.error];
+        const known = {
+          credential_unavailable: 'credential-unavailable',
+          soul_signing_key_unavailable: 'credential-unavailable',
+          outcome_unknown: 'outcome-unknown',
+          operation_conflict: 'operation-conflict',
+          agent_bound_elsewhere: 'soul-bound-elsewhere',
+        }[json.error];
         const e = known
           ? serverError(known, `the identity service answered ${route}: ${json.error}${json.error_description ? ` (${json.error_description})` : ''}`, { body: json })
           : new Error(`agent-bot server ${route}: ${res.status} ${json.error ?? ''}${typeof json.error_description === 'string' ? ` (${json.error_description.slice(0, 200)})` : ''}`.trim());
@@ -455,6 +462,34 @@ export class ServerSession {
   /** `{ state: issued|unknown|none, ... }` for one operation; never a token. */
   issuance(operationId) {
     return this.call('GET', `/api/daemon/issuances/${encodeURIComponent(operationId)}`);
+  }
+
+  // Soul token v2 (#1196): the identity service signs a five-minute ES256
+  // soul token (typ soul+jwt) so this host keeps no vouch key. The answer is
+  // refused unless it echoes the task and operation and its v2 claims match
+  // exactly what was asked for — including this enrolled device. The JWS
+  // itself is verified by the agent-comms broker, not here: the signed
+  // response is already proof it came from the service.
+  async soulToken({ agentId, parent = null, account, taskId, operationId, profile, presenterJkt } = {}) {
+    const out = await this.call('POST', '/api/daemon/soul-token', {
+      agent_id: agentId, parent, account, task_id: taskId, operation_id: operationId, audience: 'agent-comms',
+      ...(presenterJkt ? { presenter_jkt: presenterJkt } : {}),
+      ...(profile ? { profile } : {}),
+    });
+    const parts = typeof out.token === 'string' ? out.token.split('.') : [];
+    const decodePart = (part) => { try { return JSON.parse(Buffer.from(part, 'base64url').toString('utf8')); } catch { return null; } };
+    const header = parts.length === 3 ? decodePart(parts[0]) : null;
+    const payload = parts.length === 3 ? decodePart(parts[1]) : null;
+    const claims = out.claims && typeof out.claims === 'object' && !Array.isArray(out.claims) ? out.claims : null;
+    const ok = parts.length === 3 && parts.every((part) => /^[A-Za-z0-9_-]+$/.test(part))
+      && header?.alg === 'ES256' && header?.typ === 'soul+jwt'
+      && claims?.v === 2 && claims.aud === 'agent-comms' && claims.sub === agentId && claims.account === account
+      && claims.device === this.device().device_id
+      && typeof claims.iat === 'number' && typeof claims.exp === 'number' && claims.exp - claims.iat <= 300
+      && out.task_id === taskId && out.operation_id === operationId
+      && payload !== null && canonicalJson(payload) === canonicalJson(claims);
+    if (!ok) throw new Error('the identity service soul-token answer does not match the request; refusing it');
+    return out;
   }
 }
 

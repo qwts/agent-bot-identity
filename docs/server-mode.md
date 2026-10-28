@@ -156,6 +156,35 @@ This is the one named exception to short-lived credentials (owner decision D2). 
   - each fetch and use receipted as `provider-key-exception`;
   - the proxy tracked as the exit criterion.
 
+## Soul tokens (v2)
+
+**Opt-in while it rolls out:** `settings.soulTokens: "v2"` in
+`~/.config/agent-bot/config.json`, or `AGENT_BOT_SOUL_TOKENS=v2` (the
+environment wins; anything else is v1). It requires an identity service that
+serves `POST /api/daemon/soul-token` and an agent-comms broker that accepts
+v2 tokens — without both, vouching fails closed. Switching a paired daemon to
+v2 means re-running `agent-bot daemon pair-comms` so the broker learns the
+issuer instead of a host key. The default flips in a later release.
+
+When opted in, enrolled and legacy local custody off, soul tokens for
+agent-comms are **signed by the identity service**, not by a host key (#1196):
+
+- `/v0/vouch` calls `POST /api/daemon/soul-token` (a fresh operation per
+  request, task `soul-vouch`) and returns the service's answer:
+  `{ token, agentId, parent, exp, v: 2 }`. The token is a compact ES256 JWS
+  (`typ: soul+jwt`, five minutes) whose claims the broker verifies; the daemon
+  checks the signed response echoes the request and this device before using
+  it. No `vouch-key.pem` is read or created on this path.
+- `agent-bot daemon pair-comms` sends `soulTokens: { v: 2, issuer, device }`
+  in place of the host's SPKI public key, so the broker verifies v2 tokens
+  against the service, not a file on this host. An existing `vouch-key.pem`
+  can be deleted once the broker is re-paired.
+- `GET /v0/health` reports `soulTokens: 'v2' | 'v1'` and, in v2 mode,
+  `vouchKeyOnHost` (a stat, never a read).
+- The broker must run an agent-comms release that accepts v2 tokens and the
+  `soulTokens` pairing descriptor. The legacy local custody opt-in keeps the
+  v1 path (the host vouch key) unchanged until its removal date.
+
 ## Setting up a machine with no local keys
 
 1. Configure `~/.config/agent-bot/config.json`. Leave it with **no** `legacyLocalCustody` and no App keys on the machine:
