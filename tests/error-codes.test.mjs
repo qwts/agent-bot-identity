@@ -70,3 +70,30 @@ test('a launch code is an expected refusal exactly when the registry says so', (
     assert.equal(LAUNCH_REFUSALS.has(code) ? 'refusal' : 'failure', kinds.get(code), code);
   }
 });
+
+// #1209: no dead entries — every registered code is either referenced by
+// shipped runtime source or explicitly reserved here with a reason. The
+// registry is add-only, so a retired-in-code code is reserved, not deleted.
+const RESERVED = new Map([
+  // code: reason it is registered but not referenced in runtime source
+]);
+test('every registered code is used by runtime source or explicitly reserved', () => {
+  const map = JSON.parse(readFileSync(new URL('../governance/runtime-modules.json', import.meta.url), 'utf8'));
+  const files = [...Object.keys(map.files ?? {}), ...Object.keys(map.shims ?? {})];
+  const sources = files.map((file) => {
+    try { return readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'); } catch { return ''; }
+  }).join('\n');
+  // A code is "used" only when it appears as a quoted literal — 'code',
+  // "code" or `code` — never as a substring of a longer name.
+  const quotedIn = (text, code) => text.includes(`'${code}'`) || text.includes(`"${code}"`) || text.includes(`\`${code}\``);
+  assert.equal(quotedIn("'device-revoked'", 'device'), false, 'a prefix match is not a use');
+  assert.equal(quotedIn('"device-revoked"', 'device-revoked'), true);
+  const dead = REGISTRY.codes
+    .filter((entry) => !quotedIn(sources, entry.code))
+    .filter((entry) => !RESERVED.has(entry.code));
+  assert.deepEqual(
+    dead.map((entry) => `${entry.code} (n=${entry.n})`),
+    [],
+    `registered codes with no runtime reference and no reserved reason: ${dead.map((e) => e.code).join(', ') || 'none'}`,
+  );
+});
