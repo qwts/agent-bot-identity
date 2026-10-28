@@ -1309,6 +1309,16 @@ function parentForVouch(binding, { env, home }) {
   }
 }
 
+// Fetch the service's signing issuer from its public JWKS, pin it into the
+// server state directory, then send the pairing — the pin must land before
+// daemon-pair-request so a successful pairing never leaves the daemon
+// unpinned (#1196).
+export async function pairCommsSoulTokens({ env = process.env, home = homedir(), base, device, broker, fetchImpl, pairImpl = pairDaemonComms } = {}) {
+  const issuer = await fetchSoulTokenIssuer({ base, fetchImpl });
+  saveSoulTokenIssuer({ env, home }, issuer);
+  return pairImpl({ brokerAccount: broker, soulTokens: { v: 2, issuer, device } });
+}
+
 // Soul tokens v2 (#1196): with env AGENT_BOT_SOUL_TOKENS=v2 or
 // settings.soulTokens: "v2" (env wins; anything else is v1) and legacy local
 // custody off, the identity service signs soul tokens. Returns 'v1' when not
@@ -1390,6 +1400,24 @@ async function handleVouchRequest({
     const taskId = 'soul-vouch';
     const operationId = newOperationId();
     const { profile } = enforcementProfile({ env, home, now });
+    // The issuer pin lands at pair-comms before the broker request; a missing
+    // or corrupt pin refuses before the service is ever asked (#1196).
+    const pairedIssuer = loadSoulTokenIssuer({ env, home });
+    if (!pairedIssuer) {
+      appendAuditReceipt({
+        event: 'vouch',
+        agentId: binding.agentId,
+        operation: 'soul-token',
+        decision: 'denied',
+        reason: 'issuer-unpinned',
+        taskId,
+        operationId,
+        profile,
+      }, { env, home, now });
+      throw Object.assign(
+        new Error('soul-token issuer is not pinned; run agent-bot daemon pair-comms'),
+        { statusCode: 503, code: 'credential-unavailable' });
+    }
     let out;
     try {
       out = await soulTokenImpl({
@@ -1413,8 +1441,7 @@ async function handleVouchRequest({
     }
     // The issuer the service signs with is pinned at pairing; a service
     // answering under another issuer is refused, never presented.
-    const pairedIssuer = loadSoulTokenIssuer({ env, home });
-    if (pairedIssuer && out.claims?.iss !== pairedIssuer) {
+    if (out.claims?.iss !== pairedIssuer) {
       appendAuditReceipt({
         event: 'vouch',
         agentId: binding.agentId,
@@ -2519,10 +2546,7 @@ async function main() {
         // The issuer the service actually signs with comes from its public
         // JWKS — it can differ from this deployment's URL (trailing slash,
         // preview host), so never send serverUrl as the issuer.
-        const issuer = await fetchSoulTokenIssuer({ base: mode.issuer });
-        pairing = await pairDaemonComms({ brokerAccount: broker, soulTokens: { v: 2, issuer, device: mode.device } });
-        // Pin it: /v0/vouch refuses a token minted under another issuer.
-        saveSoulTokenIssuer({}, issuer);
+        pairing = await pairCommsSoulTokens({ base: mode.issuer, device: mode.device, broker });
       }
       if (json) {
         process.stdout.write(`${JSON.stringify(pairing, null, 2)}\n`);

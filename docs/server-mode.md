@@ -184,9 +184,10 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
   service's public JWKS (`GET <server>/.well-known/agent-bot/soul-keys.json`),
   which can differ from this deployment's URL — a fixed
   `https://agents.true-line.ai` versus a preview host. It is pinned into the
-  server state directory at pairing, and `/v0/vouch` refuses a token minted
-  under another issuer. An existing `vouch-key.pem`
-  can be deleted once the broker is re-paired.
+  server state directory before the pairing request lands, and `/v0/vouch`
+  refuses a token minted under another issuer — or any v2 request while the
+  pin is missing (`credential-unavailable`; re-run `pair-comms`). An
+  existing `vouch-key.pem` can be deleted once the broker is re-paired.
 - `GET /v0/health` reports `soulTokens: 'v2' | 'v1'` and, in v2 mode,
   `vouchKeyOnHost` (a stat, never a read).
 - The broker must run an agent-comms release that accepts v2 tokens and the

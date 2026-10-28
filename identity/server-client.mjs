@@ -242,11 +242,15 @@ export async function fetchSoulTokenIssuer({ base, fetchImpl = globalThis.fetch 
 }
 
 // The issuer learned at pairing time, kept next to the device record so
-// /v0/vouch can pin the service to it (#1196).
+// /v0/vouch can pin the service to it (#1196). Anything that is not a strict
+// https origin — missing file, corrupt JSON, a foreign scheme or a path —
+// reads as unpinned.
 export function loadSoulTokenIssuer(opts = {}) {
   const file = path.join(serverStateDir(opts), 'soul-token-issuer.json');
-  try { return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8'))?.issuer ?? null) : null; }
+  let issuer;
+  try { issuer = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8'))?.issuer : null; }
   catch { return null; }
+  return httpsOrigin(issuer);
 }
 
 export function saveSoulTokenIssuer(opts = {}, issuer) {
