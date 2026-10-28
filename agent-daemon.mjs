@@ -386,6 +386,8 @@ export function createDaemonServer({
   turns = createTurnRegistry(),
   taskReporter = null,
   mintImpl = mint,
+  // The identity-service transport the mint path uses; tests inject the fake.
+  serverFetch = fetch,
   // agent-bot-keyd's socket call (#397); tests pass a fake keyd.
   keydCall = keydRequest,
   // take_inbox's broker call (#229): ({ app, repo }) => { event }. The default
@@ -588,7 +590,7 @@ export function createDaemonServer({
     readBody, parseJsonBody, sendJson,
     requireBinding, presentedCredential, grantBinding,
     bindWorktreeConversation, reconcileSoulApp, ownerGate,
-    mintImpl, keydCall, signingKey,
+    mintImpl, keydCall, signingKey, serverFetch,
     inboxTake,
     grantLedger, grantActor, grantView, grantFailure,
     soulCredentialsDeclaration, soulDirectory, populationFile,
