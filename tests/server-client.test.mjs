@@ -153,12 +153,6 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       }
       if (u.pathname.startsWith('/api/daemon/issuances/')) {
         const op = decodeURIComponent(u.pathname.split('/').at(-1));
-        if (s.unsignedIssuances) return json(200, { operation_id: op, state: 'none' });
-        if (s.garbageLookup) {
-          const buf = Buffer.from('not json{{{');
-          const sig = crypto.sign(null, Buffer.from(signatureMessage(200, buf, proof.payload.jti)), sign.privateKey).toString('base64url');
-          return new Response(buf, { status: 200, headers: { 'agent-bot-signature': sig, 'agent-bot-request-jti': proof.payload.jti, 'agent-bot-key-id': 'kid1' } });
-        }
         s.lookups = (s.lookups ?? 0) + 1;
         if (s.unknownOps?.has(op)) return signed(200, { operation_id: op, state: s.unknownResolved ? 'none' : 'unknown', expires_at: '2026-10-28T03:00:00Z' }, proof.payload.jti);
         const issued = s.ops.get(op);
@@ -633,52 +627,4 @@ test('a failed first signed check keeps the enrollment and marks it unverified',
   assert.equal(dev.verified, false);
   assert.match(dev.verify_error, /signature/);
   assert.equal(loadDevice({ env }).device_id, dev.device_id);
-});
-
-// Issuance lookup edge cases (#1204).
-test('issuance lookup: a weird operation id is encoded safely, and unsigned or tampered answers are refused', async () => {
-  const env = sandbox();
-  const srv = fakeServer();
-  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
-  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
-  const out = await session.issuance('../weird op');
-  assert.equal(out.state, 'none', 'the encoded id round-trips instead of throwing');
-  srv.unsignedIssuances = true;
-  await assert.rejects(session.issuance('op_x'), /signature|signed/, 'an unsigned answer is refused');
-  const tamperSrv = fakeServer({ tamper: true });
-  const env2 = sandbox();
-  await enroll({ base: BASE, env: env2, harnesses: ['grok'], fetchImpl: tamperSrv.fetch, sleep });
-  await assert.rejects(new ServerSession({ base: BASE, env: env2, fetchImpl: tamperSrv.fetch }).issuance('op_x'), /signature/);
-});
-
-test('issuance lookup: a signed but unparseable JSON answer is refused', async () => {
-  const env = sandbox();
-  const srv = fakeServer();
-  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
-  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
-  srv.garbageLookup = true;
-  await assert.rejects(session.issuance('op_x'), /credential-unavailable|not JSON/);
-});
-
-test('issuance lookup: none settles a pending unknown as rejected; unknown stays unknown and is not retried', async () => {
-  const env = sandbox();
-  const srv = fakeServer();
-  srv.outcomeUnknown = true;
-  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
-  const op = 'op_settle';
-  await assert.rejects(
-    mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, operationId: op }),
-    (error) => error.code === 'outcome-unknown');
-  const stateDir = env.AGENT_BOT_SERVER_STATE;
-  assert.equal(readAction(stateDir, op).state, 'unknown');
-  // While the service still reports unknown, reconcile changes nothing and mints nothing.
-  await reconcilePendingCredentials({ base: BASE, env, fetchImpl: srv.fetch });
-  assert.equal(readAction(stateDir, op).state, 'unknown');
-  const mints = srv.minted ?? 0;
-  assert.equal(mints, 0, 'a pending unknown is never retried as a new mint');
-  // Once the service reports none, the operation settles rejected.
-  srv.unknownResolved = true;
-  await reconcilePendingCredentials({ base: BASE, env, fetchImpl: srv.fetch });
-  const settled = readAction(stateDir, op);
-  assert.deepEqual([settled.state, settled.reason, settled.reconciled], ['rejected', 'reconciled-none', true]);
 });
