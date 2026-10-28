@@ -100,6 +100,9 @@ export function heldProviderEnv({ providerId, envKey, agentId = null, harness = 
   if (!held || held.provider !== providerId || !envKey) return null;
   appendAuditReceipt({
     event: 'provider-key-use', agentId, operation: harness ?? providerId, decision: 'injected', reason: 'provider-key-exception',
+    // Said plainly (owner decision Q1): for the pilot the key reaches the
+    // harness process; the loopback inference proxy (#1190) ends this.
+    detail: `pilot exception: the ${providerId} key (${held.keyId ?? 'no key id'}) reaches the harness process environment; to be replaced by the loopback inference proxy (#1190)`,
     issuanceId: held.issuanceId, taskId: PROVIDER_KEY_TASK, operationId: held.operationId,
   }, { env, ...(home ? { home } : {}), now });
   return { env: { [envKey]: held.key }, envKey, provider: { harness, id: providerId, envKey, credential: null, source: 'identity-service', keyId: held.keyId } };

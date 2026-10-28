@@ -52,6 +52,7 @@ test('the key is fetched with a fresh operation, held in memory only, and receip
     ['provider-key-fetch', 'granted', 'provider-key-exception', 'iss_pk1', 'daemon-start'],
     ['provider-key-use', 'injected', 'provider-key-exception', 'iss_pk1', 'daemon-start'],
   ]);
+  assert.match(rows[1].detail, /reaches the harness process environment; to be replaced by the loopback inference proxy \(#1190\)/);
   // Never on disk: not in receipts, not anywhere under the state roots.
   const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
   for (const file of walk(root)) assert.doesNotMatch(readFileSync(file, 'utf8'), /pk-NOT-A-REAL-KEY/, file);
