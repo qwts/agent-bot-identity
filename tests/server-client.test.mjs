@@ -97,6 +97,7 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
         const body = JSON.parse(init.body);
         s.lastCredential = body;
         if (s.signedUnavailable) return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
+        if (s.describeError && body.harness === 'grok') return signed(400, s.describeError, proof.payload.jti);
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
         const prior = s.ops.get(body.operation_id);
         if (prior && (prior.task_id !== body.task_id || prior.repo !== body.repo)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
@@ -230,6 +231,23 @@ test('installation tokens come from the server; responses must carry a valid pin
   const evil = fakeServer({ tamper: true });
   evil.devices = srv.devices; // same devices, but a different (unpinned) signing key
   await assert.rejects(new ServerSession({ base: BASE, env, fetchImpl: evil.fetch }).whoami(), /signature is invalid/);
+});
+
+test('a slug the device scope names is asked for as itself, and server error descriptions reach the caller', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_REPO: 'true-line/agent-bot' };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['trueline-grokbot-agent'], fetchImpl: srv.fetch, sleep });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = srv.fetch;
+  try {
+    const { mint } = await import('../identity/mint-token.mjs');
+    const grant = await mint({ slug: 'trueline-grokbot-agent', env });
+    assert.equal(srv.lastCredential.harness, 'trueline-grokbot-agent', 'the slug in the device scope is sent as-is');
+    assert.equal(grant.issuance_id, 'iss_1');
+  } finally { globalThis.fetch = realFetch; }
+  // A refusal's description is kept: "no app for harness" must not read as a bare 400.
+  srv.describeError = { error: 'invalid_request', error_description: 'no app for harness "grok"; see list_harness_apps' };
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch }), /400 invalid_request \(no app for harness "grok"; see list_harness_apps\)/);
 });
 
 test('every mint is its own operation; a token is never reused, and a mismatched echo is refused', async () => {

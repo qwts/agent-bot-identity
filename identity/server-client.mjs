@@ -426,7 +426,7 @@ export class ServerSession {
         const known = { credential_unavailable: 'credential-unavailable', outcome_unknown: 'outcome-unknown', operation_conflict: 'operation-conflict' }[json.error];
         const e = known
           ? serverError(known, `the identity service answered ${route}: ${json.error}${json.error_description ? ` (${json.error_description})` : ''}`, { body: json })
-          : new Error(`agent-bot server ${route}: ${res.status} ${json.error ?? ''}`.trim());
+          : new Error(`agent-bot server ${route}: ${res.status} ${json.error ?? ''}${typeof json.error_description === 'string' ? ` (${json.error_description.slice(0, 200)})` : ''}`.trim());
         e.status = res.status;
         throw e;
       }

@@ -323,7 +323,14 @@ async function mintThroughServer({ server, slug, env, config, permissions, selec
   // The same identity order as a local mint (ENG-0079), mapped to the
   // server's harness name; AGENT_BOT_SERVER_HARNESS / GROK_AGENT override.
   const resolvedSlug = ambientHarness(env) ? explicit : resolveAgentSlug({ explicit, env, cwd: process.cwd(), config });
-  const harness = ambientHarness(env) ?? (resolvedSlug ? harnessForSlug(resolvedSlug, config) : null);
+  // The identity service keys Apps by slug where the owner stored them that
+  // way (e.g. trueline-grokbot-agent): when this device's scope names the
+  // resolved slug itself, ask for it rather than its harness family.
+  const { loadDevice } = await import('./server-client.mjs');
+  const scope = loadDevice({ env })?.harnesses ?? [];
+  const harness = ambientHarness(env)
+    ?? (resolvedSlug && scope.includes(resolvedSlug) ? resolvedSlug : null)
+    ?? (resolvedSlug ? harnessForSlug(resolvedSlug, config) : null);
   if (selected) selected({ appSlug: resolvedSlug, reason: 'agent-bot-server' });
   return mintViaServer({ base: server, harness, repo: repoFromCheckout(process.cwd(), env), env, taskId, operationId });
 }
