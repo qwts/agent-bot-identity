@@ -36,6 +36,12 @@ const SAMPLES = {
   'bearer-credential': [`Bearer ${'Dd3.'.repeat(8)}`, 'Bearer x'],
 };
 
+test('the shipped runtime copy of the registry cannot drift from the governance document', async () => {
+  const { REDACTION_PATTERNS } = await import('../identity/redaction-patterns.mjs');
+  assert.deepEqual(REDACTION_PATTERNS, REGISTRY.patterns, 'identity/redaction-patterns.mjs must mirror governance/redaction-patterns.json');
+  assert.ok(Object.isFrozen(REDACTION_PATTERNS) && REDACTION_PATTERNS.every((row) => Object.isFrozen(row)), 'the shipped list is immutable');
+});
+
 test('the registry is schema-clean and RE2-safe', () => {
   assert.deepEqual(Object.keys(REGISTRY).sort(), ['description', 'patterns', 'schema_version']);
   assert.equal(REGISTRY.schema_version, 1);
@@ -250,6 +256,13 @@ test('no writer reachable in-process lets a secret shape reach a file (#1202)', 
     assert.equal(noKey.status, 503, 'the key is no longer held');
   } finally {
     await stopInferenceProxy();
+  }
+
+  // The three proxy request receipts actually landed before the scan.
+  const auditRows = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  const uses = auditRows.filter((row) => row.event === 'provider-key-use').map((row) => row.detail);
+  for (const code of ['200', '413', '503']) {
+    assert.ok(uses.some((d) => d.endsWith(`-> ${code}`)), `a -> ${code} proxy receipt was written`);
   }
 
   // 5. Diagnostics: canary-bearing detail is redacted before it lands.
