@@ -457,6 +457,14 @@
       "kind": "failure",
       "summary": "The soul's provider baseUrl is on the loopback inference proxy, which is not running there; the launch is refused rather than given the key (#1190).",
       "registered": "0.14.1"
+    },
+    {
+      "n": 58,
+      "code": "soul-bound-elsewhere",
+      "component": "credential",
+      "kind": "refusal",
+      "summary": "The identity service pins this soul to another enrolled device; it vouches only from that device (#1196).",
+      "registered": "0.14.1"
     }
   ]
 }

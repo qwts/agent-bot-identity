@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  ServerSession, agentBotServerSetting, enroll, jwkThumbprint, loadDevice, logout, main, mintViaServer, onDeviceRevoked, reconcilePendingCredentials, taskIdFor,
+  ServerSession, agentBotServerSetting, enroll, fetchSoulTokenIssuer, jwkThumbprint, loadDevice, logout, main, mintViaServer, onDeviceRevoked, reconcilePendingCredentials, taskIdFor,
   parseServerArgs, serverHarness, serverUrl, signatureMessage, statePaths, validateServerUrl,
 } from '../identity/server-client.mjs';
 import { parseConfig } from '../config.mjs';
@@ -119,6 +119,35 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
         const issued = s.ops.get(op);
         if (issued && s.conflictOnReplay) issued.repo = 'expired/elsewhere'; // the stored token is gone: a replay conflicts
         return signed(200, issued ? { operation_id: op, state: 'issued', issuance_id: issued.issuance_id, task_id: issued.task_id, expires_at: s.lookupExpiresAt ?? '2099-01-01T00:00:00Z' } : { operation_id: op, state: 'none' }, proof.payload.jti);
+      }
+      if (u.pathname === '/api/daemon/soul-token') {
+        const body = JSON.parse(init.body);
+        s.lastSoulToken = body;
+        if (s.soulSigningDown) return signed(503, { error: 'soul_signing_key_unavailable', retryable: false }, proof.payload.jti);
+        if (s.boundElsewhere) return signed(403, { error: 'agent_bound_elsewhere' }, proof.payload.jti);
+        s.soulOps = s.soulOps ?? new Map();
+        const prior = s.soulOps.get(body.operation_id);
+        if (prior && (prior.task_id !== body.task_id || prior.agent_id !== body.agent_id)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
+        s.soulSign = s.soulSign ?? crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+        const iat = 1_760_000_000;
+        const claims = prior?.claims ?? {
+          v: 2, iss: BASE, aud: 'agent-comms', sub: body.agent_id, account: body.account, parent: body.parent,
+          device: s.soulDevice ?? t.device, task_id: body.task_id, operation_id: body.operation_id,
+          issuance_id: `iss_soul${s.soulOps.size + 1}`, iat, nbf: iat, exp: iat + (s.soulLife ?? 300), jti: `sjti_${s.soulOps.size + 1}`,
+        };
+        const token = prior?.token ?? (() => {
+          const input = `${Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'soul+jwt', kid: 'sk1' })).toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`;
+          return `${input}.${crypto.sign('sha256', Buffer.from(input), { key: s.soulSign.privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
+        })();
+        const issued = prior ?? { agent_id: body.agent_id, task_id: body.task_id, operation_id: body.operation_id, token, claims, issuance_id: claims.issuance_id };
+        if (!prior) s.soulOps.set(body.operation_id, issued);
+        let echo = s.badSoulEcho ? { ...issued, claims: { ...claims, sub: 'agent_other' }, operation_id: 'op_other' } : issued;
+        if (s.soulClaimsPatch) echo = { ...echo, claims: { ...echo.claims, ...s.soulClaimsPatch } };
+        if (s.soulEchoPatch) echo = { ...echo, ...s.soulEchoPatch };
+        return signed(prior ? 200 : 201, {
+          token: echo.token, expires_at: '2026-10-27T23:05:00Z', kid: 'sk1', issuance_id: echo.issuance_id,
+          task_id: echo.task_id, operation_id: echo.operation_id, jti: claims.jti, claims: echo.claims, replayed: Boolean(prior),
+        }, proof.payload.jti);
       }
       if (u.pathname === '/api/daemon/installation-token') {
         const body = JSON.parse(init.body);
@@ -411,6 +440,104 @@ test('T06: an issued operation whose credential expired settles as rejected, nev
     // Reconcile has nothing left to do.
     assert.deepEqual(await reconcilePendingCredentials({ base: BASE, env, fetchImpl }), []);
   }
+});
+
+test('soul token v2 comes from the identity service, echoes the request, and replays by operation', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  const dev = await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  const fields = { agentId: 'agent_x', parent: 'agent_p', account: 'worker', taskId: 'soul-vouch', operationId: 'op_soul1', profile: 'managed cooperative' };
+  const out = await session.soulToken(fields);
+  const [h, p, sig] = out.token.split('.');
+  assert.equal(JSON.parse(Buffer.from(h, 'base64url')).typ, 'soul+jwt');
+  assert.equal(JSON.parse(Buffer.from(h, 'base64url')).alg, 'ES256');
+  assert.ok(sig.length > 0);
+  assert.deepEqual(out.claims, JSON.parse(Buffer.from(p, 'base64url').toString('utf8')), 'claims mirror the token payload');
+  assert.equal(out.claims.v, 2);
+  assert.equal(out.claims.sub, 'agent_x');
+  assert.equal(out.claims.device, dev.device_id, 'the token is bound to this enrolled device');
+  assert.equal(out.claims.exp - out.claims.iat, 300, 'five minutes');
+  assert.equal(srv.lastSoulToken.audience, 'agent-comms');
+  assert.equal(srv.lastSoulToken.presenter_jkt, undefined, 'no presenter proof requested');
+  const replay = await session.soulToken({ ...fields });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.token, out.token, 'the same operation replays the same issuance');
+});
+
+test('a mismatched soul-token answer is refused; bound-elsewhere and signing-outage keep stable codes', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  const fields = { agentId: 'agent_x', account: 'worker', taskId: 'soul-vouch', operationId: 'op_s1' };
+  srv.badSoulEcho = true;
+  await assert.rejects(session.soulToken(fields), /does not match/);
+  srv.badSoulEcho = false;
+  srv.soulDevice = 'dev_other';
+  await assert.rejects(session.soulToken({ ...fields, operationId: 'op_s2' }), /does not match/, 'a token for another device is refused');
+  srv.soulDevice = null;
+  srv.soulLife = 600;
+  await assert.rejects(session.soulToken({ ...fields, operationId: 'op_s3' }), /does not match/, 'a longer-lived token is refused');
+  srv.soulLife = null;
+  srv.boundElsewhere = true;
+  await assert.rejects(session.soulToken({ ...fields, operationId: 'op_s4' }), (error) => error.code === 'soul-bound-elsewhere');
+  srv.boundElsewhere = false;
+  srv.soulSigningDown = true;
+  await assert.rejects(session.soulToken({ ...fields, operationId: 'op_s5' }), (error) => error.code === 'credential-unavailable');
+  srv.soulSigningDown = false;
+});
+
+test('soul token v2: parent, issuance echo, nbf and issuer claims are checked (#1196)', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  const fields = { agentId: 'agent_x', parent: 'agent_p', account: 'worker', taskId: 'soul-vouch', profile: 'managed cooperative' };
+  for (const [name, patch] of [
+    ['a different parent', { parent: 'agent_other' }],
+    ['an nbf after iat', { nbf: 1_760_000_001 }],
+    ['a non-https issuer', { iss: 'http://agent-bot.test' }],
+    ['an issuer with a path', { iss: 'https://agent-bot.test/x' }],
+    ['a trailing-slash issuer', { iss: 'https://agent-bot.test/' }],
+  ]) {
+    srv.soulClaimsPatch = patch;
+    await assert.rejects(
+      session.soulToken({ ...fields, operationId: `op_${name.replaceAll(' ', '_')}` }),
+      /does not match/, `${name} is refused`);
+    srv.soulClaimsPatch = null;
+  }
+  // The top-level issuance_id must echo the claim's.
+  srv.soulEchoPatch = { issuance_id: 'iss_forged' };
+  await assert.rejects(session.soulToken({ ...fields, operationId: 'op_iss' }), /does not match/);
+  srv.soulEchoPatch = null;
+  // A missing-issuer claim set is refused too.
+  srv.soulClaimsPatch = { iss: undefined };
+  await assert.rejects(session.soulToken({ ...fields, operationId: 'op_noiss' }), /does not match/);
+  srv.soulClaimsPatch = null;
+});
+
+test('the soul-token issuer comes from the service JWKS, never the deployment URL', async () => {
+  const jwks = { issuer: 'https://agents.true-line.ai', keys: [] };
+  const okFetch = async (url) => {
+    assert.equal(url, 'https://agent-bot-gold.vercel.app/.well-known/agent-bot/soul-keys.json');
+    return { ok: true, text: async () => JSON.stringify(jwks) };
+  };
+  assert.equal(
+    await fetchSoulTokenIssuer({ base: 'https://agent-bot-gold.vercel.app', fetchImpl: okFetch }),
+    'https://agents.true-line.ai');
+  for (const [name, impl] of [
+    ['a 503', async () => ({ ok: false, status: 503, text: async () => '' })],
+    ['a fetch error', async () => { throw new Error('ECONNREFUSED'); }],
+    ['a non-JSON body', async () => ({ ok: true, text: async () => 'not json' })],
+    ['a foreign issuer', async () => ({ ok: true, text: async () => JSON.stringify({ issuer: 'http://plain.test' }) })],
+    ['a path-bearing issuer', async () => ({ ok: true, text: async () => JSON.stringify({ issuer: 'https://x.test/p' }) })],
+  ]) {
+    await assert.rejects(fetchSoulTokenIssuer({ base: 'https://agent-bot-gold.vercel.app', fetchImpl: impl }),
+      (error) => error.code === 'credential-unavailable', name);
+  }
+  await assert.rejects(fetchSoulTokenIssuer({ base: 'http://127.0.0.1:8787' }),
+    (error) => error.code === 'credential-unavailable', 'http bases are refused outright');
 });
 
 test('revoked device surfaces invalid_grant with a re-enroll hint; logout wipes local state', async () => {

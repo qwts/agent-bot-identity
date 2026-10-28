@@ -36,6 +36,8 @@ export async function daemonStatus({
       busy: Array.isArray(health.busy) ? health.busy : [],
       souls: Array.isArray(health.souls) ? health.souls : [],
       computerUse: Array.isArray(health.computerUse) ? health.computerUse : [],
+      soulTokens: health.soulTokens ?? null,
+      ...(health.vouchKeyOnHost !== undefined ? { vouchKeyOnHost: health.vouchKeyOnHost } : {}),
       comms: await probeComms(state, { env, home, fetchImpl, timeoutMs }),
     };
   }

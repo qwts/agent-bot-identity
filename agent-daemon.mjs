@@ -62,7 +62,9 @@ import {
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
-  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, ensureProviderKey, launchProviderEnv, pilotProviderCheck, providerKeyStatus, startInferenceProxy, validProxyPort
+  validateApprovalScope, vouchKeyPath, vouchPublicKeyPem, vouchStateDir, ensureProviderKey, launchProviderEnv, pilotProviderCheck, providerKeyStatus, startInferenceProxy, validProxyPort,
+  loadDevice, newOperationId, ServerSession, serverUrl,
+  fetchSoulTokenIssuer, loadSoulTokenIssuer, saveSoulTokenIssuer
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
 import { createSoulRoutes } from './soul-routes.mjs';
@@ -423,7 +425,11 @@ export function createDaemonServer({
   // Settings accept a verified principal instead of presence, like soul mode.
   settingGate = (action, { principal }) => soulSettingOwnerGate(action, { principal, env, cwd: home }),
   revisionPrincipal = (credential, { target }) => verifyPrincipalOwner(credential, { env, target }),
+  // Soul token v2 (#1196): in server mode the identity service signs soul
+  // tokens; tests inject a fake. The default posts through ServerSession.
+  soulTokenImpl = null,
 } = {}) {
+  const vouchSoulToken = soulTokenImpl ?? ((fields) => new ServerSession({ base: serverUrl({ env }), env, home }).soulToken(fields));
   const appOptions = { env, home, gate: settingGate, souls: identityAppSouls };
   const appJobs = createIdentityAppJobs(appOptions);
   // One interaction service per server so in-flight executions and their
@@ -612,7 +618,7 @@ export function createDaemonServer({
       // requires the per-start bearer below.
       if (req.method === 'POST' && url.pathname === '/v0/vouch') {
         await handleVouchRequest({
-          req, res, findBinding, allowVouch, signingKey, env, home, now,
+          req, res, findBinding, allowVouch, signingKey, soulTokenImpl: vouchSoulToken, env, home, now, config,
         });
         return;
       }
@@ -772,6 +778,13 @@ export function createDaemonServer({
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid,
             // The enforcement profile in force (0.4 R8): never stronger than shown.
             profile: enforcementProfile({ env, home, now }),
+            // Soul token signing in force (#1196): v2 means the identity
+            // service signs; `vouchKeyOnHost` is a stat, never a read.
+            soulTokens: typeof soulTokensMode({ env, home, now, config }) === 'string'
+              ? soulTokensMode({ env, home, now, config }) : 'v2',
+            ...(typeof soulTokensMode({ env, home, now, config }) === 'object'
+              ? { vouchKeyOnHost: existsSync(vouchKeyPath(vouchStateDir({ env, home }))) }
+              : {}),
             warmPool: warmPool.list(),
             busy: server.wakePlane?.busy?.() ?? turns.busy(),
             souls: withRoles(listSouls({ file: populationFile({ env, home }) }), { file: populationFile({ env, home }), env, home }),
@@ -1015,7 +1028,7 @@ export function createDaemonServer({
         ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES,
           REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
           // Identity-service outcomes a credential caller acts on (#1184 goal).
-          'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off'].includes(error.code)
+          'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere'].includes(error.code)
           || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
         // The unsigned challenges a decision route asks the owner to sign (#753).
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
@@ -1296,15 +1309,47 @@ function parentForVouch(binding, { env, home }) {
   }
 }
 
+// Fetch the service's signing issuer from its public JWKS, pin it into the
+// server state directory, then send the pairing — the pin must land before
+// daemon-pair-request so a successful pairing never leaves the daemon
+// unpinned (#1196).
+export async function pairCommsSoulTokens({ env = process.env, home = homedir(), base, device, broker, fetchImpl, pairImpl = pairDaemonComms } = {}) {
+  const issuer = await fetchSoulTokenIssuer({ base, fetchImpl });
+  saveSoulTokenIssuer({ env, home }, issuer);
+  return pairImpl({ brokerAccount: broker, soulTokens: { v: 2, issuer, device } });
+}
+
+// Soul tokens v2 (#1196): with env AGENT_BOT_SOUL_TOKENS=v2 or
+// settings.soulTokens: "v2" (env wins; anything else is v1) and legacy local
+// custody off, the identity service signs soul tokens. Returns 'v1' when not
+// opted in or custody is on, 'v2-unavailable' when opted in but the daemon is
+// not enrolled — which must fail closed, never fall back to v1 — or the
+// pairing descriptor for `daemon pair-comms`. Opt-in until the service route
+// and a v2 broker are deployed; the default flips in a later release.
+export function soulTokensMode({ env = process.env, home = homedir(), now = () => new Date(), config } = {}) {
+  const optedIn = env.AGENT_BOT_SOUL_TOKENS !== undefined
+    ? env.AGENT_BOT_SOUL_TOKENS === 'v2'
+    : (config ?? loadConfig({ env, home }))?.settings?.soulTokens === 'v2';
+  if (!optedIn || legacyLocalCustody({ env, home, now }).enabled) return 'v1';
+  let base;
+  try { base = serverUrl({ env }); } catch { base = null; }
+  let device;
+  try { device = loadDevice({ env, home }); } catch { device = null; }
+  if (!base || !device?.device_id) return 'v2-unavailable';
+  return { v: 2, issuer: base, device: device.device_id };
+}
+
 async function handleVouchRequest({
   req,
   res,
   findBinding,
   allowVouch,
   signingKey,
+  soulTokenImpl,
   env,
   home,
   now,
+  config,
 }) {
   const body = parseJsonBody(await readBody(req));
   if (body.aud !== 'agent-comms') {
@@ -1338,6 +1383,91 @@ async function handleVouchRequest({
     throw Object.assign(new Error('could not determine the account name'), { statusCode: 500 });
   }
   const parent = parentForVouch(binding, { env, home });
+  // Soul token v2 (#1196): the identity service signs it; this path never
+  // reads or creates a vouch key on the host.
+  const mode = soulTokensMode({ env, home, now, config });
+  if (mode === 'v2-unavailable') {
+    // Opted in but unenrolled: fail closed — never sign locally (#1196).
+    appendAuditReceipt({
+      event: 'vouch', agentId: binding.agentId, operation: 'soul-token',
+      decision: 'denied', reason: 'credential-unavailable',
+    }, { env, home, now });
+    throw Object.assign(
+      new Error('opted in to service-signed soul tokens but this daemon is not enrolled with the identity service; run agent-bot server enroll'),
+      { statusCode: 503, code: 'credential-unavailable' });
+  }
+  if (mode !== 'v1') {
+    const taskId = 'soul-vouch';
+    const operationId = newOperationId();
+    const { profile } = enforcementProfile({ env, home, now });
+    // The issuer pin lands at pair-comms before the broker request; a missing
+    // or corrupt pin refuses before the service is ever asked (#1196).
+    const pairedIssuer = loadSoulTokenIssuer({ env, home });
+    if (!pairedIssuer) {
+      appendAuditReceipt({
+        event: 'vouch',
+        agentId: binding.agentId,
+        operation: 'soul-token',
+        decision: 'denied',
+        reason: 'issuer-unpinned',
+        taskId,
+        operationId,
+        profile,
+      }, { env, home, now });
+      throw Object.assign(
+        new Error('soul-token issuer is not pinned; run agent-bot daemon pair-comms'),
+        { statusCode: 503, code: 'credential-unavailable' });
+    }
+    let out;
+    try {
+      out = await soulTokenImpl({
+        agentId: binding.agentId, parent, account, taskId, operationId, profile,
+      });
+    } catch (error) {
+      appendAuditReceipt({
+        event: 'vouch',
+        agentId: binding.agentId,
+        operation: 'soul-token',
+        decision: 'denied',
+        reason: error?.code ?? 'error',
+        taskId,
+        operationId,
+        profile,
+      }, { env, home, now });
+      throw Object.assign(
+        error instanceof Error ? error : new Error('the identity service soul-token request failed'),
+        { statusCode: { 'device-revoked': 403, 'soul-bound-elsewhere': 403, 'credential-unavailable': 503, 'outcome-unknown': 503, 'operation-conflict': 409 }[error?.code] ?? 502 },
+      );
+    }
+    // The issuer the service signs with is pinned at pairing; a service
+    // answering under another issuer is refused, never presented.
+    if (out.claims?.iss !== pairedIssuer) {
+      appendAuditReceipt({
+        event: 'vouch',
+        agentId: binding.agentId,
+        operation: 'soul-token',
+        decision: 'denied',
+        reason: 'issuer-mismatch',
+        taskId,
+        operationId,
+        profile,
+      }, { env, home, now });
+      throw Object.assign(new Error('the soul token issuer does not match the paired issuer'), { statusCode: 502 });
+    }
+    appendAuditReceipt({
+      event: 'vouch',
+      agentId: binding.agentId,
+      operation: 'soul-token',
+      decision: 'granted',
+      reason: 'identity-service',
+      issuanceId: out.issuance_id,
+      taskId,
+      operationId,
+      profile,
+    }, { env, home, now });
+    sendJson(res, 200, { token: out.token, agentId: binding.agentId, parent, exp: out.claims?.exp ?? null, v: 2 });
+    return;
+  }
   let token;
   let payload;
   try {
@@ -2400,7 +2530,24 @@ async function main() {
     }
     case 'pair-comms': {
       const broker = brokerFlag(rest);
-      const pairing = await pairDaemonComms({ brokerAccount: broker, publicKey: vouchPublicKeyPem() });
+      // Soul tokens v2 (#1196): the broker learns the service's issuer and
+      // the device instead of a host vouch key — none is read or created.
+      // Opted in but unenrolled refuses rather than falling back to v1.
+      const mode = soulTokensMode({});
+      if (mode === 'v2-unavailable') {
+        throw Object.assign(
+          new Error('soul tokens v2 is opted in but this daemon is not enrolled with the identity service; run agent-bot server enroll'),
+          { code: 'credential-unavailable' });
+      }
+      let pairing;
+      if (mode === 'v1') {
+        pairing = await pairDaemonComms({ brokerAccount: broker, publicKey: vouchPublicKeyPem() });
+      } else {
+        // The issuer the service actually signs with comes from its public
+        // JWKS — it can differ from this deployment's URL (trailing slash,
+        // preview host), so never send serverUrl as the issuer.
+        pairing = await pairCommsSoulTokens({ base: mode.issuer, device: mode.device, broker });
+      }
       if (json) {
         process.stdout.write(`${JSON.stringify(pairing, null, 2)}\n`);
       } else {

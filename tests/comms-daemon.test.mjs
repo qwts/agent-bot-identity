@@ -179,6 +179,19 @@ test('pair-comms without --broker pairs privately, joins account-watch, and repo
   }
 });
 
+test('pair-comms in soul-token v2 mode refuses an unenrolled daemon without creating a vouch key (#1196)', async () => {
+  const world = scratchWorld();
+  const run = await runCli(['pair-comms'], childEnv({ env: { ...world.env, AGENT_BOT_SOUL_TOKENS: 'v2', HOME: world.root } }));
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /not enrolled with the identity service|credential-unavailable/);
+  assert.equal(statSyncSafe(path.join(world.env.XDG_STATE_HOME, 'agent-bot', 'vouch-key.pem')), null,
+    'no host vouch key is minted as a fallback');
+});
+
+function statSyncSafe(file) {
+  try { return statSync(file); } catch { return null; }
+}
+
 test('pair-comms rejects an incomplete explicit broker flag', async () => {
   const world = scratchWorld();
   for (const args of [['--broker'], ['--broker='], ['--broker', '--json']]) {

@@ -27,6 +27,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config.mjs';
+import { canonicalJson } from '../canonical-json.mjs';
 import { enforcementProfile } from './identity-format.mjs';
 import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
 
@@ -201,6 +202,59 @@ function saveDevice(opts, record) {
 export function loadPinnedServerKey(opts = {}) {
   const { serverKey } = statePaths(opts);
   return existsSync(serverKey) ? JSON.parse(readFileSync(serverKey, 'utf8')) : null;
+}
+
+// An issuer is a bare https origin — no credentials, path, query, fragment or
+// trailing slash; URL normalization makes anything else differ from the input.
+function httpsOrigin(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.origin === value ? value : null;
+  } catch { return null; }
+}
+
+// Soul token v2 (#1196): the issuer the service actually signs with, published
+// at a public well-known JWKS. It can differ from this deployment's base URL
+// (a fixed https://agents.true-line.ai vs a preview host or trailing slash),
+// so pairing learns it here, never from serverUrl. Any failure is
+// credential-unavailable: opted-in pairing must fail closed.
+export async function fetchSoulTokenIssuer({ base, fetchImpl = globalThis.fetch } = {}) {
+  const unavailable = (detail) => Object.assign(
+    new Error(`the identity service did not publish its soul-token issuer${detail ? `: ${detail}` : ''}`),
+    { code: 'credential-unavailable' });
+  if (httpsOrigin(base) === null) throw unavailable('the service URL is not an https origin');
+  let res;
+  try {
+    res = await fetchImpl(`${base}/.well-known/agent-bot/soul-keys.json`, {
+      redirect: 'error', signal: AbortSignal.timeout(5_000),
+    });
+  } catch (error) { throw unavailable(error?.message); }
+  if (!res?.ok) throw unavailable(`HTTP ${res?.status ?? 'no response'}`);
+  let text;
+  try { text = await res.text(); } catch (error) { throw unavailable(error?.message); }
+  if (text.length > 64 * 1024) throw unavailable('the key set is too large');
+  let body;
+  try { body = JSON.parse(text); } catch { throw unavailable('the key set is not JSON'); }
+  const issuer = httpsOrigin(body?.issuer);
+  if (issuer === null) throw unavailable('the key set names no https issuer');
+  return issuer;
+}
+
+// The issuer learned at pairing time, kept next to the device record so
+// /v0/vouch can pin the service to it (#1196). Anything that is not a strict
+// https origin — missing file, corrupt JSON, a foreign scheme or a path —
+// reads as unpinned.
+export function loadSoulTokenIssuer(opts = {}) {
+  const file = path.join(serverStateDir(opts), 'soul-token-issuer.json');
+  let issuer;
+  try { issuer = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8'))?.issuer : null; }
+  catch { return null; }
+  return httpsOrigin(issuer);
+}
+
+export function saveSoulTokenIssuer(opts = {}, issuer) {
+  writePrivate(path.join(serverStateDir(opts), 'soul-token-issuer.json'), `${JSON.stringify({ issuer }, null, 2)}\n`);
 }
 
 // ---- HTTP ----
@@ -423,7 +477,13 @@ export class ServerSession {
       if (json.error === 'device_revoked') throw this.revoked();
       if (res.status === 401 && attempt === 0) continue; // token expired early (sleep, clock): re-mint once
       if (!res.ok) {
-        const known = { credential_unavailable: 'credential-unavailable', outcome_unknown: 'outcome-unknown', operation_conflict: 'operation-conflict' }[json.error];
+        const known = {
+          credential_unavailable: 'credential-unavailable',
+          soul_signing_key_unavailable: 'credential-unavailable',
+          outcome_unknown: 'outcome-unknown',
+          operation_conflict: 'operation-conflict',
+          agent_bound_elsewhere: 'soul-bound-elsewhere',
+        }[json.error];
         const e = known
           ? serverError(known, `the identity service answered ${route}: ${json.error}${json.error_description ? ` (${json.error_description})` : ''}`, { body: json })
           : new Error(`agent-bot server ${route}: ${res.status} ${json.error ?? ''}${typeof json.error_description === 'string' ? ` (${json.error_description.slice(0, 200)})` : ''}`.trim());
@@ -455,6 +515,38 @@ export class ServerSession {
   /** `{ state: issued|unknown|none, ... }` for one operation; never a token. */
   issuance(operationId) {
     return this.call('GET', `/api/daemon/issuances/${encodeURIComponent(operationId)}`);
+  }
+
+  // Soul token v2 (#1196): the identity service signs a five-minute ES256
+  // soul token (typ soul+jwt) so this host keeps no vouch key. The answer is
+  // refused unless it echoes the task and operation and its v2 claims match
+  // exactly what was asked for — including this enrolled device. The JWS
+  // itself is verified by the agent-comms broker, not here: the signed
+  // response is already proof it came from the service.
+  async soulToken({ agentId, parent = null, account, taskId, operationId, profile, presenterJkt } = {}) {
+    const out = await this.call('POST', '/api/daemon/soul-token', {
+      agent_id: agentId, parent, account, task_id: taskId, operation_id: operationId, audience: 'agent-comms',
+      ...(presenterJkt ? { presenter_jkt: presenterJkt } : {}),
+      ...(profile ? { profile } : {}),
+    });
+    const parts = typeof out.token === 'string' ? out.token.split('.') : [];
+    const decodePart = (part) => { try { return JSON.parse(Buffer.from(part, 'base64url').toString('utf8')); } catch { return null; } };
+    const header = parts.length === 3 ? decodePart(parts[0]) : null;
+    const payload = parts.length === 3 ? decodePart(parts[1]) : null;
+    const claims = out.claims && typeof out.claims === 'object' && !Array.isArray(out.claims) ? out.claims : null;
+    const ok = parts.length === 3 && parts.every((part) => /^[A-Za-z0-9_-]+$/.test(part))
+      && header?.alg === 'ES256' && header?.typ === 'soul+jwt'
+      && claims?.v === 2 && claims.aud === 'agent-comms' && claims.sub === agentId && claims.account === account
+      && claims.device === this.device().device_id
+      && claims.parent === parent
+      && claims.issuance_id === out.issuance_id
+      && httpsOrigin(claims?.iss) === claims.iss
+      && Number.isSafeInteger(claims.iat) && Number.isSafeInteger(claims.nbf) && claims.nbf <= claims.iat
+      && typeof claims.exp === 'number' && claims.exp - claims.iat <= 300
+      && out.task_id === taskId && out.operation_id === operationId
+      && payload !== null && canonicalJson(payload) === canonicalJson(claims);
+    if (!ok) throw new Error('the identity service soul-token answer does not match the request; refusing it');
+    return out;
   }
 }
 
