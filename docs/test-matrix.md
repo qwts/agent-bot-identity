@@ -31,7 +31,43 @@ Priority: **P0** blocks the security goal or is itself a security property,
 ## E2E scenarios needed (shared with true-line/agent-bot)
 
 The fixture server covers request shapes and refusals; none of these run
-against a deployed identity service:
+against a deployed identity service. The runner in
+[`scripts/e2e-server.mjs`](../scripts/e2e-server.mjs) executes them — see
+"End-to-end runner" below.
+
+### End-to-end runner (#1206)
+
+`node scripts/e2e-server.mjs --base <https url> [--state dir] [--harness slug]
+[--repo owner/name] [--only a,b] [--include-revoke] [--keep-device]
+[--mock-github port] [--mock-github-hold ms] [--require] [--keep-state]
+[--json]` enrolls a throwaway device via
+`AGENT_BOT_E2E_ENROLL_TOKEN`, then drives `enroll`, `mint-readback`,
+`replay-same-op`, `conflict-new-params`, `provider-key`,
+`legacy-route-disabled`, `soul-token` (including JWKS signature
+verification), `outage` and `revoke` through the same
+`ServerSession`/`mintViaServer` code the daemon uses, printing one
+`PASS|FAIL|SKIP` line per scenario — or a JSON array with `--json`. Without
+an enrollment token the device scenarios report `skipped` and the run exits
+0 (`--require` exits 2; it also makes `soul-token` fail rather than skip on
+a signing outage and `provider-key` fail rather than skip when the service
+has no key configured). Once a device has enrolled the runner revokes it
+when the run ends, best-effort — a trailing `cleanup` row reports the
+outcome and `--keep-device` opts out. Tokens, keys and the enrollment token
+are never
+printed; `tests/e2e-server.test.mjs` runs the whole driver against the signed
+fixture server and asserts no secret shape reaches the output.
+
+The `github-5xx` scenario needs `--mock-github <port>`: the runner starts a
+mock GitHub API on `127.0.0.1:<port>` before the scenarios and stops it
+afterwards. Run the identity service with `AGENT_BOT_TEST_MODE=1` and
+`AGENT_BOT_TEST_GITHUB_API_URL=http://127.0.0.1:<port>`
+(true-line/agent-bot#38, which also requires `VERCEL_ENV` unset or
+`development`) so its GitHub App calls reach the mock; the scenario then
+drives the mock's modes in-process — `503`, `502-after-mint` and `ok` — and
+verifies `credential-unavailable`, `outcome-unknown`, the one-mint in-flight
+guard and `operation-conflict`. `--mock-github-hold <ms>` sets how long the
+mock's `timeout` mode holds a mint request open (default 20 s) for services
+whose GitHub client timeout needs a longer hold.
 
 - enroll → mint → read-back (issuance lookup returns the same issuance)
 - revoke → signed, request-bound `device_revoked` → daemon refuses without network

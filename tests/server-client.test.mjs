@@ -44,6 +44,11 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
     const f = init.body instanceof URLSearchParams ? Object.fromEntries(init.body) : null;
     s.calls.push(u.pathname);
     assert.equal(init.redirect, 'error', `${u.pathname} must not follow redirects`);
+    if (u.pathname === '/.well-known/agent-bot/soul-keys.json') {
+      s.soulSign = s.soulSign ?? crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+      const { x: jx, y: jy } = s.soulSign.publicKey.export({ format: 'jwk' });
+      return json(200, { issuer: s.jwksIssuer ?? BASE, keys: [{ kty: 'EC', crv: s.jwksCrv ?? 'P-256', x: jx, y: jy, alg: s.jwksAlg ?? 'ES256', use: 'sig', kid: 'sk1' }] });
+    }
     if (u.pathname === '/.well-known/agent-bot-server-key') return json(200, { keys: [{ kty: 'OKP', crv: 'Ed25519', kid: 'kid1', x }] });
     if (u.pathname === '/oauth/device_authorization' || u.pathname === '/oauth/device_enroll') {
       const d = decode(f.proof);
@@ -93,6 +98,12 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       assert.equal(proof.payload.ath, crypto.createHash('sha256').update(tok).digest('base64url'));
       if (s.revokedDevice === t.device) return signed(401, { error: 'device_revoked' }, proof.payload.jti);
       if (u.pathname === '/api/daemon/whoami') return signed(200, { device: { id: t.device, management: 'managed' } }, proof.payload.jti);
+      if (u.pathname === '/api/daemon/device' && init.method === 'DELETE') { s.revokedDevice = t.device; return signed(200, { revoked: true }, proof.payload.jti); }
+      if (u.pathname === '/api/daemon/provider-key') {
+        if (s.providerMissing) return signed(404, { error: 'provider_key_not_configured' }, proof.payload.jti);
+        const op = new URL(url).searchParams.get('operation_id');
+        return signed(200, { provider: 'openai', key: 'sk-e2e-fake-key-material', key_id: 'pk_e2e', expires_at: '2099-01-01T00:00:00Z', issuance_id: 'iss_pk_e2e', task_id: null, operation_id: op }, proof.payload.jti);
+      }
       if (u.pathname === '/api/daemon/credentials') {
         const body = JSON.parse(init.body);
         s.lastCredential = body;
@@ -101,6 +112,34 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
         const prior = s.ops.get(body.operation_id);
         if (prior && (prior.task_id !== body.task_id || prior.repo !== body.repo)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
+        if (s.githubBase && !prior) {
+          // Emulates the service's GitHub-App proxy path (true-line/agent-bot#38):
+          // a mint is proxied to the configured GitHub base; its 5xx maps to
+          // credential_unavailable, a 502 after the mint leaves the outcome
+          // unknown, and a task with an unknown mint refuses new operations.
+          if (s.unknownOps?.has(body.operation_id)) return signed(503, { error: 'outcome_unknown', retryable: false, operation_id: body.operation_id }, proof.payload.jti);
+          if (s.unknownTasks?.has(body.task_id)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
+          let gh;
+          try {
+            gh = await fetch(`${s.githubBase}/app/installations/1/access_tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+          } catch {
+            return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
+          }
+          if (gh.status >= 500) {
+            if (gh.status === 502 && s.github502Unavailable) return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
+            if (gh.status === 502) {
+              s.unknownOps = (s.unknownOps ?? new Set()).add(body.operation_id);
+              s.unknownTasks = (s.unknownTasks ?? new Set()).add(body.task_id);
+              return signed(503, { error: 'outcome_unknown', retryable: false, operation_id: body.operation_id }, proof.payload.jti);
+            }
+            return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
+          }
+          const ghBody = await gh.json().catch(() => ({}));
+          const issued = { issuance_id: `iss_${s.ops.size + 1}`, task_id: body.task_id, operation_id: body.operation_id, repo: body.repo, token: ghBody.token ?? `ghs_op${s.ops.size + 1}` };
+          s.minted = (s.minted ?? 0) + 1;
+          s.ops.set(body.operation_id, issued);
+          return signed(201, { ...issued, expires_at: ghBody.expires_at ?? '2026-10-27T23:00:00Z', profile: body.profile, replayed: false, git_author: 'qwts-grok-agent[bot] <1+qwts-grok-agent[bot]@users.noreply.github.com>' }, proof.payload.jti);
+        }
         if (s.outcomeUnknown) {
           s.unknownOps = (s.unknownOps ?? new Set()).add(body.operation_id);
           return signed(503, { error: 'outcome_unknown', retryable: false, operation_id: body.operation_id }, proof.payload.jti);
@@ -136,7 +175,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
           issuance_id: `iss_soul${s.soulOps.size + 1}`, iat, nbf: iat, exp: iat + (s.soulLife ?? 300), jti: `sjti_${s.soulOps.size + 1}`,
         };
         const token = prior?.token ?? (() => {
-          const input = `${Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'soul+jwt', kid: 'sk1' })).toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`;
+          const input = `${Buffer.from(JSON.stringify({ alg: s.soulAlg ?? 'ES256', typ: 'soul+jwt', kid: 'sk1' })).toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}`;
           return `${input}.${crypto.sign('sha256', Buffer.from(input), { key: s.soulSign.privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
         })();
         const issued = prior ?? { agent_id: body.agent_id, task_id: body.task_id, operation_id: body.operation_id, token, claims, issuance_id: claims.issuance_id };
@@ -150,6 +189,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
         }, proof.payload.jti);
       }
       if (u.pathname === '/api/daemon/installation-token') {
+        if (s.legacyDisabled) return signed(410, { error: 'legacy_route_disabled' }, proof.payload.jti);
         const body = JSON.parse(init.body);
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
         return signed(200, { token: 'ghs_fake', expires_at: '2026-10-27T23:00:00Z', repo: body.repo, git_author: 'qwts-grok-agent[bot] <1+qwts-grok-agent[bot]@users.noreply.github.com>' }, proof.payload.jti);
