@@ -12,7 +12,14 @@ export const PROXY_PATH = '/v0/inference/';
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const TOKEN = /^abp_[0-9a-f]{48}$/;
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length']);
-const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const LOOPBACK = new Set(['localhost', '[::1]', '0.0.0.0']);
+const LOOPBACK_V4 = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
+// Any 127.0.0.0/8 address is loopback, not only 127.0.0.1.
+function isLoopbackHost(hostname) {
+  return LOOPBACK.has(hostname)
+    || (LOOPBACK_V4.test(hostname) && hostname.split('.').every((octet) => Number(octet) <= 255));
+}
 
 /** Origin and path prefix a soul's baseUrl uses for this proxy and provider. */
 export function proxyBaseUrl(port, providerId) {
@@ -32,7 +39,7 @@ export function validProxyPort(port) {
 export function isProxyBaseUrl(baseUrl, port) {
   let url;
   try { url = new URL(baseUrl); } catch { return false; }
-  if (url.protocol !== 'http:' || !LOOPBACK.has(url.hostname)) return false;
+  if (url.protocol !== 'http:' || !isLoopbackHost(url.hostname)) return false;
   return (validProxyPort(port) && Number(url.port || 80) === port) || url.pathname.startsWith(PROXY_PATH);
 }
 
