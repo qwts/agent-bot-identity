@@ -8,6 +8,7 @@
 // A record holds identifiers and states only, never a credential.
 
 import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, chmodSync } from 'node:fs';
+import { REDACTION_PATTERNS } from './redaction-patterns.mjs';
 import path from 'node:path';
 
 export const ACTION_STATES = Object.freeze(['prepared', 'submitted', 'succeeded', 'rejected', 'unknown']);
@@ -26,10 +27,48 @@ export function readAction(stateDir, operationId) {
   try { return JSON.parse(readFileSync(fileFor(stateDir, operationId), 'utf8')); } catch { return null; }
 }
 
+// Terminal states settle an operation for good; nothing moves past them.
+const TERMINAL = new Set(['succeeded', 'rejected']);
+
+// A record holds identifiers and states only — an allowlist, never a
+// denylist: the fields every caller writes, no more, and scalar values only.
+const LEDGER_FIELDS = new Set([
+  'operation_id', 'task_id', 'kind', 'harness', 'repo',
+  'state', 'reason', 'issuance_id', 'replayed', 'reconciled',
+  'created_at', 'updated_at',
+]);
+// And a credential-shaped value is refused under an innocent key too —
+// the shared redaction registry decides what counts as a credential shape.
+// Compiled on the first write: a record is refused rather than written when
+// the registry cannot be read (fail closed), and commands that never touch
+// the ledger never pay for it.
+let secretPatterns = null;
+function ledgerSecretPatterns() {
+  if (secretPatterns === null) {
+    try { secretPatterns = REDACTION_PATTERNS.map((pattern) => new RegExp(pattern.regex)); }
+    catch { secretPatterns = false; }
+  }
+  if (secretPatterns === false) throw new Error('the credential-shape registry could not be read; refusing the write');
+  return secretPatterns;
+}
+
 /** Writes the record atomically (0600 in a 0700 directory) and returns it. */
 export function writeAction(stateDir, record) {
   if (!ACTION_STATES.includes(record.state)) throw new Error(`unknown action state ${record.state}`);
+  for (const [field, value] of Object.entries(record)) {
+    if (!LEDGER_FIELDS.has(field)) throw new Error(`a ledger record carries only identifiers and states (field ${field})`);
+    if (value !== null && !['string', 'number', 'boolean'].includes(typeof value)) {
+      throw new Error(`a ledger field holds scalars only (field ${field})`);
+    }
+    if (typeof value === 'string' && ledgerSecretPatterns().some((regex) => regex.test(value))) {
+      throw new Error(`a ledger field holds a credential-shaped value (field ${field})`);
+    }
+  }
   const file = fileFor(stateDir, record.operation_id);
+  const current = readAction(stateDir, record.operation_id);
+  if (current && TERMINAL.has(current.state) && record.state !== current.state) {
+    throw new Error(`a ${current.state} operation cannot become ${record.state}`);
+  }
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   try { chmodSync(path.dirname(file), 0o700); } catch { /* windows */ }
   const next = { ...record, updated_at: new Date().toISOString() };

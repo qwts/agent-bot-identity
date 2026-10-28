@@ -356,7 +356,8 @@
     "identity/server-client.mjs": "identity",
     "identity/action-ledger.mjs": "identity",
     "identity/provider-key.mjs": "identity",
-    "identity/inference-proxy.mjs": "identity"
+    "identity/inference-proxy.mjs": "identity",
+    "identity/redaction-patterns.mjs": "identity"
   },
   "assets": {
     "hooks/": "identity",
@@ -456,7 +457,7 @@
     "windows-account-custody.mjs": "Shared (owner decision on #645, F11, 2026-10-11): Windows SID and ACL checks used by identity (vouch.mjs) and comms (comms-windows.mjs). It reads ownership and attributes, never a file's contents, so it holds no credential.",
     "cold-wake-lock.mjs": "Shared synchronous settings lock/path mechanism, with ephemeral lock-held tokens; reads no settings or credentials.",
     "wake-webhook-store.mjs": "Internal comms-owned webhook storage. Helpers require the active shared cold-wake lock before the per-soul webhook lock; existing public access stays in wake-webhook.mjs.",
-    "identity/server-client.mjs": "Identity: opt-in agent-bot server mode (docs/server-mode.md) — device enrollment, DPoP-bound access tokens and server-minted installation tokens; identity/mint-token.mjs delegates to it when AGENT_BOT_SERVER is set.",
+    "identity/server-client.mjs": "Identity: opt-in agent-bot server mode (docs/server-mode.md) \u2014 device enrollment, DPoP-bound access tokens and server-minted installation tokens; identity/mint-token.mjs delegates to it when AGENT_BOT_SERVER is set.",
     "identity/action-ledger.mjs": "Identity: the durable action ledger for credential requests to the identity service (prepared, submitted, succeeded, rejected, unknown); an unknown outcome is reconciled by lookup, never re-sent blind (0.4 T06, #1184).",
     "identity/provider-key.mjs": "Identity: the pilot provider key (owner decision D2), fetched from the identity service at daemon start, held in memory only, dropped on device revocation, receipted as provider-key-exception (#1184).",
     "identity/inference-proxy.mjs": "Identity: the loopback inference proxy (#1190); swaps a short-lived proxy token for the pilot provider key the daemon holds, so the key never reaches a member process."
