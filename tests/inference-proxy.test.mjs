@@ -123,6 +123,10 @@ test('the proxy port is fixed, and a loopback baseUrl on the port or the proxy p
   assert.equal(isProxyBaseUrl('http://127.0.0.1:8787/v0/inference/openai', 8787), true);
   assert.equal(isProxyBaseUrl('http://localhost:8787/v1', 8787), true);
   assert.equal(isProxyBaseUrl('http://127.0.0.1:9999/v0/inference/openai', undefined), true, 'the proxy path on loopback, even with no setting');
+  assert.equal(isProxyBaseUrl('http://127.0.0.2:8787/v1', 8787), true, 'any 127/8 host counts, not only 127.0.0.1');
+  assert.equal(isProxyBaseUrl('http://0.0.0.0:8787/v1', 8787), true);
+  assert.equal(isProxyBaseUrl('http://127.9.9.9:1/v0/inference/openai', undefined), true, 'the proxy path on any 127/8 host, even with no setting');
+  assert.equal(isProxyBaseUrl('http://128.0.0.1:8787/v1', 8787), false, 'outside 127/8 is not loopback');
   assert.equal(isProxyBaseUrl('http://127.0.0.1:11434/v1', 8787), false, 'a local model server is not the proxy');
   assert.equal(isProxyBaseUrl('https://opencode.ai/zen/go/v1', 8787), false);
   assert.equal(isProxyBaseUrl(null, 8787), false);

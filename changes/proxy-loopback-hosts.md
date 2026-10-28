@@ -1,0 +1,1 @@
+- The inference proxy now treats every 127.0.0.0/8 address and `0.0.0.0` as loopback, not only `127.0.0.1`: a soul whose `baseUrl` reaches the proxy port or the `/v0/inference/` path through any loopback alias is brokered or refused, never handed the provider key (#1190).
