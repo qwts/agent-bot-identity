@@ -62,7 +62,7 @@ import {
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
-  validateApprovalScope, vouchPublicKeyPem, vouchStateDir
+  validateApprovalScope, vouchPublicKeyPem, vouchStateDir, fetchProviderKey, heldProviderEnv, providerKeyStale, providerKeyStatus
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
 import { createSoulRoutes } from './soul-routes.mjs';
@@ -76,7 +76,7 @@ import { OWNER_DECIDER, createProposal, decideProposal, listProposals, operation
 import { createGrantLedger } from './delegation-grants.mjs';
 import { createGrantActor } from './grant-github.mjs';
 import { createComputerUseActivity } from './computer-use-activity.mjs';
-import { appendAuditReceipt, assertProfileClaim, enforcementProfile, isComputerUse, validateAgentId } from './identity-format.mjs';
+import { appendAuditReceipt, assertProfileClaim, enforcementProfile, isComputerUse, legacyLocalCustody, validateAgentId } from './identity-format.mjs';
 import { approvalAction, shown } from './approval-action.mjs';
 import {
   confirmOwnerPresence, createChallengeLedger, decisionOwnerGate, ownerChallengeMessage, keydPresenceWithoutDialog, ownerCredentialRequired, presenceOrConsent, verifyPrincipalOwner,
@@ -119,7 +119,7 @@ import { ACP_SPAWN_REGISTRY, defaultHarnessFor, onPath, opencodeDaemonConfig } f
 import { computePackageRevision, preferredHarnesses, soulCredentialsDeclaration, validateSoulPackage, writeSoulComms } from './soul-package.mjs';
 import { pendingSoulToolHome, prepareSoulToolHome, soulToolHomeEnv } from './soul-env-migrate.mjs';
 import { harnessInstallDeclared, pendingSoulRuntimes, provisionSoulRuntimes, runtimeApprovalSubject, soulRuntimeEnv } from './soul-runtimes.mjs';
-import { checkSoulProvider, pendingSoulProvider, soulProviderEnv } from './soul-secrets.mjs';
+import { checkSoulProvider, pendingSoulProvider, soulProviderEnv, soulSecretsStatus } from './soul-secrets.mjs';
 import { editSoulRevision, listSoulProposals, REVISION_PUBLICATION_UNCERTAIN, REVISION_STORAGE_FAILED, revisionCommand, revisionHistory,
   revisionPublicationUncertain } from './soul-revisions.mjs';
 import { acpExecutorFor, composeTurnEnv, createWakePlane, createTurnRegistry } from './wake-plane.mjs';
@@ -1826,6 +1826,13 @@ async function serveDaemon({
   // (0.4 T21, #1184).
   const requiredProfile = env.AGENT_BOT_REQUIRE_PROFILE ?? (config ?? loadConfig({ env, home }))?.settings?.requireProfile;
   if (requiredProfile !== undefined && requiredProfile !== null && requiredProfile !== '') assertProfileClaim(requiredProfile, { env, home, now });
+  // The pilot provider key (D2): fetched from the identity service at start,
+  // memory only. A failure is receipted and leaves local work running; a
+  // launch that needs the key then fails with its coded reason.
+  const pilotProvider = (config ?? loadConfig({ env, home }))?.settings?.pilotProvider;
+  if (pilotProvider && !legacyLocalCustody({ env, home, now }).enabled && providerKeyStale({ now })) {
+    try { await fetchProviderKey({ provider: pilotProvider, env, home, now }); } catch { /* receipted by fetchProviderKey */ }
+  }
   const requestedPort = Number(port);
   if (!Number.isSafeInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
     throw new Error('daemon port must be an integer between 0 and 65535');
@@ -1857,7 +1864,17 @@ async function serveDaemon({
     // The provider secret for the launched harness, read from the soul's
     // store per turn (#583 slice 4); the executor keeps it out of the
     // reach server and keyd's relay.
-    providerEnvFor: ({ agentId, harness }) => soulProviderEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness }),
+    // With legacy local custody off (#1184), no provider secret is read from a
+    // store on this host: the pilot provider key the daemon fetched at start
+    // (memory only, receipted as provider-key-exception) is used when the
+    // soul's declared provider matches it, and nothing otherwise.
+    providerEnvFor: ({ agentId, harness }) => {
+      if (legacyLocalCustody({ env, home, now }).enabled) return soulProviderEnv(agentId, { env, home, config, file: populationFile({ env, home }), harness });
+      const row = soulSecretsStatus(agentId, { env, home, config, file: populationFile({ env, home }) }).providers.find((p) => p.harness === harness && p.credential);
+      if (!row) return null;
+      return heldProviderEnv({ providerId: row.id, envKey: row.envKey, agentId, harness, env, home, now })
+        ?? (() => { throw Object.assign(new Error(`${harness}'s provider ${row.id} needs the pilot provider key, which the daemon does not hold; enroll with the identity service and set the key there`), { code: 'provider-secret-missing' }); })();
+    },
   };
   // The ACP executor is off unless the user config turns it on (#259):
   // `"executor": { "enabled": true, "policy": { ... } }`. Without it /v1
