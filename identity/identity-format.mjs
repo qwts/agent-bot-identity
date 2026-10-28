@@ -9,7 +9,7 @@
 // shared state-paths.mjs. Receipts are the same `audit.jsonl` lines at the
 // same path, appended in-process, so they still work while the daemon is down.
 
-import { appendFileSync, chmodSync, mkdirSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -86,6 +86,89 @@ export function auditFile({ env = process.env, home = homedir() } = {}) {
   return path.join(interactionHome({ env, home }), 'audit.jsonl');
 }
 
+// Enforcement profiles (Soul Agent Platform 0.4 §4, R8), strongest first.
+// The daemon never claims more than it can show: today members share its
+// trust domain, so the best it is is `managed cooperative`; with legacy local
+// custody on, App keys sit on the host and it is `standalone unenforced`.
+export const ENFORCEMENT_PROFILES = Object.freeze({
+  protected: 'managed protected',
+  cooperative: 'managed cooperative',
+  standalone: 'standalone unenforced',
+});
+const PROFILE_STRENGTH = [ENFORCEMENT_PROFILES.standalone, ENFORCEMENT_PROFILES.cooperative, ENFORCEMENT_PROFILES.protected];
+
+// Legacy local custody (App keys on the host) is off unless the owner opts
+// in, and the opt-in stops working at this instant (stage 3 exit or this
+// date, whichever comes first; owner decision 2026-10-27).
+export const LEGACY_LOCAL_CUSTODY_REMOVE_BY = '2027-01-31T00:00:00.000Z';
+
+function configSettings({ env, home }) {
+  // config.mjs's path, read here without importing it (this file imports
+  // only node built-ins and state-paths.mjs). A missing or malformed file is
+  // no opt-in.
+  try {
+    const file = env.AGENT_BOT_CONFIG ?? path.join(home, '.config', 'agent-bot', 'config.json');
+    const settings = JSON.parse(readFileSync(file, 'utf8'))?.settings;
+    return settings && typeof settings === 'object' ? settings : {};
+  } catch {
+    return {};
+  }
+}
+
+const TRUE_VALUES = new Set(['1', 'true', 'yes']);
+
+/**
+ * Whether legacy local custody is on: `{ enabled, source, expired }`.
+ * `source` is `env` (AGENT_BOT_LEGACY_LOCAL_CUSTODY) or `config`
+ * (settings.legacyLocalCustody: true); an opt-in after the removal date is
+ * reported `expired` and is not enabled.
+ */
+export function legacyLocalCustody({ env = process.env, home = homedir(), now = () => new Date() } = {}) {
+  let source = null;
+  if (TRUE_VALUES.has(String(env.AGENT_BOT_LEGACY_LOCAL_CUSTODY ?? '').trim().toLowerCase())) source = 'env';
+  else if (configSettings({ env, home }).legacyLocalCustody === true) source = 'config';
+  const expired = source !== null && now().getTime() >= Date.parse(LEGACY_LOCAL_CUSTODY_REMOVE_BY);
+  return { enabled: source !== null && !expired, source, expired };
+}
+
+/** The enforcement profile in force here: `{ profile, reason }`. */
+export function enforcementProfile({ env = process.env, home = homedir(), now = () => new Date() } = {}) {
+  if (legacyLocalCustody({ env, home, now }).enabled) {
+    return { profile: ENFORCEMENT_PROFILES.standalone, reason: 'legacy-local-custody' };
+  }
+  return { profile: ENFORCEMENT_PROFILES.cooperative, reason: 'members-share-trust-domain' };
+}
+
+/** A profile name in canonical form, or null; `cooperative` etc. are accepted. */
+export function normalizeProfile(value) {
+  if (typeof value !== 'string') return null;
+  const words = value.trim().toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
+  if (words === 'protected' || words === ENFORCEMENT_PROFILES.protected) return ENFORCEMENT_PROFILES.protected;
+  if (words === 'cooperative' || words === ENFORCEMENT_PROFILES.cooperative) return ENFORCEMENT_PROFILES.cooperative;
+  if (words === 'standalone' || words === ENFORCEMENT_PROFILES.standalone) return ENFORCEMENT_PROFILES.standalone;
+  return null;
+}
+
+/** The refusal for a claim stronger than the profile in force (0.4 T21). */
+export function profileInsufficient(claimed, actual) {
+  return Object.assign(
+    new Error(`the ${claimed} profile cannot be claimed here: the profile in force is ${actual}`),
+    { code: 'profile-insufficient', statusCode: 403, claimed, actual },
+  );
+}
+
+/**
+ * Throws `profile-insufficient` when `claim` names a profile stronger than the
+ * one in force, or names no known profile. Returns the profile in force.
+ */
+export function assertProfileClaim(claim, options = {}) {
+  const { profile } = enforcementProfile(options);
+  const wanted = normalizeProfile(claim);
+  if (wanted === null) throw profileInsufficient(String(claim).slice(0, 40), profile);
+  if (PROFILE_STRENGTH.indexOf(wanted) > PROFILE_STRENGTH.indexOf(profile)) throw profileInsufficient(wanted, profile);
+  return profile;
+}
+
 // Why a receipt's decision went the way it did (#382), one line. A URL is
 // never kept: a webhook's URL is a secret, and an error may carry one.
 function receiptDetail(value) {
@@ -101,6 +184,9 @@ export function appendAuditReceipt(
   const receipt = {
     at: now().toISOString(),
     event: printableText('event', event, { max: 40 }),
+    // Every receipt names the enforcement profile it was written under
+    // (0.4 R8), so no record reads stronger than what was actually in force.
+    profile: enforcementProfile({ env, home, now }).profile,
     ...(principalId === null ? {} : { principalId: validatePrincipalId(principalId) }),
     ...(transport === null ? {} : { transport: validateTransport(transport) }),
     ...(agentId === null ? {} : { agentId: agentIdOrThrow(agentId, 'agentId') }),

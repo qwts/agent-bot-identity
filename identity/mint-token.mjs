@@ -29,6 +29,22 @@ import process from 'node:process';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { resolveAppCredential } from './soul-credentials.mjs';
 import { loadConfig, appJwtApiBase } from '../config.mjs';
+import { LEGACY_LOCAL_CUSTODY_REMOVE_BY, legacyLocalCustody } from './identity-format.mjs';
+
+/**
+ * Throws `legacy-local-custody-off` unless the owner opted in to minting with
+ * an App key held on this host. Server mode never reaches this.
+ */
+export function assertLegacyLocalCustody({ env = process.env, home = env.HOME ?? homedir(), now } = {}) {
+  const custody = legacyLocalCustody({ env, home, ...(now ? { now } : {}) });
+  if (custody.enabled) return custody;
+  const why = custody.expired
+    ? `legacy local custody was removed on ${LEGACY_LOCAL_CUSTODY_REMOVE_BY.slice(0, 10)}`
+    : 'legacy local custody is off';
+  throw Object.assign(new Error(
+    `${why}: no App key on this host may mint. Mint through the identity service (set AGENT_BOT_SERVER and run \`agent-bot server enroll\`)${custody.expired ? '' : ', or opt in for this machine with AGENT_BOT_LEGACY_LOCAL_CUSTODY=1 or settings.legacyLocalCustody: true (standalone unenforced profile)'}`,
+  ), { code: 'legacy-local-custody-off' });
+}
 
 function b64url(input) {
   return Buffer.from(input).toString('base64url');
@@ -260,6 +276,10 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
   const { serverUrl } = await import('./server-client.mjs');
   const server = serverUrl({ env, config });
   if (server) return mintThroughServer({ server, slug, env, config, permissions, selected });
+  // Everything below reads an App key on this host (a key store, keyd's App
+  // items, GH_APP_PRIVATE_KEY*): legacy local custody, off unless the owner
+  // opts in, and refused outright after its removal date (#1184).
+  assertLegacyLocalCustody({ env });
   const argv = slug ? ['node', 'mint-token.mjs', '--app', slug] : process.argv;
   const resolved = appConfig({ argv, env, config, agentId });
   if (selected) selected({ appSlug: resolved.slug, reason: selectionReason({ argv, env }) });

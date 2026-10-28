@@ -220,7 +220,7 @@ test('audit receipts are append-only, whitelisted, and secret-free', () => {
     lines.map((line) => line.event),
     ['enroll', 'bind', 'allow-souls', 'allow-operations', 'set-default-soul', 'revoke', 'denied-request'],
   );
-  const allowedKeys = new Set(['at', 'event', 'principalId', 'transport', 'agentId', 'operation', 'decision']);
+  const allowedKeys = new Set(['at', 'event', 'profile', 'principalId', 'transport', 'agentId', 'operation', 'decision']);
   for (const line of lines) {
     for (const key of Object.keys(line)) assert.equal(allowedKeys.has(key), true, key);
   }
@@ -241,7 +241,7 @@ test('a credential-mint receipt adds the App slug and reason only when given (#1
   assert.equal(minted.reason, 'env-app');
   // A receipt that names neither keeps the shape existing readers know.
   const plain = appendAuditReceipt({ event: 'credential-mint', decision: 'denied' }, storeOptions);
-  assert.deepEqual(Object.keys(plain), ['at', 'event', 'decision']);
+  assert.deepEqual(Object.keys(plain), ['at', 'event', 'profile', 'decision']);
   assert.throws(() => appendAuditReceipt({ event: 'credential-mint', reason: 'a\nb' }, storeOptions), /reason must be printable/);
   assert.throws(() => appendAuditReceipt({ event: 'credential-mint', appSlug: '' }, storeOptions), /appSlug must be printable/);
 });

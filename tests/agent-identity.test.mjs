@@ -34,6 +34,10 @@ import { reclaimStaleLock, withLock } from '../file-lock.mjs';
 import { displayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { startMockGitHubApp } from './helpers/mock-github-app.mjs';
 
+// These tests exercise minting with an App key held on this host: legacy
+// local custody, which is off unless the owner opts in (#1184).
+process.env.AGENT_BOT_LEGACY_LOCAL_CUSTODY = '1';
+
 const roots = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -544,6 +548,8 @@ test('setup-worktree reuses a joined CODEX_THREAD_ID soul and refuses another co
   for (const key of Object.keys(cleanEnv)) {
     if (/^(CODEX|CLAUDE|AI_AGENT|QWTS_AGENT|AGENT_BOT)/.test(key)) delete cleanEnv[key];
   }
+  // setup-worktree's live App check mints with a key on this host (#1184).
+  cleanEnv.AGENT_BOT_LEGACY_LOCAL_CUSTODY = '1';
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'topic', worktree], {
     cwd: repo,
     env: cleanEnv,

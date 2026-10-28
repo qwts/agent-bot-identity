@@ -45,6 +45,7 @@ function fixture(t, { store = 'keyd' } = {}) {
     AGENT_BOT_CONFIG: path.join(home, 'config.json'), AGENT_BOT_INTERACTION_HOME: path.join(home, 'interaction'),
     AGENT_BOT_DAEMON_STATE_PATH: path.join(home, 'daemon.json'), AGENT_BOT_PRINCIPALS_PATH: path.join(home, 'principals.json'),
     AGENT_BOT_SECURITY_BIN: '/nonexistent/security', AGENT_BOT_SUPERVISOR_SKIP_LOAD: '1',
+    AGENT_BOT_LEGACY_LOCAL_CUSTODY: '1',
   };
   writeFileSync(env.AGENT_BOT_CONFIG, '{}');
   const file = env.AGENT_BOT_POPULATION_PATH;

@@ -162,6 +162,9 @@ export function createColdHome({ prefix = 'agent-bot-cold-', node = true } = {})
     GIT_CONFIG_GLOBAL: globalGitConfig,
     AGENT_BOT_STATE_HOME: stateDir,
     AGENT_BOT_SUPERVISOR_SKIP_LOAD: '1',
+    // Cold-home fixtures model today's local-custody install: App keys on
+    // this host, which is legacy local custody and needs the opt-in (#1184).
+    AGENT_BOT_LEGACY_LOCAL_CUSTODY: '1',
   });
 
   return {
