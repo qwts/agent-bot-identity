@@ -481,6 +481,19 @@ async function mintRecorded(session, { harness, repo, taskId, operationId, profi
   const existing = readAction(stateDir, operationId);
   if (existing?.state === 'unknown') return reconcileCredential(session, { stateDir, operationId, profile });
   if (existing) throw serverError('operation-conflict', `credential operation ${operationId} was already used (${existing.state}); use a new operation`, { operationId });
+  // No blind retry under a new name either (T06): an earlier operation for
+  // the same task, harness and repo whose outcome is unknown is settled by
+  // lookup first. Issued or none lets this one go ahead; still unknown
+  // refuses it, so a lost credential is never followed by a second mint.
+  for (const pending of listActions(stateDir, { state: 'unknown' })) {
+    if (pending.task_id !== taskId || pending.harness !== request.harness || pending.repo !== repo) continue;
+    try {
+      await reconcileCredential(session, { stateDir, operationId: pending.operation_id, profile });
+    } catch (error) {
+      if (readAction(stateDir, pending.operation_id)?.state === 'rejected') continue;
+      throw error;
+    }
+  }
   writeAction(stateDir, { operation_id: operationId, task_id: taskId, ...request, state: 'prepared', created_at: new Date().toISOString() });
   transition(stateDir, operationId, 'submitted');
   try {

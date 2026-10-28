@@ -372,6 +372,27 @@ test('T06: an unknown upstream outcome stays unknown, is not retried, and settle
   assert.equal(srv.lookups, lookups);
 });
 
+test('T06: a new operation for the same task, harness and repo waits on an unknown one, and goes ahead once it settles', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  srv.outcomeUnknown = true;
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.w', operationId: 'op_first' }), (e) => e.code === 'outcome-unknown');
+  srv.outcomeUnknown = false;
+  const posts = () => srv.calls.filter((p) => p === '/api/daemon/credentials').length;
+  const before = posts();
+  // Still unknown upstream: a fresh operation is refused, and nothing is sent for it.
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.w' }), (e) => e.code === 'outcome-unknown' && /op_first/.test(e.message));
+  assert.equal(posts(), before, 'no second mint while the first is unknown');
+  // A different repository is a different request and is not held up.
+  assert.ok((await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/other', env, fetchImpl: srv.fetch, taskId: 'task.w' })).token);
+  // Once the service reports none, the old one settles as rejected and the new one goes ahead.
+  srv.unknownResolved = true;
+  const next = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.w' });
+  assert.ok(next.token);
+  assert.equal(readAction(statePaths({ env }).dir, 'op_first').state, 'rejected');
+});
+
 test('T06: an issued operation whose credential expired settles as rejected, never an endless unknown', async () => {
   for (const how of ['lookup-expiry', 'replay-conflict']) {
     const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
