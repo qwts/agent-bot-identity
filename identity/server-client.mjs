@@ -476,6 +476,11 @@ export function repoFromCheckout(cwd = process.cwd(), env = process.env) {
 // before it is sent; an ambiguous failure is looked up, never re-sent blind.
 async function mintRecorded(session, { harness, repo, taskId, operationId, profile, stateDir }) {
   const request = { kind: 'github_installation_token', harness: serverHarness(harness), repo };
+  // An operation already in the ledger is never overwritten: an unknown one
+  // is reconciled by lookup; any other is a reused operation_id.
+  const existing = readAction(stateDir, operationId);
+  if (existing?.state === 'unknown') return reconcileCredential(session, { stateDir, operationId, profile });
+  if (existing) throw serverError('operation-conflict', `credential operation ${operationId} was already used (${existing.state}); use a new operation`, { operationId });
   writeAction(stateDir, { operation_id: operationId, task_id: taskId, ...request, state: 'prepared', created_at: new Date().toISOString() });
   transition(stateDir, operationId, 'submitted');
   try {
@@ -510,8 +515,22 @@ export async function reconcileCredential(session, { stateDir, operationId, prof
     if (error.code === 'device-revoked') throw error;
     throw serverError('outcome-unknown', `the outcome of credential operation ${operationId} is unknown and could not be looked up (${error.code ?? 'error'}); it was not retried`, { operationId, cause });
   }
+  // Issued, but its credential has expired: it can never be replayed (the
+  // service answers operation_conflict), so the action settles as rejected
+  // instead of staying unknown for ever.
+  const expired = (reason) => {
+    transition(stateDir, operationId, 'rejected', { reason, issuance_id: found.issuance_id ?? null, reconciled: true });
+    return serverError('credential-unavailable', `credential operation ${operationId} was issued but its credential has expired (reconciled by lookup); it was not re-sent`, { operationId });
+  };
+  if (found?.state === 'issued' && found.expires_at && Date.parse(found.expires_at) <= Date.now()) throw expired('reconciled-expired');
   if (found?.state === 'issued') {
-    const out = await session.credential({ harness: action.harness, repo: action.repo, taskId: action.task_id, operationId, profile });
+    let out;
+    try {
+      out = await session.credential({ harness: action.harness, repo: action.repo, taskId: action.task_id, operationId, profile });
+    } catch (error) {
+      if (error.code === 'operation-conflict') throw expired('reconciled-conflict');
+      throw error;
+    }
     if (out.issuance_id !== found.issuance_id) throw new Error(`the identity service replayed a different issuance for ${operationId}; refusing it`);
     transition(stateDir, operationId, 'succeeded', { issuance_id: out.issuance_id, replayed: true, reconciled: true });
     return out;

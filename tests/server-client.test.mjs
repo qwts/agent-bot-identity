@@ -116,7 +116,8 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
         s.lookups = (s.lookups ?? 0) + 1;
         if (s.unknownOps?.has(op)) return signed(200, { operation_id: op, state: s.unknownResolved ? 'none' : 'unknown', expires_at: '2026-10-28T03:00:00Z' }, proof.payload.jti);
         const issued = s.ops.get(op);
-        return signed(200, issued ? { operation_id: op, state: 'issued', issuance_id: issued.issuance_id, task_id: issued.task_id } : { operation_id: op, state: 'none' }, proof.payload.jti);
+        if (issued && s.conflictOnReplay) issued.repo = 'expired/elsewhere'; // the stored token is gone: a replay conflicts
+        return signed(200, issued ? { operation_id: op, state: 'issued', issuance_id: issued.issuance_id, task_id: issued.task_id, expires_at: s.lookupExpiresAt ?? '2099-01-01T00:00:00Z' } : { operation_id: op, state: 'none' }, proof.payload.jti);
       }
       if (u.pathname === '/api/daemon/installation-token') {
         const body = JSON.parse(init.body);
@@ -240,10 +241,16 @@ test('every mint is its own operation; a token is never reused, and a mismatched
   assert.notEqual(a.operation_id, b.operation_id);
   assert.notEqual(a.token, b.token);
   assert.deepEqual([a.task_id, b.task_id], ['task.1', 'task.1']);
-  // The same operation replays its own issuance; a different request under it conflicts.
-  const replay = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.1', operationId: a.operation_id });
+  // The daemon never sends a used operation again: the ledger refuses it locally.
+  const sent = srv.calls.length;
+  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.1', operationId: a.operation_id }),
+    (error) => error.code === 'operation-conflict' && /already used \(succeeded\)/.test(error.message));
+  assert.equal(srv.calls.length, sent, 'nothing was sent for a reused operation');
+  // At the wire, the service replays an operation's own issuance and refuses a different request under it.
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  const replay = await session.credential({ harness: 'grok', repo: 'o/r', taskId: 'task.1', operationId: a.operation_id, profile: 'managed cooperative' });
   assert.deepEqual([replay.issuance_id, replay.replayed], [a.issuance_id, true]);
-  await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/other', env, fetchImpl: srv.fetch, taskId: 'task.1', operationId: a.operation_id }),
+  await assert.rejects(session.credential({ harness: 'grok', repo: 'o/other', taskId: 'task.1', operationId: a.operation_id, profile: 'managed cooperative' }),
     (error) => error.code === 'operation-conflict');
   srv.badEcho = true;
   await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch }), /does not match the requested task and operation/);
@@ -345,6 +352,26 @@ test('T06: an unknown upstream outcome stays unknown, is not retried, and settle
   const lookups = srv.lookups;
   await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch }), (error) => error.code === 'credential-unavailable');
   assert.equal(srv.lookups, lookups);
+});
+
+test('T06: an issued operation whose credential expired settles as rejected, never an endless unknown', async () => {
+  for (const how of ['lookup-expiry', 'replay-conflict']) {
+    const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+    const srv = fakeServer();
+    await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+    srv.dropAfterMint = true;
+    const fetchImpl = srv.fetch;
+    // The lookup says issued; either it carries a past expiry, or the replay gets operation_conflict.
+    if (how === 'lookup-expiry') srv.lookupExpiresAt = '2000-01-01T00:00:00Z';
+    else srv.conflictOnReplay = true;
+    await assert.rejects(mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl, operationId: `op_${how}` }),
+      (error) => error.code === 'credential-unavailable' && /expired/.test(error.message), how);
+    const action = readAction(statePaths({ env }).dir, `op_${how}`);
+    assert.deepEqual([action.state, action.reason], ['rejected', how === 'lookup-expiry' ? 'reconciled-expired' : 'reconciled-conflict'], how);
+    assert.equal(srv.minted, 1, `${how}: nothing new was minted`);
+    // Reconcile has nothing left to do.
+    assert.deepEqual(await reconcilePendingCredentials({ base: BASE, env, fetchImpl }), []);
+  }
 });
 
 test('revoked device surfaces invalid_grant with a re-enroll hint; logout wipes local state', async () => {
