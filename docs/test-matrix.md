@@ -38,8 +38,9 @@ against a deployed identity service. The runner in
 ### End-to-end runner (#1206)
 
 `node scripts/e2e-server.mjs --base <https url> [--state dir] [--harness slug]
-[--repo owner/name] [--only a,b] [--include-revoke]
-[--require] [--keep-state] [--json]` enrolls a throwaway device via
+[--repo owner/name] [--only a,b] [--include-revoke] [--mock-github port]
+[--mock-github-hold ms] [--require] [--keep-state] [--json]` enrolls a
+throwaway device via
 `AGENT_BOT_E2E_ENROLL_TOKEN`, then drives `enroll`, `mint-readback`,
 `replay-same-op`, `conflict-new-params`, `provider-key`,
 `legacy-route-disabled`, `soul-token` (including JWKS signature
@@ -50,6 +51,18 @@ an enrollment token the device scenarios report `skipped` and the run exits
 0 (`--require` exits 2). Tokens, keys and the enrollment token are never
 printed; `tests/e2e-server.test.mjs` runs the whole driver against the signed
 fixture server and asserts no secret shape reaches the output.
+
+The `github-5xx` scenario needs `--mock-github <port>`: the runner starts a
+mock GitHub API on `127.0.0.1:<port>` before the scenarios and stops it
+afterwards. Run the identity service with `AGENT_BOT_TEST_MODE=1` and
+`AGENT_BOT_TEST_GITHUB_API_URL=http://127.0.0.1:<port>`
+(true-line/agent-bot#38, which also requires `VERCEL_ENV` unset or
+`development`) so its GitHub App calls reach the mock; the scenario then
+drives the mock's modes in-process — `503`, `502-after-mint` and `ok` — and
+verifies `credential-unavailable`, `outcome-unknown`, the one-mint in-flight
+guard and `operation-conflict`. `--mock-github-hold <ms>` sets how long the
+mock's `timeout` mode holds a mint request open (default 20 s) for services
+whose GitHub client timeout needs a longer hold.
 
 - enroll → mint → read-back (issuance lookup returns the same issuance)
 - revoke → signed, request-bound `device_revoked` → daemon refuses without network

@@ -112,6 +112,33 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
         const prior = s.ops.get(body.operation_id);
         if (prior && (prior.task_id !== body.task_id || prior.repo !== body.repo)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
+        if (s.githubBase && !prior) {
+          // Emulates the service's GitHub-App proxy path (true-line/agent-bot#38):
+          // a mint is proxied to the configured GitHub base; its 5xx maps to
+          // credential_unavailable, a 502 after the mint leaves the outcome
+          // unknown, and a task with an unknown mint refuses new operations.
+          if (s.unknownOps?.has(body.operation_id)) return signed(503, { error: 'outcome_unknown', retryable: false, operation_id: body.operation_id }, proof.payload.jti);
+          if (s.unknownTasks?.has(body.task_id)) return signed(409, { error: 'operation_conflict' }, proof.payload.jti);
+          let gh;
+          try {
+            gh = await fetch(`${s.githubBase}/app/installations/1/access_tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+          } catch {
+            return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
+          }
+          if (gh.status >= 500) {
+            if (gh.status === 502) {
+              s.unknownOps = (s.unknownOps ?? new Set()).add(body.operation_id);
+              s.unknownTasks = (s.unknownTasks ?? new Set()).add(body.task_id);
+              return signed(503, { error: 'outcome_unknown', retryable: false, operation_id: body.operation_id }, proof.payload.jti);
+            }
+            return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
+          }
+          const ghBody = await gh.json().catch(() => ({}));
+          const issued = { issuance_id: `iss_${s.ops.size + 1}`, task_id: body.task_id, operation_id: body.operation_id, repo: body.repo, token: ghBody.token ?? `ghs_op${s.ops.size + 1}` };
+          s.minted = (s.minted ?? 0) + 1;
+          s.ops.set(body.operation_id, issued);
+          return signed(201, { ...issued, expires_at: ghBody.expires_at ?? '2026-10-27T23:00:00Z', profile: body.profile, replayed: false, git_author: 'qwts-grok-agent[bot] <1+qwts-grok-agent[bot]@users.noreply.github.com>' }, proof.payload.jti);
+        }
         if (s.outcomeUnknown) {
           s.unknownOps = (s.unknownOps ?? new Set()).add(body.operation_id);
           return signed(503, { error: 'outcome_unknown', retryable: false, operation_id: body.operation_id }, proof.payload.jti);

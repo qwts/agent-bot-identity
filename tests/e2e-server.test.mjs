@@ -4,10 +4,19 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { run } from '../scripts/e2e-server.mjs';
 import { BASE, fakeServer, sandbox, sleep } from './server-client.test.mjs';
 
 const ENROLL_TOKEN = 'abe_good';
+
+async function freePort() {
+  const probe = createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
 
 async function drive({ flags, ...opts } = {}) {
   const srv = fakeServer();
@@ -44,6 +53,23 @@ test('provider_key_not_configured is a pass, not a failure', async () => {
 test('a signing outage skips soul-token instead of failing', async () => {
   const { rows } = await drive({ flags: { soulSigningDown: true } });
   assert.equal(byName(rows, 'soul-token').result, 'skipped');
+});
+
+test('github-5xx: the mock GitHub drives 503, 502-after-mint and the in-flight guard', async () => {
+  const port = await freePort();
+  const { rows } = await drive({
+    mockGithub: port,
+    flags: { githubBase: `http://127.0.0.1:${port}` },
+  });
+  const row = byName(rows, 'github-5xx');
+  assert.equal(row.result, 'passed', row.detail);
+  assert.match(row.detail, /503:credential-unavailable\/none/);
+  assert.match(row.detail, /502:outcome-unknown\/unknown mints:1 retry:outcome-unknown new-op:operation-conflict extra-mints:0 ok:issued/);
+});
+
+test('github-5xx skips without --mock-github', async () => {
+  const { rows } = await drive();
+  assert.equal(byName(rows, 'github-5xx').result, 'skipped');
 });
 
 test('an outage mint answers credential-unavailable and records nothing issued', async () => {
