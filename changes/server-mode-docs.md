@@ -1,0 +1,6 @@
+- `docs/server-mode.md` now describes server mode as it ships:
+  - per-operation minting (credential/v1) with issuance references;
+  - `credential-unavailable`, `device-revoked` and `outcome-unknown` with `agent-bot server reconcile`;
+  - the enforcement profile and the legacy local custody opt-in;
+  - the pilot provider key, including how provider names must match;
+  - a runbook for a machine with no local keys, against `https://agents.true-line.ai` (#1184).
