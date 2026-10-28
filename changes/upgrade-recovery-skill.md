@@ -1,1 +1,0 @@
-- The agent-bot skill's operations reference now has a recovery procedure for when every agent loses GitHub access after an upgrade or a daemon restart: reinstall the shims, have the owner restart a stale daemon, then re-run `setup-worktree` and `session bind` in each worktree (#1179).
