@@ -31,7 +31,9 @@ function fixture(t, { gate = true, platform = 'linux' } = {}) {
   const home = mkdtempSync(path.join(tmpdir(), 'identity-apps-'));
   const env = { HOME: home, PATH: process.env.PATH, AGENT_BOT_STATE_HOME: path.join(home, 'state'),
     AGENT_BOT_CONFIG: path.join(home, 'config.json'), AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json'),
-    AGENT_BOT_SECURITY_BIN: path.join(ROOT, 'tests/fixtures/fake-security.mjs'), FAKE_KEYCHAIN: path.join(home, 'keychain.json') };
+    AGENT_BOT_SECURITY_BIN: path.join(ROOT, 'tests/fixtures/fake-security.mjs'), FAKE_KEYCHAIN: path.join(home, 'keychain.json'),
+    // App administration with a key on this host is legacy local custody (#1184).
+    AGENT_BOT_LEGACY_LOCAL_CUSTODY: '1' };
   writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({ features: { 'github-identity': gate } }));
   const keyFile = path.join(home, 'incoming.pem'); writeFileSync(keyFile, KEY, { mode: 0o600 });
   const newKeyFile = path.join(home, 'new.pem'); writeFileSync(newKeyFile, NEW_KEY, { mode: 0o600 });
@@ -79,6 +81,18 @@ async function page(flow) {
 async function callback(manifest, state) {
   return fetch(manifest.redirect_url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code: 'fixture-code', state }) });
 }
+
+test('with legacy local custody off, no App JWT is signed with a key on this host (#1184)', async (t) => {
+  const f = fixture(t);
+  delete f.env.AGENT_BOT_LEGACY_LOCAL_CUSTODY;
+  let requests = 0;
+  const options = { ...f.options, fetchImpl: async () => { requests += 1; throw new Error('no request expected'); } };
+  await assert.rejects(identityAppOperation('connect', { id: '123', keyFile: f.keyFile }, options), (error) => error.code === 'legacy-local-custody-off');
+  assert.equal(requests, 0);
+  const { verifyAppCredential } = await import('../identity/soul-credentials.mjs');
+  await assert.rejects(verifyAppCredential({ appId: '123', privateKeyPem: KEY }, { env: f.env, fetchImpl: options.fetchImpl }), (error) => error.code === 'legacy-local-custody-off');
+  assert.equal(requests, 0);
+});
 
 test('without the census port, an App operation that needs a soul is refused, not answered as soulless', async (t) => {
   const f = fixture(t);

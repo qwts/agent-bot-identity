@@ -1,0 +1,1 @@
+- App administration (`agent-bot identity app` connect, rotate, verify and the GitHub calls behind them) and the live App-key check (`verifyAppCredential`) now refuse with `legacy-local-custody-off` before signing an App JWT with a key held on this host, unless the owner opted in to legacy local custody. This closes the last local App-key signing paths left after #1185 (#1184).
