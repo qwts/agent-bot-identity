@@ -31,7 +31,25 @@ Priority: **P0** blocks the security goal or is itself a security property,
 ## E2E scenarios needed (shared with true-line/agent-bot)
 
 The fixture server covers request shapes and refusals; none of these run
-against a deployed identity service:
+against a deployed identity service. The runner in
+[`scripts/e2e-server.mjs`](../scripts/e2e-server.mjs) executes them — see
+"End-to-end runner" below.
+
+### End-to-end runner (#1206)
+
+`node scripts/e2e-server.mjs --base <https url> [--state dir] [--harness slug]
+[--repo owner/name] [--only a,b] [--include-revoke]
+[--require] [--keep-state] [--json]` enrolls a throwaway device via
+`AGENT_BOT_E2E_ENROLL_TOKEN`, then drives `enroll`, `mint-readback`,
+`replay-same-op`, `conflict-new-params`, `provider-key`,
+`legacy-route-disabled`, `soul-token` (including JWKS signature
+verification), `outage` and `revoke` through the same
+`ServerSession`/`mintViaServer` code the daemon uses, printing one
+`PASS|FAIL|SKIP` line per scenario — or a JSON array with `--json`. Without
+an enrollment token the device scenarios report `skipped` and the run exits
+0 (`--require` exits 2). Tokens, keys and the enrollment token are never
+printed; `tests/e2e-server.test.mjs` runs the whole driver against the signed
+fixture server and asserts no secret shape reaches the output.
 
 - enroll → mint → read-back (issuance lookup returns the same issuance)
 - revoke → signed, request-bound `device_revoked` → daemon refuses without network

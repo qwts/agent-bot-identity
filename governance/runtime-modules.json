@@ -363,7 +363,8 @@
     "hooks/soul-hook": "soul",
     "keyd/": "identity",
     "scripts/ensure-identity.sh": "identity",
-    "wrangler.toml": "identity"
+    "wrangler.toml": "identity",
+    "scripts/e2e-server.mjs": "identity"
   },
   "shims": {
     "agent-audit.mjs": "identity/agent-audit.mjs",

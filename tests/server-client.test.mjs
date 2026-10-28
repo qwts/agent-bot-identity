@@ -12,7 +12,7 @@ import {
 import { parseConfig } from '../config.mjs';
 import { readAction } from '../identity/action-ledger.mjs';
 
-const BASE = 'https://agent-bot.test';
+export const BASE = 'https://agent-bot.test';
 
 function decode(jws) {
   const [h, p, s] = jws.split('.');
@@ -26,7 +26,7 @@ function verifyEs256(jws, jwk) {
 }
 
 // A fake agent-bot server that checks the wire format the Go server enforces.
-function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
+export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
   const sign = crypto.generateKeyPairSync('ed25519');
   const x = sign.publicKey.export({ format: 'jwk' }).x;
   const s = { devices: new Map(), tokens: new Map(), seenEk: new Set(), polls: 0, calls: [], issued: 0 };
@@ -44,6 +44,11 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
     const f = init.body instanceof URLSearchParams ? Object.fromEntries(init.body) : null;
     s.calls.push(u.pathname);
     assert.equal(init.redirect, 'error', `${u.pathname} must not follow redirects`);
+    if (u.pathname === '/.well-known/agent-bot/soul-keys.json') {
+      s.soulSign = s.soulSign ?? crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+      const { x: jx, y: jy } = s.soulSign.publicKey.export({ format: 'jwk' });
+      return json(200, { issuer: BASE, keys: [{ kty: 'EC', crv: 'P-256', x: jx, y: jy, alg: 'ES256', use: 'sig', kid: 'sk1' }] });
+    }
     if (u.pathname === '/.well-known/agent-bot-server-key') return json(200, { keys: [{ kty: 'OKP', crv: 'Ed25519', kid: 'kid1', x }] });
     if (u.pathname === '/oauth/device_authorization' || u.pathname === '/oauth/device_enroll') {
       const d = decode(f.proof);
@@ -93,6 +98,12 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
       assert.equal(proof.payload.ath, crypto.createHash('sha256').update(tok).digest('base64url'));
       if (s.revokedDevice === t.device) return signed(401, { error: 'device_revoked' }, proof.payload.jti);
       if (u.pathname === '/api/daemon/whoami') return signed(200, { device: { id: t.device, management: 'managed' } }, proof.payload.jti);
+      if (u.pathname === '/api/daemon/device' && init.method === 'DELETE') { s.revokedDevice = t.device; return signed(200, { revoked: true }, proof.payload.jti); }
+      if (u.pathname === '/api/daemon/provider-key') {
+        if (s.providerMissing) return signed(404, { error: 'provider_key_not_configured' }, proof.payload.jti);
+        const op = new URL(url).searchParams.get('operation_id');
+        return signed(200, { provider: 'openai', key: 'sk-e2e-fake-key-material', key_id: 'pk_e2e', expires_at: '2099-01-01T00:00:00Z', issuance_id: 'iss_pk_e2e', task_id: null, operation_id: op }, proof.payload.jti);
+      }
       if (u.pathname === '/api/daemon/credentials') {
         const body = JSON.parse(init.body);
         s.lastCredential = body;
@@ -150,6 +161,7 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
         }, proof.payload.jti);
       }
       if (u.pathname === '/api/daemon/installation-token') {
+        if (s.legacyDisabled) return signed(410, { error: 'legacy_route_disabled' }, proof.payload.jti);
         const body = JSON.parse(init.body);
         if (!s.devices.get(t.device).harnesses.includes(body.harness)) return signed(403, { error: 'not scoped' }, proof.payload.jti);
         return signed(200, { token: 'ghs_fake', expires_at: '2026-10-27T23:00:00Z', repo: body.repo, git_author: 'qwts-grok-agent[bot] <1+qwts-grok-agent[bot]@users.noreply.github.com>' }, proof.payload.jti);
@@ -160,11 +172,11 @@ function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } = {}) {
   return s;
 }
 
-function sandbox() {
+export function sandbox() {
   const dir = mkdtempSync(join(tmpdir(), 'agent-bot-server-'));
   return { AGENT_BOT_SERVER_STATE: join(dir, 'server'), AGENT_BOT_CONFIG: join(dir, 'none.json'), HOME: dir };
 }
-const sleep = async () => {};
+export const sleep = async () => {};
 
 test('server mode is off unless AGENT_BOT_SERVER or settings.agentBotServer is set', () => {
   const env = sandbox();

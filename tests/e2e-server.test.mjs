@@ -1,0 +1,78 @@
+// The e2e runner (#1206) driven against the signed fake identity service.
+// Importing the server-client suite's helpers also runs its tests here —
+// that reuse is deliberate.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { run } from '../scripts/e2e-server.mjs';
+import { BASE, fakeServer, sandbox, sleep } from './server-client.test.mjs';
+
+const ENROLL_TOKEN = 'abe_good';
+
+async function drive({ flags, ...opts } = {}) {
+  const srv = fakeServer();
+  Object.assign(srv, { legacyDisabled: true }, flags ?? {});
+  const rows = [];
+  const out = await run({
+    base: BASE, env: sandbox(), fetchImpl: srv.fetch,
+    enrollToken: ENROLL_TOKEN, harness: 'grok', repo: 'o/r',
+    emit: (row) => rows.push(row),
+    ...opts,
+  });
+  return { srv, rows, out };
+}
+
+const byName = (rows, name) => rows.find((r) => r.scenario === name);
+
+test('the runner exercises enroll through soul-token against a live service', async () => {
+  const { rows, out } = await drive({ includeRevoke: true });
+  assert.equal(out.failed, 0, JSON.stringify(rows.filter((r) => r.result === 'failed')));
+  for (const name of ['enroll', 'mint-readback', 'replay-same-op', 'conflict-new-params', 'provider-key', 'legacy-route-disabled', 'soul-token', 'revoke']) {
+    assert.equal(byName(rows, name)?.result, 'passed', `${name}: ${byName(rows, name)?.detail}`);
+  }
+  const mint = byName(rows, 'mint-readback');
+  assert.ok(mint.issuance_id && mint.operation_id);
+  assert.equal(byName(rows, 'replay-same-op').issuance_id, mint.issuance_id);
+  assert.equal(byName(rows, 'github-5xx').result, 'skipped');
+});
+
+test('provider_key_not_configured is a pass, not a failure', async () => {
+  const { rows } = await drive({ flags: { providerMissing: true } });
+  assert.equal(byName(rows, 'provider-key').result, 'passed');
+});
+
+test('a signing outage skips soul-token instead of failing', async () => {
+  const { rows } = await drive({ flags: { soulSigningDown: true } });
+  assert.equal(byName(rows, 'soul-token').result, 'skipped');
+});
+
+test('an outage mint answers credential-unavailable and records nothing issued', async () => {
+  const { rows } = await drive();
+  const row = byName(rows, 'outage');
+  assert.equal(row.result, 'passed', row.detail);
+  assert.match(row.detail, /credential-unavailable/);
+  assert.doesNotMatch(row.detail, /uncoded/);
+});
+
+test('without an enrollment token the device scenarios skip and nothing fails', async () => {
+  const { rows, out } = await drive({ enrollToken: null });
+  assert.equal(out.failed, 0);
+  for (const name of ['enroll', 'mint-readback', 'provider-key', 'soul-token']) {
+    assert.equal(byName(rows, name).result, 'skipped', name);
+  }
+  assert.equal(byName(rows, 'github-5xx').result, 'skipped');
+});
+
+test('--require turns a missing enrollment token into an exit-2 style failure', async () => {
+  const { out } = await drive({ enrollToken: null, requireDevice: true });
+  assert.equal(out.failed, 1);
+  assert.equal(out.results[0].scenario, 'enroll');
+});
+
+test('no secret shape ever reaches the emitted output', async () => {
+  const { rows } = await drive({ includeRevoke: true });
+  const text = JSON.stringify(rows);
+  for (const shape of [/ghs_/, /sk-[A-Za-z0-9_-]{16,}/, /eyJ[A-Za-z0-9_-]{8,}/, /[Bb]earer [A-Za-z0-9]/, /abp_[0-9a-f]{48}/, /abe_good/]) {
+    assert.doesNotMatch(text, shape);
+  }
+});
