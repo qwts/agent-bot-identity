@@ -28,7 +28,9 @@ maps the code onto that model. The owner decided it on 2026-10-27:
 
 - **D1:** `agent-bot-daemon` is HQ, and `managed-machine` stays the
   provisioner.
-- **D2:** a pilot provider key only in HQ memory.
+- **D2:** a pilot provider key held only in HQ memory. Under Q1, for the
+  pilot it may reach the harness process environment for the soul's
+  declared provider only, until the loopback inference proxy (#1190) lands.
 - **D3:** soul-runtime's core stays pure, with no server runtime before the
   pilot gates.
 
@@ -80,8 +82,9 @@ maps the code onto that model. The owner decided it on 2026-10-27:
   agent-bot-daemon and soul code to agent-bot-soul-runtime. That is more
   churn than the extraction would have caused, and it is accepted because it
   matches the trust boundary.
-- **ENG-0128's extraction amendment is replaced** by its amendment of
-  2026-10-27 ([qwts-agent-sop#111](https://github.com/qwts/qwts-agent-sop/issues/111)).
+- **ENG-0128's extraction amendment is replaced** by
+  [ENG-0111](https://github.com/qwts/qwts-agent-sop/blob/main/docs/decisions/ENG-0111-agent-bot-runtime-hq-daemon-and-plugins.md)
+  ([qwts-agent-sop#112](https://github.com/qwts/qwts-agent-sop/pull/112)).
 - [qwts-agent-org#32](https://github.com/qwts/qwts-agent-org/issues/32) (an
   org pin for agent-identity) is no longer needed in that form. The four
   repositories get pins when they first release.
