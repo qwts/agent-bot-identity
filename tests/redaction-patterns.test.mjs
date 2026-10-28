@@ -214,13 +214,40 @@ test('no writer reachable in-process lets a secret shape reach a file (#1202)', 
     operation_id: new URL(route, 'https://x.test').searchParams.get('operation_id'),
   });
   await fetchProviderKey({ provider: 'openai', env, home: '/nonexistent', session });
-  const origin = await startInferenceProxy({ port: 0, upstreams: { openai: 'https://api.test/v1' } });
+  // The upstream answers canary text and a canary cookie — it never reaches a
+  // file, and the proxy drops set-cookie on the way back anyway.
+  const upstream = async () => new Response(`data: ${CANARY['github-user-token']}\n\n`, {
+    status: 200, headers: { 'content-type': 'text/event-stream', 'set-cookie': `session=${CANARY['github-oauth-token']}` },
+  });
+  const origin = await startInferenceProxy({
+    port: 0, upstreams: { openai: 'https://api.test/v1' }, env, home: '/nonexistent',
+    fetchImpl: upstream, maxBodyBytes: 64,
+  });
   try {
     const envPatch = brokeredProviderEnv({
       providerId: 'openai', envKey: 'OPENAI_API_KEY', baseUrl: `${origin}/v0/inference/openai`,
       agentId: null, harness: 'opencode', env, home: '/nonexistent',
     });
-    assert.match(envPatch.env.OPENAI_API_KEY, /^abp_[0-9a-f]{48}$/, 'the proxy issued a registered-shape token');
+    const token = envPatch.env.OPENAI_API_KEY;
+    assert.match(token, /^abp_[0-9a-f]{48}$/, 'the proxy issued a registered-shape token');
+    // A forwarded request: the abp_ token is the Authorization bearer, and the
+    // query and body carry registry-shaped canaries.
+    const proxied = await fetch(`${origin}/v0/inference/openai/chat/completions?key=${CANARY['provider-api-key']}`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: `{"q":"${CANARY['bearer-credential']}"}`,
+    });
+    assert.equal(proxied.status, 200);
+    assert.match(await proxied.text(), /data:/);
+    // too-large and key-not-held write their own per-request receipts.
+    const big = await fetch(`${origin}/v0/inference/openai/chat/completions`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` }, body: CANARY.jwt,
+    });
+    assert.equal(big.status, 413, 'a body over the cap is refused');
+    dropProviderKey();
+    const noKey = await fetch(`${origin}/v0/inference/openai/chat/completions`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}',
+    });
+    assert.equal(noKey.status, 503, 'the key is no longer held');
   } finally {
     await stopInferenceProxy();
   }

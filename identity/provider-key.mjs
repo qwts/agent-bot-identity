@@ -22,10 +22,12 @@ onDeviceRevoked(() => { held = null; proxy?.instance.revokeAll(); });
  * provider id to its `upstreams` URL with the held key swapped in. Returns
  * its origin. The key stays in this module.
  */
-export async function startInferenceProxy({ port, upstreams, now = () => new Date(), env = process.env, home } = {}) {
+export async function startInferenceProxy({ port, upstreams, now = () => new Date(), env = process.env, home, fetchImpl = fetch, maxBodyBytes } = {}) {
   await stopInferenceProxy();
   const instance = createInferenceProxy({
     upstreams,
+    fetchImpl,
+    ...(maxBodyBytes === undefined ? {} : { maxBodyBytes }),
     // One receipt per request that passed token lookup (#1203): the detail is
     // a method, a path and a status — never the key, token, query or body.
     onRequest: ({ agentId, providerId, method, path: requestPath, status, outcome }) => appendAuditReceipt({
