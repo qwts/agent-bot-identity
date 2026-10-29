@@ -623,3 +623,50 @@ test('a wake with 1200 message ids dispatches as three ordered <=512 wakes', asy
   );
   assert.deepEqual(sinks.reports.flatMap((report) => report.messageIds), ids);
 });
+
+test('a rejected chunk does not strand the rest; the first error is rethrown last', async () => {
+  const sinks = fakeSinks();
+  const attempts = [];
+  let calls = 0;
+  const first = new Error('broker disconnected');
+  const report = async (agentId, messageIds, outcome, detail) => {
+    attempts.push(messageIds);
+    calls += 1;
+    if (calls === 1) throw first;
+    sinks.report(agentId, messageIds, outcome, detail);
+  };
+  const ports = { ...warmPorts().ports, report };
+  const ids = Array.from({ length: 1200 }, (_, i) => `msg_${i}`);
+  await assert.rejects(
+    dispatchWake(wakeEvent({ messageIds: ids, count: ids.length }), ports),
+    (error) => error === first,
+  );
+  assert.equal(attempts.length, 3, 'every chunk was dispatched');
+  assert.deepEqual(
+    attempts.map((chunk) => chunk.length),
+    [512, 512, 176],
+    'each wake carries at most 512 ids',
+  );
+  assert.deepEqual(attempts.flat(), ids, 'no id is dropped and order is preserved');
+});
+
+test('a mid-batch report failure still dispatches the surrounding chunks', async () => {
+  const sinks = fakeSinks();
+  const attempts = [];
+  let calls = 0;
+  const middle = new Error('transient');
+  const report = async (agentId, messageIds, outcome, detail) => {
+    attempts.push(messageIds);
+    calls += 1;
+    if (calls === 2) throw middle;
+    sinks.report(agentId, messageIds, outcome, detail);
+  };
+  const ports = { ...warmPorts().ports, report };
+  const ids = Array.from({ length: 1200 }, (_, i) => `msg_${i}`);
+  await assert.rejects(
+    dispatchWake(wakeEvent({ messageIds: ids, count: ids.length }), ports),
+    (error) => error === middle,
+  );
+  assert.equal(attempts.length, 3, 'chunks 1 and 3 still dispatched');
+  assert.deepEqual(attempts.flat(), ids);
+});

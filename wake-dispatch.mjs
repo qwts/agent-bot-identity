@@ -163,10 +163,19 @@ export async function dispatchWake(event, ports) {
   // with its own frame, report and receipt — never a dropped id.
   if (wake.messageIds.length > MAX_MESSAGE_IDS) {
     const results = [];
+    // A rejected chunk (a transient report failure, say) must not strand
+    // the rest: every chunk still reaches the pool and the report, and
+    // the caller sees the first failure only after all were attempted.
+    let firstError = null;
     for (let i = 0; i < wake.messageIds.length; i += MAX_MESSAGE_IDS) {
       const chunk = wake.messageIds.slice(i, i + MAX_MESSAGE_IDS);
-      results.push(await dispatchWake({ ...wake, count: chunk.length, messageIds: chunk }, ports));
+      try {
+        results.push(await dispatchWake({ ...wake, count: chunk.length, messageIds: chunk }, ports));
+      } catch (error) {
+        firstError ??= error;
+      }
     }
+    if (firstError) throw firstError;
     const last = results.at(-1);
     return { agentId: wake.agentId, messageIds: [...wake.messageIds], outcome: last.outcome, detail: last.detail, count: wake.count, chunks: results.length };
   }
