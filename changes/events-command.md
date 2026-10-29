@@ -1,0 +1,1 @@
+- `agent-bot events wait|peek|ack` is recognised by the CLI parser again — it was dispatched but missing from the public command table, so the documented `events wait [--ide] [--cursor]` loop for harnesses without MCP events failed with "unknown command: events". A regression test now asserts every command in the dispatch table parses.

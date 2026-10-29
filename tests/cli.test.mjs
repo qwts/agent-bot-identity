@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseAgentBotArgs } from '../cli/parse.mjs';
+import { MODULES } from '../cli/dispatch.mjs';
 import { formatMintGrant } from '../cli/mint-output.mjs';
 
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -191,6 +192,24 @@ test('CLI parsing rejects unknown commands and malformed hook dispatch', () => {
   });
   assert.deepEqual(parseAgentBotArgs(['secret', 'get', '--provider', 'proton-pass']), {
     kind: 'command', command: 'secret', args: ['get', '--provider', 'proton-pass'],
+  });
+});
+
+test('every command the dispatch table maps is accepted by the parser', () => {
+  for (const command of MODULES.keys()) {
+    assert.doesNotThrow(
+      () => parseAgentBotArgs([command]),
+      `dispatch maps ${command} but parse rejects it as unknown`,
+    );
+  }
+});
+
+test('agent-bot events is a public command (#1239)', () => {
+  assert.deepEqual(parseAgentBotArgs(['events', 'peek', '--ide']), {
+    kind: 'command', command: 'events', args: ['peek', '--ide'],
+  });
+  assert.deepEqual(parseAgentBotArgs(['events', 'wait', '--harness', 'codex', '--cursor', 'v1.x.1']), {
+    kind: 'command', command: 'events', args: ['wait', '--harness', 'codex', '--cursor', 'v1.x.1'],
   });
 });
 

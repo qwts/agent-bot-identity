@@ -11,6 +11,7 @@ Commands:
   join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json]
   mint-token         Mint a GitHub App installation token (through the agent-bot server when AGENT_BOT_SERVER is set)
   server             Connect to an agent-bot server: server enroll [--harness H]... | status [--json] | logout
+  events             Wait on, peek at, or ack relay messages from the agent-bot server: events wait|peek|ack [--ide] [--harness H] [--cursor C] [--timeout S]
   doctor             Diagnose installation and identity state; --probe-inbox also checks the gh-app-hook inbox answers (network, bounded, no bearer sent)
   identity           Manage execution identities and Apps (apps list; app create/connect/rotate-key/assign/remove; app migrate-key SLUG --to keyd [--dry-run]; addon github-identity on|off); migrate-credentials [--soul ID|--all] [--dry-run] [--json] moves App keys into each soul's key store and public metadata into config; reports removable legacy folders; --from-namespace OLD and/or --from-vault OLD copy credentials stored under an old credential namespace or pass-cli vault and keep the old items (owner only)
   space              Manage durable per-soul Agent Spaces
