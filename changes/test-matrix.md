@@ -1,1 +1,0 @@
-- `docs/test-matrix.md` maps unit and E2E coverage of the fail-closed identity surface, with the gaps that feed #1184.

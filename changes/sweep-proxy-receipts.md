@@ -1,1 +1,0 @@
-- Inference-proxy test seams: `startInferenceProxy` accepts `fetchImpl` and `maxBodyBytes`, passed through to `createInferenceProxy`, so the redaction sweep can drive real forwarded, too-large and key-not-held requests through the wired-up request receipts and prove no secret shape reaches a file.
