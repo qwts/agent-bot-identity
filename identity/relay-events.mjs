@@ -211,6 +211,10 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
   const deadline = Date.now() + waitMs;
   let at = cursor;
   const edgeDrops = [];
+  // auto mode only: when the edge stream did the whole wait without a
+  // failure, the one poll that runs after it is a catch-up check, not
+  // the transport that waited — the result says so.
+  let edgeHeld = false;
   if (mode !== 'poll' && !(session._edgeUnsupportedUntil > Date.now())) {
     try {
       const out = await edgeEvents({ session, harness, cursor: at, waitMs: Math.max(deadline - Date.now(), 0), maxEvents: want, sleep });
@@ -220,6 +224,7 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
       // the stream advanced the cursor.
       at = out.cursor;
       edgeDrops.push(...out.dropped);
+      edgeHeld = Date.now() >= deadline;
     } catch (e) {
       if (mode === 'edge') throw e;
       // Coded service refusals (scope, cursor, credential) are not
@@ -253,11 +258,11 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
     const next = last !== sent ? last : (typeof out?.cursor === 'string' ? out.cursor : sent);
     at = next;
     if (events.length || Date.now() >= deadline) {
-      return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
+      return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: edgeHeld ? 'edge' : 'poll', ...(edgeHeld ? { finalPoll: true } : {}) };
     }
     if (out?.hasMore && next !== sent) continue;
     const nap = Math.min(Math.max(Number(out?.nextPollMs) || 5000, 1000), 60000, Math.max(deadline - Date.now(), 0));
-    if (nap <= 0) return { events, dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
+    if (nap <= 0) return { events, dropped, cursor: next, truncated: Boolean(out?.truncated), transport: edgeHeld ? 'edge' : 'poll', ...(edgeHeld ? { finalPoll: true } : {}) };
     await sleep(nap);
   }
 }

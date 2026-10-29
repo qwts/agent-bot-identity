@@ -1,0 +1,1 @@
+- `nextEvents` now reports `transport: 'edge'` when the SSE stream held until the wait deadline and the only `events/poll` call was the final catch-up check (such a result also carries `finalPoll: true`). `transport: 'poll'` now means polling actually did the waiting — after an edge failure, an unsupported endpoint, or a clean early stream end.
