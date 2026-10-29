@@ -505,6 +505,7 @@ test('server mode: the gh shim and credential helper mint through the daemon, no
   const port = daemon.address().port;
   t.after(() => new Promise((resolve) => { daemon.close(resolve); }));
   const cwd = checkout(t);
+  execFileSync('git', ['-C', cwd, 'remote', 'add', 'origin', 'https://github.com/acme/repo.git']);
   const gitDir = join(cwd, '.git');
   const bindToken = mintBindToken({ gitDir, worktree: cwd, agentId });
   const bindRes = await fetch(`http://127.0.0.1:${port}/v0/bind`, {

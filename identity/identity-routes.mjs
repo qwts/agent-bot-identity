@@ -218,8 +218,23 @@ export function createIdentityRoutes({
         const operationId = newOperationId();
         const taskId = taskIdFor({ env, agentId: binding.agentId, transcript: binding.transcript ?? identity.transcript ?? null, operationId });
         try {
+          // The repository is the bound worktree's origin — never the
+          // daemon's working directory (/ under launchd) and never the
+          // caller's say. Local custody still mints without one.
+          let repo = null;
+          {
+            let cfg = {};
+            try { cfg = loadConfig({ env, home }); } catch { cfg = {}; }
+            if (serverUrl({ env, config: cfg })) {
+              try {
+                repo = boundRepository(binding.worktree);
+              } catch {
+                throw Object.assign(new Error('the bound worktree has no GitHub origin remote, so server mode cannot pick a repository; check it with `agent-bot doctor`'), { statusCode: 409, code: 'credential-no-repo' });
+              }
+            }
+          }
           grant = await mintImpl({
-            slug: appSlug, env, agentId: binding.agentId, taskId, operationId,
+            slug: appSlug, env, agentId: binding.agentId, taskId, operationId, repo,
             fetchImpl: serverFetch,
             viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
           });
@@ -228,7 +243,7 @@ export function createIdentityRoutes({
           // the audit stream has to account for every attempt, not only the
           // ones that reached a decision. Identity-service answers keep their
           // stable codes (credential-unavailable, device-revoked, ...).
-          const coded = ['credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off'].includes(error?.code) ? error.code : null;
+          const coded = ['credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'credential-no-repo'].includes(error?.code) ? error.code : null;
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
@@ -241,7 +256,7 @@ export function createIdentityRoutes({
           }, { env, home, now });
           if (coded) {
             throw Object.assign(error, {
-              statusCode: { 'credential-unavailable': 503, 'outcome-unknown': 503, 'device-revoked': 403, 'operation-conflict': 409, 'legacy-local-custody-off': 409 }[coded],
+              statusCode: { 'credential-unavailable': 503, 'outcome-unknown': 503, 'device-revoked': 403, 'operation-conflict': 409, 'legacy-local-custody-off': 409, 'credential-no-repo': 409 }[coded],
             });
           }
           throw error;

@@ -10,6 +10,7 @@ import {
   parseServerArgs, serverHarness, serverUrl, signatureMessage, statePaths, validateServerUrl,
 } from '../identity/server-client.mjs';
 import { parseConfig } from '../config.mjs';
+import { mint } from '../mint-token.mjs';
 import { readAction } from '../identity/action-ledger.mjs';
 
 import { BASE, fakeServer, sandbox, sleep } from './helpers/fake-identity-server.mjs';
@@ -578,4 +579,12 @@ test('a response signed by a different keypair is refused and the pin never move
   const session = new ServerSession({ base: BASE, env, fetchImpl: evil.fetch });
   await assert.rejects(session.call('GET', '/api/daemon/whoami'), /signature/, 'a foreign-key signature is refused');
   assert.deepEqual(readFileSync(pinFile), before, 'the pinned key file is byte-identical — nothing re-pinned');
+});
+
+test('an explicit repo overrides the caller checkout in server-mode mint', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_HARNESS: 'grok' };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const minted = await mint({ slug: 'qwts-grok-agent', env, fetchImpl: srv.fetch, repo: 'ov/erride', taskId: 'task_r', operationId: 'op_r' });
+  assert.equal(minted.repo, 'ov/erride', 'the explicit repo wins over cwd resolution');
 });

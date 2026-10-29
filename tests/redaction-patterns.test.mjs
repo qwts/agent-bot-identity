@@ -112,6 +112,7 @@ function mintWorktreeToken(env, root) {
   const worktree = path.join(root, 'worktree');
   mkdirSync(worktree, { recursive: true });
   execFileSync('git', ['init', '-q', worktree]);
+  execFileSync('git', ['-C', worktree, 'remote', 'add', 'origin', 'https://github.com/acme/repo.git']);
   const gitDir = path.join(worktree, '.git');
   const record = mintBindToken({ gitDir, worktree, agentId: identity.id });
   return { identity, gitDir, record };

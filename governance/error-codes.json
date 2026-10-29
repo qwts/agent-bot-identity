@@ -521,6 +521,14 @@
       "kind": "failure",
       "summary": "The identity service answered events/edgeTicket with -32026 Unsupported: edge push is not configured for this deployment; callers fall back to events/poll.",
       "registered": "0.15.0"
+    },
+    {
+      "n": 66,
+      "code": "credential-no-repo",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "The bound worktree has no GitHub origin remote, so the daemon cannot pick a repository for a server-mode credential mint; check the worktree with agent-bot doctor.",
+      "registered": "0.15.1"
     }
   ]
 }

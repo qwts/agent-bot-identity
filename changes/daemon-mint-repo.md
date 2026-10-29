@@ -1,0 +1,1 @@
+- Daemon-minted credentials in server mode resolve the repository from the authenticated binding's worktree origin instead of the daemon's working directory; a bound worktree without a GitHub origin fails closed with `credential-no-repo` (409) and a credential-mint receipt.
