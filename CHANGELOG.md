@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.1
+
+- Daemon-minted credentials in server mode resolve the repository from the authenticated binding's worktree origin instead of the daemon's working directory; a bound worktree without a GitHub origin fails closed with `credential-no-repo` (409) and a credential-mint receipt.
+- `agent-bot doctor` now checks the runtime module path (`CONFIG_MODULE`) a managed `gh` shim recorded: a path that is no longer on disk is a `shim.gh` failure and a versioned `/Cellar/agent-bot/<version>/` path a warning — the stale-shim failure that makes every `gh` call refuse with "cannot read the github-identity gate" after a `brew upgrade` is diagnosed and answered by `agent-bot install-gh-shim`.
+- `nextEvents` now reports `transport: 'edge'` when the SSE stream held until the wait deadline and the only `events/poll` call was the final catch-up check (such a result also carries `finalPoll: true`). `transport: 'poll'` now means polling actually did the waiting — after an edge failure, an unsupported endpoint, or a clean early stream end.
+
 ## 0.15.0
 
 - Action ledger guards (#1201): the ledger now writes only the allowlisted identifier/state fields, scalar values only, refuses credential-shaped values under any key (checked against the shared redaction registry), and keeps terminal states terminal; new tests cover corrupt entries, torn writes, cross-process writers and the secret-free file contract. The redaction sweep also asserts the three proxy request receipts land before scanning.
