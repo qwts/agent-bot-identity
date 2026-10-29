@@ -58,7 +58,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   assertAuthorized, assertPrivateGitDir, assignAgentApp, bindAgentLineage, childBindingPath,
   consumeBindToken, createBindingRegistry, createIdentityAppJobs, createIdentityRoutes,
-  createInboxTaker, ensureAgentIdentity, extractToken, identityAppFailure, identityAppOperation,
+  createInboxTaker, createServerNotices, ensureAgentIdentity, extractToken, identityAppFailure, identityAppOperation,
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
@@ -392,7 +392,8 @@ export function createDaemonServer({
   keydCall = keydRequest,
   // take_inbox's broker call (#229): ({ app, repo }) => { event }. The default
   // reads the bearer from pass-cli and the URL from this process's env.
-  inboxTake = createInboxTaker({ env }),
+  serverNotices = createServerNotices({ env, config }),
+  inboxTake = createInboxTaker({ env, serverNotices }),
   spawnHook = runSpawnHooks,
   now = () => new Date(),
   // Delegation grants (#108): one ledger per daemon, since approved grants
@@ -592,6 +593,7 @@ export function createDaemonServer({
     bindWorktreeConversation, reconcileSoulApp, ownerGate,
     mintImpl, keydCall, signingKey, serverFetch,
     inboxTake,
+    serverNotices,
     grantLedger, grantActor, grantView, grantFailure,
     soulCredentialsDeclaration, soulDirectory, populationFile,
   });
@@ -1031,7 +1033,7 @@ export function createDaemonServer({
           REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
           // Identity-service outcomes a credential caller acts on (#1184 goal).
           'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere', 'credential-no-repo'].includes(error.code)
-          || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
+          || typeof error.code === 'string' && /^(dream|inbox|grant|human|notices)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
         // The unsigned challenges a decision route asks the owner to sign (#753).
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
     }

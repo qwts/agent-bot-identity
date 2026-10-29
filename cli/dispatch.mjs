@@ -43,6 +43,7 @@ export const MODULES = new Map([
   ['metrics', 'metrics.mjs'],
   ['diagnostics', 'diagnostics-cli.mjs'],
   ['server', 'identity/server-client.mjs'],
+  ['notices', 'identity/server-notices.mjs'],
   ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'],
   ['gh-inbox-query', 'gh-inbox-query.mjs'],

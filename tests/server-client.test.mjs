@@ -600,3 +600,52 @@ test('an explicit null repo fails closed in server mode instead of reading cwd',
     /owner\/name/,
   );
 });
+test('notices: take/peek/ack/release through the signed session, filters and the take_inbox shim', async () => {
+  const { createServerNotices, parseNoticesArgs, noticeQuery, harnessForApp, main: noticesMain } = await import('../identity/server-notices.mjs');
+  const { createInboxTaker } = await import('../identity/inbox-take.mjs');
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  srv.notices = [
+    { id: 'd1', kind: 'mention', repo: 'a/b', type: ['discussion', 'comment'], number: 1 },
+    { id: 'd2', kind: 'issues.opened', repo: 'a/b', type: ['issue'], number: 2 },
+    { id: 'd3', kind: 'pull_request.opened', repo: 'a/c', type: ['pr'], number: 3 },
+  ];
+  const n = createServerNotices({ env, fetchImpl: srv.fetch });
+  assert.equal(n.enabled(), true);
+  const t = await n.take({ count: 5, type: 'discussions' });
+  assert.deepEqual(t.notices.map((x) => x.id), ['d1']);
+  assert.equal(t.notices[0].lease, 'lease_1');
+  assert.deepEqual(srv.noticeBodies.at(-1).body, { count: 5, type: 'discussions' });
+  assert.equal((await n.peek({ repo: 'a/b' })).visible, 1);
+  assert.equal(srv.noticeBodies.at(-1).method, 'GET');
+  assert.deepEqual((await n.release({ ids: ['lease_1'] })).released, ['lease_1']);
+  // A released notice leases again; ack then removes it.
+  const retaken = await n.take({ count: 1 });
+  assert.deepEqual((await n.ack({ ids: retaken.notices[0].lease })).acked, [retaken.notices[0].lease]);
+  await assert.rejects(() => n.ack({ ids: [] }), /1\.\.100/);
+  assert.throws(() => noticeQuery({ count: 99 }), /1\.\.50/);
+  assert.deepEqual(noticeQuery({ type: ['pr', 'issue'], kind: 'mention' }), { type: 'pr,issue', kind: 'mention' });
+  assert.deepEqual(parseNoticesArgs(['take', '--count', '5', '--type', 'discussion', '--type', 'pr']), { sub: 'take', ids: [], json: false, count: '5', type: 'discussion,pr' });
+  assert.throws(() => parseNoticesArgs(['bogus']), /unknown notices command/);
+  // A device may enroll App slugs themselves (the server keys Apps by slug):
+  // a scope match uses the slug, else the slug's harness family, else refuse.
+  assert.equal(harnessForApp('grok', { harnesses: ['grok', 'x'] }), 'grok');
+  assert.equal(harnessForApp('qwts-claude-agent', { harnesses: ['qwts-devin-agent', 'qwts-claude-agent'] }, { env: {}, config: {} }), 'qwts-claude-agent');
+  assert.equal(harnessForApp('qwts-codex-agent', { harnesses: ['codex', 'claude'] }, { env: {}, config: { apps: { codex: 'qwts-codex-agent' } } }), 'codex');
+  assert.throws(
+    () => harnessForApp('qwts-zebra-agent', { harnesses: ['a', 'b'] }, { env: {}, config: {} }),
+    (error) => error.code === 'notices-no-harness',
+  );
+  // take_inbox shim: one notice for the repo, acked, legacy { event } shape
+  const take = createInboxTaker({ env, serverNotices: n, readBearer: () => { throw new Error('bearer must not be read'); } });
+  const r = await take({ app: 'grok', repo: 'a/c' });
+  assert.equal(r.event.id, 'd3');
+  assert.equal(r.event.lease, undefined);
+  assert.ok(!srv.notices.some((x) => x.id === 'd3'), 'shim acks what it returns');
+  assert.deepEqual(await take({ app: 'grok', repo: 'a/c' }), { event: null });
+  // CLI
+  let out = '';
+  assert.equal(await noticesMain(['take', '--json'], { env, fetchImpl: srv.fetch, out: { write: (x) => { out += x; } }, err: { write: () => {} } }), 0);
+  assert.deepEqual(JSON.parse(out).notices.map((x) => x.id), ['d2']);
+});

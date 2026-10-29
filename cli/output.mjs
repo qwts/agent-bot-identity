@@ -26,7 +26,7 @@ Commands:
   owner              Owner-signed statements (ADR-0753): verify <token|file|-> [--repo R --issue N] [--json] checks one against the pinned keys, and calls it owner approval only where agent-bot-keyd vouches for those pins on that call (otherwise NOT owner approval, owner-pins-unprotected, exit 1); sign "<text>" --repo R --issue N (--key PATH | --store keyd) [--expires 7d]; enroll --store keyd [--name N] or --store ssh --key PATH [--name N], and remove NAME (owner only, through agent-bot-keyd); keys [--json]
   approvals          Tool-permission requests souls are waiting on: list [--json] | approve PROPOSAL_ID [--scope once|session] [--json] [--principal-stdin] | deny PROPOSAL_ID [--json] [--principal-stdin]
   audit              Read audit receipts: list [--json] [--since ISO-8601|-P1D] [--agent ID] [--event KIND] [--limit N] | tail [--json] [--agent ID]
-  mcp                Serve the agent-bot MCP tools (bind, whoami, population, space_path, credential, take_inbox)
+  mcp                Serve the agent-bot MCP tools (bind, whoami, population, space_path, credential, take_notices, ack_notices)
   reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply, fleet, send_message)
   wake               Hold this session's socket at the daemon's wake plane
   web                Pair a browser with the daemon's private web client

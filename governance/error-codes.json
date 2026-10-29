@@ -529,6 +529,30 @@
       "kind": "failure",
       "summary": "The bound worktree has no GitHub origin remote, so the daemon cannot pick a repository for a server-mode credential mint; check the worktree with agent-bot doctor.",
       "registered": "0.15.1"
+    },
+    {
+      "n": 67,
+      "code": "notices-no-app",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "The bound soul has no GitHub App recorded, so the daemon cannot answer notices for it.",
+      "registered": "0.15.3"
+    },
+    {
+      "n": 68,
+      "code": "notices-not-configured",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "Notices need server mode: AGENT_BOT_SERVER is unset or the device is not enrolled.",
+      "registered": "0.15.3"
+    },
+    {
+      "n": 69,
+      "code": "notices-no-harness",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "The bound App slug resolves to no server harness this device is enrolled for, so the notices queue cannot be addressed.",
+      "registered": "0.15.3"
     }
   ]
 }
