@@ -58,7 +58,13 @@ export const WAKE_FRAME_EVENT = 'wake';
 // The cold path (#259) owns `cold`, `failed`, and `waiting`; it can never
 // answer `warm`, because a soul it woke had no warm socket to answer from.
 const COLD_OUTCOMES = Object.freeze(['cold', 'failed', 'waiting']);
+// One dispatched wake carries at most this many ids; a bigger broker
+// event is chunked below. The event itself may be larger: after a
+// re-pair the broker unions a whole mailbox backlog into one wake
+// (its own mailbox bound is 1000, the socket line caps it anyway), so
+// the wire check only refuses absurd sizes.
 const MAX_MESSAGE_IDS = 512;
+const MAX_EVENT_MESSAGE_IDS = 4096;
 // A detail is broker-visible text: printable, bounded, and never a payload.
 const MAX_DETAIL_LENGTH = 200;
 
@@ -104,8 +110,8 @@ function validateEvent(event) {
   const cursorOk = (Number.isSafeInteger(event.cursor) && event.cursor >= 0)
     || (typeof event.cursor === 'string' && event.cursor.length > 0);
   if (!cursorOk) failDispatch('wake event requires a sequence-number or string cursor');
-  if (!Array.isArray(event.messageIds) || event.messageIds.length > MAX_MESSAGE_IDS) {
-    failDispatch(`wake event requires an array of at most ${MAX_MESSAGE_IDS} message IDs`);
+  if (!Array.isArray(event.messageIds) || event.messageIds.length > MAX_EVENT_MESSAGE_IDS) {
+    failDispatch(`wake event requires an array of at most ${MAX_EVENT_MESSAGE_IDS} message IDs`);
   }
   for (const id of event.messageIds) {
     if (typeof id !== 'string' || id.length === 0) failDispatch('message IDs must be non-empty strings');
@@ -152,6 +158,27 @@ export async function dispatchWake(event, ports) {
   assertPorts(ports ?? {});
   const { pool, coldWake, report, receipt, isPaused = () => false, diagnostics = null, nowMs = () => Date.now() } = ports;
   const wake = validateEvent(event);
+  // A backlog wake (a fresh pairing can fold hundreds of messages into
+  // one event) dispatches in order as <=512-id wakes of its own, each
+  // with its own frame, report and receipt — never a dropped id.
+  if (wake.messageIds.length > MAX_MESSAGE_IDS) {
+    const results = [];
+    // A rejected chunk (a transient report failure, say) must not strand
+    // the rest: every chunk still reaches the pool and the report, and
+    // the caller sees the first failure only after all were attempted.
+    let firstError = null;
+    for (let i = 0; i < wake.messageIds.length; i += MAX_MESSAGE_IDS) {
+      const chunk = wake.messageIds.slice(i, i + MAX_MESSAGE_IDS);
+      try {
+        results.push(await dispatchWake({ ...wake, count: chunk.length, messageIds: chunk }, ports));
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    if (firstError) throw firstError;
+    const last = results.at(-1);
+    return { agentId: wake.agentId, messageIds: [...wake.messageIds], outcome: last.outcome, detail: last.detail, count: wake.count, chunks: results.length };
+  }
   const agentId = wake.agentId;
   const messageIds = [...wake.messageIds];
   const span = diagnostics ? startSpan(typeof wake.traceparent === 'string' ? wake.traceparent : null) : null;
