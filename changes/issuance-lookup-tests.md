@@ -1,1 +1,0 @@
-- Issuance lookup hardening (#1204): a signed but unparseable response body is now refused as credential-unavailable instead of read as an empty answer; lookup edge cases covered — safe id encoding, unsigned/tampered answers refused, none settling a pending unknown as rejected, unknown never retried.

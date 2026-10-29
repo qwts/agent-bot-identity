@@ -1,1 +1,0 @@
-- Credential-race coverage (#1207): revocation racing an in-flight mint leaves every caller settled and no cached token, two callers racing one operation_id settle on a single issuance, and a same-task operation waits on an unknown one rather than racing it.
