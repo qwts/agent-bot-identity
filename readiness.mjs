@@ -2024,9 +2024,50 @@ function codexSoulSkills({ home, env }) {
   return souls && codexSkillsCheck({ souls });
 }
 
-function ghShimCheck({ home, required, inspect }) {
+const VERSIONED_CELLAR_MODULE_RE = /\/Cellar\/agent-bot\/[^/]+\//;
+
+// The shim's recorded CONFIG_MODULE is where it reads the gate from. A
+// path that vanished (a brew upgrade removes the old Cellar tree) leaves
+// every gh call refusing; a versioned Cellar path works today and breaks
+// on the next upgrade, so it warns before it fails.
+function shimConfigModule(shimPath, readFile) {
+  let text;
+  try {
+    text = readFile(shimPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const match = /^CONFIG_MODULE=(?:'([^']*)'|"([^"]*)"|(\S+))/m.exec(text);
+  return match ? (match[1] ?? match[2] ?? match[3] ?? null) : null;
+}
+
+function ghShimCheck({ home, required, inspect, exists = existsSync, readFile = readFileSync }) {
   const result = inspect({ home });
   if (result.status === 'ready') {
+    const shimPath = typeof result.evidence?.path === 'string'
+      ? result.evidence.path
+      : join(home, '.config', 'agent-bot', 'bin', 'gh');
+    const configured = shimConfigModule(shimPath, readFile);
+    if (configured && !exists(configured)) {
+      return readinessCheck({
+        id: 'shim.gh',
+        status: 'failed',
+        code: 'gh-shim-config-missing',
+        message: 'the gh shim records a runtime module that is no longer on disk',
+        action: 'run: agent-bot install-gh-shim',
+        evidence: { ...result.evidence, installed: true, required, config_module: configured },
+      });
+    }
+    if (configured && VERSIONED_CELLAR_MODULE_RE.test(configured)) {
+      return readinessCheck({
+        id: 'shim.gh',
+        status: 'warning',
+        code: 'gh-shim-config-versioned',
+        message: 'the gh shim records a versioned Cellar module; a brew upgrade leaves it stale',
+        action: 'run: agent-bot install-gh-shim',
+        evidence: { ...result.evidence, installed: true, required, config_module: configured },
+      });
+    }
     return readinessCheck({
       id: 'shim.gh',
       status: 'ready',
@@ -2775,6 +2816,7 @@ export async function collectReadiness({
   statFile = statSync,
   readlink = readlinkSync,
   exists = existsSync,
+  readFile = readFileSync,
   access = accessSync,
   load = loadConfig,
   inspectCredentials = inspectAppCredentials,
@@ -2954,7 +2996,7 @@ export async function collectReadiness({
         ...inspectClaudeWorktreeAdapter({ home, env, config }),
       }));
     }
-    machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh }));
+    machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh, exists, readFile }));
     machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));
     // Doctor only: a bootstrap reaches no gh (bootstrap-hermetic), and names
     // an expired login itself when a profile fetch fails over it.
