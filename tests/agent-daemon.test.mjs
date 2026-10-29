@@ -1804,3 +1804,92 @@ test('v2: legacy local custody keeps the v1 path (host vouch key) even in server
     soulTokenImpl: async () => { called += 1; throw new Error('unreachable'); },
   });
 });
+
+test('server-mode /v0/credential mints per the bound worktree origin, never the daemon cwd', async () => {
+  const { root, env } = scratchEnv();
+  env.AGENT_BOT_SERVER = 'https://identity.example.test';
+  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
+  execFileSync('git', ['-C', worktree, 'remote', 'add', 'origin', 'https://github.com/acme/repo.git']);
+  const seen = [];
+  const server = createDaemonServer({
+    env,
+    home: '/nonexistent',
+    config: { features: { 'github-identity': true } },
+    mintImpl: async ({ slug, repo }) => { seen.push({ slug, repo }); return { token: 'ghs_r', expires_at: '2026-08-12T09:00:00.000Z', issuance_id: 'iss_r' }; },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const call = (pathname, { method = 'GET', body, headers = {} } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method, headers: { authorization: `Bearer ${server.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-repo' } } })).json();
+    const credential = await call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } });
+    assert.equal(credential.status, 200);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].repo, 'acme/repo', 'the bound worktree origin is the mint repository');
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
+});
+
+test('server-mode /v0/credential without a worktree origin fails closed with credential-no-repo', async () => {
+  const { root, env } = scratchEnv();
+  env.AGENT_BOT_SERVER = 'https://identity.example.test';
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  let minted = 0;
+  const server = createDaemonServer({
+    env,
+    home: '/nonexistent',
+    config: { features: { 'github-identity': true } },
+    mintImpl: async () => { minted += 1; return { token: 'ghs_no', expires_at: '2026-08-12T09:00:00.000Z' }; },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const call = (pathname, { method = 'GET', body, headers = {} } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method, headers: { authorization: `Bearer ${server.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-norepo' } } })).json();
+    const credential = await call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } });
+    const body = await credential.json();
+    assert.equal(credential.status, 409);
+    assert.equal(body.code, 'credential-no-repo');
+    assert.equal(minted, 0, 'nothing was minted');
+    const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line));
+    const mint = receipts.find((r) => r.event === 'credential-mint' && r.decision === 'failed');
+    assert.equal(mint?.reason, 'credential-no-repo');
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
+});
+
+test('local-custody /v0/credential still mints without a worktree origin', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  const seen = [];
+  const server = createDaemonServer({
+    env,
+    home: '/nonexistent',
+    config: { features: { 'github-identity': true } },
+    mintImpl: async ({ slug, repo }) => { seen.push({ slug, repo }); return { token: 'ghs_l', expires_at: '2026-08-12T09:00:00.000Z', issuance_id: 'iss_l' }; },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const call = (pathname, { method = 'GET', body, headers = {} } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method, headers: { authorization: `Bearer ${server.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-local' } } })).json();
+    const credential = await call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } });
+    assert.equal(credential.status, 200);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].repo, null, 'no repo resolved outside server mode');
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
+});

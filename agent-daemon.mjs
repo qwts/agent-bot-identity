@@ -1030,7 +1030,7 @@ export function createDaemonServer({
         ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES,
           REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
           // Identity-service outcomes a credential caller acts on (#1184 goal).
-          'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere'].includes(error.code)
+          'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere', 'credential-no-repo'].includes(error.code)
           || typeof error.code === 'string' && /^(dream|inbox|grant|human)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
         // The unsigned challenges a decision route asks the owner to sign (#753).
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
