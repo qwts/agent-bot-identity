@@ -129,6 +129,40 @@ export function ambientHarness(env = process.env) {
   return null;
 }
 
+// An enrolled App is private to one owner account/org: a mismatch between the
+// App's owner and the checkout origin's owner can never mint an installation
+// token, so it is refused up front rather than at push time. An App absent
+// from the roster is left to the server to refuse (don't block on unknown).
+export async function appOwnerMismatch({ appSlug, repo, session }) {
+  if (!appSlug || !repo || !session) return null;
+  const repoOwner = String(repo).split('/')[0];
+  if (!repoOwner) return null;
+  // A roster that can't be read is unknown, not a refusal: the server still
+  // refuses the mint itself.
+  let apps;
+  try { ({ apps } = await session.harnessApps()); } catch { return null; }
+  const app = (apps ?? []).find((a) => (a.slug ?? a.name) === appSlug);
+  if (!app?.owner) return null;
+  return app.owner.toLowerCase() === repoOwner.toLowerCase() ? null : { appSlug, appOwner: app.owner, repo };
+}
+
+// Server mode only: refuse before a soul's App is recorded for a checkout the
+// App's owner cannot reach. Callers with no server, no App, or no origin pass.
+export async function refuseAppOwnerMismatch({ appSlug, env = process.env, config, cwd = process.cwd(), fetchImpl = fetch }) {
+  const base = serverUrl({ env, config });
+  if (!base || !appSlug) return;
+  const repo = repoFromCheckout(cwd, env);
+  if (!repo) return;
+  const mismatch = await appOwnerMismatch({ appSlug, repo, session: new ServerSession({ base, env, fetchImpl }) });
+  if (mismatch) {
+    const repoOwner = repo.split('/')[0];
+    throw Object.assign(
+      new Error(`this soul's App is ${mismatch.appSlug} (owner ${mismatch.appOwner}); ${repo} belongs to ${repoOwner} and a private App can't be installed there — use an App owned by ${repoOwner} (join a soul whose App belongs to ${repoOwner}) for this checkout`),
+      { code: 'app-owner-mismatch', statusCode: 409 },
+    );
+  }
+}
+
 // The server's harness name for a resolved App slug — shared by minting and
 // notices so the two never drift: the ambient override wins; a device whose
 // enrolled scope names the slug itself (the server keys Apps by slug, e.g.
@@ -511,6 +545,13 @@ export class ServerSession {
   }
 
   whoami() { return this.call('GET', '/api/daemon/whoami'); }
+
+  // Which Apps the enrolled device may use, each with the owner account/org it
+  // is private to. Cached per session — the roster changes on enrollment only.
+  harnessApps() {
+    this._harnessApps ??= this.call('GET', '/api/daemon/harness-apps').catch((error) => { this._harnessApps = null; throw error; });
+    return this._harnessApps;
+  }
 
   // SEP-3415 MCP events/poll on POST /mcp: the relay is untrusted external
   // input, so /mcp answers carry no agent-bot-signature and are not verified

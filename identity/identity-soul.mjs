@@ -26,3 +26,6 @@ export { pinnedSlug, resolveAgentSlug } from './resolve-agent.mjs';
 export { createSessionGrants } from './session-approvals.mjs';
 export { credentialStores, defaultCredentialStore, deleteSoulSecret, legacyCredentialDirectory, legacyKeyRemovable, readLegacyCredential, readSoulCredential, readSoulSecret, verifyAppCredential, writeSoulCredential, writeSoulSecret } from './soul-credentials.mjs';
 export { vouchKeyPath, vouchStateDir } from './vouch.mjs';
+
+// App-owner scoping for join/setup-worktree refuses (#1182 review).
+export { refuseAppOwnerMismatch } from './server-client.mjs';

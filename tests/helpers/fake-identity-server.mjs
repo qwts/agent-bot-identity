@@ -247,6 +247,10 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
           task_id: echo.task_id, operation_id: echo.operation_id, jti: claims.jti, claims: echo.claims, replayed: Boolean(prior),
         }, proof.payload.jti);
       }
+      if (u.pathname === '/api/daemon/harness-apps' && (init.method ?? 'GET') === 'GET') {
+        s.calls.push({ method: 'GET', path: u.pathname });
+        return signed(200, { apps: s.harnessApps ?? [] }, proof.payload.jti);
+      }
       if (u.pathname === '/api/daemon/notices' || u.pathname.startsWith('/api/daemon/notices/')) {
         s.noticeBodies = s.noticeBodies ?? [];
         s.noticeBodies.push({ method: init.method ?? 'GET', path: u.pathname + u.search, body: init.body ? JSON.parse(init.body) : null });

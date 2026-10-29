@@ -13,6 +13,7 @@ import { loadConfig, isGateEnabled, isOrgHarnessAppSlug, soulOwnsAppSlug, apiBas
 import { daemonClient, identityOp } from './daemon-client.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
 import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
+import { refuseAppOwnerMismatch } from './identity-soul.mjs';
 import { assertWorktreeArea, placeWorktree, soulWorktreePath } from './soul-worktrees.mjs';
 
 const USAGE = `usage: agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
@@ -437,6 +438,7 @@ async function configure({ identity, options, config,
     config,
     daemon,
   });
+  await refuseAppOwnerMismatch({ appSlug: slug, config, cwd: process.cwd(), fetchImpl: options?.fetchImpl });
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);

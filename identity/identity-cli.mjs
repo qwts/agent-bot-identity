@@ -25,3 +25,6 @@ export { createSecretProviderRegistry, probeSecretStore } from './secret-store.m
 export { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
 export { appKeyStores } from './soul-credentials.mjs';
 export { adapterFallback } from './uninstalled-identity-hook.mjs';
+
+// Server-mode App-owner roster for the doctor's worktree.app_owner check.
+export { ServerSession, appOwnerMismatch, repoFromCheckout, serverUrl } from './server-client.mjs';

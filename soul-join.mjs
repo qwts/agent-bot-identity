@@ -41,6 +41,7 @@ import { ensureSoulSpace } from './soul-memory.mjs';
 import { execCliFile, cliCommandTimeout } from './windows-git-shell.mjs';
 import { daemonPreference, isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { pinnedSlug, readBinding, resolveAgentSlug } from './identity-soul.mjs';
+import { refuseAppOwnerMismatch } from './identity-soul.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulNpmHarnessDirs } from './soul-home.mjs';
 import { bundledStarter, spawnSoulTemplate } from './soul-templates.mjs';
 export { bundledStarter } from './soul-templates.mjs';
@@ -197,7 +198,7 @@ export function joinComms({ agentId, worktree, name, harness }, { env = process.
 export async function joinSoul({
   name, harness, template, soul = null, cwd = process.cwd(), ownWorkspace = false, wake = null, principal = null,
   env = process.env, home = homedir(), config, daemon = null, comms = joinComms, spawn = spawnSoulTemplate, gate = ownerGate,
-  installHarness = installSoulHarnesses, leave = null,
+  installHarness = installSoulHarnesses, leave = null, fetchImpl = fetch,
 } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
   if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) throw new Error('--harness must be a harness key');
@@ -280,6 +281,9 @@ export async function joinSoul({
   // never changes a non-default assignment, revives a soul, or replaces a binding.
   // The census gets the App first and identity's record last; if the
   // identity write fails, the census row's App is put back (#645, F6).
+  // A private App belongs to its owner account/org: refuse a checkout whose
+  // origin owner can never host it, before the census or the soul records it.
+  if (appSlug) await refuseAppOwnerMismatch({ appSlug, env, config: loaded, cwd, fetchImpl });
   if (existing && appSlug && (!existing.github || repairingDefaultApp)) {
     const opEnv = { ...env, ...(home ? { HOME: home, USERPROFILE: home } : {}) };
     setSoulAppThen(agentId, appSlug, { file }, () => identityOp('initialize-app', { id: agentId, appSlug, stateDir, config: loaded }, { env: opEnv, cwd }));

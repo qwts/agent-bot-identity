@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -600,6 +601,36 @@ test('an explicit null repo fails closed in server mode instead of reading cwd',
     /owner\/name/,
   );
 });
+test('app-owner mismatch: refused on another owner; match, unknown and case pass', async (t) => {
+  const { appOwnerMismatch, refuseAppOwnerMismatch, ServerSession } = await import('../identity/server-client.mjs');
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  srv.harnessApps = [
+    { slug: 'trueline-mcode-agent', owner: 'true-line' },
+    { slug: 'qwts-devin-agent', owner: 'QWTS' },
+  ];
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
+  assert.deepEqual(await appOwnerMismatch({ appSlug: 'trueline-mcode-agent', repo: 'qwts/qwts-agent-ci', session }),
+    { appSlug: 'trueline-mcode-agent', appOwner: 'true-line', repo: 'qwts/qwts-agent-ci' });
+  assert.equal(await appOwnerMismatch({ appSlug: 'qwts-devin-agent', repo: 'QwTs/foo', session }), null, 'owners compare case-insensitively');
+  assert.equal(await appOwnerMismatch({ appSlug: 'ghost-agent', repo: 'qwts/foo', session }), null, 'an App absent from the roster is not blocked');
+
+  const dir = mkdtempSync(join(tmpdir(), 'abi-owner-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  execFileSync('git', ['-C', dir, 'init', '-q']);
+  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/qwts/qwts-agent-ci.git']);
+  await assert.rejects(
+    refuseAppOwnerMismatch({ appSlug: 'trueline-mcode-agent', env, config: {}, cwd: dir, fetchImpl: srv.fetch }),
+    (error) => error.code === 'app-owner-mismatch' && error.statusCode === 409 && /qwts/.test(error.message),
+  );
+  // No server configured: skipped without any network call.
+  await refuseAppOwnerMismatch({
+    appSlug: 'trueline-mcode-agent', env: { ...sandbox(), AGENT_BOT_CONFIG: '/nonexistent' }, config: {},
+    cwd: dir, fetchImpl: () => { throw new Error('the check must not fetch off-server'); },
+  });
+});
+
 test('notices: take/peek/ack/release through the signed session, filters and the take_inbox shim', async () => {
   const { createServerNotices, parseNoticesArgs, noticeQuery, harnessForApp, main: noticesMain } = await import('../identity/server-notices.mjs');
   const { createInboxTaker } = await import('../identity/inbox-take.mjs');
