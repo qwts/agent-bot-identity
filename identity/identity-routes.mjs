@@ -223,8 +223,9 @@ export function createIdentityRoutes({
           // caller's say. Local custody still mints without one.
           let repo = null;
           {
-            let cfg = {};
-            try { cfg = loadConfig({ env, home }); } catch { cfg = {}; }
+            // A config that cannot be read fails closed: a config-only
+            // agentBotServer must not silently read as local custody.
+            const cfg = loadConfig({ env, home });
             if (serverUrl({ env, config: cfg })) {
               try {
                 repo = boundRepository(binding.worktree);

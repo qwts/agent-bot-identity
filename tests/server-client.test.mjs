@@ -588,3 +588,15 @@ test('an explicit repo overrides the caller checkout in server-mode mint', async
   const minted = await mint({ slug: 'qwts-grok-agent', env, fetchImpl: srv.fetch, repo: 'ov/erride', taskId: 'task_r', operationId: 'op_r' });
   assert.equal(minted.repo, 'ov/erride', 'the explicit repo wins over cwd resolution');
 });
+
+test('an explicit null repo fails closed in server mode instead of reading cwd', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_HARNESS: 'grok' };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  // The suite's own cwd is a checkout with an origin: a silent fallback
+  // would mint; an explicit null must reach the server-mode refusal.
+  await assert.rejects(
+    mint({ slug: 'qwts-grok-agent', env, fetchImpl: srv.fetch, repo: null, taskId: 'task_n', operationId: 'op_n' }),
+    /owner\/name/,
+  );
+});

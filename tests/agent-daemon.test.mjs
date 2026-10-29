@@ -1893,3 +1893,34 @@ test('local-custody /v0/credential still mints without a worktree origin', async
     await new Promise((resolve) => { server.close(resolve); });
   }
 });
+
+test('an unreadable config fails closed instead of minting as local custody', async () => {
+  const { root, env } = scratchEnv();
+  env.AGENT_BOT_CONFIG = path.join(root, 'config.json');
+  writeFileSync(env.AGENT_BOT_CONFIG, '{ not json');
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  let minted = 0;
+  const server = createDaemonServer({
+    env,
+    home: '/nonexistent',
+    config: { features: { 'github-identity': true } },
+    mintImpl: async () => { minted += 1; return { token: 'ghs_c', expires_at: '2026-08-12T09:00:00.000Z' }; },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const call = (pathname, { method = 'GET', body, headers = {} } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method, headers: { authorization: `Bearer ${server.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-cfg' } } })).json();
+    const credential = await call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } });
+    assert.ok(credential.status >= 400, `config failure must not mint (got ${credential.status})`);
+    assert.equal(minted, 0, 'mintImpl was not called');
+    const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(receipts.some((r) => r.event === 'credential-mint' && r.decision === 'failed'), true, 'a failure receipt was written');
+  } finally {
+    await new Promise((resolve) => { server.close(resolve); });
+  }
+});
