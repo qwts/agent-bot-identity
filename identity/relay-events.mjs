@@ -115,18 +115,25 @@ async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }
   let truncated = false;
   let remints = 0;
   if (typeof session.mcpEdgeTicket !== 'function') throw edgeError('this session cannot mint edge tickets', at);
+  // The stream's own timer is the truth for "edge did the waiting": it
+  // fires on a monotonic clock that can beat the wall-clock deadline
+  // by a hair, so callers ask endedBy, not Date.now().
+  // Precedence: 'max-events' > 'deadline' > 'eof'.
+  let timedOut = false;
+  const endedBy = () => (events.length >= want ? 'max-events' : (timedOut || Date.now() >= deadline ? 'deadline' : 'eof'));
   for (;;) {
     const ticket = await edgeTicket(session, harness, at);
     if (!sseUrlOk(ticket.sse)) { dropTicket(session, harness); throw edgeError('the edge advertised a non-https sse endpoint', at); }
     const url = `${ticket.sse}?cursor=${encodeURIComponent(at ?? ticket.cursor ?? '')}`;
     const ctl = new AbortController();
-    const timeout = setTimeout(() => { ctl.abort(); }, Math.max(deadline - Date.now(), 1));
+    timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; ctl.abort(); }, Math.max(deadline - Date.now(), 1));
     let res;
     try {
       res = await fetchImpl(url, { headers: { authorization: `Bearer ${ticket.ticket}`, accept: 'text/event-stream' }, signal: ctl.signal, redirect: 'error' });
     } catch (e) {
       clearTimeout(timeout);
-      if (Date.now() >= deadline) return { events, dropped, cursor: at, truncated, transport: 'edge' };
+      if (Date.now() >= deadline) return { events, dropped, cursor: at, truncated, transport: 'edge', endedBy: endedBy() };
       throw edgeError(`edge sse fetch failed: ${e?.name ?? 'error'}`, at);
     }
     if (res.status === 401) {
@@ -196,13 +203,13 @@ async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }
       clearTimeout(timeout);
       try { await reader.cancel(); } catch { /* best effort */ }
     }
-    if (events.length || Date.now() >= deadline) return { events: events.slice(0, want), dropped, cursor: at, truncated, transport: 'edge' };
+    if (events.length || Date.now() >= deadline) return { events: events.slice(0, want), dropped, cursor: at, truncated, transport: 'edge', endedBy: endedBy() };
     if (fail) throw fail;
     // A clean stream end returns whatever the stream yielded — 'auto'
     // falls through to polling; the next call opens a fresh stream.
     break;
   }
-  return { events: events.slice(0, want), dropped, cursor: at, truncated, transport: 'edge' };
+  return { events: events.slice(0, want), dropped, cursor: at, truncated, transport: 'edge', endedBy: endedBy() };
 }
 
 export async function nextEvents({ session, harness, cursor = null, waitMs = 0, maxEvents = 1, sleep = defaultSleep, transport = null } = {}) {
@@ -211,15 +218,23 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
   const deadline = Date.now() + waitMs;
   let at = cursor;
   const edgeDrops = [];
+  // auto mode only: when the edge stream did the whole wait without a
+  // failure, the one poll that runs after it is a catch-up check, not
+  // the transport that waited — the result says so.
+  let edgeHeld = false;
   if (mode !== 'poll' && !(session._edgeUnsupportedUntil > Date.now())) {
     try {
       const out = await edgeEvents({ session, harness, cursor: at, waitMs: Math.max(deadline - Date.now(), 0), maxEvents: want, sleep });
+      // endedBy is internal bookkeeping — never part of the result.
+      const edgeEndedBy = out.endedBy;
+      delete out.endedBy;
       if (out.events.length || mode === 'edge') return { ...out, dropped: edgeDrops.concat(out.dropped) };
       // auto, edge produced no events (clean end or the wait burned out):
       // poll always runs next — even an immediate check — from wherever
       // the stream advanced the cursor.
       at = out.cursor;
       edgeDrops.push(...out.dropped);
+      edgeHeld = edgeEndedBy === 'deadline';
     } catch (e) {
       if (mode === 'edge') throw e;
       // Coded service refusals (scope, cursor, credential) are not
@@ -253,11 +268,11 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
     const next = last !== sent ? last : (typeof out?.cursor === 'string' ? out.cursor : sent);
     at = next;
     if (events.length || Date.now() >= deadline) {
-      return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
+      return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: edgeHeld ? 'edge' : 'poll', ...(edgeHeld ? { finalPoll: true } : {}) };
     }
     if (out?.hasMore && next !== sent) continue;
     const nap = Math.min(Math.max(Number(out?.nextPollMs) || 5000, 1000), 60000, Math.max(deadline - Date.now(), 0));
-    if (nap <= 0) return { events, dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
+    if (nap <= 0) return { events, dropped, cursor: next, truncated: Boolean(out?.truncated), transport: edgeHeld ? 'edge' : 'poll', ...(edgeHeld ? { finalPoll: true } : {}) };
     await sleep(nap);
   }
 }

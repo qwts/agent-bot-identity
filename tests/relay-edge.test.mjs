@@ -255,3 +255,68 @@ test('one chunk of many small frames is processed, not capped', async () => {
   assert.equal(out.transport, 'edge', `${frames.join('').length} bytes of small frames drained fine`);
   assert.equal(out.cursor, enc(100));
 });
+
+test('edge holding to the deadline reports transport edge; poll is one catch-up call', async () => {
+  const srv = fakeServer();
+  srv.sseScript = [
+    { method: 'notifications/events/active', params: { cursor: enc(0) } },
+    { method: 'notifications/events/heartbeat', params: { cursor: enc(3) } },
+  ];
+  srv.sseHold = true;
+  let polls = 0;
+  const sess = session(srv, { poll: async () => { polls += 1; return { events: [], cursor: enc(3), hasMore: false, nextPollMs: 5 }; } });
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 150 });
+  assert.equal(out.transport, 'edge', 'the SSE stream did the waiting');
+  assert.equal(polls, 1, 'only the final catch-up poll ran');
+  assert.equal(out.events.length, 0);
+  assert.equal(out.cursor, enc(3));
+});
+
+test('an event that lands in the catch-up poll reports edge with finalPoll', async () => {
+  const srv = fakeServer();
+  srv.sseScript = [{ method: 'notifications/events/active', params: { cursor: enc(0) } }];
+  srv.sseHold = true;
+  const sess = session(srv, { poll: async () => ({ events: [relay('late', 4)], cursor: enc(4), hasMore: false }) });
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 120 });
+  assert.equal(out.transport, 'edge');
+  assert.equal(out.finalPoll, true, 'the event came via the catch-up poll');
+  assert.equal(out.events.length, 1);
+  assert.equal(out.events[0].body, 'late');
+});
+
+test('an edge failure leaves polling as the reported transport', async () => {
+  const srv = fakeServer();
+  srv.sseStatus = 503;
+  let polls = 0;
+  const sess = session(srv, { poll: async () => { polls += 1; return { events: [relay('p', 1)], cursor: enc(1), hasMore: false }; } });
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 3000 });
+  assert.equal(out.transport, 'poll');
+  assert.equal(out.finalPoll, undefined);
+});
+
+test('the edge label follows the stream timer even when Date.now lags the deadline', async (t) => {
+  const srv = fakeServer();
+  srv.sseHold = true;
+  const realNow = Date.now;
+  const fixed = realNow();
+  // The wall clock never reaches the deadline; only the edge timer does.
+  Date.now = () => fixed;
+  t.after(() => { Date.now = realNow; });
+  const out = await nextEvents({
+    session: session(srv, { poll: async () => ({ events: [relay('late', 4)], cursor: enc(4), hasMore: false }) }),
+    harness: HARNESS, cursor: enc(0), waitMs: 50,
+  });
+  assert.equal(out.transport, 'edge', 'the timer still says the edge did the waiting');
+  assert.equal(out.finalPoll, true);
+  assert.equal('endedBy' in out, false, 'endedBy is internal');
+});
+
+test('endedBy never reaches a nextEvents result', async () => {
+  const srv = fakeServer();
+  Object.assign(srv, frames(['event', relay('x', 1)]));
+  const edge = await nextEvents({ session: session(srv), harness: HARNESS, cursor: enc(0), waitMs: 500, transport: 'edge' });
+  assert.equal('endedBy' in edge, false);
+  srv.sseStatus = 503;
+  const poll = await nextEvents({ session: session(srv, { poll: async () => ({ events: [relay('p', 1)], cursor: enc(1), hasMore: false }) }), harness: HARNESS, cursor: enc(0), waitMs: 500 });
+  assert.equal('endedBy' in poll, false);
+});
