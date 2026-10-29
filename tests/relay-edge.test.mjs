@@ -320,3 +320,19 @@ test('endedBy never reaches a nextEvents result', async () => {
   const poll = await nextEvents({ session: session(srv, { poll: async () => ({ events: [relay('p', 1)], cursor: enc(1), hasMore: false }) }), harness: HARNESS, cursor: enc(0), waitMs: 500 });
   assert.equal('endedBy' in poll, false);
 });
+
+test('a fetch aborted by the stream timer counts as the edge waiting', async (t) => {
+  const srv = fakeServer();
+  const sess = session(srv, { poll: async () => ({ events: [relay('late', 4)], cursor: enc(4), hasMore: false }) });
+  // The fetch never settles on its own — only the abort signal frees it.
+  sess.edgeFetch = (url, init = {}) => new Promise((resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+  });
+  const realNow = Date.now;
+  const fixed = realNow();
+  Date.now = () => fixed;
+  t.after(() => { Date.now = realNow; });
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 40 });
+  assert.equal(out.transport, 'edge', 'the timer still says the edge did the waiting');
+  assert.equal(out.finalPoll, true);
+});

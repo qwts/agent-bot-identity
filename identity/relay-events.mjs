@@ -133,7 +133,7 @@ async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }
       res = await fetchImpl(url, { headers: { authorization: `Bearer ${ticket.ticket}`, accept: 'text/event-stream' }, signal: ctl.signal, redirect: 'error' });
     } catch (e) {
       clearTimeout(timeout);
-      if (Date.now() >= deadline) return { events, dropped, cursor: at, truncated, transport: 'edge', endedBy: endedBy() };
+      if (timedOut || Date.now() >= deadline) return { events, dropped, cursor: at, truncated, transport: 'edge', endedBy: endedBy() };
       throw edgeError(`edge sse fetch failed: ${e?.name ?? 'error'}`, at);
     }
     if (res.status === 401) {
