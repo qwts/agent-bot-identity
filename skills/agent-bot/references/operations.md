@@ -362,7 +362,9 @@ Recover in this order, verifying each step before the next:
 
 1. **Shims.** Run `agent-bot install-gh-shim`. It rewrites the PATH shim and
    the Codex runtime shim to the installed release. Releases with #1176
-   record the stable `opt` path, so an upgrade no longer needs this step.
+   record the stable `opt` path, so an upgrade no longer needs this step;
+   `agent-bot doctor` flags a shim that still records a missing or
+   versioned-Cellar module as `shim.gh` before any `gh` call is made.
 2. **Daemon (owner).** Compare `agent-bot --version` with the running
    daemon: `ps -axo pid,ppid,command | grep agent-daemon.mjs`. If the daemon
    runs an older Cellar path, the owner restarts it with

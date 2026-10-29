@@ -2893,3 +2893,65 @@ test('doctor tells a rejected gh token from one this session cannot read, and ne
   });
   assert.equal(bootstrapped.machine.checks.some(({ id }) => id === 'gh.login'), false);
 });
+
+test('doctor fails a gh shim whose recorded module is gone', async () => {
+  const home = tempRoot();
+  const shimPath = join(home, '.config', 'agent-bot', 'bin', 'gh');
+  const modulePath = '/opt/homebrew/Cellar/agent-bot/0.13.0/libexec/config.mjs';
+  const shimText = `#!/bin/sh\nCONFIG_MODULE='${modulePath}'\n`;
+  const report = await collectReadiness({
+    ...machineDependencies(home), scope: 'machine',
+    inspectShellGh: () => ({ status: 'ready', code: null, evidence: { path: shimPath } }),
+    readFile: (p) => (p === shimPath ? shimText : readFileSync(p, 'utf8')),
+    exists: (p) => p !== modulePath,
+  });
+  const check = report.machine.checks.find(({ id }) => id === 'shim.gh');
+  assert.equal(check.status, 'failed');
+  assert.equal(check.code, 'gh-shim-config-missing');
+  assert.equal(check.evidence.config_module, modulePath);
+  assert.match(check.action, /install-gh-shim/);
+});
+
+test('doctor warns on a gh shim pinned to a versioned Cellar module path', async () => {
+  const home = tempRoot();
+  const shimPath = join(home, '.config', 'agent-bot', 'bin', 'gh');
+  const modulePath = '/opt/homebrew/Cellar/agent-bot/0.15.0/libexec/config.mjs';
+  const shimText = `#!/bin/sh\nCONFIG_MODULE="${modulePath}"\n`;
+  const report = await collectReadiness({
+    ...machineDependencies(home), scope: 'machine',
+    inspectShellGh: () => ({ status: 'ready', code: null, evidence: { path: shimPath } }),
+    readFile: (p) => (p === shimPath ? shimText : readFileSync(p, 'utf8')),
+    exists: () => true,
+  });
+  const check = report.machine.checks.find(({ id }) => id === 'shim.gh');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'gh-shim-config-versioned');
+  assert.match(check.action, /install-gh-shim/);
+});
+
+test('doctor passes a gh shim on the stable opt module path', async () => {
+  const home = tempRoot();
+  const shimPath = join(home, '.config', 'agent-bot', 'bin', 'gh');
+  const modulePath = '/opt/homebrew/opt/agent-bot/libexec/config.mjs';
+  const shimText = `#!/bin/sh\nCONFIG_MODULE='${modulePath}'\n`;
+  const report = await collectReadiness({
+    ...machineDependencies(home), scope: 'machine',
+    inspectShellGh: () => ({ status: 'ready', code: null, evidence: { path: shimPath } }),
+    readFile: (p) => (p === shimPath ? shimText : readFileSync(p, 'utf8')),
+    exists: () => true,
+  });
+  const check = report.machine.checks.find(({ id }) => id === 'shim.gh');
+  assert.equal(check.status, 'ready');
+});
+
+test('a machine without the shim keeps the optional warning', async () => {
+  const home = tempRoot();
+  const report = await collectReadiness({
+    ...machineDependencies(home), scope: 'machine',
+    inspectShellGh: () => ({ status: 'missing', code: 'gh-shim-missing', evidence: {} }),
+  });
+  const check = report.machine.checks.find(({ id }) => id === 'shim.gh');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'gh-shim-missing');
+  assert.equal(check.evidence.config_module, undefined);
+});
