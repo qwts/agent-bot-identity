@@ -244,6 +244,11 @@ export function daemonClient({
     async takeInbox(secret) {
       return request('POST', '/v0/inbox/take', {}, { 'x-agent-binding': secret }, INBOX_TAKE_TIMEOUT_MS);
     },
+    // Server-mode notices: op is take, peek, ack or release; args are the
+    // filters (take/peek) or { ids } (ack/release). The App comes from the binding.
+    async notices(secret, op, args = {}) {
+      return request('POST', `/v0/notices/${op}`, args, { 'x-agent-binding': secret }, INBOX_TAKE_TIMEOUT_MS);
+    },
     // Delegation grants (#108). The request waits on the owner's presence
     // prompt, as an owner decision does; the spend on GitHub.
     async requestGrant(secret, operation) {

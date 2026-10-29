@@ -20,6 +20,7 @@ import { SCHEMA_VERSION } from './daemon-client.mjs';
 import { validAppSlug } from './identity-app-store.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { boundRepository, inboxError } from './inbox-take.mjs';
+import { harnessForApp } from './server-notices.mjs';
 import { grantTarget, KEYD_TOOL_NAMES, mintViaKeyd, signKeydGrant } from './keyd-client.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { newOperationId, taskIdFor, ServerSession, serverUrl } from './server-client.mjs';
@@ -84,7 +85,7 @@ export function createIdentityRoutes({
   // A bounded seen-set receipted per daemon process: a re-delivered notice
   // (lease lapsed, ack stale) never writes event-deliver twice.
   deliveredNoticeIds = new Set(),
-  inboxTake,
+  inboxTake, serverNotices,
   grantLedger, grantActor, grantView, grantFailure,
   soulCredentialsDeclaration, soulDirectory, populationFile,
 }) {
@@ -400,6 +401,30 @@ export function createIdentityRoutes({
           ...(result.bearerSource ? { bearerSource: result.bearerSource } : {}),
         });
         sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, event: result.event ?? null });
+        return true;
+      }
+      // Notices (server mode): lease-based take/ack/release/peek against the
+      // agent-bot server, for the harness of the bound soul's own App. Filters
+      // come from the caller; the App never does.
+      case 'POST /v0/notices/take':
+      case 'POST /v0/notices/peek':
+      case 'POST /v0/notices/ack':
+      case 'POST /v0/notices/release': {
+        const op = route.slice('POST /v0/notices/'.length);
+        const body = parseJsonBody(await readBody(req));
+        const binding = requireBinding(req, bindings);
+        const identity = readAgentIdentity(binding.agentId, { stateDir: stateDirectory({ env, home }) });
+        const appSlug = boundAppSlug(binding, identity, { env, home, config });
+        if (!appSlug) throw Object.assign(new Error('notices failed: this soul has no GitHub App'), { code: 'notices-no-app', statusCode: 409 });
+        if (!serverNotices?.enabled()) throw Object.assign(new Error('notices need server mode: set AGENT_BOT_SERVER and enroll this machine (agent-bot server enroll)'), { code: 'notices-not-configured', statusCode: 503 });
+        const harness = harnessForApp(appSlug, serverNotices.device(), { env, config });
+        const args = { ...(body && typeof body === 'object' ? body : {}), harness };
+        let result;
+        try { result = await serverNotices[op](args); }
+        catch (error) { throw Object.assign(error, { statusCode: error.status && error.status < 500 ? error.status : 502 }); }
+        appendAuditReceipt({ event: 'notices', operation: op, decision: 'ok', agentId: binding.agentId, appSlug,
+          count: (result.notices ?? result.acked ?? result.released ?? []).length }, { env, home, now });
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...result });
         return true;
       }
       // Delegation grants (#108). A soul asks for one named write; the

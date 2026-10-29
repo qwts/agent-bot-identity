@@ -247,6 +247,17 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
           task_id: echo.task_id, operation_id: echo.operation_id, jti: claims.jti, claims: echo.claims, replayed: Boolean(prior),
         }, proof.payload.jti);
       }
+      if (u.pathname === '/api/daemon/notices' || u.pathname.startsWith('/api/daemon/notices/')) {
+        s.noticeBodies = s.noticeBodies ?? [];
+        s.noticeBodies.push({ method: init.method ?? 'GET', path: u.pathname + u.search, body: init.body ? JSON.parse(init.body) : null });
+      }
+      if (u.pathname === '/api/daemon/notices' && (init.method ?? 'GET') === 'GET') {
+        const repo = u.searchParams.get('repo');
+        const type = u.searchParams.get('type');
+        const visible = (s.notices ?? []).filter((notice) => (!repo || notice.repo === repo)
+          && (!type || type.split(',').some((t) => notice.type.includes(t.replace(/s$/, ''))))).length;
+        return signed(200, { notices: [], visible }, proof.payload.jti);
+      }
       if (u.pathname === '/api/daemon/notices/take') {
         const body = JSON.parse(init.body);
         if (s.signedUnavailable) return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
@@ -258,8 +269,11 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
         // so the suite stays fast while long-poll semantics are exercised.
         const cap = Math.min((body.wait_seconds ?? 0) * 1000, s.noticeHoldCap ?? 250);
         const start = Date.now();
-        while (!s.notices.length && Date.now() - start < cap) await new Promise((r) => setTimeout(r, 15));
-        const take = s.notices.splice(0, body.count ?? 10).map((notice) => {
+        const matches = (notice) => (!body.repo || notice.repo === body.repo)
+          && (!body.type || body.type.split(',').some((t) => notice.type.includes(t.replace(/s$/, ''))));
+        while (!s.notices.some(matches) && Date.now() - start < cap) await new Promise((r) => setTimeout(r, 15));
+        const take = s.notices.filter(matches).slice(0, body.count ?? 10).map((notice) => {
+          s.notices.splice(s.notices.indexOf(notice), 1);
           const lease = `lease_${++s.nextLease}`;
           const leased = { ...notice, lease };
           s.leased.set(lease, leased);

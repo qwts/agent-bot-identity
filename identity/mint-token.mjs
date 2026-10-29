@@ -317,8 +317,7 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
 
 async function mintThroughServer({ server, slug, env, config, permissions, selected, taskId = null, operationId = null, fetchImpl, repo }) {
   if (permissions) throw new Error('--permissions is not available in server mode; the server mints the App\'s installation grant');
-  const { ambientHarness, mintViaServer, repoFromCheckout } = await import('./server-client.mjs');
-  const { harnessForSlug } = await import('../config.mjs');
+  const { ambientHarness, mintViaServer, repoFromCheckout, serverHarnessForSlug } = await import('./server-client.mjs');
   const explicit = slug ?? (process.argv.includes('--app') ? process.argv[process.argv.indexOf('--app') + 1] : null);
   // The same identity order as a local mint (ENG-0079), mapped to the
   // server's harness name; AGENT_BOT_SERVER_HARNESS / GROK_AGENT override.
@@ -328,9 +327,7 @@ async function mintThroughServer({ server, slug, env, config, permissions, selec
   // resolved slug itself, ask for it rather than its harness family.
   const { loadDevice } = await import('./server-client.mjs');
   const scope = loadDevice({ env })?.harnesses ?? [];
-  const harness = ambientHarness(env)
-    ?? (resolvedSlug && scope.includes(resolvedSlug) ? resolvedSlug : null)
-    ?? (resolvedSlug ? harnessForSlug(resolvedSlug, config) : null);
+  const harness = serverHarnessForSlug({ slug: resolvedSlug, env, config, scope });
   if (selected) selected({ appSlug: resolvedSlug, reason: 'agent-bot-server' });
   return mintViaServer({ base: server, harness, repo: repo === undefined ? repoFromCheckout(process.cwd(), env) : repo, env, taskId, operationId, fetchImpl });
 }

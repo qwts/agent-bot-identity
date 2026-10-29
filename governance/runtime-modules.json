@@ -360,7 +360,8 @@
     "identity/redaction-patterns.mjs": "identity",
     "events.mjs": "identity",
     "identity/events.mjs": "identity",
-    "identity/relay-events.mjs": "identity"
+    "identity/relay-events.mjs": "identity",
+    "identity/server-notices.mjs": "identity"
   },
   "assets": {
     "hooks/": "identity",
@@ -492,6 +493,7 @@
         "createInboxTaker",
         "createPassCredentialStore",
         "createSecretProviderRegistry",
+        "createServerNotices",
         "dropProviderKey",
         "ensureAgentIdentity",
         "ensureProviderKey",

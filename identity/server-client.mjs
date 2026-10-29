@@ -26,7 +26,7 @@ import { homedir, hostname, platform as osPlatform } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { loadConfig } from '../config.mjs';
+import { harnessForSlug, loadConfig } from '../config.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
 import { enforcementProfile } from './identity-format.mjs';
 import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
@@ -127,6 +127,18 @@ export function ambientHarness(env = process.env) {
   if (env.AGENT_BOT_SERVER_HARNESS) return serverHarness(env.AGENT_BOT_SERVER_HARNESS);
   if (env.GROK_AGENT === '1') return 'grok';
   return null;
+}
+
+// The server's harness name for a resolved App slug — shared by minting and
+// notices so the two never drift: the ambient override wins; a device whose
+// enrolled scope names the slug itself (the server keys Apps by slug, e.g.
+// qwts-devin-agent) uses it; otherwise the slug's harness family.
+export function serverHarnessForSlug({ slug, env = process.env, config, scope } = {}) {
+  const ambient = ambientHarness(env);
+  if (ambient) return ambient;
+  const hs = scope ?? loadDevice({ env })?.harnesses ?? [];
+  if (slug && hs.includes(slug)) return slug;
+  return harnessForSlug(slug, config);
 }
 
 // ---- JOSE helpers ----

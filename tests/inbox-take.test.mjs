@@ -43,6 +43,7 @@ function scratch() {
     AGENT_BOT_DAEMON_STATE_PATH: path.join(root, 'daemon.json'),
     AGENT_BOT_PRINCIPALS_PATH: path.join(root, 'principals.json'),
     AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
+    AGENT_BOT_CONFIG: path.join(root, 'config.json'),
     GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid',
   };
   ensureAgentIdentity({
@@ -260,7 +261,7 @@ test('/v0/inbox/take uses the env bearer, receipts its source and never the valu
 
 test('a rejected env bearer names the env variable, not the password field, and receipts the source', async () => {
   const take = createInboxTaker({
-    env: { GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid', GH_APP_HOOK_INBOX_TOKEN: BEARER },
+    env: { AGENT_BOT_CONFIG: '/nonexistent', GH_APP_HOOK_INBOX_URL: 'https://gh-app-hook.example.invalid', GH_APP_HOOK_INBOX_TOKEN: BEARER },
     fetchImpl: async () => new Response('{}', { status: 401 }),
   });
   await assert.rejects(take({ app: 'you-codex-agent', repo: 'qwts/example1' }), (error) => {
@@ -372,7 +373,7 @@ test('a missing bearer is refused with inbox-credential-missing before the broke
 
 test('a daemon with no inbox URL refuses before reading the bearer', async () => {
   let reads = 0;
-  const take = createInboxTaker({ env: {}, readBearer: () => { reads += 1; return BEARER; }, fetchImpl: async () => { throw new Error('no call'); } });
+  const take = createInboxTaker({ env: { AGENT_BOT_CONFIG: '/nonexistent' }, readBearer: () => { reads += 1; return BEARER; }, fetchImpl: async () => { throw new Error('no call'); } });
   await assert.rejects(take({ app: 'you-codex-agent', repo: 'qwts/example1' }), { code: 'inbox-not-configured' });
   assert.equal(reads, 0);
 });
