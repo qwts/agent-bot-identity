@@ -3,6 +3,7 @@ const PUBLIC_COMMANDS = new Set([
   'setup-worktree',
   'join',
   'mint-token',
+  'events',
   'doctor',
   'identity',
   'space',
