@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.2
+
+- A broker `wake` event carrying more than 512 message ids — a whole mailbox backlog unioned after a fresh agent-comms pairing — no longer fails `wake dispatch`: the daemon splits it into ordered wakes of at most 512 ids each, each with its own frame, report and receipt, so no message is dropped and none is re-woken out of order. The event's own bound is a 4096-id sanity ceiling; each dispatched wake stays within the wire's 512. A chunk whose dispatch or report fails no longer strands the rest: every chunk is attempted in order and the first failure is rethrown after the last one.
+- `agent-bot events wait|peek|ack` is recognised by the CLI parser again — it was dispatched but missing from the public command table, so the documented `events wait [--ide] [--cursor]` loop for harnesses without MCP events failed with "unknown command: events". A regression test now asserts every command in the dispatch table parses.
+- Wake-chunk and server-mode mint follow-ups: an SSE fetch aborted by the stream's own timer now counts as edge-held for the `transport` label; `mint`'s explicit `repo: null` reaches the per-repository refusal instead of falling back to the caller's checkout; and `/v0/credential` treats an unreadable config as a closed failure (receipted, nothing minted) rather than silently minting as local custody.
+
 ## 0.15.1
 
 - Daemon-minted credentials in server mode resolve the repository from the authenticated binding's worktree origin instead of the daemon's working directory; a bound worktree without a GitHub origin fails closed with `credential-no-repo` (409) and a credential-mint receipt.
