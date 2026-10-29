@@ -167,3 +167,91 @@ test('the ticket string never reaches thrown errors', async () => {
     assert.doesNotMatch(e.message, /tkt_/);
   }
 });
+
+test('a replayed event at/behind the start cursor is skipped entirely', async () => {
+  const srv = fakeServer();
+  srv.sseScript = [
+    { method: 'notifications/events/active', params: { cursor: enc(2) } },
+    { method: 'notifications/events/event', params: relay('replay', 2) },
+    { method: 'notifications/events/event', params: relay('fresh', 3) },
+  ];
+  const out = await nextEvents({ session: session(srv), harness: HARNESS, cursor: enc(2), waitMs: 3000, transport: 'edge' });
+  assert.equal(out.events.length, 1);
+  assert.equal(out.events[0].body, 'fresh', 'only the new event is delivered');
+  assert.equal(out.dropped.length, 0, 'the replay was skipped, not dropped');
+  assert.equal(out.cursor, enc(3));
+});
+
+test('the SSE fetch never follows a redirect — the ticket stays with the edge', async () => {
+  const srv = fakeServer();
+  let sawRedirect = null;
+  const sess = session(srv);
+  sess.edgeFetch = async (url, init) => { sawRedirect = init?.redirect; return new Response('moved', { status: 302, headers: { location: 'https://evil.example/' } }); };
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 500 });
+  assert.equal(sawRedirect, 'error', 'fetch asks the platform to refuse redirects');
+  assert.equal(out.transport, 'poll', 'a redirect is an edge failure');
+});
+
+test('a malformed config cannot enable the edge — transport resolves poll', async () => {
+  const srv = fakeServer();
+  const sess = session(srv, { poll: async () => ({ events: [relay('p', 1)], cursor: enc(1), hasMore: false }) });
+  sess.opts = { env: { AGENT_BOT_CONFIG: '/dev/null' } }; // not JSON -> parse throws -> 'poll'
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 3000 });
+  assert.equal(out.transport, 'poll');
+  assert.equal(srv.ticketCalls ?? 0, 0, 'no ticket was minted');
+});
+
+test('a single frame over 64 KiB without a terminator trips the cap', async () => {
+  const srv = fakeServer();
+  const real = srv.sseFetch;
+  srv.sseFetch = async (url, init) => {
+    await real(url, init);
+    return new Response(new ReadableStream({ start: (c) => { c.enqueue(Buffer.from('data: ' + 'x'.repeat(70 * 1024))); c.close(); } }), { status: 200 });
+  };
+  const sess = session(srv);
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 3000 });
+  assert.equal(out.transport, 'poll', 'the oversize frame is an edge failure');
+});
+
+test('CRLF-framed events parse the same as LF frames', async () => {
+  const srv = fakeServer();
+  const real = srv.sseFetch;
+  srv.sseFetch = async (url, init) => {
+    await real(url, init);
+    const body = 'event: message\r\ndata: ' + JSON.stringify({ method: 'notifications/events/event', params: relay('crlf', 1) }) + '\r\n\r\n';
+    return new Response(new ReadableStream({ start: (c) => { c.enqueue(Buffer.from(body)); c.close(); } }), { status: 200 });
+  };
+  const sess = session(srv);
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 3000, transport: 'edge' });
+  assert.equal(out.events.length, 1);
+  assert.equal(out.events[0].body, 'crlf');
+});
+
+test('explicit edge after a memoized -32026 throws, never polls', async () => {
+  const srv = fakeServer();
+  srv.noEdge = true;
+  let polls = 0;
+  const sess = session(srv, { poll: async () => { polls += 1; return { events: [], cursor: enc(0), hasMore: false, nextPollMs: 5 }; } });
+  await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 100 }); // auto memoizes
+  polls = 0;
+  await assert.rejects(
+    nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 100, transport: 'edge' }),
+    (e) => e?.code === 'event-edge-unsupported',
+  );
+  assert.equal(polls, 0, 'explicit edge never touches the poll path');
+});
+
+test('one chunk of many small frames is processed, not capped', async () => {
+  const srv = fakeServer();
+  const frames = [];
+  for (let i = 1; i <= 100; i += 1) {
+    frames.push(`event: message\ndata: ${JSON.stringify({ method: 'notifications/events/heartbeat', params: { cursor: enc(i) } })}\n\n`);
+  }
+  srv.sseFetch = async () => new Response(new ReadableStream({
+    start: (c) => { c.enqueue(Buffer.from(frames.join(''))); c.close(); },
+  }), { status: 200 });
+  const sess = session(srv);
+  const out = await nextEvents({ session: sess, harness: HARNESS, cursor: enc(0), waitMs: 3000, transport: 'edge' });
+  assert.equal(out.transport, 'edge', `${frames.join('').length} bytes of small frames drained fine`);
+  assert.equal(out.cursor, enc(100));
+});

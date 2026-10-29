@@ -52,7 +52,12 @@ const defaultSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms);
 // settings.eventTransport > 'auto'.
 function eventTransport(env) {
   const envValue = env?.AGENT_BOT_EVENT_TRANSPORT;
-  const value = envValue !== undefined ? envValue : loadConfig({ env }).settings?.eventTransport;
+  let value = envValue;
+  if (value === undefined) {
+    // A config the caller cannot read fails safe: poll, the transport
+    // that needs no extra endpoint or ticket.
+    try { value = loadConfig({ env }).settings?.eventTransport; } catch { return 'poll'; }
+  }
   return ['auto', 'poll', 'edge'].includes(value) ? value : 'auto';
 }
 
@@ -118,7 +123,7 @@ async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }
     const timeout = setTimeout(() => { ctl.abort(); }, Math.max(deadline - Date.now(), 1));
     let res;
     try {
-      res = await fetchImpl(url, { headers: { authorization: `Bearer ${ticket.ticket}`, accept: 'text/event-stream' }, signal: ctl.signal });
+      res = await fetchImpl(url, { headers: { authorization: `Bearer ${ticket.ticket}`, accept: 'text/event-stream' }, signal: ctl.signal, redirect: 'error' });
     } catch (e) {
       clearTimeout(timeout);
       if (Date.now() >= deadline) return { events, dropped, cursor: at, truncated, transport: 'edge' };
@@ -142,13 +147,13 @@ async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }
         const { done, value } = await reader.read();
         if (done) { streamEnded = true; break; }
         buf += dec.decode(value, { stream: true });
-        if (buf.length > FRAME_MAX) { fail = edgeError('an edge frame exceeded the 64 KiB cap', at); break; }
-        let idx;
-        while ((idx = buf.indexOf('\n\n')) >= 0) {
-          const frame = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
+        let sep;
+        while ((sep = /\r?\n\r?\n/.exec(buf)) !== null) {
+          const frame = buf.slice(0, sep.index);
+          buf = buf.slice(sep.index + sep[0].length);
           let data = '';
-          for (const line of frame.split('\n')) {
+          for (const raw of frame.split('\n')) {
+            const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
             if (line.startsWith('data:')) data += line.slice(5).trimStart();
           }
           if (!data) continue;
@@ -158,10 +163,16 @@ async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }
           const method = note?.method ?? '';
           if (method.endsWith('/event')) {
             const ev = { ...p, cursor: p.cursor ?? p.event?.cursor };
-            const v = validateRelayEvent(ev, harness);
-            if (v.ok) events.push(v.event);
-            else dropped.push({ id: v.id, reason: v.reason });
-            if (typeof ev?.cursor === 'string' && CURSOR_RE.test(ev.cursor) && cursorAhead(ev.cursor, at)) at = ev.cursor;
+            // A replayed or stale position is skipped entirely: not
+            // delivered, not a drop, never receipted again.
+            const cursorIsFresh = typeof ev?.cursor === 'string' && CURSOR_RE.test(ev.cursor) && cursorAhead(ev.cursor, at);
+            const cursorIsStale = typeof ev?.cursor === 'string' && CURSOR_RE.test(ev.cursor) && !cursorAhead(ev.cursor, at);
+            if (!cursorIsStale) {
+              const v = validateRelayEvent(ev, harness);
+              if (v.ok) events.push(v.event);
+              else dropped.push({ id: v.id, reason: v.reason });
+            }
+            if (cursorIsFresh) at = ev.cursor;
           } else if (method.endsWith('/active') || method.endsWith('/heartbeat')) {
             if (p?.truncated === true) truncated = true;
             if (cursorAhead(p?.cursor, at)) at = p.cursor;
@@ -173,6 +184,9 @@ async function edgeEvents({ session, harness, cursor, waitMs, maxEvents, sleep }
           }
           if (events.length >= want || fail || streamEnded) break;
         }
+        // Only the leftover (incomplete) tail is capped: a chunk of many
+        // small frames drains below it, one unterminated giant does not.
+        if (buf.length > FRAME_MAX) { fail = edgeError('an edge frame exceeded the 64 KiB cap', at); break; }
         if (fail || streamEnded || events.length >= want) break;
       }
     } catch (e) {
@@ -215,24 +229,22 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
       // Resume poll from wherever the edge attempt got — never backwards.
       if (cursorAhead(e?.cursor, at)) at = e.cursor;
     }
+  } else if (mode === 'edge') {
+    // Explicit edge with a fresh 'unsupported' memo: never fall back —
+    // surface the same coded refusal the last attempt earned.
+    const e = new Error('edge transport unavailable: the service reported events/edgeTicket unsupported');
+    e.code = 'event-edge-unsupported';
+    e.status = 400;
+    throw e;
   }
-  if (mode === 'edge') {
-    if (session._edgeUnsupportedUntil > Date.now()) {
-      const e = new Error('edge transport unavailable: the service reported events/edgeTicket unsupported');
-      e.code = 'event-edge-unsupported';
-      throw e;
-    }
-    // edge asked for but skipped above (should not reach here)
-  }
-  const want2 = want;
   const dropped = edgeDrops;
   for (;;) {
     const sent = at;
-    const out = await session.mcpEventsPoll({ name: RELAY_EVENT, args: { harness }, cursor: at, maxEvents: want2 });
+    const out = await session.mcpEventsPoll({ name: RELAY_EVENT, args: { harness }, cursor: at, maxEvents: want });
     const events = [];
     let last = at;
     for (const ev of out?.events ?? []) {
-      if (events.length >= want2) break;
+      if (events.length >= want) break;
       const v = validateRelayEvent(ev, harness);
       if (v.ok) events.push(v.event);
       else dropped.push({ id: v.id, reason: v.reason });
@@ -241,7 +253,7 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
     const next = last !== sent ? last : (typeof out?.cursor === 'string' ? out.cursor : sent);
     at = next;
     if (events.length || Date.now() >= deadline) {
-      return { events: events.slice(0, want2), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
+      return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'poll' };
     }
     if (out?.hasMore && next !== sent) continue;
     const nap = Math.min(Math.max(Number(out?.nextPollMs) || 5000, 1000), 60000, Math.max(deadline - Date.now(), 0));
@@ -249,9 +261,6 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
     await sleep(nap);
   }
 }
-
-// Kept for old call sites that passed positional args; the body moved above.
-void 0;
 
 // Cursors live under the device state directory: one entry per
 // (event name, harness) subscription, 0600, atomic tmp+rename.
