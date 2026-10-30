@@ -1,0 +1,48 @@
+name: Live harness MCP pass
+
+# #1208: scheduled and manual live-harness ACP + reach-back MCP pass. Never
+# triggered on pull_request or push so it never blocks PR CI. When the runner
+# has no signed-in harness configured and `require` is false, the suite skips
+# cleanly with the harness auth diagnostic; set `require: true` on a configured
+# runner to fail closed when sign-in is missing.
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      harness:
+        description: Comma-separated harness keys to exercise
+        required: false
+        default: opencode
+        type: string
+      require:
+        description: Fail instead of skipping when the harness is not signed in
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acp-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acp-live:
+    name: Live harness MCP pass
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 20
+      - name: Run live ACP and reach-back MCP suite
+        env:
+          AGENT_BOT_ACP_LIVE: ${{ inputs.harness || 'opencode' }}
+          AGENT_BOT_REACH_LIVE: ${{ inputs.harness || 'opencode' }}
+          AGENT_BOT_ACP_LIVE_REQUIRE: ${{ inputs.require && '1' || '0' }}
+        run: node --test tests/acp-live.test.mjs

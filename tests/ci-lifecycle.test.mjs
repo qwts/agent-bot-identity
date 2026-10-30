@@ -6,6 +6,7 @@ const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url),
 const codeql = readFileSync(new URL('../.github/workflows/codeql.yml', import.meta.url), 'utf8');
 const linuxBundleRelease = readFileSync(new URL('../.github/workflows/linux-bundle-release.yml', import.meta.url), 'utf8');
 const changelog = readFileSync(new URL('../.github/workflows/changelog.yml', import.meta.url), 'utf8');
+const acpLive = readFileSync(new URL('../.github/workflows/acp-live.yml', import.meta.url), 'utf8');
 
 test('lifecycle workflow has governed triggers, actor fields, and draft skipping', () => {
   assert.match(ci, /^  pull_request:\n/m);
@@ -105,11 +106,20 @@ test('advanced CodeQL is callable only through governed CI for both languages', 
 });
 
 test('every third-party action reference is immutable', () => {
-  for (const source of [ci, codeql, linuxBundleRelease, changelog]) {
+  for (const source of [ci, codeql, linuxBundleRelease, changelog, acpLive]) {
     for (const match of source.matchAll(/uses:\s+[^\s@]+@([^\s]+)/g)) {
       assert.match(match[1], /^[0-9a-f]{40}$/);
     }
   }
+});
+
+test('the live-harness MCP workflow is scheduled/manual only and never blocks PR CI (#1208)', () => {
+  assert.match(acpLive, /^on:\n  schedule:\n    - cron:/m);
+  assert.match(acpLive, /^  workflow_dispatch:\n/m);
+  assert.doesNotMatch(acpLive, /^  (?:pull_request|push|pull_request_target):/m);
+  assert.doesNotMatch(acpLive, /\$\{\{\s*secrets\./);
+  assert.match(acpLive, /AGENT_BOT_ACP_LIVE: \$\{\{ inputs\.harness \|\| 'opencode' \}\}/);
+  assert.match(acpLive, /node --test tests\/acp-live\.test\.mjs/);
 });
 
 // #767: keyd builds and tests unsigned on a GitHub-hosted macOS runner. The

@@ -31,9 +31,20 @@ import {
   setOperations,
 } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
+import { harnessAuth } from '../harness-auth.mjs';
 
 const LIVE = (process.env.AGENT_BOT_ACP_LIVE ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const REACH_LIVE = (process.env.AGENT_BOT_REACH_LIVE ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const REQUIRE_LIVE = process.env.AGENT_BOT_ACP_LIVE_REQUIRE === '1';
+
+async function requireSignedInHarness(t, harness) {
+  const auth = await harnessAuth('status', harness);
+  if (auth.loggedIn) return true;
+  const detail = `${harness} is not signed in (${auth.status}${auth.reason ? `: ${auth.reason}` : ''})`;
+  if (REQUIRE_LIVE) assert.fail(detail);
+  t.skip(`${detail}; set AGENT_BOT_ACP_LIVE_REQUIRE=1 to fail`);
+  return false;
+}
 const AGENT_ID = 'agent_11111111-1111-4111-8111-111111111111';
 const IDENTITY = { app: 'qwts-claude-agent', agentId: AGENT_ID };
 const ALLOW_ALL = { version: 1, rules: [], fallback: 'allow' };
@@ -125,6 +136,7 @@ for (const harness of ['opencode', 'claude', 'muse', 'codex']) {
     skip: LIVE.includes(harness) ? false : `set AGENT_BOT_ACP_LIVE=${harness} to run`,
     timeout: 360_000,
   }, async (t) => {
+    if (!await requireSignedInHarness(t, harness)) return;
     const { env, principal } = harnessFixture();
 
     const first = createAcpExecutor({ harness, identity: IDENTITY, policy: ALLOW_ALL });
@@ -193,6 +205,7 @@ for (const harness of ['opencode', 'claude', 'codex']) {
     skip: REACH_LIVE.includes(harness) ? false : `set AGENT_BOT_REACH_LIVE=${harness} to run`,
     timeout: 360_000,
   }, async (t) => {
+    if (!await requireSignedInHarness(t, harness)) return;
     const { env, principal } = harnessFixture();
     const executor = createAcpExecutor({
       harness,
@@ -237,6 +250,7 @@ for (const harness of ['opencode', 'codex']) {
     skip: REACH_LIVE.includes(harness) ? false : `set AGENT_BOT_REACH_LIVE=${harness} to run`,
     timeout: 360_000,
   }, async (t) => {
+    if (!await requireSignedInHarness(t, harness)) return;
     const { env, principal } = harnessFixture();
     const workspace = mkdtempSync(path.join(tmpdir(), 'acp-live-ws-'));
     const outside = mkdtempSync(path.join(tmpdir(), 'acp-live-out-'));
@@ -267,6 +281,7 @@ test('live opencode (registered): a desktop harness config lands a reply by invo
   skip: REACH_LIVE.includes('opencode') ? false : 'set AGENT_BOT_REACH_LIVE=opencode to run',
   timeout: 360_000,
 }, async (t) => {
+  if (!await requireSignedInHarness(t, 'opencode')) return;
   const { env, principal } = harnessFixture();
   const options = { env, home: '/nonexistent' };
 
