@@ -1,0 +1,1 @@
+- The `gh` shim keeps `exec` for the common case (#1259 follow-up): the target repo is resolved before `gh` runs, and same-repo or untargeted calls still `exec "$REAL" "$@"` so signals reach `gh`; only a call aimed at another repository runs under the wrapper that prints the scope hint on failure, with the exit status unchanged.
