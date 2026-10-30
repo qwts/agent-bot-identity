@@ -271,6 +271,14 @@ export async function nextEvents({ session, harness, cursor = null, waitMs = 0, 
       return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: edgeHeld ? 'edge' : 'poll', ...(edgeHeld ? { finalPoll: true } : {}) };
     }
     if (out?.hasMore && next !== sent) continue;
+    // An edge stream that held to its own deadline already did the call's
+    // waiting: the poll after it is the catch-up — drain its pages but
+    // never nap and retry. The stream's monotonic timer can beat the
+    // wall-clock deadline by a hair, and that hair is what let a loaded
+    // runner schedule a nap and count a second poll here.
+    if (edgeHeld) {
+      return { events: events.slice(0, want), dropped, cursor: next, truncated: Boolean(out?.truncated), transport: 'edge', finalPoll: true };
+    }
     const nap = Math.min(Math.max(Number(out?.nextPollMs) || 5000, 1000), 60000, Math.max(deadline - Date.now(), 0));
     if (nap <= 0) return { events, dropped, cursor: next, truncated: Boolean(out?.truncated), transport: edgeHeld ? 'edge' : 'poll', ...(edgeHeld ? { finalPoll: true } : {}) };
     await sleep(nap);
