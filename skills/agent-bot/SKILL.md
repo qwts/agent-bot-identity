@@ -1,6 +1,6 @@
 ---
 name: agent-bot
-description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, transcript-bound Agent IDs, Agent Spaces, joining the hub (agent-comms), the account-local soul population, skill import and source updates, soul learning, and dream maintenance. Do not use to bind a human's own checkout to a bot on harness detection alone, broaden password-manager access, or fall back to human credentials.
+description: Bootstrap, configure, and operate per-harness GitHub App identities and authorized secure-store reads for coding agents. Use for fresh-clone requests such as "install agent bot identities," source or installed agent-bot setup and diagnosis, bot credential minting, password or API-key retrieval, identity attribution, GitHub-verified bot commits, soul-bound Agent IDs with per-session attribution (ADR-1257), Agent Spaces, joining the hub (agent-comms), the account-local soul population, skill import and source updates, soul learning, and dream maintenance. Do not use to bind a human's own checkout to a bot on harness detection alone, broaden password-manager access, or fall back to human credentials.
 metadata:
   qwts-contract: "1"
   qwts-cli: "agent-bot"
@@ -25,6 +25,8 @@ minted; never continue with an ambient human GitHub login.
   diagnostics, or identity-repair requests. When every agent loses GitHub
   access at once, after an upgrade or a daemon restart, follow its
   [recovery section](references/operations.md#recover-after-an-upgrade-or-a-daemon-restart).
+  On a server-mode machine (`agent-bot server status` shows enrolled) token or
+  credential questions go through server mode first — never `pass-cli`.
 - Read [verified-publish.md](references/verified-publish.md) before publishing.
   Bot-authored commits on a qwts repository are signed. `agent-bot signed-commit` is how.
 - Read [execution-identities.md](references/execution-identities.md) for Agent
@@ -113,68 +115,60 @@ shim (`qwts/agent-bot-identity`), and machine setup (`qwts/managed-machine`).
 Follow the step-by-step verification sequence in
 [operations.md](references/operations.md#onboard-an-agent-github-app):
 
-1. **Provision credentials and check the backend store.** Distinguish using
-   `pass-cli` to import a key into a readable `file` or `keychain` store from
-   retaining `store: "pass-cli"` as the credential backend:
-   - **Readable `file` or `keychain` stores (or legacy
-     `~/.config/<slug>/{app-id,private-key.pem}`):** Verify an active `pass-cli`
-     session against the `Agent Identities` vault and run
-     `agent-bot ensure-private-key --app <slug>` to import the App ID and
-     private key into the `file` or `keychain` store.
-   - **`agent-bot-keyd` (`store: "keyd"`) and `store: "pass-cli"` backends:**
-     For `store: "keyd"`, `ensure-private-key` does not apply (`keyd-held`) and
-     `mint-token` routes through `mintThroughDaemon`, which rejects unbound
-     callers (`only a bound soul can get a token for it, through the daemon`).
-     For `store: "pass-cli"`, `passCliStore` (`identity/soul-credentials.mjs`)
-     refuses any soul-marked caller — including `GH_AGENT_APP=<slug>` — before
-     any provider access (`owner-only`). Establish a live daemon binding
-     (`<git-dir>/agent-binding.json`) first by running
-     `agent-bot join --name NAME --harness H --soul AGENT_ID` (which pins
-     `agentBot.agentId` and mints `<git-dir>/agent-bind-token.json`) followed by
-     the MCP `bind` exchange (or `agent-bot join ... --wake acp`), so
-     `mintForCaller` and `/v0/credential` can mint through the daemon.
-     **Runtime `setup-worktree` limitation:** `setup-worktree` only mints a bind
-     token (`prepareWorktreeBinding`) — it is not an alternative to the MCP
-     `bind` exchange — and `setup-worktree.mjs` currently calls
-     `reconcileAppCredentials` (`ensurePrivateKey`) before writing GitHub
-     attribution, which does not use the daemon credential path and fails during
-     `local preparation` with `keyd-held` (even after MCP `bind`) for
-     `store: "keyd"` or `owner-only` for soul-marked `store: "pass-cli"`. Full
-     `agent-bot setup-worktree <slug>` attribution therefore requires a readable
-     `file` or `keychain` store (or legacy `~/.config/<slug>`) until
-     `setup-worktree` / `reconcileAppCredentials` routes preparation through the
-     daemon.
-2. **Avoid the `mint-token --app` prompt storm.** In the owner's account,
-   running `agent-bot mint-token --app <slug>` from an unpinned context with no
-   stated identity triggers the macOS owner-approval gate and prompts for
-   administrator credentials on every invocation:
-   - **Bound soul/daemon path (`store: "keyd"` and `store: "pass-cli"`
-     backends):** No unbound `GH_AGENT_APP=<slug>` path exists (`keyd` rejects
-     unbound callers and `passCliStore` refuses soul-marked callers such as
-     `GH_AGENT_APP` with `owner-only`). After `agent-bot join` + the MCP `bind`
-     exchange (or `join --wake acp`) has written `<git-dir>/agent-binding.json`,
-     run `agent-bot mint-token` (or the `gh` shim) from inside the bound, pinned
-     worktree so `mintForCaller` / `worktree-token` mints through
-     `/v0/credential` on the daemon.
-   - **Unbound local-store path (`file`, `keychain`, or legacy
-     `~/.config/<slug>` only):** State the identity with
-     `GH_AGENT_APP=<slug> agent-bot mint-token` to bypass the unmarked-operator
-     prompt.
+1. **Get a token: server mode first.** Run `agent-bot server status`. When the
+   device is enrolled, App keys live on the identity service
+   (agents.true-line.ai), the enrolled device mints short-lived repo-scoped
+   tokens, and **you do not need `pass-cli` or `agent-bot ensure-private-key`**
+   (see [docs/server-mode.md](../../docs/server-mode.md)):
+   - `git`/`gh` get tokens automatically through the credential helper and the
+     `gh` shim — no token handling in the session.
+   - Explicit mint: `GH_AGENT_APP=<slug> agent-bot mint-token` from inside a
+     checkout whose `origin` remote names the repository (or set
+     `AGENT_BOT_SERVER_REPO=owner/name` outside one). In a soul-bound checkout
+     a member gets a credential reference, not the token.
+   - The App must be among the device's approved harnesses — check
+     `agent-bot server status` if a mint is refused.
+   - Failures: `credential-unavailable` (service unreachable or refused),
+     `device-revoked` (re-enroll with `agent-bot server enroll --force` — an
+     owner action), `outcome-unknown` (settle it with
+     `agent-bot server reconcile`). `--permissions` is unavailable in server
+     mode.
+   - **Legacy local custody (off by default; only if `legacyLocalCustody` is
+     opted in):** key stores (`file`, `keychain`, `agent-bot-keyd`,
+     `store: "pass-cli"`, legacy `~/.config/<slug>/{app-id,private-key.pem}`)
+     mint nothing unless opted in (`AGENT_BOT_LEGACY_LOCAL_CUSTODY=1` /
+     `settings.legacyLocalCustody`, opt-in expires 2027-01-31); unopted calls
+     fail `legacy-local-custody-off`. Only then does the old flow apply: verify
+     a `pass-cli` session against the `Agent Identities` vault and run
+     `agent-bot ensure-private-key --app <slug>` to import the App ID and key
+     into a readable `file`/`keychain` store. `store: "keyd"` and
+     `store: "pass-cli"` backends are `keyd-held`/`owner-only` for unbound or
+     soul-marked callers and need a live daemon binding
+     (`<git-dir>/agent-binding.json` via `agent-bot join` + the MCP `bind`
+     exchange) so `mintForCaller`/`/v0/credential` mints through the daemon.
+     `setup-worktree` still calls `reconcileAppCredentials`
+     (`ensurePrivateKey`), which fails `keyd-held`/`owner-only` for those
+     backends until preparation routes through the daemon.
+2. **Avoid the `mint-token --app` prompt storm (legacy local custody).** In
+   the owner's account, `agent-bot mint-token --app <slug>` from an unpinned
+   context triggers the macOS owner-approval gate on every invocation. Under
+   server mode the daemon path above mints without it. Under legacy custody:
+   a bound soul/daemon caller mints through `/v0/credential` from the bound
+   worktree; an unbound caller with a readable `file`/`keychain` store states
+   `GH_AGENT_APP=<slug> agent-bot mint-token` to bypass the prompt.
+   `store: "keyd"`/`store: "pass-cli"` have no unbound workaround.
 3. **Respect the `gh` shim token contract.** When any soul marker
    (`GH_AGENT_APP`, `agentBot.app`, `AGENT_BOT_ID`, `agentBot.agentId`, or
    `<git-dir>/agent-binding.json`) is present, the `gh` shim sets
    `SOUL_BOUND=1`, drops any inherited `GH_TOKEN`, and requires a live daemon
-   binding to mint; in an unpinned context without a soul marker, inherited
-   tokens are not used for bot attribution. `store: "keyd"` and
-   `store: "pass-cli"` backends have no unbound workaround and must establish
-   `<git-dir>/agent-binding.json` via `agent-bot join` + the MCP `bind` exchange
-   (or `join --wake acp`) first so the daemon binding supplies the token. Only
-   when the credential is in a readable `file` or `keychain` store (or legacy
-   `~/.config/<slug>`) — including keys imported from Proton Pass via
-   `ensure-private-key` into `file` or `keychain` — can an unbound caller mint
-   via `GH_AGENT_APP=<slug> agent-bot mint-token`, verify `.data.viewer.login ==
-   "<slug>[bot]"` via GraphQL, and invoke the real `gh` binary (for example
-   `/opt/homebrew/bin/gh`) with `GH_TOKEN`.
+   binding to mint — in server mode the credential helper and shim mint through
+   the enrolled device automatically. Under legacy local custody,
+   `store: "keyd"`/`store: "pass-cli"` callers must bind via `agent-bot join` +
+   the MCP `bind` exchange first; only a readable `file`/`keychain` store (or
+   legacy `~/.config/<slug>`, including a key imported via `ensure-private-key`)
+   lets an unbound caller mint via `GH_AGENT_APP=<slug> agent-bot mint-token`,
+   verify `.data.viewer.login == "<slug>[bot]"` via GraphQL, and invoke the
+   real `gh` binary (for example `/opt/homebrew/bin/gh`) with `GH_TOKEN`.
 
 ## Choose the storage surface
 
