@@ -116,6 +116,10 @@ if [ "$1 $2 $3 $4" = "auth token --hostname github.com" ]; then
   echo human-oauth-token
   exit 0
 fi
+if [ "$1" = "mypid" ]; then
+  printf 'PPID=%s\n' "$PPID"
+  exit 0
+fi
 if [ "$1" = "passthrough" ]; then
   shift
   for arg in "$@"; do printf 'arg=<%s>\\n' "$arg"; done
@@ -693,6 +697,15 @@ test('the pass-through stays quiet for the worktree repo and for successful call
   const ok = runShim({ agentEnv: {}, args: ['api', 'repos/another-org/other-repo'], realExit: 0 });
   assert.equal(ok.status, 0);
   assert.ok(!ok.stderr.includes('token is scoped to'), 'a successful cross-repo call gets no hint');
+});
+
+
+test('the same-repo path execs gh so signals reach it; only cross-repo calls keep the wrapper (#1259)', () => {
+  const direct = runShim({ agentEnv: {}, args: ['mypid'], realExit: 0 });
+  // Under exec, gh inherits the shim's PID slot: the test process is its parent.
+  assert.equal(direct.stdout.trim(), `PPID=${process.pid}`);
+  const script = buildGhShim({});
+  assert.match(script, /exec "\$REAL" "\$@"/, 'the generated shim keeps an exec path');
 });
 
 // #1257 rework: TARGET reduces to owner/name — deeper same-repo paths and the
