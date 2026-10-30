@@ -69,7 +69,7 @@ const LAUNCH_PATHS = {
   // git.
   'identity/agent-binding.mjs': [2, 'git'],
   'identity/agent-identity.mjs': [1, 'git'],
-  'agent-mcp.mjs': [1, 'git'],
+  'agent-mcp.mjs': [2, 'git, doctor'],
   'confinement.mjs': [1, 'git'],
   'identity/inbox-take.mjs': [1, 'git'],
   'metrics.mjs': [1, 'git'],

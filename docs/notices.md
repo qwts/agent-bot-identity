@@ -21,7 +21,10 @@ device holds several; by default the device's only harness is used.
 
 ## MCP tools (agent-bot mcp, requires bind)
 
-`take_notices`, `peek_notices`, `ack_notices`, `release_notices`. The App (and so
+`take_notices`, `peek_notices`, `ack_notices`, `release_notices`. `tools/list`
+advertises only the meta-tools — `search_tools`, `describe_tool`, `call_tool`
+(reads) and `call_write_tool` (writes) — but the notice names still work when
+called directly. The App (and so
 the server harness) comes from the bound soul's record, never from the caller;
 filters come from the caller.
 

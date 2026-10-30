@@ -1,12 +1,13 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { createMcpState, handleMcpMessage, runMcpServer } from '../agent-mcp.mjs';
+import { SKILL_REFERENCES } from '../cli/skill-references.mjs';
 import { mintBindToken, readBindToken } from '../agent-binding.mjs';
 
 const AGENT_ID = 'agent_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -77,11 +78,11 @@ test('initialize advertises tools and instructs the agent to bind first', async 
   const state = createMcpState({ client: fakeClient() });
   const init = await handleMcpMessage(state, request(1, 'initialize', { protocolVersion: '2025-06-18' }));
   assert.equal(init.result.serverInfo.name, 'agent-bot');
-  assert.match(init.result.instructions, /bind tool once at conversation start/);
+  assert.match(init.result.instructions, /call_write_tool/);
   const list = await handleMcpMessage(state, request(2, 'tools/list'));
   assert.deepEqual(
     list.result.tools.map((tool) => tool.name),
-    ['bind', 'whoami', 'population', 'space_path', 'credential', 'take_notices', 'peek_notices', 'ack_notices', 'release_notices', 'take_inbox', 'request_grant', 'spend_grant'],
+    ['search_tools', 'describe_tool', 'call_tool', 'call_write_tool'],
   );
 });
 
@@ -326,4 +327,125 @@ test('a session on an existing binding states its App too, and repins after a re
   client.reconcileApp = async () => { throw new Error('daemon POST /v0/binding/app failed: HTTP 404'); };
   const again = await callTool(createMcpState({ client, cwd: root, env: claimEnv(root) }), 'bind', { transcript_id: 'session-later' });
   assert.equal(again.isError, false);
+});
+
+test('tools/list returns exactly the four meta-tools', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  const listed = await handleMcpMessage(state, request(2, 'tools/list'));
+  const names = listed.result.tools.map((t) => t.name);
+  assert.deepEqual(names, ['search_tools', 'describe_tool', 'call_tool', 'call_write_tool']);
+});
+
+test('search_tools ranks a matching tool and returns one-line descriptions only', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  const { text } = await callTool(state, 'search_tools', { query: 'who am i' });
+  const hits = JSON.parse(text);
+  assert.equal(hits[0].name, 'whoami');
+  for (const hit of hits) {
+    assert.deepEqual(Object.keys(hit), ['name', 'desc']);
+    assert.ok(!hit.desc.includes('\n'));
+  }
+  const all = JSON.parse((await callTool(state, 'search_tools', {})).text);
+  assert.ok(all.some((h) => h.name === 'bind') && all.some((h) => h.name === 'doctor'));
+});
+
+test('describe_tool returns schema and class; unknown names fail', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  const who = JSON.parse((await callTool(state, 'describe_tool', { name: 'whoami' })).text);
+  assert.equal(who.class, 'read');
+  assert.equal(who.inputSchema.type, 'object');
+  const bind = JSON.parse((await callTool(state, 'describe_tool', { name: 'bind' })).text);
+  assert.equal(bind.class, 'write');
+  const bad = await callTool(state, 'describe_tool', { name: 'nope' });
+  assert.equal(bad.isError, true);
+  assert.match(bad.text, /unknown-tool/);
+});
+
+test('call_tool runs a read tool; whoami reports unbound as before', async () => {
+  const { root } = scratchRepo();
+  const state = createMcpState({ client: fakeClient(), cwd: root });
+  const { text } = await callTool(state, 'call_tool', { name: 'whoami' });
+  assert.match(text, /not bound|binding/);
+});
+
+test('call_tool refuses a write tool without consuming the bind token', async () => {
+  const { root, gitDir } = scratchRepo();
+  mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
+  const state = createMcpState({ client: fakeClient(), cwd: root });
+  const refused = await callTool(state, 'call_tool', { name: 'bind', arguments: { transcript_id: 'x' } });
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /use-call-write-tool/);
+  assert.ok(readBindToken(gitDir), 'bind token must still be in place');
+});
+
+test('call_write_tool refuses a read tool', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  const refused = await callTool(state, 'call_write_tool', { name: 'whoami' });
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /use-call-tool/);
+});
+
+test('call_write_tool runs bind; a legacy direct tools/call still works', async () => {
+  const { root, gitDir } = scratchRepo();
+  mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
+  const state = createMcpState({ client: fakeClient(), cwd: root });
+  const via = await callTool(state, 'call_write_tool', { name: 'bind', arguments: { transcript_id: 's1' } });
+  assert.equal(via.isError, false);
+  assert.match(via.text, /agentId/);
+  const state2 = createMcpState({ client: fakeClient(), cwd: root });
+  mintBindToken({ gitDir, worktree: root, agentId: AGENT_ID });
+  const legacy = await callTool(state2, 'bind', { transcript_id: 's2' });
+  assert.equal(legacy.isError, false);
+});
+
+test('initialize instructions name the version and the write caller', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  const init = await handleMcpMessage(state, request(1, 'initialize', { protocolVersion: '2025-06-18' }));
+  const pkg = JSON.parse(execFileSync('node', ['-e', 'process.stdout.write(require("fs").readFileSync("package.json","utf8"))'], { encoding: 'utf8' }));
+  assert.match(init.result.instructions, new RegExp(pkg.version.replace(/\./g, '\\.')));
+  assert.match(init.result.instructions, /call_write_tool/);
+});
+
+test('doctor and server_status return JSON without secret material', async () => {
+  const { root } = scratchRepo();
+  const stateDir = path.join(root, 'state');
+  writeFileSync(path.join(root, 'cfg.json'), '{}\n');
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, 'device.json'), JSON.stringify({ device_id: 'dev-1', device_name: 'studio-mac', harnesses: ['claude'] }));
+  const env = { PATH: process.env.PATH, HOME: root, AGENT_BOT_SERVER: 'https://agents.true-line.ai', AGENT_BOT_SERVER_STATE: stateDir };
+  const state = createMcpState({ client: fakeClient(), cwd: root, home: root, env });
+  const status = await callTool(state, 'server_status');
+  const report = JSON.parse(status.text);
+  assert.equal(report.server_mode, true);
+  assert.equal(report.enrolled, true);
+  assert.equal(report.device_id, 'dev-1');
+  assert.equal(report.device_name, 'studio-mac');
+  // doctor.mjs exits non-zero on a not-ready machine yet still prints JSON;
+  // a real subprocess is the coverage — the tool must read stdout, not throw.
+  const doc = await callTool(state, 'call_tool', { name: 'doctor' });
+  assert.equal(doc.isError, false, doc.text);
+  const dreport = JSON.parse(doc.text);
+  assert.equal(dreport.ready, false);
+  assert.ok(dreport.first_actionable_failure, 'a not-ready fixture must name a failing check');
+  for (const text of [status.text, doc.text]) {
+    // No secret-shaped material: key material, PEM blocks, or credential
+    // values. Field names and prose may say "token"/"secret" legitimately.
+    assert.doesNotMatch(text, /ghs_|ghp_|github_pat|BEGIN [A-Z ]*PRIVATE KEY|private_key|\.pem/i);
+    for (const key of text.match(/"([a-z_]+)":/gi) ?? []) {
+      assert.doesNotMatch(key, /token|secret|private|pem/i);
+    }
+  }
+});
+
+test('guide resolves topics through the same map the CLI --for uses', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  const def = JSON.parse((await callTool(state, 'call_tool', { name: 'guide' })).text);
+  assert.match(def.text, /Route the request/);
+  for (const topic of Object.keys(SKILL_REFERENCES)) {
+    const hit = JSON.parse((await callTool(state, 'call_tool', { name: 'guide', arguments: { topic } })).text);
+    assert.equal(hit.reference, SKILL_REFERENCES[topic], topic);
+  }
+  const bad = await callTool(state, 'call_tool', { name: 'guide', arguments: { topic: 'join' } });
+  assert.equal(bad.isError, true);
+  assert.match(bad.text, /unknown-topic/);
 });

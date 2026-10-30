@@ -353,9 +353,14 @@ test('the MCP grant tools need a binding and show the daemon\'s sentence and cod
   const tool = async (name, args) => (await handleMcpMessage(state, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })).result;
   const tools = (await handleMcpMessage(state, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools;
   const listed = tools.map((entry) => entry.name);
-  assert.ok(listed.includes('request_grant') && listed.includes('spend_grant'));
+  assert.deepEqual(listed, ['search_tools', 'describe_tool', 'call_tool', 'call_write_tool']);
+  const described = {};
+  for (const name of ['request_grant', 'spend_grant']) {
+    described[name] = JSON.parse((await tool('describe_tool', { name })).content[0].text);
+    assert.equal(described[name].class, 'write');
+  }
   // Every operation the daemon performs is discoverable from the tool schema.
-  const shapes = tools.find((entry) => entry.name === 'request_grant').inputSchema.properties.operation.description;
+  const shapes = described.request_grant.inputSchema.properties.operation.description;
   for (const operation of GRANT_ACTS) assert.match(shapes, new RegExp(`"${operation}"`));
 
   const unbound = await tool('request_grant', { operation: COMMENT });
