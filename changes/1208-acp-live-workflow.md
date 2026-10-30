@@ -1,1 +1,0 @@
-- `.github/workflows/acp-live.yml` runs the live-harness ACP and reach-back MCP suite (`tests/acp-live.test.mjs` with `AGENT_BOT_ACP_LIVE=opencode`) on a weekly schedule and `workflow_dispatch` without blocking pull-request CI, skipping cleanly with the harness sign-in diagnostic when no signed-in harness is present unless `AGENT_BOT_ACP_LIVE_REQUIRE=1` is set (#1208).

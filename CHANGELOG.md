@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.7
+
+- A bot session's `gh` call is now refused when `gh` resolves to a shadowing binary outside the agent-bot shim rather than the managed shim, and calling the managed shim by its explicit path (`~/.local/bin/gh` or `~/.config/agent-bot/bin/gh`) is allowed instead of blocked as opaque execution; `agent-bot doctor` also flags `gh-shim-shadowed` when a foreign `gh` precedes the shim on `PATH` (#1133).
+- `GET /v0/health` and `daemonStatus` now report the daemon's runtime `version`, `agent-bot doctor` flags `daemon-version-mismatch` when a running daemon lags behind an upgraded CLI, and `agent-bot session bind` (and MCP `bind`) recover cleanly when a restarted daemon rejects a stale `agent-binding.json` (403) after `agent-bot setup-worktree` has minted a fresh bind token (#1179).
+- `.github/workflows/acp-live.yml` runs the live-harness ACP and reach-back MCP suite (`tests/acp-live.test.mjs` with `AGENT_BOT_ACP_LIVE=opencode`) on a weekly schedule and `workflow_dispatch` without blocking pull-request CI, skipping cleanly with the harness sign-in diagnostic when no signed-in harness is present unless `AGENT_BOT_ACP_LIVE_REQUIRE=1` is set (#1208).
+- New sessions bind without a hand-found transcript id (#1275). `agent-bot session bind` with no `--transcript-id` now reads `QWEN_CODE_SESSION_ID` (Qwen Code CLI and Desktop) besides the Codex, Claude and Cursor ids, then a lifecycle hook's session id, then Devin's session list when it names exactly one session for the worktree, and refuses with where to find the id otherwise. A new `session-start/15-bind-session` hook runs it in a soul worktree right after `10-ensure-identity`, and does nothing elsewhere. `sync-hooks` now writes a user-level Qwen adapter in `~/.qwen/settings.json`, `SessionStart` only (Qwen fails open, so blocking guards stay in soul homes), and registers the `agent-bot mcp` server there unless an `agent-bot` entry already exists. The `agent-space` skill's new "Bind the session" section lists each harness's session id source.
+
 ## 0.15.6
 
 - Agent-machine client (#1254): agent-daemon can now call the local
