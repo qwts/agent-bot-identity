@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.4
+
+- `agent-bot server enroll --force` no longer deletes the enrollment up front: the new key and grant run in `<state>/enroll-staging/` and swap in only after approval, so an expired or denied code leaves `device.json`, `device-key.pem`, the `actions/` ledger and `event-cursors.json` byte-identical. A changed device id moves the old cursors to `event-cursors.<old-id>.json` instead of deleting them (#1243).
+- `take_inbox`'s server-mode shim is honest about delivery: a failed ack now releases the lease best-effort (the caller still sees the ack error), and `serverHarnessForSlug` returns `null` rather than a default family when no App slug resolves — the ambient harness override is unchanged.
+
 ## 0.15.3
 
 - Private App ownership is checked before a soul's App is recorded for a checkout: in server mode, `agent-bot join` and `agent-bot setup-worktree` refuse with `app-owner-mismatch` when the App's owner differs from the origin's owner (e.g. a `trueline-*` App on a `qwts/…` checkout), and `agent-bot doctor` reports existing mismatched bindings as `worktree.app_owner`.

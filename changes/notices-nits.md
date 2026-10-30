@@ -1,1 +1,0 @@
-- `take_inbox`'s server-mode shim is honest about delivery: a failed ack now releases the lease best-effort (the caller still sees the ack error), and `serverHarnessForSlug` returns `null` rather than a default family when no App slug resolves — the ambient harness override is unchanged.
