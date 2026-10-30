@@ -589,8 +589,10 @@
       ],
       "exports": [
         "BUILTIN_SECRET_PROVIDERS",
+        "ServerSession",
         "adapterFallback",
         "appKeyStores",
+        "appOwnerMismatch",
         "attestedOwnerKeys",
         "cacheAppDoctorRows",
         "createSecretProviderRegistry",
@@ -617,7 +619,9 @@
         "readBinding",
         "readGitConfig",
         "reconcileAppCredentials",
+        "repoFromCheckout",
         "resolveAgentSlug",
+        "serverUrl",
         "sinceTime",
         "soulMarkers",
         "territoryHarness"
@@ -661,6 +665,7 @@
         "readSoulCredential",
         "readSoulSecret",
         "reconcileAppCredentials",
+        "refuseAppOwnerMismatch",
         "resolveAgentSlug",
         "signBindingProof",
         "soulCoAuthorCredits",

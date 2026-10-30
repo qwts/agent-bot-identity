@@ -20,6 +20,7 @@ import { loadConfig } from '../config.mjs';
 import { readSelectedOrganizationProfile } from '../sop.mjs';
 import { createOrgRepo } from './helpers/org-repo.mjs';
 import {
+  appOwnerCheck,
   READINESS_SCHEMA_VERSION,
   collectReadiness,
   harnessMcpWiring,
@@ -2954,4 +2955,35 @@ test('a machine without the shim keeps the optional warning', async () => {
   assert.equal(check.status, 'warning');
   assert.equal(check.code, 'gh-shim-missing');
   assert.equal(check.evidence.config_module, undefined);
+});
+
+test('worktree.app_owner flags bound checkouts whose private App belongs to another owner', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'abi-owner-dr-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(root, 'repo');
+  mkdirSync(repo, { recursive: true });
+  execFileSync('git', ['-C', repo, 'init', '-q']);
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/qwts/qwts-agent-ci.git']);
+  const population = join(root, 'population.json');
+  writeFileSync(population, JSON.stringify({ schemaVersion: 1, souls: { 'agent_11111111-1111-4111-8111-111111111111': { id: 'agent_11111111-1111-4111-8111-111111111111', name: 'a1', status: 'active', parentId: null, appSlug: 'trueline-mcode-agent', worktrees: [repo], soulDir: join(root, 'souls', 'a1'), spacePath: join(root, 'space'), transcriptLocator: null, lastSeen: '2026-08-16T00:00:00.000Z' } } }));
+  const env = { AGENT_BOT_POPULATION_PATH: population, AGENT_BOT_SERVER: 'https://agents.example.invalid' };
+  const session = { harnessApps: async () => ({ apps: [{ slug: 'trueline-mcode-agent', owner: 'true-line' }] }) };
+
+  const failed = await appOwnerCheck({ home: root, env, config: {}, session });
+  assert.equal(failed.id, 'worktree.app_owner');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.evidence.mismatched.length, 1);
+  assert.equal(failed.evidence.mismatched[0].worktree, repo);
+  assert.equal(failed.evidence.mismatched[0].appSlug, 'trueline-mcode-agent');
+  assert.equal(failed.evidence.mismatched[0].repo, 'qwts/qwts-agent-ci');
+
+  const matched = await appOwnerCheck({
+    home: root, env, config: {},
+    session: { harnessApps: async () => ({ apps: [{ slug: 'trueline-mcode-agent', owner: 'QWTS' }] }) },
+  });
+  assert.equal(matched.status, 'ready');
+
+  // Without server mode there is no roster to compare against — skipped.
+  const off = await appOwnerCheck({ home: root, env: { AGENT_BOT_POPULATION_PATH: population }, config: {}, session });
+  assert.equal(off, null);
 });

@@ -553,6 +553,14 @@
       "kind": "failure",
       "summary": "The bound App slug resolves to no server harness this device is enrolled for, so the notices queue cannot be addressed.",
       "registered": "0.15.3"
+    },
+    {
+      "n": 70,
+      "code": "app-owner-mismatch",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "The soul's private App belongs to a different owner account/org than the checkout's origin, so it can never mint an installation token there.",
+      "registered": "0.15.3"
     }
   ]
 }

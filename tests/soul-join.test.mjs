@@ -15,6 +15,7 @@ import { appendAuditReceipt, auditFile } from '../identity-format.mjs';
 import { createColdWaker } from '../cold-wake.mjs';
 import { installSoulHarnesses } from '../soul-home.mjs';
 import { bundledStarter, ensureAcpHarness, joinSoul, parseJoinArgs, WORKSPACE_NAME } from '../soul-join.mjs';
+import { BASE, fakeServer } from './helpers/fake-identity-server.mjs';
 import { INSTALL_STAMP } from '../soul-runtimes.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
 import { createWebhookWaker } from '../wake-webhook.mjs';
@@ -103,6 +104,47 @@ function pinnedStarter(root) {
   };
   return { template, installHarness };
 }
+
+test('join refuses a private App whose owner differs from the checkout origin', async (t) => {
+  const a = await account(t);
+  const repo = path.join(a.root, 'repo');
+  mkdirSync(repo);
+  git(repo, 'init', '-q');
+  git(repo, 'remote', 'add', 'origin', 'https://github.com/qwts/qwts-agent-ci.git');
+  const srv = fakeServer();
+  srv.harnessApps = [{ slug: 'trueline-mcode-agent', owner: 'true-line' }];
+  const config = { apps: { grokbot: 'trueline-mcode-agent' }, features: { 'github-identity': true } };
+  const { enroll } = await import('../identity/server-client.mjs');
+  const env = { ...a.env, AGENT_BOT_SERVER: BASE };
+  await enroll({ base: BASE, env, harnesses: ['grokbot'], fetchImpl: srv.fetch, sleep: async () => {} });
+
+  await assert.rejects(
+    joinSoul({ name: 'dudles', harness: 'grokbot', template: null, cwd: repo, env, home: a.home, config, fetchImpl: srv.fetch }),
+    (error) => error.code === 'app-owner-mismatch' && /true-line/.test(error.message) && /qwts/.test(error.message),
+  );
+  assert.equal(!existsSync(a.env.AGENT_BOT_POPULATION_PATH) || readFileSync(a.env.AGENT_BOT_POPULATION_PATH, 'utf8').trim() === '', true, 'nothing is recorded when the owner check refuses');
+});
+
+test('join passes the owner check when the App owner matches or server mode is off', async (t) => {
+  const a = await account(t);
+  const repo = path.join(a.root, 'repo');
+  mkdirSync(repo);
+  git(repo, 'init', '-q');
+  git(repo, 'remote', 'add', 'origin', 'https://github.com/qwts/qwts-agent-ci.git');
+  // Match: the App's owner is the origin owner.
+  const srv = fakeServer();
+  srv.harnessApps = [{ slug: 'qwts-dudles-agent', owner: 'QWTS' }];
+  const env2 = { ...a.env, AGENT_BOT_SERVER: BASE };
+  const { enroll } = await import('../identity/server-client.mjs');
+  await enroll({ base: BASE, env: env2, harnesses: ['grokbot'], fetchImpl: srv.fetch, sleep: async () => {} });
+  const matched = await joinSoul({ name: 'dudles', harness: 'grokbot', template: null, cwd: repo, env: env2, home: a.home, config: { apps: { grokbot: 'qwts-dudles-agent' }, features: { 'github-identity': true } }, fetchImpl: srv.fetch });
+  assert.ok(matched.agentId);
+  // Off-server: no roster lookup happens at all.
+  const srv2 = fakeServer();
+  const off = await joinSoul({ name: 'ted', harness: 'codex', template: null, cwd: a.outside, env: a.env, home: a.home, config: { apps: { codex: 'trueline-mcode-agent' }, features: { 'github-identity': true } }, fetchImpl: srv2.fetch });
+  assert.ok(off.agentId);
+  assert.equal(srv2.calls.filter((c) => c.path === '/api/daemon/harness-apps').length, 0);
+});
 
 test('join with no GitHub App and no checkout: new soul, its own workspace pinned, recorded, bindable and joined', async (t) => {
   const a = account(t);

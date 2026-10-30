@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveSpacesHome } from './agent-space.mjs';
+import { ServerSession, appOwnerMismatch, repoFromCheckout, serverUrl } from './identity-cli.mjs';
 import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
 import { readSopPersonaRecord } from './sop.mjs';
@@ -607,6 +608,45 @@ function checkoutHolds(soul, { git, env, worktree }) {
 // census already records appSlug per soul, so this costs no git call per
 // checkout — the existing souls.referenced check already spends those, and
 // doubling them would make doctor unusable on a large census.
+// A private App can only be installed under its owner account/org. In server
+// mode, flag every bound checkout whose origin belongs to another owner —
+// those souls can never mint a token there.
+export async function appOwnerCheck({ home, env, config, session }) {
+  const base = serverUrl({ env, config });
+  if (!base) return null; // the roster is a server-mode fact; local custody has nothing to compare
+  let souls;
+  try {
+    souls = listSouls({ file: populationFile({ home, env }) })
+      .filter((soul) => soul.status === 'active' && soul.appSlug);
+  } catch {
+    return null; // worktree.binding_summary already reports an unreadable census
+  }
+  const sess = session ?? new ServerSession({ base, env });
+  const mismatched = [];
+  for (const soul of souls) {
+    for (const worktree of soul.worktrees ?? []) {
+      const repo = repoFromCheckout(worktree, env);
+      if (!repo) continue;
+      const hit = await appOwnerMismatch({ appSlug: soul.appSlug, repo, session: sess });
+      if (hit) mismatched.push({ worktree, appSlug: soul.appSlug, app_owner: hit.appOwner, repo });
+    }
+  }
+  if (mismatched.length === 0) {
+    return readinessCheck({
+      id: 'worktree.app_owner',
+      status: 'ready',
+      message: 'every bound checkout belongs to the account its soul\'s private App is installed for',
+      evidence: { mismatched: [] },
+    });
+  }
+  return readinessCheck({
+    id: 'worktree.app_owner',
+    status: 'failed',
+    message: `${mismatched.length} bound checkout(s) name a private App that cannot be installed on the origin owner — re-join each with an App owned by the repo's org`,
+    evidence: { mismatched },
+  });
+}
+
 function worktreeBindingSummaryCheck({ home, env, roster }) {
   let souls;
   try {
@@ -2963,6 +3003,8 @@ export async function collectReadiness({
     machineChecks.push(inspectSopPersona({ home, env }));
     const bindingSummary = worktreeBindingSummaryCheck({ home, env, roster });
     if (bindingSummary) machineChecks.push(bindingSummary);
+    const appOwner = await appOwnerCheck({ home, env, config });
+    if (appOwner) machineChecks.push(appOwner);
     if (configValid) machineChecks.push(keyStoreCheck({ roster, home, env, config, inspect: inspectKeyStores }));
     machineChecks.push(secureStoreCheck({ probe: probeSecretStore }));
     machineChecks.push(secureStoreLauncherSessionCheck({
