@@ -806,9 +806,31 @@ export function runMcpServer({ state = createMcpState(), input = process.stdin, 
   });
 }
 
+export const MCP_USAGE = `usage: agent-bot mcp
+
+Run the agent-bot stdio JSON-RPC MCP server for the current worktree.
+`;
+
+export function parseMcpArgs(argv = []) {
+  if (argv.length === 0) return { help: false };
+  if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h')) return { help: true };
+  throw new Error(MCP_USAGE.trimEnd());
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runMcpServer().catch((error) => {
+  let options;
+  try {
+    options = parseMcpArgs(process.argv.slice(2));
+  } catch (error) {
     process.stderr.write(`agent-mcp: ${error.message}\n`);
     process.exit(1);
-  });
+  }
+  if (options.help) {
+    process.stdout.write(MCP_USAGE);
+  } else {
+    runMcpServer().catch((error) => {
+      process.stderr.write(`agent-mcp: ${error.message}\n`);
+      process.exit(1);
+    });
+  }
 }

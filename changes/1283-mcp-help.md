@@ -1,0 +1,1 @@
+- `agent-bot mcp --help` and `agent-bot reach-mcp --help` now print usage and exit `0` (and reject unknown arguments with exit `1`) instead of opening `stdin` and hanging indefinitely (#1283).

@@ -872,9 +872,31 @@ export function runReachServer({ state = createReachState(), input = process.std
   });
 }
 
+export const REACH_MCP_USAGE = `usage: agent-bot reach-mcp
+
+Run the agent-reach stdio JSON-RPC MCP server for the current soul turn.
+`;
+
+export function parseReachMcpArgs(argv = []) {
+  if (argv.length === 0) return { help: false };
+  if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h')) return { help: true };
+  throw new Error(REACH_MCP_USAGE.trimEnd());
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runReachServer().catch((error) => {
+  let options;
+  try {
+    options = parseReachMcpArgs(process.argv.slice(2));
+  } catch (error) {
     process.stderr.write(`daemon-mcp: ${error.message}\n`);
     process.exit(1);
-  });
+  }
+  if (options.help) {
+    process.stdout.write(REACH_MCP_USAGE);
+  } else {
+    runReachServer().catch((error) => {
+      process.stderr.write(`daemon-mcp: ${error.message}\n`);
+      process.exit(1);
+    });
+  }
 }
