@@ -288,6 +288,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       }
       if (u.pathname === '/api/daemon/notices/ack' || u.pathname === '/api/daemon/notices/release') {
         const body = JSON.parse(init.body);
+        if (s.failAck && u.pathname.endsWith('/ack')) return signed(500, { error: 'server_error', message: 'fake ack failure' }, proof.payload.jti);
         if (s.signedUnavailable) return signed(503, { error: 'credential_unavailable', retryable: true }, proof.payload.jti);
         const done = [];
         const stale = [];
