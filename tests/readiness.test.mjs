@@ -37,6 +37,17 @@ import {
 } from '../readiness.mjs';
 
 const roots = [];
+
+// Fixtures that intend a human caller must drop the harness markers CI or an
+// agent shell exports; otherwise readiness treats them as agent sessions.
+function withoutAgentMarkers(env) {
+  const copy = { ...env };
+  for (const key of Object.keys(copy)) {
+    if (/^(CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|AI_AGENT|CODEX_|CURSOR_AGENT|COPILOT_AGENT|DEVIN_AGENT|WINDSURF_AGENT|MUSE_AGENT|ANTIGRAVITY_AGENT|KIRO_AGENT|QWEN_CODE)/.test(key)) delete copy[key];
+  }
+  return copy;
+}
+
 const sourceEntrypoint = fileURLToPath(new URL('../agent-bot', import.meta.url));
 
 function tempRoot() {
@@ -2133,7 +2144,7 @@ test('the current worktree binding fails only for a non-rostered App', async () 
   const repo = join(tempRoot(), 'repo');
   mkdirSync(repo);
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
-  const env = hermeticGitEnv(process.env, { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
+  const env = hermeticGitEnv(withoutAgentMarkers(process.env), { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
   const git = (args, options) => execFileSync('git', args, {
     cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).replace(/[\r\n]+$/, '');
@@ -2142,6 +2153,7 @@ test('the current worktree binding fails only for a non-rostered App', async () 
     command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
     load: () => ({ apps: { claude: 'org-claude-agent' } }),
     isSoulBoundImpl: () => false,
+    detectHarnessImpl: () => null,
   });
   const absent = unbound.worktree.checks.find((check) => check.id === 'worktree.binding');
   assert.equal(absent.status, 'warning');
@@ -2177,7 +2189,7 @@ test('a foreign App fails the worktree section, not just the check list', async 
   const repo = join(tempRoot(), 'repo');
   mkdirSync(repo);
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
-  const env = hermeticGitEnv(process.env, { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
+  const env = hermeticGitEnv(withoutAgentMarkers(process.env), { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
   const git = (args, options) => execFileSync('git', args, {
     cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).replace(/[\r\n]+$/, '');
@@ -2204,12 +2216,12 @@ test('an unconfigured roster does not make every App acceptable', async () => {
   const repo = join(tempRoot(), 'repo');
   mkdirSync(repo);
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repo });
-  const env = hermeticGitEnv(process.env, { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
+  const env = hermeticGitEnv(withoutAgentMarkers(process.env), { HOME: repo, GIT_CONFIG_GLOBAL: join(repo, '.gitconfig') });
   const git = (args, options) => execFileSync('git', args, {
     cwd: options?.cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).replace(/[\r\n]+$/, '');
   execFileSync('git', ['config', '--worktree', 'agentBot.app', 'any-agent'], { cwd: repo, env });
-  const report = await collectReadiness({
+  const report = await collectReadiness({ detectHarnessImpl: () => null,
     command: 'doctor', scope: 'worktree', cwd: repo, home: repo, env, git,
     load: () => ({}),
   });
@@ -2986,4 +2998,37 @@ test('worktree.app_owner flags bound checkouts whose private App belongs to anot
   // Without server mode there is no roster to compare against — skipped.
   const off = await appOwnerCheck({ home: root, env: { AGENT_BOT_POPULATION_PATH: population }, config: {}, session });
   assert.equal(off, null);
+});
+
+test('worktree binding upgrades to the first actionable failure under agent markers (#1257)', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'abi-1257-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(root, 'repo');
+  mkdirSync(repo, { recursive: true });
+  execFileSync('git', ['-C', repo, 'init', '-q']);
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/qwts/x.git']);
+  const deps = machineDependencies(root);
+  const base = { command: 'doctor', scope: 'worktree', cwd: repo, env: { ...deps.env ?? {} }, home: root, ...deps };
+  const human = await collectReadiness({ ...base, detectHarnessImpl: () => null });
+  const humanCheck = human.worktree.checks.find((c) => c.id === 'worktree.binding' && c.status === 'warning');
+  assert.ok(humanCheck, 'a human session keeps the binding warning');
+  const agent = await collectReadiness({ ...base, env: { ...base.env, AGENT_BOT_ACCOUNT: 'org-claude-agent' }, detectHarnessImpl: () => 'claude' });
+  const promoted = agent.worktree.checks.find((c) => c.code === 'agent-needs-soul-worktree');
+  assert.ok(promoted, 'an agent-harness session promotes the binding check');
+  assert.equal(promoted.status, 'failed');
+  assert.equal(agent.first_actionable_failure?.code, 'agent-needs-soul-worktree');
+  assert.match(promoted.action, /agent-bot join --name NAME --harness claude/);
+});
+
+test('only the operation check outranks earlier actionable failures; a -failed code alone does not (#1257)', async () => {
+  const { firstActionableFailure } = await import('../readiness.mjs');
+  const machineActionable = { id: 'machine.x', status: 'failed', code: 'x-broken', message: 'm', action: 'fix it' };
+  const worktreeFailedCode = { id: 'worktree.y', status: 'failed', code: 'some-check-failed', message: 'w', action: null };
+  const op = { scope: 'worktree', check: { id: 'worktree.op', status: 'failed', code: 'worktree-setup-failed', message: 'o', action: 'retry' } };
+  const report = {
+    machine: { checks: [machineActionable], apps: [] },
+    worktree: { checks: [worktreeFailedCode, op.check] },
+  };
+  assert.equal(firstActionableFailure(report).check_id, 'machine.x', 'without an operation failure the original order is unchanged');
+  assert.equal(firstActionableFailure(report, op).check_id, 'worktree.op', 'the operation failure ranks first');
 });

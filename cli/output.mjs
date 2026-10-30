@@ -37,7 +37,7 @@ Commands:
   ensure-private-key Restore an App key into its managed store and ID into config with pass-cli
   signed-commit      Replay local commits with GitHub-verified signatures
   secret             Read a password or API key from a secure-store provider
-  skill              Print one skill's SKILL.md (bundled, or from the fleet catalog at its pinned commit); agent-bot --for <subcommand> prints one reference; path prints the bundle and source commit
+  skill              Print one skill's SKILL.md (bundled, or from the fleet catalog at its pinned commit); agent-bot skill agent-bot --for <subcommand> prints one reference; path prints the bundle and source commit
   sop                Resolve the configured SOP and report its pinned commits; persona [--json] records its persona mapping for the sandbox
   metrics            Collect or show optional read-only runtime metrics
   diagnostics        Export local diagnostics to a file you choose; never uploads

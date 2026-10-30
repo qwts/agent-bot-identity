@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -106,6 +106,46 @@ test('dry-run previews a linear range without minting or network access', async 
   assert.match(output, /feature/);
   assert.match(output, /dry run — nothing was created or pushed/);
   assert.equal(git('status', '--porcelain'), '');
+});
+
+test('dry-run never invokes gpg even when log.showSignature is on (#1257)', async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-signed-'));
+  const aux = mkdtempSync(join(tmpdir(), 'agent-bot-gpg-'));
+  t.after(() => { rmSync(cwd, { recursive: true, force: true }); rmSync(aux, { recursive: true, force: true }); });
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'commit.gpgsign', 'false');
+  git('config', 'core.hooksPath', '/dev/null');
+  writeFileSync(join(cwd, 'file.txt'), 'base\n');
+  git('add', 'file.txt');
+  git('commit', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+  const tree = git('write-tree');
+  // A commit object with a gpgsig header makes `git log` try to run gpg.program
+  // when log.showSignature is on — a marker script proves it never ran.
+  const marker = join(aux, 'gpg-called');
+  const fakeGpg = join(aux, 'fake-gpg.sh');
+  writeFileSync(fakeGpg, `#!/bin/sh\ntouch '${marker}'\nexit 0\n`);
+  chmodSync(fakeGpg, 0o755);
+  const commitObj = `tree ${tree}\nparent ${base}\nauthor T <t@e> 1700000000 +0000\ncommitter T <t@e> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\nfeature\n`;
+  const sha = execFileSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin'], { cwd, input: commitObj, encoding: 'utf8' }).trim();
+  git('config', 'gpg.program', fakeGpg);
+  git('config', 'log.showSignature', 'true');
+  git('switch', '-c', 'feature', sha);
+  git('remote', 'add', 'origin', 'https://github.com/acme/widgets.git');
+  git('update-ref', 'refs/remotes/origin/main', base);
+  git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  const result = await runSignedCommit(parseSignedCommitArgs(['--dry-run']), {
+    cwd,
+    env: gateOnEnv(),
+    stdout: { write: () => {} },
+    mintImpl: async () => { throw new Error('dry-run minted'); },
+    fetchImpl: async () => { throw new Error('dry-run fetched'); },
+  });
+  assert.equal(result.dryRun, true);
+  assert.ok(!existsSync(marker), 'git log must not invoke gpg when reading commit messages');
 });
 
 test('replay refuses a commit that credits another soul, before anything is created (ADR-0815)', async () => {

@@ -50,7 +50,7 @@ export async function mintCredential({
   try { binding = readBindingImpl({ env, cwd }); } catch {
     throw new Error('cannot request a credential from the daemon: soul binding is unreadable');
   }
-  if (!binding) throw new Error('a soul-bound caller needs a live daemon binding to obtain GitHub credentials');
+  if (!binding) throw new Error("a soul-bound caller needs a live daemon binding to obtain GitHub credentials — run 'agent-bot join --name NAME --harness HARNESS [--soul AGENT_ID]' from the soul's workspace or a linked worktree, bind with the local 'agent-bot mcp' bind tool, then 'agent-bot setup-worktree'; see docs/joining.md");
   let grant;
   try {
     const client = await clientFactory({ env, home: env.HOME, cwd });

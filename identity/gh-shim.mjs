@@ -367,7 +367,7 @@ if [ -z "$GH_TOKEN" ] && [ -n "$SLUG$SOUL_BOUND" ]; then
     echo "agent-bot: token mint failed for \${SLUG}[bot] — refusing to run gh as the human" >&2
     case "$(cat "$TOKEN_STDERR")" in
       *"needs a live daemon binding"*|*"soul binding is unreadable"*)
-        echo "agent-bot: no usable binding for \${SLUG} in this session — run 'agent-bot doctor' for the fix (join as that soul, or re-bind with agent-bot setup-worktree)" >&2
+        echo "agent-bot: no usable binding for \${SLUG} in this session — run 'agent-bot join --name NAME --harness HARNESS [--soul AGENT_ID]' from the soul's workspace or a linked worktree, then bind with the local 'agent-bot mcp' bind tool, then 'agent-bot setup-worktree' (docs/joining.md); 'agent-bot doctor' diagnoses further" >&2
         ;;
     esac
     exit 1

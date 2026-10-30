@@ -157,7 +157,7 @@ function runWhoami(options = {}) {
 }
 
 for (const tokenError of [
-  'worktree-token: a soul-bound caller needs a live daemon binding to obtain GitHub credentials\n',
+  'worktree-token: a soul-bound caller needs a live daemon binding to obtain GitHub credentials — run \'agent-bot join\' then \'agent-bot mcp\' bind then \'agent-bot setup-worktree\'\n',
   'worktree-token: cannot request a credential from the daemon: soul binding is unreadable\n',
   'worktree-token: network unavailable\n',
 ]) {
@@ -174,7 +174,7 @@ for (const tokenError of [
     assert.equal(result.stderr, tokenError
       + 'agent-bot: token mint failed for you-grok-agent[bot] — refusing to run gh as the human\n'
       + (bindingFailure
-        ? "agent-bot: no usable binding for you-grok-agent in this session — run 'agent-bot doctor' for the fix (join as that soul, or re-bind with agent-bot setup-worktree)\n"
+        ? "agent-bot: no usable binding for you-grok-agent in this session — run 'agent-bot join --name NAME --harness HARNESS [--soul AGENT_ID]' from the soul's workspace or a linked worktree, then bind with the local 'agent-bot mcp' bind tool, then 'agent-bot setup-worktree' (docs/joining.md); 'agent-bot doctor' diagnoses further\n"
         : ''));
   });
 }
