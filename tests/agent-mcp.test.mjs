@@ -334,6 +334,8 @@ test('tools/list returns exactly the four meta-tools', async () => {
   const listed = await handleMcpMessage(state, request(2, 'tools/list'));
   const names = listed.result.tools.map((t) => t.name);
   assert.deepEqual(names, ['search_tools', 'describe_tool', 'call_tool', 'call_write_tool']);
+  const hints = Object.fromEntries(listed.result.tools.map((t) => [t.name, t.annotations?.readOnlyHint]));
+  assert.deepEqual(hints, { search_tools: true, describe_tool: true, call_tool: true, call_write_tool: false });
 });
 
 test('search_tools ranks a matching tool and returns one-line descriptions only', async () => {
@@ -353,6 +355,8 @@ test('describe_tool returns schema and class; unknown names fail', async () => {
   const state = createMcpState({ client: fakeClient() });
   const who = JSON.parse((await callTool(state, 'describe_tool', { name: 'whoami' })).text);
   assert.equal(who.class, 'read');
+  assert.equal(typeof who.desc, 'string');
+  assert.ok(who.desc.length > 0 && !who.desc.includes('\n'), 'desc is the same one-line text search_tools returns');
   assert.equal(who.inputSchema.type, 'object');
   const bind = JSON.parse((await callTool(state, 'describe_tool', { name: 'bind' })).text);
   assert.equal(bind.class, 'write');
@@ -402,7 +406,7 @@ test('initialize instructions name the version and the write caller', async () =
   const state = createMcpState({ client: fakeClient() });
   const init = await handleMcpMessage(state, request(1, 'initialize', { protocolVersion: '2025-06-18' }));
   const pkg = JSON.parse(execFileSync('node', ['-e', 'process.stdout.write(require("fs").readFileSync("package.json","utf8"))'], { encoding: 'utf8' }));
-  assert.match(init.result.instructions, new RegExp(pkg.version.replace(/\./g, '\\.')));
+  assert.ok(init.result.instructions.includes(pkg.version));
   assert.match(init.result.instructions, /call_write_tool/);
 });
 

@@ -228,7 +228,7 @@ const META_TOOLS = [
       name: { type: 'string' },
       arguments: { type: 'object' },
     } },
-    annotations: { readOnlyHint: false },
+    annotations: { readOnlyHint: true },
   },
   {
     name: 'call_write_tool',
@@ -670,7 +670,7 @@ export async function handleMcpMessage(state, message) {
           }
           if (name === 'describe_tool') {
             const d = describeEntry(args.name);
-            return reply(rpcResult(id, { content: [{ type: 'text', text: JSON.stringify({ name: d.name, class: d.class, inputSchema: d.inputSchema }, null, 2) }] }));
+            return reply(rpcResult(id, { content: [{ type: 'text', text: JSON.stringify({ name: d.name, desc: d.desc, class: d.class, inputSchema: d.inputSchema }, null, 2) }] }));
           }
           if (name === 'call_tool' || name === 'call_write_tool') {
             const target = HIDDEN.get(args.name);
