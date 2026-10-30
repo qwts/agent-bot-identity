@@ -9,6 +9,7 @@
 
 export { sinceTime } from './agent-audit.mjs';
 export { readBindToken, readBinding } from './agent-binding.mjs';
+export { discoverTranscript } from './agent-identity.mjs';
 export { principalCommand } from './agent-principals.mjs';
 export { inspectAppCredentials, reconcileAppCredentials } from './credential-reconciler.mjs';
 export { isSoulBound } from './git-credential-bot.mjs';

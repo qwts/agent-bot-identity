@@ -396,7 +396,7 @@ Recover in this order, verifying each step before the next:
 
    ```bash
    agent-bot setup-worktree <app-slug> --name <worktree name> --branch <branch>
-   agent-bot session bind --transcript-id <session id> --provider <harness>
+   agent-bot session bind   # add --transcript-id <session id> --provider <harness> where the harness exposes no id
    gh whoami   # expect the worktree's bot identity
    ```
 

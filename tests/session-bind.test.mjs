@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { parseAgentBotArgs } from '../cli/parse.mjs';
 import { helpText } from '../cli/output.mjs';
 import { bindingStatusLines } from '../setup-worktree.mjs';
-import { parseSessionBindArgs, sessionBind } from '../session-bind.mjs';
+import { findTranscript, parseSessionBindArgs, sessionBind } from '../session-bind.mjs';
 
 test('session bind is a public CLI command with help text', () => {
   assert.deepEqual(parseAgentBotArgs(['session', 'bind']).command, 'session');
@@ -12,14 +12,12 @@ test('session bind is a public CLI command with help text', () => {
 });
 
 test('setup output names worktree and live session binding separately', () => {
+  const live = 'live session binding: not established by setup-worktree — run `agent-bot session bind` (add --transcript-id <session-id> where the harness exposes none) or MCP bind';
   assert.deepEqual(bindingStatusLines({ worktreeBindingPresent: false }), [
     'worktree binding: bind token minted (not a live session binding)',
-    'live session binding: not established by setup-worktree — run `agent-bot session bind --transcript-id <session-id>` or MCP bind',
+    live,
   ]);
-  assert.deepEqual(bindingStatusLines({ worktreeBindingPresent: true }), [
-    'worktree binding: present',
-    'live session binding: not established by setup-worktree — run `agent-bot session bind --transcript-id <session-id>` or MCP bind',
-  ]);
+  assert.deepEqual(bindingStatusLines({ worktreeBindingPresent: true }), ['worktree binding: present', live]);
 });
 
 test('session bind parses its bounded arguments', () => {
@@ -75,8 +73,45 @@ test('session bind surrenders the minted token and never returns the new secret'
 test('session bind refuses without a transcript when no binding exists', async () => {
   await assert.rejects(
     sessionBind({ cwd: '/worktree', env: {}, readBindingImpl: () => null }),
-    /--transcript-id is required/,
+    /--transcript-id is required: no session id was found.*QWEN_CODE_SESSION_ID.*devin list --format json/,
   );
+});
+
+// #1275: a new session binds with no flag where the harness names itself.
+test('findTranscript reads the harness environment, then the hook payload, then one listed Devin session', async () => {
+  const noList = () => assert.fail('no session list when an id is in view');
+  assert.deepEqual(await findTranscript({ env: { QWEN_CODE_SESSION_ID: 'q-1' }, listDevinSessionsImpl: noList }), { provider: 'qwen', id: 'q-1' });
+  assert.deepEqual(await findTranscript({ env: { CLAUDE_SESSION_ID: 'c-1', AGENT_HOOK_SESSION_ID: 'h-1' }, listDevinSessionsImpl: noList }), { provider: 'claude', id: 'c-1' });
+  // A hook payload's id names the session; the harness marker names the provider.
+  assert.deepEqual(await findTranscript({ env: { AGENT_HOOK_SESSION_ID: 'h-1', AGENT_HOOK_HARNESS: 'claude', AI_AGENT: 'devin_1_agent' }, listDevinSessionsImpl: noList }), { provider: 'devin', id: 'h-1' });
+  assert.deepEqual(await findTranscript({ env: { AGENT_HOOK_SESSION_ID: 'h-2', AGENT_HOOK_HARNESS: 'qwen' }, listDevinSessionsImpl: noList }), { provider: 'qwen', id: 'h-2' });
+  const devin = { AI_AGENT: 'devin_1_agent' };
+  let listedIn = null;
+  assert.deepEqual(await findTranscript({ env: devin, cwd: '/wt', listDevinSessionsImpl: async (cwd) => { listedIn = cwd; return ['shine-cotton']; } }), { provider: 'devin', id: 'shine-cotton' });
+  assert.equal(listedIn, '/wt');
+  // Two sessions in the worktree, none, or a failed list: ambiguous, nothing found.
+  for (const listed of [['a', 'b'], [], null]) {
+    assert.equal(await findTranscript({ env: devin, listDevinSessionsImpl: async () => listed }), null);
+  }
+  assert.equal(await findTranscript({ env: {}, listDevinSessionsImpl: noList }), null);
+});
+
+test('session bind with no flag binds the discovered session, and --provider still overrides', async () => {
+  const requests = [];
+  const bindWith = (overrides) => sessionBind({
+    cwd: '/worktree', env: { QWEN_CODE_SESSION_ID: 'q-1' },
+    gitDirImpl: () => '/worktree/.git/worktrees/x',
+    readBindingImpl: () => null,
+    readBindTokenImpl: () => ({ token: 'f'.repeat(64) }),
+    resolveSlugImpl: () => null,
+    clientFactory: async () => ({
+      bind: async (body) => { requests.push(body.transcript); return { agentId: 'agent_11111111-1111-4111-8111-111111111111', secret: 'e'.repeat(43) }; },
+    }),
+    ...overrides,
+  });
+  await bindWith({});
+  await bindWith({ provider: 'qwen-desktop' });
+  assert.deepEqual(requests, [{ provider: 'qwen', id: 'q-1' }, { provider: 'qwen-desktop', id: 'q-1' }]);
 });
 
 test('session bind reconciles a differently selected App on an existing binding, like MCP bind', async () => {

@@ -102,9 +102,18 @@ covers Devin Desktop's weak channel and Devin cloud's absent one.
 the Claude, Codex, Cursor, Copilot, and Devin Desktop adapters into the harness
 user directory (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.copilot/hooks`,
 `~/.windsurf`). Devin CLI consumes the Claude adapter natively; generating a
-second Devin CLI file would fire each hook twice. The OpenCode and Qwen Code
-rows have no user-level adapter (#378). The adapters are not
-committed in a repository. A project copy can outrank the user hook.
+second Devin CLI file would fire each hook twice. The OpenCode row has no
+user-level adapter (#378). The Qwen Code one in `~/.qwen/settings.json`
+carries `SessionStart` only and registers the `agent-bot mcp` server there
+(#1275): Qwen fails open on a hook that crashes or overruns, so its blocking
+guards stay in a soul's own `.qwen/settings.json`, under the soul builder's
+watchdog. The adapters are not committed in a repository. A project copy can
+outrank the user hook.
+
+`session-start/15-bind-session` binds the conversation to the worktree's soul
+right after `10-ensure-identity` mints the bind token (#1275). It takes the
+session id from the hook payload or the harness environment, only validates a
+binding that already exists, and does nothing outside a soul worktree.
 
 Generated entries are marker-scoped. Regeneration replaces entries containing
 `agent-bot agent-hook` and preserves foreign entries such as Claude's

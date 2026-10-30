@@ -247,13 +247,41 @@ test('--check reports drift without writing and apply repairs it', () => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, '{}\n');
   }
-  assert.equal(syncHooks({ home, check: true }).length, 6);
+  assert.equal(syncHooks({ home, check: true }).length, 7);
   assert.equal(readFileSync(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home), 'utf8'), '{}\n');
-  assert.equal(syncHooks({ home }).length, 6);
+  assert.equal(syncHooks({ home }).length, 7);
   assert.deepEqual(syncHooks({ home, check: true }), []);
   assert.equal(existsSync(join(repo, '.cursor', 'hooks.json')), false);
   assert.equal(existsSync(join(home, '.github', 'hooks', 'agent-bot.json')), false);
   assert.equal(existsSync(join(home, '.copilot', 'hooks', 'agent-bot.json')), true);
+});
+
+// #1275: the user-level Qwen file gets SessionStart only and the agent-bot
+// MCP server; the person's own settings, hooks and MCP servers survive, and an
+// agent-bot server they configured themselves is never replaced.
+test('the user-level Qwen adapter carries SessionStart and registers agent-bot mcp, keeping foreign settings', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-hook-qwen-'));
+  const row = DIALECTS.find((candidate) => candidate.key === 'qwen');
+  const path = hookHomePath(row, home);
+  assert.equal(path, join(home, '.qwen', 'settings.json'));
+  mkdirSync(dirname(path), { recursive: true });
+  const ownStop = { hooks: [{ type: 'command', command: '/usr/local/bin/my-stop' }] };
+  writeFileSync(path, `${JSON.stringify({ model: { name: 'qwen3-coder' }, mcpServers: { other: { command: 'x' } }, hooks: { Stop: [ownStop] } })}\n`);
+  syncHooks({ home });
+  const settings = JSON.parse(readFileSync(path, 'utf8'));
+  assert.deepEqual(settings.model, { name: 'qwen3-coder' });
+  assert.deepEqual(settings.mcpServers.other, { command: 'x' });
+  assert.deepEqual(settings.mcpServers['agent-bot'], { command: join(home, '.local', 'bin', 'agent-bot'), args: ['mcp'] });
+  assert.deepEqual(settings.hooks.Stop, [ownStop]);
+  const managed = Object.entries(settings.hooks).filter(([, entries]) => entries.some((entry) => JSON.stringify(entry).includes(MANAGED_MARKER)));
+  assert.deepEqual(managed.map(([event]) => event), ['SessionStart']);
+  assert.match(JSON.stringify(settings.hooks.SessionStart), /--dialect qwen --event session-start/);
+  assert.deepEqual(syncHooks({ home, check: true }), []);
+
+  const own = { command: '/opt/agent-bot', args: ['mcp'], trust: false };
+  writeFileSync(path, `${JSON.stringify({ ...settings, mcpServers: { 'agent-bot': own } }, null, 2)}\n`);
+  assert.deepEqual(syncHooks({ home, check: true }), []);
+  assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).mcpServers['agent-bot'], own);
 });
 
 // The uninstalled fallback carries the allowlist the shared resolver granted

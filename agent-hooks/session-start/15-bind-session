@@ -1,0 +1,12 @@
+#!/bin/sh
+# Bind this conversation to the worktree's soul at session start (#1275), so
+# daemon-minted credentials never wait on the model calling MCP bind or
+# finding its own session id. 10-ensure-identity has just minted the bind
+# token; `session bind` takes the session id from the hook payload
+# (AGENT_HOOK_SESSION_ID) or the harness environment, and only validates a
+# binding that already exists. Silent outside a soul worktree.
+
+command -v agent-bot >/dev/null 2>&1 || exit 0
+pin=$(git config --get agentBot.agentId 2>/dev/null || git config --get qwts.agentId 2>/dev/null)
+[ -n "$pin" ] || exit 0
+agent-bot session bind >/dev/null

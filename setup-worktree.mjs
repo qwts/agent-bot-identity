@@ -92,7 +92,7 @@ export function bindingStatusLines({ worktreeBindingPresent }) {
     worktreeBindingPresent
       ? 'worktree binding: present'
       : 'worktree binding: bind token minted (not a live session binding)',
-    'live session binding: not established by setup-worktree — run `agent-bot session bind --transcript-id <session-id>` or MCP bind',
+    'live session binding: not established by setup-worktree — run `agent-bot session bind` (add --transcript-id <session-id> where the harness exposes none) or MCP bind',
   ];
 }
 

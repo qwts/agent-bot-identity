@@ -58,6 +58,33 @@ worktrees directory or already linked from it. Cross-device placement fails;
 there is no temporary-directory fallback. Without a session soul, plain
 setup is a quiet no-op; `--name` fails. Check in before retrying.
 
+## Bind the session
+
+A worktree binding is not a live session binding; `gh` and pushes need the
+live one. In the checkout you work in (binding is per worktree), run:
+
+```sh
+agent-bot session bind
+```
+
+The session-start hook runs it for you where agent-bot's adapter is
+installed. Without a flag it finds the session id in this order:
+
+| Harness | Session id |
+|---|---|
+| Codex | `CODEX_THREAD_ID` |
+| Claude Code | `CLAUDE_SESSION_ID` |
+| Cursor | `CURSOR_CONVERSATION_ID` |
+| Qwen Code (CLI and Desktop) | `QWEN_CODE_SESSION_ID`, exported into every shell command |
+| Any, from a lifecycle hook | the hook payload's session id (`AGENT_HOOK_SESSION_ID`) |
+| Devin | `devin list --format json`, only when it lists exactly one session for this worktree |
+
+A Devin session started in another directory is listed there, not in the
+worktree: run `devin list --format json` in the directory the session
+started in, take its `id`, and pass `--transcript-id <id> --provider devin`.
+With no id found, `session bind` refuses rather than guessing. Check the
+result with `gh api repos/<owner>/<repo> --jq .full_name`.
+
 ## Clean up
 
 Preserve needed work, leave the checkout, and run from a remaining clone:

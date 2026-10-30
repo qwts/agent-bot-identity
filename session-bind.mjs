@@ -10,17 +10,57 @@ import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { readBinding, readBindToken, resolveAgentSlug } from './identity-cli.mjs';
+import { discoverTranscript, readBinding, readBindToken, resolveAgentSlug } from './identity-cli.mjs';
 import { daemonClient } from './daemon-client.mjs';
-import { detectAgentHarness } from './detect-harness.mjs';
+import { detectAgentHarness, detectHarness } from './detect-harness.mjs';
 
 export const SESSION_BIND_USAGE = `usage: agent-bot session bind [--transcript-id ID] [--provider NAME] [--parent-agent-id ID] [--json]
 
 Establish (or verify) this worktree's live session binding without MCP.
 With an existing binding this validates it at the daemon and needs no
-transcript id. Without one, --transcript-id identifies this conversation
-to its harness, exactly as the MCP bind tool requires.
+transcript id. Without one, the conversation is named by --transcript-id,
+else by the harness: CODEX_THREAD_ID, CLAUDE_SESSION_ID,
+CURSOR_CONVERSATION_ID, QWEN_CODE_SESSION_ID, a lifecycle hook's session
+id, or Devin's session list when it names exactly one session for this
+worktree.
 `;
+
+const NO_TRANSCRIPT = '--transcript-id is required: no session id was found for this conversation '
+  + '(Qwen Code exports QWEN_CODE_SESSION_ID; for Devin, run `devin list --format json` in the directory '
+  + 'the session started in), or bind with the MCP bind tool';
+
+// Devin exports no session id, so its list is the only witness: the ids it
+// shows for exactly this worktree, the same lookup a resume wake uses.
+async function listDevinSessions(cwd, env) {
+  const { RESUME_HARNESSES } = await import('./wake-resume.mjs');
+  const row = RESUME_HARNESSES.devin;
+  try {
+    const stdout = execFileSync(row.command, row.listArgs, {
+      cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000,
+    });
+    return row.sessionsIn(stdout, cwd);
+  } catch {
+    return null;
+  }
+}
+
+// Where this conversation's id comes from when no flag names it (#1275):
+// the harness's own environment, then the lifecycle hook payload's session
+// id, then (Devin only) a session list naming exactly one session for this
+// worktree. More than one listed session is ambiguous and finds nothing.
+export async function findTranscript({ env = process.env, cwd = process.cwd(), listDevinSessionsImpl = listDevinSessions } = {}) {
+  const native = discoverTranscript(env);
+  if (native) return native;
+  const harness = detectHarness(env);
+  if (env.AGENT_HOOK_SESSION_ID) {
+    return { provider: harness ?? env.AGENT_HOOK_HARNESS ?? 'custom', id: env.AGENT_HOOK_SESSION_ID };
+  }
+  if (harness === 'devin') {
+    const ids = await listDevinSessionsImpl(cwd, env);
+    if (Array.isArray(ids) && ids.length === 1) return { provider: 'devin', id: ids[0] };
+  }
+  return null;
+}
 
 export function parseSessionBindArgs(argv = []) {
   const options = { help: false, json: false, transcriptId: null, provider: null, parentAgentId: null };
@@ -70,6 +110,7 @@ export async function sessionBind({
   gitDirImpl = gitDirFor,
   resolveSlugImpl = claimedApp,
   repinImpl = repin,
+  findTranscriptImpl = findTranscript,
 } = {}) {
   const client = await clientFactory({ env, home: env.HOME, cwd });
 
@@ -107,9 +148,11 @@ export async function sessionBind({
     return result;
   }
 
-  if (!transcriptId) {
-    throw new Error('--transcript-id is required when no live session binding exists yet (or bind with the MCP bind tool)');
-  }
+  let transcript = transcriptId
+    ? { provider: provider ?? detectAgentHarness(env) ?? 'custom', id: transcriptId }
+    : await findTranscriptImpl({ env, cwd });
+  if (!transcript) throw new Error(NO_TRANSCRIPT);
+  if (provider) transcript = { ...transcript, provider };
   const gitDir = gitDirImpl(cwd);
   const record = readBindTokenImpl(gitDir);
   if (!record) {
@@ -118,7 +161,7 @@ export async function sessionBind({
   const result = await client.bind({
     gitDir,
     token: record.token,
-    transcript: { provider: provider ?? detectAgentHarness(env) ?? 'custom', id: transcriptId },
+    transcript,
     parentId: parentAgentId,
     app: resolveSlugImpl(env, cwd),
     expectedAgentId: env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? null,

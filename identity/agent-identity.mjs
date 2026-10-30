@@ -118,6 +118,11 @@ export function discoverTranscript(env = process.env) {
       id: requiredText('CURSOR_CONVERSATION_ID', env.CURSOR_CONVERSATION_ID),
     };
   }
+  // Qwen Code (CLI and Desktop runtime, 0.26.x) exports its session id into
+  // every shell command it runs (#1275).
+  if (env.QWEN_CODE_SESSION_ID) {
+    return { provider: 'qwen', id: requiredText('QWEN_CODE_SESSION_ID', env.QWEN_CODE_SESSION_ID) };
+  }
   return null;
 }
 

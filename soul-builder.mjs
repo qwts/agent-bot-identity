@@ -609,8 +609,8 @@ export const HOOK_TARGETS = Object.freeze([
   Object.freeze({ harness: 'cursor', dialect: 'cursor', path: '.cursor/hooks.json' }),
   Object.freeze({ harness: 'copilot', dialect: 'copilot', path: '.github/hooks/agent-bot-soul.json' }),
   // Qwen Code (#378) shares its settings file with the soul's MCP entry and
-  // settings; like OpenCode it has no user-level adapter, so its file always
-  // carries the runner's guards (QWEN_GUARD_EVENTS), hooks declared or not.
+  // settings; its user-level adapter carries SessionStart only (#1275), so its
+  // file always carries the runner's guards (QWEN_GUARD_EVENTS), hooks declared or not.
   Object.freeze({ harness: 'qwen', dialect: 'qwen', path: '.qwen/settings.json' }),
 ]);
 const HOOK_DIALECT_FOR = Object.freeze({ claude: 'claude', devin: 'claude', codex: 'codex', cursor: 'cursor', copilot: 'copilot', opencode: 'opencode', qwen: 'qwen' });

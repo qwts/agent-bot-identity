@@ -388,11 +388,18 @@ export const DIALECTS = [
     // stable release at least two weeks old on 2026-10-11: docs/users/features/
     // hooks.md, hooks/hookRunner.ts and core/toolHookTriggers.ts.
     //
-    // No `homeFile`: sync-hooks writes no user-level Qwen adapter. The soul
-    // builder writes these entries into the soul's own `.qwen/settings.json`,
-    // always with the runner's guards on pre-tool-use.
+    // The user-level adapter in `~/.qwen/settings.json` carries SessionStart
+    // only (`homeEvents`), so every Qwen session runs the session-start hooks
+    // that set up and bind a soul worktree (#1275), and it registers the
+    // `agent-bot mcp` server there (`homeMcpKey`). Blocking events stay out of
+    // it: Qwen fails open on a hook that crashes or overruns, and the soul
+    // builder's entries in the soul's own `.qwen/settings.json` are the ones
+    // that run the runner's guards under a watchdog that closes.
     key: 'qwen',
     file: '.qwen/settings.json',
+    homeFile: '.qwen/settings.json',
+    homeEvents: ['session-start'],
+    homeMcpKey: 'mcpServers',
     format: 'claude',
     events: {
       'session-start': 'SessionStart',

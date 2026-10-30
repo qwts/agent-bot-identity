@@ -65,9 +65,11 @@ function parseConfig(path, text) {
 }
 
 // `snapshot` (config.mjs unmanagedAuthorsSnapshot) is what the uninstalled
-// fallback may grant; without one it grants nothing.
-export function renderConfig(row, current = '{}', snapshot = undefined) {
+// fallback may grant; without one it grants nothing. `home` renders the
+// user-level file, which a row may limit to its `homeEvents`.
+export function renderConfig(row, current = '{}', snapshot = undefined, { home = false } = {}) {
   const config = parseConfig(row.file, current);
+  const events = home && row.homeEvents ? row.homeEvents : CANONICAL_EVENTS;
   const hooks = { ...(config.hooks ?? {}) };
   for (const [event, entries] of Object.entries(hooks)) {
     if (!Array.isArray(entries)) throw new Error(`${row.file}: hooks.${event} must be an array`);
@@ -76,7 +78,7 @@ export function renderConfig(row, current = '{}', snapshot = undefined) {
     // keys (WorktreeCreate, agent-guard) relative to SessionStart / PreToolUse.
     hooks[event] = entries.filter((entry) => !isManaged(entry));
   }
-  for (const event of CANONICAL_EVENTS) {
+  for (const event of events) {
     if (!vendorEvent(row.key, event)) continue;
     const generated = hookEntry(row, event, snapshot);
     hooks[generated.vendorEvent] ??= [];
@@ -88,6 +90,22 @@ export function renderConfig(row, current = '{}', snapshot = undefined) {
   const result = { ...config, hooks };
   if (row.format === 'cursor' || row.format === 'copilot') result.version ??= 1;
   return `${JSON.stringify(result, null, 2)}\n`;
+}
+
+// The `agent-bot mcp` server a row registers in its user file (#1275); Qwen
+// Code reads `mcpServers` from ~/.qwen/settings.json. The command is the
+// stable installed path, since a desktop app need not have ~/.local/bin on
+// PATH. An `agent-bot` entry already there is the owner's and is kept.
+export function withHomeMcpServer(row, rendered, home = homedir()) {
+  if (!row.homeMcpKey) return rendered;
+  const config = JSON.parse(rendered);
+  const servers = config[row.homeMcpKey];
+  if (servers !== undefined && (!servers || typeof servers !== 'object' || Array.isArray(servers))) {
+    throw new Error(`${row.homeFile}: ${row.homeMcpKey} must be an object`);
+  }
+  if (servers?.['agent-bot'] !== undefined) return rendered;
+  const entry = { command: join(resolve(home), '.local', 'bin', 'agent-bot'), args: ['mcp'] };
+  return `${JSON.stringify({ ...config, [row.homeMcpKey]: { ...servers, 'agent-bot': entry } }, null, 2)}\n`;
 }
 
 function claudeAdapterPlan({ home = homedir(), env = process.env, config = loadConfig({ home, env }) } = {}) {
@@ -238,7 +256,7 @@ export function syncHooks({ home = homedir(), env = process.env, check = false }
     const path = hookHomePath(row, home, env);
     assertRegularHookFile(path);
     const current = existsSync(path) ? readFileSync(path, 'utf8') : '{}';
-    const desired = renderConfig(row, current, snapshot);
+    const desired = withHomeMcpServer(row, renderConfig(row, current, snapshot, { home: true }), home);
     if (current === desired) continue;
     drift.push(path);
     if (!check) writeAtomic(path, desired);

@@ -482,8 +482,11 @@ test('qwen maps Claude-shaped events, with plain matchers on its runtime tool id
   for (const event of ['pre-command', 'pre-file-write']) assert.doesNotMatch(vendorEvent('qwen', event).matcher, /^[\^(]/);
   const row = DIALECTS.find((candidate) => candidate.key === 'qwen');
   assert.equal(row.file, '.qwen/settings.json');
-  // No user-level adapter: sync-hooks only writes rows with a homeFile.
-  assert.equal(row.homeFile, undefined);
+  // The user-level adapter (#1275) carries SessionStart only, plus the MCP
+  // server; blocking events stay with the soul builder's watchdog entries.
+  assert.equal(row.homeFile, '.qwen/settings.json');
+  assert.deepEqual(row.homeEvents, ['session-start']);
+  assert.equal(row.homeMcpKey, 'mcpServers');
   assert.deepEqual(nativeHookEntry('qwen', 'pre-command', 'run'), {
     vendorEvent: 'PreToolUse',
     entry: { matcher: 'run_shell_command', hooks: [{ type: 'command', command: 'run', timeout: 60, shell: 'bash' }] },

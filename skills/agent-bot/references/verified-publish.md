@@ -7,7 +7,8 @@ branch under a force-with-lease equivalent.
 ## Gate: live session binding (step 0, before anything else)
 
 Verify this session's live binding before shaping commits or calling
-GitHub. Run `agent-bot session bind --transcript-id <session-id>` — with
+GitHub. Run `agent-bot session bind` (it finds the harness's session id;
+pass `--transcript-id <session-id>` where none is exposed) — with
 an existing binding it only validates it at the daemon — or establish it
 with the MCP `bind` tool. If the binding is missing and cannot be
 established in this harness, stop here and report that exact blocker.

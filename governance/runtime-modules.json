@@ -606,6 +606,7 @@
         "attestedOwnerKeys",
         "cacheAppDoctorRows",
         "createSecretProviderRegistry",
+        "discoverTranscript",
         "extractToken",
         "identityAppFailure",
         "identityAppsCommand",
