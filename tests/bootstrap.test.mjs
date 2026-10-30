@@ -130,6 +130,7 @@ test('doctor exposes a machine-only verification phase', () => {
     json: false,
     machineOnly: false,
     probeInbox: false,
+    verifyApps: true,
     requireSchemaVersion: null,
   });
   assert.deepEqual(parseDoctorArgs(['--machine-only', '--json']), {
@@ -138,6 +139,7 @@ test('doctor exposes a machine-only verification phase', () => {
     json: true,
     machineOnly: true,
     probeInbox: false,
+    verifyApps: true,
     requireSchemaVersion: null,
   });
   assert.deepEqual(parseDoctorArgs(['--app', 'explicit-agent', '--require-schema-version', '1']), {
@@ -146,6 +148,7 @@ test('doctor exposes a machine-only verification phase', () => {
     json: false,
     machineOnly: false,
     probeInbox: false,
+    verifyApps: true,
     requireSchemaVersion: 1,
   });
   assert.equal(parseDoctorArgs(['--probe-inbox', '--json']).probeInbox, true);

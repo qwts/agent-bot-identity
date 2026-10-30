@@ -246,6 +246,7 @@
     "signed-commit.mjs": "identity",
     "identity/signed-commit.mjs": "identity",
     "skill-library-paths.mjs": "shared",
+    "skill-for-map.mjs": "shared",
     "skill-library.mjs": "soul",
     "skill-dream-evidence.mjs": "soul",
     "skill-dream-inputs.mjs": "soul",

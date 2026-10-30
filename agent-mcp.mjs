@@ -26,10 +26,11 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { readBinding, readBindToken, resolveAgentSlug } from './identity-host.mjs';
+import { readBinding, readBindToken, resolveAgentSlug, serverUrl, loadDevice } from './identity-host.mjs';
 import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
-
+import { SKILL_REFERENCES, skillReferenceFor } from './skill-for-map.mjs';
+import { loadConfig } from './config.mjs';
 const PROTOCOL_VERSION = '2025-06-18';
 
 function serverVersion() {
@@ -189,6 +190,141 @@ const TOOLS = [
     },
   },
 ];
+
+const TOOL_CLASS = Object.freeze({
+  whoami: 'read', population: 'read', space_path: 'read', peek_notices: 'read',
+  doctor: 'read', server_status: 'read', guide: 'read',
+  bind: 'write', credential: 'write', take_notices: 'write', ack_notices: 'write',
+  release_notices: 'write', take_inbox: 'write', request_grant: 'write', spend_grant: 'write',
+});
+
+function oneLine(text) {
+  return text.replace(/\s+/g, ' ').replace(/\.`/g, "'").split('. ')[0].replace(/\.$/, '');
+}
+
+// The hidden registry: legacy names stay callable but are no longer listed.
+const HIDDEN = new Map(TOOLS.map((tool) => [tool.name, tool]));
+
+const META_TOOLS = [
+  {
+    name: 'search_tools',
+    description: 'Find agent-bot tools by keyword; returns each match\'s name and a one-line description.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      query: { type: 'string', description: 'what you need to do (omit to list every visible tool)' },
+    } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'describe_tool',
+    description: 'Return a tool\'s input schema and its class (read or write).',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: {
+      name: { type: 'string' },
+    } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'call_tool',
+    description: 'Run a READ agent-bot tool (search_tools/describe_tool to discover names and schemas).',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: {
+      name: { type: 'string' },
+      arguments: { type: 'object' },
+    } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'call_write_tool',
+    description: 'Run a WRITE agent-bot tool such as bind, take_notices, or request_grant.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: {
+      name: { type: 'string' },
+      arguments: { type: 'object' },
+    } },
+    annotations: { readOnlyHint: false },
+  },
+];
+
+// Extra read tools added for the meta-tool surface; their schemas live here so
+// describe_tool stays accurate while tools/list shows only the four.
+HIDDEN.set('doctor', {
+  name: 'doctor',
+  description: 'Machine and worktree readiness: overall status, the first failing check and its fix.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+});
+HIDDEN.set('server_status', {
+  name: 'server_status',
+  description: 'Server-mode status: whether enrolled, the device id/name, approved harnesses, and the repo this checkout would mint for.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+});
+HIDDEN.set('guide', {
+  name: 'guide',
+  description: 'The bundled agent-bot skill text for a subcommand or topic; no topic returns the routing summary.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: {
+    topic: { type: 'string', description: 'an agent-bot subcommand or reference name (omit for the routing summary)' },
+  } },
+});
+
+function mcpError(code, message) {
+  return Object.assign(new Error(`${message} [${code}]`), { code });
+}
+
+function describeEntry(name) {
+  const tool = HIDDEN.get(name);
+  if (!tool) throw mcpError('unknown-tool', `unknown tool: ${name}`);
+  return { name, desc: oneLine(tool.description ?? ''), class: TOOL_CLASS[name] ?? 'write', inputSchema: tool.inputSchema };
+}
+
+function searchTools(query) {
+  const needle = (query ?? '').toLowerCase().trim();
+  const entries = [...HIDDEN.keys()].filter((n) => !META_TOOLS.some((m) => m.name === n)).map((n) => describeEntry(n));
+  if (needle === '') return entries.map(({ name, desc }) => ({ name, desc }));
+  const words = needle.split(/[^a-z0-9_]+/i).filter(Boolean);
+  const scored = entries.map((entry) => {
+    const hay = `${entry.name} ${entry.desc}`.toLowerCase();
+    const score = words.reduce((sum, w) => sum + (hay.includes(w) ? 1 : 0), 0)
+      + (hay.includes(needle) ? 1 : 0)
+      + (entry.name.toLowerCase().includes(needle) ? 2 : 0);
+    return { entry, score };
+  }).filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name));
+  return scored.map(({ entry }) => ({ name: entry.name, desc: entry.desc }));
+}
+
+function guideText(state, topic) {
+  const root = dirname(fileURLToPath(import.meta.url));
+  const skillDir = join(root, 'skills', 'agent-bot');
+  if (!topic) {
+    const main = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+    const start = main.indexOf('## Route the request');
+    const end = main.indexOf('\n## ', start + 1);
+    return { topic: null, reference: 'SKILL.md', text: end === -1 ? main.slice(start) : main.slice(start, end) };
+  }
+  const file = skillReferenceFor(topic);
+  if (!file) {
+    throw mcpError('unknown-topic',
+      `no bundled reference for '${topic}' — --for knows: ${Object.keys(SKILL_REFERENCES).sort().join(', ')}`);
+  }
+  return { topic, reference: file, text: readFileSync(join(skillDir, 'references', file), 'utf8') };
+}
+
+function serverStatusReport(state) {
+  const config = (() => { try { return loadConfig({ home: state.home, env: state.env }); } catch { return {}; } })();
+  const base = serverUrl({ env: state.env, config });
+  const device = loadDevice({ env: state.env, home: state.home });
+  let repo = null;
+  try {
+    const remote = git(state.cwd, 'remote', 'get-url', 'origin');
+    const m = remote.match(/[/:]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/);
+    if (m) repo = `${m[1]}/${m[2]}`;
+  } catch { repo = null; }
+  return {
+    server_mode: Boolean(base),
+    base: base ?? null,
+    enrolled: Boolean(device),
+    device_id: device?.device_id ?? null,
+    device_name: device?.device_name ?? null,
+    approved_harnesses: device?.harnesses ?? [],
+    repo,
+  };
+}
 
 export function createMcpState({
   env = process.env,
@@ -453,8 +589,39 @@ async function callTool(state, name, args = {}) {
         throw error;
       }
     }
+    case 'doctor': {
+      const root = dirname(fileURLToPath(import.meta.url));
+      let out = null;
+      try {
+        out = execFileSync(process.execPath, [join(root, 'doctor.mjs'), '--json', '--no-verify-apps'],
+          { env: state.env, cwd: state.cwd, encoding: 'utf8', timeout: 30000 });
+      } catch (error) {
+        // doctor exits non-zero when the machine is not ready but still prints
+        // the JSON report — read it from the failed spawn's stdout.
+        out = typeof error?.stdout === 'string' ? error.stdout : null;
+        if (out === null) {
+          throw mcpError('doctor-unavailable', `doctor failed: ${error?.message ?? 'unknown'}`);
+        }
+      }
+      let report;
+      try {
+        report = JSON.parse(out);
+      } catch (error) {
+        throw mcpError('doctor-unavailable', `doctor failed: unreadable report (${error?.message ?? 'unknown'})`);
+      }
+      return {
+        ready: report.ready ?? null,
+        first_actionable_failure: report.first_actionable_failure ?? null,
+        machine: report.machine ?? null,
+        worktree: report.worktree ?? null,
+      };
+    }
+    case 'server_status':
+      return serverStatusReport(state);
+    case 'guide':
+      return guideText(state, typeof args.topic === 'string' ? args.topic : null);
     default:
-      throw new Error(`unknown tool: ${name}`);
+      throw mcpError('unknown-tool', `unknown tool: ${name}`);
   }
 }
 
@@ -485,18 +652,37 @@ export async function handleMcpMessage(state, message) {
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: 'agent-bot', version: serverVersion() },
           instructions:
-            'Call the bind tool once at conversation start, passing your session or '
-            + 'thread identifier as transcript_id (and parent_agent_id when you were '
-            + 'spawned by another agent). Binding joins this worktree\'s minted token '
-            + 'with your conversation into one enforced identity; other tools require it.',
+            `agent-bot local MCP v${serverVersion()}. On a server-mode machine git/gh mint tokens `
+            + 'through the credential helper and gh shim — never pass-cli or ensure-private-key. '
+            + 'Use search_tools to find tools, describe_tool for a schema, call_tool for reads, '
+            + 'call_write_tool for writes. Start a conversation with call_write_tool bind '
+            + '(or `agent-bot join` first when no bind token exists). Ask guide for more.',
         }));
       case 'ping':
         return reply(rpcResult(id, {}));
       case 'tools/list':
-        return reply(rpcResult(id, { tools: TOOLS }));
+        return reply(rpcResult(id, { tools: META_TOOLS }));
       case 'tools/call': {
         try {
-          const result = await callTool(state, params.name, params.arguments ?? {});
+          const name = params.name;
+          const args = params.arguments ?? {};
+          if (name === 'search_tools') {
+            return reply(rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(searchTools(args.query), null, 2) }] }));
+          }
+          if (name === 'describe_tool') {
+            const d = describeEntry(args.name);
+            return reply(rpcResult(id, { content: [{ type: 'text', text: JSON.stringify({ name: d.name, desc: d.desc, class: d.class, inputSchema: d.inputSchema }, null, 2) }] }));
+          }
+          if (name === 'call_tool' || name === 'call_write_tool') {
+            const target = HIDDEN.get(args.name);
+            if (!target) throw mcpError('unknown-tool', `unknown tool: ${args.name}`);
+            const cls = TOOL_CLASS[args.name] ?? 'write';
+            if (name === 'call_tool' && cls !== 'read') throw mcpError('use-call-write-tool', `${args.name} is a write tool — run it through call_write_tool`);
+            if (name === 'call_write_tool' && cls !== 'write') throw mcpError('use-call-tool', `${args.name} is a read tool — run it through call_tool`);
+            const result = await callTool(state, args.name, args.arguments ?? {});
+            return reply(rpcResult(id, { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }));
+          }
+          const result = await callTool(state, name, args);
           return reply(rpcResult(id, {
             content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           }));

@@ -876,6 +876,13 @@ everything it always did, and additionally mints a **single-use bind token**
 into the worktree's private git dir — an inert claim of *place* that confers
 nothing until surrendered.
 
+The server's `tools/list` is progressive disclosure: it advertises only
+`search_tools`, `describe_tool`, `call_tool` and `call_write_tool`. Discover a
+tool with `search_tools`, read its schema with `describe_tool`, run reads with
+`call_tool` and writes with `call_write_tool`. Read tools also include `doctor`,
+`server_status` and `guide`. Calling a legacy tool name directly (for example
+`bind`) still works, so existing instructions need no change.
+
 Mount it in the harness (for Claude Code, `.mcp.json` in the repo or project):
 
 ```json

@@ -585,6 +585,46 @@
       "kind": "failure",
       "summary": "A bind named a retired soul; the single-use token is left in place. Join another soul or remove the worktree pin.",
       "registered": "0.15.4"
+    },
+    {
+      "n": 74,
+      "code": "use-call-write-tool",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "A write tool was passed to the read-only call_tool meta-tool; nothing ran. Run it through call_write_tool.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 75,
+      "code": "use-call-tool",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "A read tool was passed to call_write_tool; nothing ran. Run it through call_tool.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 76,
+      "code": "unknown-tool",
+      "component": "host",
+      "kind": "failure",
+      "summary": "describe_tool, call_tool or call_write_tool named a tool that does not exist.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 77,
+      "code": "doctor-unavailable",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The MCP doctor tool could not run `agent-bot doctor --json` or parse its report.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 78,
+      "code": "unknown-topic",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The MCP guide tool named a topic no bundled skill reference covers.",
+      "registered": "0.15.5"
     }
   ]
 }
