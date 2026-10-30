@@ -38,3 +38,4 @@ supersede them instead.
 | [ADR-0815](ADR-0815-the-soul-is-a-git-co-author.md) | The soul is a Git co-author; commits stay Verified | Accepted |
 | [ADR-0983](ADR-0983-local-first-diagnostics-and-optional-otlp-export.md) | Local-first diagnostics, stable error codes and optional OTLP export | Accepted |
 | [ADR-1183](ADR-1183-agent-bot-splits-into-hq-and-plugins.md) | agent-bot splits into an HQ daemon and plugins; the identity extraction is retired | Accepted |
+| [ADR-1257](ADR-1257-souls-outlive-sessions.md) | A soul outlives its sessions | Accepted |
