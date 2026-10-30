@@ -25,6 +25,7 @@ export { createIdentityAppJobs, identityAppFailure, identityAppOperation, listId
 export { createIdentityRoutes, spawnChildIdentity } from './identity-routes.mjs';
 export { createInboxTaker, inboxError } from './inbox-take.mjs';
 export { createServerNotices } from './server-notices.mjs';
+export { isManagedGh, managedShimPath, resolveGhWord, shimGhDirs } from './install-gh-shim.mjs';
 export { KEYD_LABEL, KEYD_LABEL_VARIABLE, keydMcpServerEntry, keydPaths, keydPolicyRules, keydRequest, keydStatus, keydVersionAction, readKeydRecord } from './keyd-client.mjs';
 export { mint } from './mint-token.mjs';
 export { verifyOwnerDecisionPresence } from './owner-decision-action.mjs';
@@ -32,7 +33,7 @@ export { createDaemonJournalStore, sealRecordOnlyReconciliation } from './owner-
 export { readOwnerDecisionTrust, readOwnerDecisionTrustObservation } from './owner-decision-trust.mjs';
 export { keydPresence } from './owner-presence.mjs';
 export { extractToken } from './owner-statement.mjs';
-export { hookBypassReason, readGitConfig, resolveAgentSlug, statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason } from './resolve-agent.mjs';
+export { hookBypassReason, readGitConfig, resolveAgentSlug, shadowedGhReason, statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason, unverifiableGhReason } from './resolve-agent.mjs';
 export { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
 export { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 export { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';

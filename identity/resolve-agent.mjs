@@ -235,3 +235,15 @@ export function unprovableBotReason(slug) {
     + 'whose binding cannot be proven (a variable or unresolved path, a shell indirection, or an alias). '
     + 'Run the git command with literal paths from the bound worktree, or run `agent-bot setup-worktree` there first.';
 }
+
+export function shadowedGhReason(slug, { resolved, shimPath }) {
+  const where = resolved ? `resolves to ${resolved}` : 'is not on PATH';
+  return `agent-bot: this session acts as ${slug}, but \`gh\` here ${where}, not the agent-bot shim at ${shimPath}: `
+    + 'every GitHub write would be attributed to the human, and a human author cannot approve the PR it opened. '
+    + `Fix PATH with \`agent-bot install-gh-shim\`, or call the shim by absolute path (${shimPath}) — that form is allowed.`;
+}
+
+export function unverifiableGhReason(slug, { shimPath }) {
+  return `agent-bot: this session acts as ${slug}, and could not verify that \`gh\` resolves to the agent-bot shim at ${shimPath}. `
+    + `Fix PATH with \`agent-bot install-gh-shim\`, or call the shim by absolute path (${shimPath}).`;
+}

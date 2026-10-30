@@ -26,7 +26,7 @@ import {
   appKeyStores, BUILTIN_SECRET_PROVIDERS, createSecretProviderRegistry, inspectAppCredentials,
   inspectConfiguredCodexDesktopGh, inspectShellGhShim, isSoulBound, keydStatus, keydVersionAction,
   pinnedSlug, probeSecretStore, readBindToken, readBinding, readGitConfig, resolveAgentSlug,
-  territoryHarness,
+  resolveGhWord, territoryHarness,
 } from './identity-cli.mjs';
 import { configuredAccountIdentity, accountName, detectHarness, HARNESSES } from './detect-harness.mjs';
 import { inspectClaudeWorktreeAdapter } from './sync-hooks.mjs';
@@ -2081,7 +2081,7 @@ function shimConfigModule(shimPath, readFile) {
   return match ? (match[1] ?? match[2] ?? match[3] ?? null) : null;
 }
 
-function ghShimCheck({ home, required, inspect, exists = existsSync, readFile = readFileSync }) {
+function ghShimCheck({ home, env, required, inspect, exists = existsSync, readFile = readFileSync, resolveGh = resolveGhWord }) {
   const result = inspect({ home });
   if (result.status === 'ready') {
     const shimPath = typeof result.evidence?.path === 'string'
@@ -2107,6 +2107,21 @@ function ghShimCheck({ home, required, inspect, exists = existsSync, readFile = 
         action: 'run: agent-bot install-gh-shim',
         evidence: { ...result.evidence, installed: true, required, config_module: configured },
       });
+    }
+    const shimDirs = new Set([dirname(shimPath), join(home, '.local', 'bin')]);
+    const pathEntries = String(env?.PATH ?? '').split(':').filter(Boolean);
+    if (pathEntries.some((entry) => shimDirs.has(resolve(entry)))) {
+      const resolution = resolveGh('gh', { env, home });
+      if (resolution.status === 'shadowed') {
+        return readinessCheck({
+          id: 'shim.gh',
+          status: required ? 'failed' : 'warning',
+          code: 'gh-shim-shadowed',
+          message: `gh on PATH resolves to ${resolution.resolved} before the managed shim; agent gh calls will bypass the shim`,
+          action: 'run: agent-bot install-gh-shim',
+          evidence: { ...result.evidence, installed: true, required, resolved_gh: resolution.resolved },
+        });
+      }
     }
     return readinessCheck({
       id: 'shim.gh',
@@ -3041,7 +3056,7 @@ export async function collectReadiness({
         ...inspectClaudeWorktreeAdapter({ home, env, config }),
       }));
     }
-    machineChecks.push(ghShimCheck({ home, required: expectedGhShim, inspect: inspectShellGh, exists, readFile }));
+    machineChecks.push(ghShimCheck({ home, env, required: expectedGhShim, inspect: inspectShellGh, exists, readFile }));
     machineChecks.push(codexDesktopGhCheck({ home, inspect: inspectCodexDesktopGh }));
     // Doctor only: a bootstrap reaches no gh (bootstrap-hermetic), and names
     // an expired login itself when a profile fetch fails over it.

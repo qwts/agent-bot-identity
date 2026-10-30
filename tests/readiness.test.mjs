@@ -2969,6 +2969,31 @@ test('a machine without the shim keeps the optional warning', async () => {
   assert.equal(check.evidence.config_module, undefined);
 });
 
+test('doctor flags a shadowing gh binary on PATH ahead of the managed shim (#1133)', async () => {
+  const home = tempRoot();
+  const shadowDir = join(home, 'shadow-bin');
+  const shimDir = join(home, '.config', 'agent-bot', 'bin');
+  mkdirSync(shadowDir, { recursive: true });
+  mkdirSync(shimDir, { recursive: true });
+  const shadowGh = join(shadowDir, 'gh');
+  const shimPath = join(shimDir, 'gh');
+  writeFileSync(shadowGh, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(shimPath, '#!/bin/sh\n# gh shim — agent bot identity. Managed by install-gh-shim.mjs\nexit 0\n', { mode: 0o755 });
+  const deps = machineDependencies(home, { shim: true });
+  const shadowed = await collectReadiness({
+    ...deps,
+    scope: 'machine',
+    expectedGhShim: true,
+    env: { HOME: home, PATH: `${shadowDir}:${shimDir}` },
+    inspectShellGh: () => ({ status: 'ready', code: null, evidence: { path: shimPath } }),
+  });
+  const check = shadowed.machine.checks.find(({ id }) => id === 'shim.gh');
+  assert.equal(check.status, 'failed');
+  assert.equal(check.code, 'gh-shim-shadowed');
+  assert.equal(check.evidence.resolved_gh, shadowGh);
+  assert.match(check.action, /install-gh-shim/);
+});
+
 test('worktree.app_owner flags bound checkouts whose private App belongs to another owner', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'abi-owner-dr-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

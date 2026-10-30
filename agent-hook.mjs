@@ -33,8 +33,8 @@ import {
 } from './hook-dialects.mjs';
 
 import {
-  expandAlias, hookBypassReason, readBinding, scanGitPublish, statedBotSlug, unboundBotReason,
-  unboundBotSlug, unprovableBotReason
+  expandAlias, hookBypassReason, readBinding, resolveGhWord, scanGitPublish, shadowedGhReason,
+  statedBotSlug, unboundBotReason, unboundBotSlug, unprovableBotReason, unverifiableGhReason,
 } from './identity-host.mjs';
 import { minimalChildEnv } from './child-env.mjs';
 import { confinementCheck } from './confinement.mjs';
@@ -344,11 +344,11 @@ function targetGit(target, env) {
   });
 }
 
-export function unboundIdentityCheck(envelope, { env = process.env, cwd = process.cwd() } = {}) {
+export function unboundIdentityCheck(envelope, { env = process.env, cwd = process.cwd(), scan: precomputedScan } = {}) {
   const allow = { decision: 'allow' };
   if (!scansCommand(envelope) || !envelope.command) return allow;
   const command = envelope.command;
-  const scan = scanGitPublish(command, { cwd, env });
+  const scan = precomputedScan ?? scanGitPublish(command, { cwd, env });
   if (!scan.publishes.length && !scan.aliases.length && !scan.ambiguous && !scan.opaqueExecution && !scan.skipsHooks) return allow;
   // A command word the scan cannot read only matters when git could be in it.
   let uncertain = scan.ambiguous && /git|commit|push/i.test(command.replace(/[\\'"]/g, ''));
@@ -434,6 +434,44 @@ export function unboundIdentityCheck(envelope, { env = process.env, cwd = proces
   }
 }
 
+// #1133: when a stated bot runs `gh`, verify that `gh` resolves to the managed
+// agent-bot shim rather than a shadowing binary (e.g. /opt/homebrew/bin/gh).
+// The human's delegate (no stated bot slug) is never refused.
+export function ghResolutionCheck(envelope, {
+  env = process.env,
+  cwd = process.cwd(),
+  home = env?.HOME,
+  scan: precomputedScan,
+  resolve = resolveGhWord,
+} = {}) {
+  const allow = { decision: 'allow' };
+  if (!scansCommand(envelope) || !envelope.command) return allow;
+  const scan = precomputedScan ?? scanGitPublish(envelope.command, { cwd, env });
+  if (!scan.gh?.length) return allow;
+  let slug = null;
+  try {
+    slug = statedBotSlug({ env, cwd }) || scan.gh.map((entry) => (
+      entry.cwd && existsSync(entry.cwd) ? statedBotSlug({ env, cwd: entry.cwd, git: targetGit(entry, env) }) : null
+    )).find(Boolean);
+  } catch (error) {
+    return { decision: 'deny', reason: `cannot verify the stated bot identity: ${error.message}` };
+  }
+  if (!slug) return allow;
+  for (const entry of scan.gh) {
+    const res = resolve(entry.word, {
+      env: { ...env, ...entry.env },
+      home,
+      cwd: entry.cwd || cwd,
+    });
+    if (res.status === 'shim') continue;
+    if (res.status === 'shadowed' || res.status === 'missing') {
+      return { decision: 'deny', reason: shadowedGhReason(slug, res) };
+    }
+    return { decision: 'deny', reason: unverifiableGhReason(slug, res) };
+  }
+  return allow;
+}
+
 export function runHooks({ dialectKey, event, payload, dir, env = process.env, startedAt = now() }) {
   const envelope = normalizeEnvelope({ dialectKey, event, payload });
   let binding;
@@ -455,7 +493,13 @@ export function runHooks({ dialectKey, event, payload, dir, env = process.env, s
   const budget = budgetMs(dialectKey, event, requested);
   const deadline = startedAt + budget;
   const checkCwd = envelope.cwd && existsSync(envelope.cwd) ? envelope.cwd : process.cwd();
-  const results = [{ name: 'identity', ...unboundIdentityCheck(envelope, { env, cwd: checkCwd }) }];
+  const scan = scansCommand(envelope) && envelope.command
+    ? scanGitPublish(envelope.command, { cwd: checkCwd, env })
+    : undefined;
+  const results = [
+    { name: 'identity', ...unboundIdentityCheck(envelope, { env, cwd: checkCwd, scan }) },
+    { name: 'gh-resolution', ...ghResolutionCheck(envelope, { env, cwd: checkCwd, scan }) },
+  ];
   results.push({ name: 'confinement', ...confinementCheck(envelope, {
     env, binding, cwd: envelope.cwd ?? process.cwd(),
     boundCheckout: binding ? repoRoot(envelope.cwd ?? process.cwd()) : null,
