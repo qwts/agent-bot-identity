@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.15.5
+
+- Follow-ups to #1262 and #1263: the `gh` shim treats a slashless target (`gh api repos/foo`) as no repository — it execs and never hints; `session bind` checks a retired soul before spending the bind token (409 `soul-retired`, token preserved); `openSession` writes the session record before claiming the transcript index and removes the record on a contested claim, and an index entry whose record is missing reads as bound-unknown (fail closed, never as unbound); the audit helper's `session_id` parameter is `sessionId` (the stored field is unchanged).
+- ADR-1257: a soul keeps one Agent ID across its sessions; a new conversation is a session of the joined soul, never a new soul. Session records are authority state, one soul per app profile, and audit carries `session_id`. Decision only; the runtime change follows (#1257).
+- The `gh` shim names the token's repo scope when a failed call targets a different repository than the worktree's origin (`-R`/`--repo`, `api repos/<owner>/<name>`, or `github.com/<owner>/<name>` args; case-insensitive) — the exit status is unchanged, and it stays quiet on success (#1257).
+- Relay edge auto mode: an SSE stream that held to its own deadline now makes
+  the following poll a single terminal catch-up — drain its `hasMore` pages,
+  never nap and retry. The stream's monotonic abort timer can beat the
+  wall-clock deadline by a hair, and that hair let a loaded runner schedule a
+  nap and count a second catch-up poll (flake in
+  tests/relay-edge.test.mjs "edge holding to the deadline").
+- MCP progressive disclosure: the local `agent-bot mcp` server now lists only
+  the four meta-tools `search_tools` / `describe_tool` / `call_tool` /
+  `call_write_tool` (matching the remote server's contract); every existing tool
+  is callable through them or still directly by name. New read tools `doctor`,
+  `server_status` and `guide` join the hidden registry, and the initialize
+  `instructions` stamp the installed version and point at server-mode minting.
+- Cursor onboarding friction (#1257): doctor's `first_actionable_failure` promotes an agent-harness session's unbound-worktree warning to `agent-needs-soul-worktree` ranked first with the join → `agent-bot mcp` bind → `setup-worktree` sequence; the credential refusal text names the same steps; `agent-bot population` with no subcommand runs `list` (flags pass through); the `skill` help line names `agent-bot skill agent-bot --for`; signed-commit's git reads pin `-c log.showSignature=false` so a user's `log.showSignature=true` can't spawn the "cannot run gpg" noise.
+- The `gh` shim keeps `exec` for the common case (#1259 follow-up): the target repo is resolved before `gh` runs, and same-repo or untargeted calls still `exec "$REAL" "$@"` so signals reach `gh`; only a call aimed at another repository runs under the wrapper that prints the scope hint on failure, with the exit status unchanged.
+- The bundled `agent-bot` skill now teaches server mode first: "Onboard a GitHub App identity" leads with `agent-bot server status`, daemon-minted repo-scoped tokens (credential helper, `gh` shim, `GH_AGENT_APP=<slug> agent-bot mint-token`, `credential-unavailable`/`device-revoked`/`outcome-unknown`), and relegates `pass-cli`/`ensure-private-key`/local key stores to a clearly labelled legacy-local-custody path (`legacyLocalCustody` opt-in, `legacy-local-custody-off` otherwise). `operations.md` is restructured the same way and its command table gains a "Get a token (server mode)" row. Frontmatter now says "soul-bound Agent IDs with per-session attribution (ADR-1257)".
+- `session bind` never mints a soul anymore (ADR-1257): the bind token's Agent ID is the soul, and every conversation binds as a session record under `<stateDir>/sessions` with a per-transcript uniqueness index — a second transcript joins the same soul (`agentId` unchanged, `repinRequired: false`, `sessionId` in the response and binding). `agent-bot session bind` sends its stated `AGENT_BOT_ID` as `expectedAgentId` and a token naming another soul fails `agent-id-pin-mismatch` before it is spent; a transcript already bound to another soul fails `transcript-bound-elsewhere` without consuming the token. Local credential-mint audit receipts and action-ledger entries record `session_id` (never sent to the server). The soul's legacy `transcript` field keeps naming its first session.
+
 ## 0.15.4
 
 - `agent-bot server enroll --force` no longer deletes the enrollment up front: the new key and grant run in `<state>/enroll-staging/` and swap in only after approval, so an expired or denied code leaves `device.json`, `device-key.pem`, the `actions/` ledger and `event-cursors.json` byte-identical. A changed device id moves the old cursors to `event-cursors.<old-id>.json` instead of deleting them (#1243).
