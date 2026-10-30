@@ -442,6 +442,58 @@ if [ -n "$CODEX_DESKTOP_CONTEXT" ] && [ "$#" -eq 7 ] && \
       ;;
   esac
 fi
-exec "$REAL" "$@"
+# The token only covers this worktree's origin repo; a failed call aimed at a
+# different repository reads as "repo does not exist", so say why. A plain
+# call keeps the exit status observable; it is returned unchanged.
+"$REAL" "$@"
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  # The hinted repo is always owner/name: -R may carry HOST/owner/name or a
+  # github.com URL; api/URL args are cut to their first two segments.
+  TARGET=""
+  RAW=""
+  PREV=""
+  for A in "$@"; do
+    case "$PREV" in -R|--repo) RAW="$A" ;; esac
+    case "$A" in --repo=*) RAW="\${A#--repo=}" ;; esac
+    PREV="$A"
+  done
+  case "$RAW" in https://github.com/*) RAW="\${RAW#https://github.com/}" ;; esac
+  case "$RAW" in
+    */*/*) TARGET=$(printf '%s' "$RAW" | cut -d/ -f2-3) ;;
+    */*)   TARGET=$(printf '%s' "$RAW" | cut -d/ -f1-2) ;;
+  esac
+  if [ -z "$TARGET" ]; then
+    for A in "$@"; do
+      case "$A" in
+        /repos/*)               CAND="\${A#/repos/}" ;;
+        repos/*)                CAND="\${A#repos/}" ;;
+        https://github.com/*/*) CAND="\${A#https://github.com/}" ;;
+        *) continue ;;
+      esac
+      TARGET=$(printf '%s' "$CAND" | cut -d/ -f1-2)
+    done
+  fi
+  TARGET="\${TARGET%.git}"
+  case "$TARGET" in
+    */*)
+      ORIGIN_URL=$(git config --get remote.origin.url 2>/dev/null || true)
+      if [ -n "$ORIGIN_URL" ]; then
+        ORIGIN_REST="\${ORIGIN_URL%/*}"
+        ORIGIN_REPO="\${ORIGIN_URL##*/}"; ORIGIN_REPO="\${ORIGIN_REPO%.git}"
+        ORIGIN_OWNER="\${ORIGIN_REST##*/}"; ORIGIN_OWNER="\${ORIGIN_OWNER##*:}"
+        ORIGIN="$ORIGIN_OWNER/$ORIGIN_REPO"
+      else
+        ORIGIN=""
+      fi
+      TLOW=$(printf '%s' "$TARGET" | tr '[:upper:]' '[:lower:]')
+      OLOW=$(printf '%s' "$ORIGIN" | tr '[:upper:]' '[:lower:]')
+      if [ -n "$OLOW" ] && [ -n "$TLOW" ] && [ "$TLOW" != "$OLOW" ]; then
+        echo "agent-bot: this worktree's token is scoped to $ORIGIN; $TARGET is outside it. Work on $TARGET from a worktree of $TARGET (agent-bot setup-worktree in a checkout of $TARGET). Access across repositories will need an owner grant." >&2
+      fi
+      ;;
+  esac
+fi
+exit $STATUS
 `;
 }

@@ -1,0 +1,1 @@
+- The `gh` shim names the token's repo scope when a failed call targets a different repository than the worktree's origin (`-R`/`--repo`, `api repos/<owner>/<name>`, or `github.com/<owner>/<name>` args; case-insensitive) — the exit status is unchanged, and it stays quiet on success (#1257).
