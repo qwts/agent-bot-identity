@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { createMcpState, handleMcpMessage, runMcpServer } from '../agent-mcp.mjs';
+import { MCP_USAGE, createMcpState, handleMcpMessage, parseMcpArgs, runMcpServer } from '../agent-mcp.mjs';
+import { REACH_MCP_USAGE, parseReachMcpArgs } from '../daemon-mcp.mjs';
 import { SKILL_REFERENCES } from '../cli/skill-references.mjs';
 import { mintBindToken, readBindToken } from '../agent-binding.mjs';
 
@@ -387,6 +388,20 @@ test('call_write_tool refuses a read tool', async () => {
   const refused = await callTool(state, 'call_write_tool', { name: 'whoami' });
   assert.equal(refused.isError, true);
   assert.match(refused.text, /use-call-tool/);
+});
+
+test('mcp and reach-mcp handle --help/-h and reject unknown arguments without opening stdin (#1283)', () => {
+  assert.deepEqual(parseMcpArgs([]), { help: false });
+  assert.deepEqual(parseMcpArgs(['--help']), { help: true });
+  assert.deepEqual(parseMcpArgs(['-h']), { help: true });
+  assert.match(MCP_USAGE, /^usage: agent-bot mcp\n/);
+  assert.throws(() => parseMcpArgs(['--unknown']), /usage: agent-bot mcp/);
+
+  assert.deepEqual(parseReachMcpArgs([]), { help: false });
+  assert.deepEqual(parseReachMcpArgs(['--help']), { help: true });
+  assert.deepEqual(parseReachMcpArgs(['-h']), { help: true });
+  assert.match(REACH_MCP_USAGE, /^usage: agent-bot reach-mcp\n/);
+  assert.throws(() => parseReachMcpArgs(['--unknown']), /usage: agent-bot reach-mcp/);
 });
 
 test('call_write_tool runs bind; a legacy direct tools/call still works', async () => {
