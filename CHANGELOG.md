@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.6
+
+- Agent-machine client (#1254): agent-daemon can now call the local
+  agent-machine control daemon over its signed unix-socket protocol.
+  `POST /v0/machine` takes {verb, name?, option?, target?, plan_id?} behind the
+  caller's binding proof and fills soul, harness and session_id from the
+  binding (a supplied mismatch is `derived-field-mismatch`). The agent-daemon
+  Ed25519 key lives under vouch custody; `agent-bot machine pair|unpair|status`
+  (owner-gated) stages `peers/agent-daemon.*` and pins `daemon.pub` so a key
+  swap is refused. MCP gains machine_status/machine_receipts (read) and
+  machine_plan/machine_apply/machine_update (write) behind the meta-tools.
+
 ## 0.15.5
 
 - Follow-ups to #1262 and #1263: the `gh` shim treats a slashless target (`gh api repos/foo`) as no repository — it execs and never hints; `session bind` checks a retired soul before spending the bind token (409 `soul-retired`, token preserved); `openSession` writes the session record before claiming the transcript index and removes the record on a contested claim, and an index entry whose record is missing reads as bound-unknown (fail closed, never as unbound); the audit helper's `session_id` parameter is `sessionId` (the stored field is unchanged).
