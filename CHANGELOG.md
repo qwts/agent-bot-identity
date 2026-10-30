@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.8
+
+- `agent-bot mcp --help` and `agent-bot reach-mcp --help` now print usage and exit `0` (and reject unknown arguments with exit `1`) instead of opening `stdin` and hanging indefinitely (#1283).
+
 ## 0.15.7
 
 - A bot session's `gh` call is now refused when `gh` resolves to a shadowing binary outside the agent-bot shim rather than the managed shim, and calling the managed shim by its explicit path (`~/.local/bin/gh` or `~/.config/agent-bot/bin/gh`) is allowed instead of blocked as opaque execution; `agent-bot doctor` also flags `gh-shim-shadowed` when a foreign `gh` precedes the shim on `PATH` (#1133).
