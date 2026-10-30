@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -703,4 +703,48 @@ test('notices: take/peek/ack/release through the signed session, filters and the
   let out = '';
   assert.equal(await noticesMain(['take', '--json'], { env, fetchImpl: srv.fetch, out: { write: (x) => { out += x; } }, err: { write: () => {} } }), 0);
   assert.deepEqual(JSON.parse(out).notices.map((x) => x.id), ['d2']);
+});
+
+test('enroll --force with a denied grant leaves the live enrollment byte-identical', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'abi-enroll-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = { ...sandbox(), AGENT_BOT_SERVER_STATE: dir };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  const deviceJson = readFileSync(join(dir, 'device.json'), 'utf8');
+  const keyPem = readFileSync(join(dir, 'device-key.pem'), 'utf8');
+  mkdirSync(join(dir, 'actions'), { recursive: true });
+  writeFileSync(join(dir, 'actions', 'op1.json'), '{}');
+  writeFileSync(join(dir, 'event-cursors.json'), '{"x":1}');
+
+  await assert.rejects(
+    enroll({ base: BASE, env, enrollToken: 'bad', force: true, fetchImpl: srv.fetch, sleep }),
+    /invalid_grant|enrollment failed/,
+  );
+  assert.equal(readFileSync(join(dir, 'device.json'), 'utf8'), deviceJson);
+  assert.equal(readFileSync(join(dir, 'device-key.pem'), 'utf8'), keyPem);
+  assert.equal(readFileSync(join(dir, 'event-cursors.json'), 'utf8'), '{"x":1}');
+  assert.equal(readFileSync(join(dir, 'actions', 'op1.json'), 'utf8'), '{}');
+  assert.ok(!existsSync(join(dir, 'enroll-staging')));
+});
+
+test('enroll --force with an approved grant swaps the enrollment and keeps the ledger and cursors', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'abi-enroll-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = { ...sandbox(), AGENT_BOT_SERVER_STATE: dir };
+  const srv = fakeServer();
+  const prior = await enroll({ base: BASE, env, enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  const keyPem = readFileSync(join(dir, 'device-key.pem'), 'utf8');
+  mkdirSync(join(dir, 'actions'), { recursive: true });
+  writeFileSync(join(dir, 'actions', 'op1.json'), '{}');
+  writeFileSync(join(dir, 'event-cursors.json'), '{"x":1}');
+
+  const dev = await enroll({ base: BASE, env, enrollToken: 'abe_good', force: true, fetchImpl: srv.fetch, sleep });
+  assert.notEqual(dev.device_id, prior.device_id);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'device.json'), 'utf8')).device_id, dev.device_id);
+  assert.notEqual(readFileSync(join(dir, 'device-key.pem'), 'utf8'), keyPem, 'the old key is replaced, never archived');
+  assert.equal(readFileSync(join(dir, 'actions', 'op1.json'), 'utf8'), '{}', 'the action ledger survives a forced re-enroll');
+  assert.equal(readFileSync(join(dir, `event-cursors.${prior.device_id}.json`), 'utf8'), '{"x":1}');
+  assert.ok(!existsSync(join(dir, 'event-cursors.json')));
+  assert.ok(!existsSync(join(dir, 'enroll-staging')));
 });

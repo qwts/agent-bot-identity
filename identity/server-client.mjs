@@ -21,7 +21,7 @@
 
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, hostname, platform as osPlatform } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -361,54 +361,84 @@ export async function enroll({
 } = {}) {
   const fetchImpl = noRedirect(rawFetch);
   const opts = { env, home };
-  if (!force && loadDevice(opts)) throw new Error('already enrolled; run `agent-bot server logout` first (or pass --force)');
-  if (force) logout(opts);
-  const serverKey = await pinServerKey(base, opts, { fetchImpl });
-  const deviceKey = loadDeviceKey(opts, { create: true });
-  const jkt = jwkThumbprint(publicJwk(deviceKey));
-  const meta = { device_name: deviceName, platform, key_storage: 'software', tags: tags.join(' ') };
-  let result; let method;
-  if (enrollToken) {
-    method = 'enrollment_token';
-    const aud = `${base}/oauth/device_enroll`;
-    const res = await fetchImpl(aud, form({ ...meta, enrollment_token: enrollToken, proof: enrollProof(deviceKey, aud) }));
-    result = await readJson(res);
-    if (!res.ok || !result.device_id) throw oauthError('enrollment failed', result);
-  } else {
-    method = 'device_code';
-    if (harnesses.length === 0) throw new Error('enroll needs at least one --harness');
-    const aud = `${base}/oauth/device_authorization`;
-    const res = await fetchImpl(aud, form({ ...meta, harnesses: harnesses.join(' '), proof: enrollProof(deviceKey, aud) }));
-    const auth = await readJson(res);
-    if (!res.ok || !auth.user_code) throw oauthError('device authorization failed', auth);
-    onPrompt({ ...auth, jkt });
-    let interval = Number(auth.interval) || 5;
-    const deadline = Date.now() + (Number(auth.expires_in) || 900) * 1000;
-    for (;;) {
-      if (Date.now() > deadline) throw new Error('device code expired before approval');
-      await sleep(interval * 1000);
-      const p = await fetchImpl(`${base}/oauth/token`, form({ grant_type: GRANT_DEVICE_CODE, device_code: auth.device_code }));
-      const body = await readJson(p);
-      if (body.device_id) { result = body; break; }
-      if (body.error === 'slow_down') interval += 5;
-      else if (body.error !== 'authorization_pending') throw oauthError('enrollment failed', body);
-    }
-  }
-  const record = {
-    server: base, device_id: result.device_id, jkt, method, platform, device_name: deviceName,
-    harnesses: result.harnesses ?? harnesses, read_only: Boolean(result.read_only),
-    ephemeral: Boolean(result.ephemeral), expires_at: result.expires_at ?? null,
-    management: 'managed', server_key_id: serverKey.kid ?? null, enrolled_at: new Date().toISOString(),
-  };
-  saveDevice(opts, record);
-  // Prove the enrollment works end to end and learn what the server reports.
-  // The enrollment is already real on the server, so a failed check is a
-  // warning on the saved record, not an error that strands a retry.
+  const prior = loadDevice(opts);
+  if (!force && prior) throw new Error('already enrolled; run `agent-bot server logout` first (or pass --force)');
+  // --force stages the new enrollment under <state>/enroll-staging/: the grant
+  // runs against a fresh key and device record while the live enrollment, the
+  // action ledger and event cursors stay untouched until approval (#1243).
+  const stagedDir = force ? path.join(serverStateDir(opts), 'enroll-staging') : null;
+  const sopts = stagedDir ? { env: { ...env, AGENT_BOT_SERVER_STATE: stagedDir }, home } : opts;
+  let result;
   try {
-    const who = await new ServerSession({ base, env, home, fetchImpl: rawFetch }).whoami();
-    saveDevice(opts, { ...record, management: who?.device?.management ?? record.management, verified: true });
-  } catch (e) {
-    saveDevice(opts, { ...record, verified: false, verify_error: e.message });
+    if (stagedDir) { rmSync(stagedDir, { recursive: true, force: true }); mkdirSync(stagedDir, { recursive: true, mode: 0o700 }); }
+    const serverKey = await pinServerKey(base, sopts, { fetchImpl });
+    const deviceKey = loadDeviceKey(sopts, { create: true });
+    const jkt = jwkThumbprint(publicJwk(deviceKey));
+    const meta = { device_name: deviceName, platform, key_storage: 'software', tags: tags.join(' ') };
+    let method;
+    if (enrollToken) {
+      method = 'enrollment_token';
+      const aud = `${base}/oauth/device_enroll`;
+      const res = await fetchImpl(aud, form({ ...meta, enrollment_token: enrollToken, proof: enrollProof(deviceKey, aud) }));
+      result = await readJson(res);
+      if (!res.ok || !result.device_id) throw oauthError('enrollment failed', result);
+    } else {
+      method = 'device_code';
+      if (harnesses.length === 0) throw new Error('enroll needs at least one --harness');
+      const aud = `${base}/oauth/device_authorization`;
+      const res = await fetchImpl(aud, form({ ...meta, harnesses: harnesses.join(' '), proof: enrollProof(deviceKey, aud) }));
+      const auth = await readJson(res);
+      if (!res.ok || !auth.user_code) throw oauthError('device authorization failed', auth);
+      onPrompt({ ...auth, jkt });
+      let interval = Number(auth.interval) || 5;
+      const deadline = Date.now() + (Number(auth.expires_in) || 900) * 1000;
+      for (;;) {
+        if (Date.now() > deadline) throw new Error('device code expired before approval');
+        await sleep(interval * 1000);
+        const p = await fetchImpl(`${base}/oauth/token`, form({ grant_type: GRANT_DEVICE_CODE, device_code: auth.device_code }));
+        const body = await readJson(p);
+        if (body.device_id) { result = body; break; }
+        if (body.error === 'slow_down') interval += 5;
+        else if (body.error !== 'authorization_pending') throw oauthError('enrollment failed', body);
+      }
+    }
+    const record = {
+      server: base, device_id: result.device_id, jkt, method, platform, device_name: deviceName,
+      harnesses: result.harnesses ?? harnesses, read_only: Boolean(result.read_only),
+      ephemeral: Boolean(result.ephemeral), expires_at: result.expires_at ?? null,
+      management: 'managed', server_key_id: serverKey.kid ?? null, enrolled_at: new Date().toISOString(),
+    };
+    saveDevice(sopts, record);
+    // Prove the enrollment works end to end and learn what the server reports.
+    // The enrollment is already real on the server, so a failed check is a
+    // warning on the saved record, not an error that strands a retry.
+    try {
+      const who = await new ServerSession({ base, env: sopts.env, home, fetchImpl: rawFetch }).whoami();
+      saveDevice(sopts, { ...record, management: who?.device?.management ?? record.management, verified: true });
+    } catch (e) {
+      saveDevice(sopts, { ...record, verified: false, verify_error: e.message });
+    }
+  } catch (error) {
+    // An expired, denied or aborted grant never touches the live enrollment.
+    if (stagedDir) rmSync(stagedDir, { recursive: true, force: true });
+    throw error;
+  }
+  if (stagedDir) {
+    const live = statePaths(opts);
+    const staged = statePaths(sopts);
+    mkdirSync(live.dir, { recursive: true, mode: 0o700 });
+    // The action ledger is never removed. Event cursors belong to the old
+    // device id; when the id changes they are moved aside, not deleted.
+    const cursors = path.join(live.dir, 'event-cursors.json');
+    if (prior?.device_id && prior.device_id !== result.device_id && existsSync(cursors)) {
+      renameSync(cursors, path.join(live.dir, `event-cursors.${prior.device_id}.json`));
+    }
+    // device.json is what loadDevice reads: swap it last so a crash mid-swap
+    // never pairs the new key with a stale device record.
+    for (const file of ['serverKey', 'key', 'device']) {
+      if (existsSync(staged[file])) renameSync(staged[file], live[file]);
+    }
+    rmSync(stagedDir, { recursive: true, force: true });
   }
   return loadDevice(opts);
 }
