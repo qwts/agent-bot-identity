@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { assertOwnerAction } from '../owner-action.mjs';
 import {
   AGENT_MACHINE_DIR, buildRequest, machineCall, machineSocketPath,
-  loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub, verifyResponse,
+  loadOrCreateMachineKey, loadMachinePublicKey, pairedPublicKey, pinDaemonPub, verifyResponse,
   writeAgentDaemonPeer, unpairAgentDaemon, machineStateDir,
 } from '../machine-client.mjs';
 
@@ -24,7 +24,7 @@ async function statusRoundTrip({ home, env }) {
   const signer = loadOrCreateMachineKey({ env, home });
   const request = buildRequest({ verb: 'status' }, signer);
   const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
-  return verifyResponse(line, pinned);
+  return verifyResponse(line, pinned, { expectedNonce: request.nonce });
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -63,6 +63,10 @@ async function main(argv = process.argv.slice(2)) {
       : [];
     process.stdout.write(`agent-machine dir: ${existsSync(dir) ? dir : 'absent'}\n`);
     process.stdout.write(`pin: ${existsSync(pin) ? 'present' : 'absent'}; peer files: ${pairedFiles.length ? pairedFiles.join(', ') : 'none'}\n`);
+    if (loadMachinePublicKey({ env, home }) === null) {
+      process.stdout.write('client key: absent\n');
+      return;
+    }
     if (!existsSync(pin)) return;
     try {
       const reply = await statusRoundTrip({ home, env });

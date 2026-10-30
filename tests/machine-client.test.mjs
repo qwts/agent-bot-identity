@@ -37,7 +37,7 @@ test('a request built with fixed fields signs byte-identically to Go', async () 
 });
 
 test('verifyResponse accepts the Go golden line, raw escaped body and all', () => {
-  const out = verifyResponse(GO_RES, Buffer.from(GO_DAEMON_PUB, 'hex'), { now: 1730000001 * 1000 + 10 });
+  const out = verifyResponse(GO_RES, Buffer.from(GO_DAEMON_PUB, 'hex'), { expectedNonce: 'AAAAAAAAAAAAAAAAAAAAAA', now: 1730000001 * 1000 + 10 });
   assert.equal(out.ok, true);
   assert.equal(out.state, 'planned');
   assert.deepEqual(out.body.a, '<b>&x');
@@ -47,19 +47,42 @@ test('verifyResponse accepts the Go golden line, raw escaped body and all', () =
 test('tamper cases: bad signature, wrong key, stale timestamp, edited body', () => {
   const pub = Buffer.from(GO_DAEMON_PUB, 'hex');
   const now = 1730000001 * 1000;
-  assert.throws(() => verifyResponse(GO_RES.replace('"ok":true', '"ok":false'), pub, { now }), /machine-reply-tampered/);
+  const expected = { expectedNonce: 'AAAAAAAAAAAAAAAAAAAAAA', now };
+  assert.throws(() => verifyResponse(GO_RES.replace('"ok":true', '"ok":false'), pub, expected), /machine-reply-tampered/);
   const other = generateKeyPairSync('ed25519');
   const otherRaw = Buffer.from(other.publicKey.export({ format: 'jwk' }).x, 'base64url');
-  assert.throws(() => verifyResponse(GO_RES, otherRaw, { now }), /machine-reply-tampered/);
-  assert.throws(() => verifyResponse(GO_RES, pub, { now: now + 10 * 60 * 1000 }), /machine-reply-stale/);
+  assert.throws(() => verifyResponse(GO_RES, otherRaw, expected), /machine-reply-tampered/);
+  assert.throws(() => verifyResponse(GO_RES, pub, { expectedNonce: 'AAAAAAAAAAAAAAAAAAAAAA', now: now + 10 * 60 * 1000 }), /machine-reply-stale/);
   // A byte inside the body span breaks the signature but not JSON parsing.
   const edited = GO_RES.replace('"n":{"k":[1,2]}', '"n":{"k":[1,3]}');
-  assert.throws(() => verifyResponse(edited, pub, { now }), /machine-reply-tampered/);
+  assert.throws(() => verifyResponse(edited, pub, expected), /machine-reply-tampered/);
+});
+
+test('the reply must be bound to the request nonce (#410)', () => {
+  const pub = Buffer.from(GO_DAEMON_PUB, 'hex');
+  const now = 1730000001 * 1000;
+  // A correctly signed reply for another request is refused.
+  assert.throws(() => verifyResponse(GO_RES, pub, { expectedNonce: 'CCCCCCCCCCCCCCCCCCCCCC', now }), /machine-reply-unbound/);
+  // A reply validly signed with no request_nonce is refused as unbound.
+  const keypair = generateKeyPairSync('ed25519');
+  const pub2 = Buffer.from(keypair.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  const res2 = { ok: true, state: 'ready' };
+  res2.timestamp = Math.floor(Date.now() / 1000);
+  res2.nonce = 'TESTNONCE00000000000001';
+  const payload2 = [String(res2.ok), '', '', res2.state, '', String(res2.timestamp), res2.nonce, ''].join('\n');
+  res2.signature = edSign(null, Buffer.from(payload2), keypair.privateKey).toString('base64');
+  assert.throws(() => verifyResponse(JSON.stringify(res2), pub2, { expectedNonce: 'Q', now: Date.now() }), /machine-reply-unbound/);
 });
 
 test('bodySpan finds the raw body value inside a line', () => {
   const span = bodySpan(GO_RES);
   assert.equal(span.toString('utf8'), '{"a":"\\u003cb\\u003e\\u0026x","u":"héllo","n":{"k":[1,2]}}');
+  // A "body" string inside another value is not the key.
+  const tricky = '{"ok":true,"message":"set \"body\":{x} here","body":"s","timestamp":1,"nonce":"n"}';
+  assert.equal(bodySpan(tricky).toString(), '"s"');
+  // Scalar bodies scan the same way.
+  assert.equal(bodySpan('{"ok":true,"body":7,"timestamp":1}').toString(), '7');
+  assert.equal(bodySpan('{"body":{"k":[1]},"ok":true}').toString(), '{"k":[1]}');
 });
 
 // A fake agent-machine: unix socket, verifies the request signature against
@@ -110,7 +133,7 @@ test('a signed request round-trips through a fake agent-machine', async () => {
   pinDaemonPub({ env, home });
   const req = buildRequest({ verb: 'status' }, signer);
   const line = await machineCall({ socketPath: fm.sock, request: req });
-  const out = verifyResponse(line, fm.daemonPub);
+  const out = verifyResponse(line, fm.daemonPub, { expectedNonce: req.nonce });
   assert.equal(out.ok, true);
   assert.equal(fm.received.length, 1);
   assert.equal(fm.received[0].verb, 'status');

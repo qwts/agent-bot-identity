@@ -729,6 +729,14 @@
       "kind": "refusal",
       "summary": "A supplied field disagrees with a value the daemon derives from the binding (soul, harness, session).",
       "registered": "0.15.5"
+    },
+    {
+      "n": 92,
+      "code": "machine-reply-unbound",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "The agent-machine reply verifies but its request_nonce is absent or not the request we sent.",
+      "registered": "0.15.5"
     }
   ]
 }

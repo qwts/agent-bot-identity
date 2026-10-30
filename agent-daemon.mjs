@@ -90,7 +90,7 @@ import {
   daemonClient, daemonStateFile, LOOPBACK_HOSTS, probeDaemonHealth as probeHealth,
   readDaemonState as readStateFile, SCHEMA_VERSION,
 } from './daemon-client.mjs';
-import { buildRequest, machineCall, machineSocketPath, loadOrCreateMachineKey, pairedPublicKey, verifyResponse } from './machine-client.mjs';
+import { buildRequest, machineCall, machineSocketPath, machineStateDir, loadOrCreateMachineKey, pairedPublicKey, verifyResponse } from './machine-client.mjs';
 // Re-exported for importers that predate daemon-client.mjs (#645).
 export { daemonClient, daemonStateFile };
 import { joinLaunchedSoul, leaveLaunchedSoul } from './comms-membership.mjs';
@@ -737,7 +737,7 @@ export function createDaemonServer({
         const stated = { soul: binding.agentId, harness: binding.harness ?? null, session_id: binding.sessionId ?? null };
         for (const field of ['soul', 'harness', 'session_id']) {
           if (body[field] !== undefined && body[field] !== stated[field]) {
-            throw Object.assign(new Error(`${field} does not match this binding — omit it; the daemon fills it`), { statusCode: 409, code: 'derived-field-mismatch' });
+            throw Object.assign(new Error(`${field} does not match this binding — omit it; the daemon fills it [derived-field-mismatch]`), { statusCode: 409, code: 'derived-field-mismatch' });
           }
         }
         const request = buildRequest(
@@ -746,7 +746,7 @@ export function createDaemonServer({
         );
         const pinned = pairedPublicKey({ env, home });
         const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
-        sendJson(res, 200, verifyResponse(line, pinned));
+        sendJson(res, 200, verifyResponse(line, pinned, { expectedNonce: request.nonce }));
         return;
       }
       if (route === 'POST /v0/credential') {
@@ -1337,10 +1337,11 @@ function presentedCredential(req) {
   return typeof req.headers['x-agent-binding'] === 'string' ? req.headers['x-agent-binding'] : '';
 }
 
-let cachedMachineKey = null;
+const machineKeys = new Map();
 function machineKey({ env, home }) {
-  cachedMachineKey ??= loadOrCreateMachineKey({ env, home });
-  return cachedMachineKey;
+  const dir = machineStateDir({ env, home });
+  if (!machineKeys.has(dir)) machineKeys.set(dir, loadOrCreateMachineKey({ env, home }));
+  return machineKeys.get(dir);
 }
 
 function requireBinding(req, bindings) {

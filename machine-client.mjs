@@ -6,13 +6,18 @@
 // The agent-daemon Ed25519 key lives under the identity vouch custody
 // (0600 / Windows owned ACL); the agent-machine response key is pinned at
 // pair time so a swapped daemon.pub is refused.
-import { createHash, randomBytes, sign as edSign, verify as edVerify, createPublicKey } from 'node:crypto';
+import { createHash, createPrivateKey as createPrivateKeySync, randomBytes, sign as edSign, verify as edVerify, createPublicKey } from 'node:crypto';
 import { connect } from 'node:net';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { loadOrCreateVouchKey, vouchStateDir } from './identity-host.mjs';
+
+// Same 12-byte Ed25519 SPKI DER prefix as identity/keyd-client.mjs
+// ED25519_SPKI_PREFIX — keyd-client is identity module and host may not
+// import it directly, so the constant is duplicated here by design.
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 const REQUEST_FIELDS = ['verb', 'name', 'option', 'target', 'plan_id', 'soul', 'harness', 'session_id'];
 const VERBS = new Set(['status', 'receipts', 'plan', 'apply', 'update']);
@@ -33,11 +38,26 @@ export function machineStateDir({ env = process.env, home = homedir() } = {}) {
 }
 
 export function loadOrCreateMachineKey({ env = process.env, home = homedir(), platform = process.platform } = {}) {
-  const dir = machineStateDir({ env, home });
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const key = loadOrCreateVouchKey(dir, { platform });
-  const publicKeyRaw = Buffer.from(createPublicKey(key.privateKey).export({ format: 'jwk' }).x, 'base64url');
+  // loadOrCreateVouchKey owns directory custody itself: a pre-created
+  // directory here would keep an inherited ACL on Windows.
+  const key = loadOrCreateVouchKey(machineStateDir({ env, home }), { platform });
+  const der = key.publicKey.export({ type: 'spki', format: 'der' });
+  if (der.length !== 44 || !der.subarray(0, 12).equals(ED25519_SPKI_PREFIX)) {
+    throw mcError('machine-reply-invalid', 'the machine client key is not a raw Ed25519 SPKI export');
+  }
+  const publicKeyRaw = Buffer.from(der.subarray(12));
   return { publicKeyRaw, sign: (bytes) => edSign(null, bytes, key.privateKey) };
+}
+
+// Read-only probe for `agent-bot machine status`: reports the key's public
+// half without ever creating one. The vouch custody file is a PKCS8 PEM.
+export function loadMachinePublicKey({ env = process.env, home = homedir() } = {}) {
+  const file = path.join(machineStateDir({ env, home }), 'vouch-key.pem');
+  if (!existsSync(file)) return null;
+  const key = createPrivateKeySync(readFileSync(file, 'utf8'));
+  const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
+  if (der.length !== 44 || !der.subarray(0, 12).equals(ED25519_SPKI_PREFIX)) return null;
+  return Buffer.from(der.subarray(12));
 }
 
 export function requestCanonical(r) {
@@ -64,30 +84,56 @@ export function buildRequest({ verb, name, option, target, plan_id, soul, harnes
 }
 
 // The response signature covers the raw bytes of the body value exactly as
-// they appear on the line, so find that span in the top-level object without
-// re-serializing (escaped <, &, unicode all differ under re-encode).
+// they appear on the line. Walk the top-level object — never regex-search —
+// so a "body" string inside another value cannot be mistaken for the key:
+// for each member, skip whitespace, read the key string honouring escapes,
+// skip its value with the depth/string scanner, and return the span only
+// when the unescaped key is exactly `body`.
 export function bodySpan(line) {
   const text = typeof line === 'string' ? line : line.toString('utf8');
-  const marker = /"body"\s*:/.exec(text);
-  if (!marker) return null;
-  let i = marker.index + marker[0].length;
-  while (i < text.length && /\s/.test(text[i])) i += 1;
-  const start = i;
-  let depth = 0, inString = false, escaped = false;
-  for (; i < text.length; i += 1) {
-    const c = text[i];
-    if (escaped) { escaped = false; continue; }
-    if (c === '\\' && inString) { escaped = true; continue; }
-    if (c === '"') inString = !inString;
-    if (inString) continue;
-    if (c === '{' || c === '[') depth += 1;
-    else if (c === '}' || c === ']') {
-      if (depth === 0) break;
-      depth -= 1;
-      if (depth === 0) { i += 1; break; }
-    } else if (depth === 0 && (c === ',' || c === '}')) break;
+  const skipWs = (i) => { while (i < text.length && /\s/.test(text[i])) i += 1; return i; };
+  const readString = (i) => { // i at opening quote → { key, end } past closing quote
+    let value = '', j = i + 1;
+    while (j < text.length) {
+      const c = text[j];
+      if (c === '\\') { value += c + text[j + 1] ?? ''; j += 2; continue; }
+      if (c === '"') return { value: unescapeJson(value), end: j + 1 };
+      value += c; j += 1;
+    }
+    return { value, end: j };
+  };
+  const skipValue = (i) => {
+    let depth = 0, inString = false, escaped = false;
+    for (; i < text.length; i += 1) {
+      const c = text[i];
+      if (escaped) { escaped = false; continue; }
+      if (c === '\\' && inString) { escaped = true; continue; }
+      if (c === '"') inString = !inString;
+      if (inString) continue;
+      if (c === '{' || c === '[') depth += 1;
+      else if (c === '}' || c === ']') {
+        if (depth === 0) return i;
+        depth -= 1;
+        if (depth === 0) return i + 1;
+      } else if (depth === 0 && c === ',') return i;
+    }
+    return i;
+  };
+  let i = skipWs(text.indexOf('{') >= 0 ? text.indexOf('{') + 1 : 0);
+  while (i < text.length && text[i] !== '}') {
+    if (text[i] !== '"') break;
+    const { value: key, end } = readString(i);
+    i = skipWs(skipWs(end) + 1); // past the colon
+    const vEnd = skipValue(i);
+    if (key === 'body') return Buffer.from(text.slice(i, vEnd), 'utf8');
+    i = skipWs(vEnd);
+    if (text[i] === ',') i = skipWs(i + 1);
   }
-  return Buffer.from(text.slice(start, i === start ? start : i), 'utf8');
+  return null;
+}
+
+function unescapeJson(value) {
+  try { return JSON.parse(`"${value.replace(/"/g, '\\"')}"`); } catch { return value; }
 }
 
 export function responseCanonical(res, bodyRaw) {
@@ -98,7 +144,7 @@ export function responseCanonical(res, bodyRaw) {
   ].join('\n'));
 }
 
-export function verifyResponse(line, pinnedPublicKeyRaw, { now = Date.now() } = {}) {
+export function verifyResponse(line, pinnedPublicKeyRaw, { expectedNonce, now = Date.now() } = {}) {
   const raw = typeof line === 'string' ? line : line.toString('utf8');
   const res = JSON.parse(raw.trimEnd());
   if (typeof res.signature !== 'string' || typeof res.timestamp !== 'number') {
@@ -107,12 +153,17 @@ export function verifyResponse(line, pinnedPublicKeyRaw, { now = Date.now() } = 
   const bodyRaw = bodySpan(raw);
   let ok;
   try {
-    const pub = createPublicKey({ format: 'jwk', key: { kty: 'OKP', crv: 'Ed25519', x: pinnedPublicKeyRaw.toString('base64url') } });
+    const pub = createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, pinnedPublicKeyRaw]), format: 'der', type: 'spki' });
     ok = edVerify(null, responseCanonical(res, bodyRaw), pub, Buffer.from(res.signature, 'base64'));
   } catch { ok = false; }
   if (!ok) throw mcError('machine-reply-tampered', 'the agent-machine reply signature does not match the pinned key');
   const skew = Math.abs(now - res.timestamp * 1000);
   if (skew > SKEW_MS) throw mcError('machine-reply-stale', 'the agent-machine reply timestamp is outside the allowed window');
+  // A captured old reply verifies cryptographically but is not this
+  // request's answer (#410): the signed request_nonce must echo ours.
+  if (expectedNonce !== undefined && res.request_nonce !== expectedNonce) {
+    throw mcError('machine-reply-unbound', 'the agent-machine reply is not bound to this request');
+  }
   return { ok: res.ok, state: res.state ?? null, diagnostic: res.diagnostic ?? null, message: res.message ?? null, body: res.body ?? null };
 }
 
