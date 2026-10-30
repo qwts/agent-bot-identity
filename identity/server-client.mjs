@@ -170,8 +170,9 @@ export async function refuseAppOwnerMismatch({ appSlug, env = process.env, confi
 export function serverHarnessForSlug({ slug, env = process.env, config, scope } = {}) {
   const ambient = ambientHarness(env);
   if (ambient) return ambient;
+  if (!slug) return null; // no App slug resolves: never fall back to a default family
   const hs = scope ?? loadDevice({ env })?.harnesses ?? [];
-  if (slug && hs.includes(slug)) return slug;
+  if (hs.includes(slug)) return slug;
   return harnessForSlug(slug, config);
 }
 

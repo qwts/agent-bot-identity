@@ -601,6 +601,30 @@ test('an explicit null repo fails closed in server mode instead of reading cwd',
     /owner\/name/,
   );
 });
+test('notices: the take_inbox shim releases its lease when ack fails', async () => {
+  const { createServerNotices } = await import('../identity/server-notices.mjs');
+  const { createInboxTaker } = await import('../identity/inbox-take.mjs');
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  srv.notices = [{ id: 'x1', kind: 'mention', repo: 'a/b', type: ['issue'], number: 7 }];
+  srv.failAck = true;
+  const take = createInboxTaker({ env, serverNotices: createServerNotices({ env, fetchImpl: srv.fetch }), readBearer: () => { throw new Error('bearer must not be read'); } });
+  await assert.rejects(() => take({ app: 'grok', repo: 'a/b' }), (error) => error.statusCode >= 500);
+  const releaseCall = srv.noticeBodies.at(-1);
+  assert.equal(releaseCall.path, '/api/daemon/notices/release', 'a failed ack releases the lease');
+  assert.deepEqual(releaseCall.body.ids, ['lease_1']);
+  assert.equal(srv.notices[0]?.id, 'x1', 'the released notice is back in the queue');
+});
+
+test('serverHarnessForSlug: an unresolved slug never falls back to a default family', async () => {
+  const { serverHarnessForSlug } = await import('../identity/server-client.mjs');
+  const config = { apps: { codex: 'qwts-codex-agent' } };
+  assert.equal(serverHarnessForSlug({ slug: null, env: {}, scope: ['codex'], config }), null);
+  assert.equal(serverHarnessForSlug({ slug: '', env: {}, scope: ['codex'], config }), null);
+  assert.equal(serverHarnessForSlug({ slug: null, env: { AGENT_BOT_SERVER_HARNESS: 'claude' }, scope: ['codex'], config }), 'claude', 'the ambient override still wins');
+});
+
 test('app-owner mismatch: refused on another owner; match, unknown and case pass', async (t) => {
   const { appOwnerMismatch, refuseAppOwnerMismatch, ServerSession } = await import('../identity/server-client.mjs');
   const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
