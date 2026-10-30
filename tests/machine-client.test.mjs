@@ -142,6 +142,29 @@ test('a signed request round-trips through a fake agent-machine', async () => {
   assert.equal(fm.received[0].public_key, signer.publicKeyRaw.toString('base64'));
 });
 
+test('a multibyte reply split across socket chunks decodes whole', async () => {
+  const root = scratch();
+  const dir = path.join(root, 'am'); mkdirSync(dir, { recursive: true });
+  const sock = path.join(dir, 'daemon.sock');
+  const server = createServer((conn) => {
+    conn.on('data', () => {
+      const line = Buffer.from(`${JSON.stringify({ ok: true, message: 'héllo' })}\n`, 'utf8');
+      // Split inside the 'é' (0xC3 0xA9) so no chunk holds a complete char.
+      const cut = line.indexOf(0xc3);
+      conn.write(line.subarray(0, cut));
+      setImmediate(() => conn.end(line.subarray(cut)));
+    });
+  });
+  await new Promise((resolve) => server.listen(sock, resolve));
+  server.unref();
+  try {
+    const line = await machineCall({ socketPath: sock, request: { verb: 'status' } });
+    assert.equal(JSON.parse(line).message, 'héllo');
+  } finally {
+    server.close();
+  }
+});
+
 test('pairing file rules: legacy peer.* refuses, unknown peers/ entry refuses, terminal untouched', async () => {
   const root = scratch();
   const dir = path.join(root, '.config', 'agent-machine');

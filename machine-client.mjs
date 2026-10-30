@@ -173,16 +173,19 @@ export function verifyResponse(line, pinnedPublicKeyRaw, { expectedNonce, now = 
 export function machineCall({ socketPath, request, timeoutMs = DEFAULT_TIMEOUT_MS, connectImpl = connect } = {}) {
   return new Promise((resolve, reject) => {
     const socket = connectImpl(socketPath);
-    let buf = '';
+    let buf = Buffer.alloc(0);
     const timer = setTimeout(() => { socket.destroy(); reject(mcError('machine-timeout', 'agent-machine did not answer in time')); }, timeoutMs);
     socket.on('connect', () => socket.write(`${JSON.stringify(request)}\n`));
     socket.on('data', (chunk) => {
-      buf += chunk.toString('utf8');
-      const nl = buf.indexOf('\n');
+      // 0x0a never appears inside a UTF-8 multibyte sequence, so the raw-byte
+      // scan is safe and the line decodes whole — a chunk boundary inside a
+      // character must not split it.
+      buf = Buffer.concat([buf, chunk]);
+      const nl = buf.indexOf(0x0a);
       if (nl === -1) return;
       clearTimeout(timer);
       socket.destroy();
-      resolve(buf.slice(0, nl));
+      resolve(buf.subarray(0, nl).toString('utf8'));
     });
     socket.on('error', (error) => { clearTimeout(timer); reject(mcError('machine-unreachable', `agent-machine socket failed: ${error.code ?? error.message}`)); });
   });
