@@ -39,7 +39,7 @@ Why you'd want this:
   trailer is a breadcrumb.)
 
 This repository is the sole runtime owner of the agent-bot and
-transcript-bound execution identity system. Clone and install it directly;
+soul identity system (soul-bound identities, per-session attribution). Clone and install it directly;
 organization governance may supply the roster, compatible configuration, and
 shared harness tooling, but it is not a runtime provider. For `qwts`, those
 organization-owned inputs and their acquisition procedure are governed from
