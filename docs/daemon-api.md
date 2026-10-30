@@ -163,6 +163,7 @@ and a soul binding, are refused on each owner route.
 | `GET /v0/binding` | binding | |
 | `DELETE /v0/binding` | binding | |
 | `POST /v0/credential` | binding | The soul's own App token. |
+| `POST /v0/machine` | binding | Agent-machine control for the bound soul (#1254). |
 | `POST /v0/events/wait` | binding | Polls the next `relay.message` MCP event for the soul's own harness (#39); returns at most one wrapped event plus the cursor it reached — the store does not move. |
 | `POST /v0/events/ack` | binding | Commits an events cursor (`{cursor, ids?}`) and writes the once-per-id deliver receipts. |
 | `POST /v0/inbox/take` | binding | Deprecated: in server mode it takes one notice and auto-acks. Use `/v0/notices/*`. |
@@ -223,3 +224,10 @@ the owner:
   principal's transport and provider ID can act as that principal: talk to a
   soul, observe it, cancel. Owner presence on each message would break remote
   transports.
+
+The `POST /v0/machine` body is `{verb, name?, option?, target?, plan_id?}` — verbs `status`, `receipts`, `plan`, `apply`, `update`; other keys refuse. The daemon fills `soul`, `harness`, `session_id` from the binding; a supplied value that disagrees is `derived-field-mismatch`. Returns `{ok, state, diagnostic, message, body}`; agent-machine's own refusals surface in `diagnostic`.
+
+## POST /v0/machine detail
+
+(see table entry)
+Binding-proof route to the local agent-machine daemon. Body `{verb, name?, option?, target?, plan_id?}` — verbs `status`, `receipts`, `plan`, `apply`, `update`; other keys refuse. The daemon fills `soul`, `harness`, `session_id` from the binding; a supplied value that disagrees is `derived-field-mismatch`. Returns `{ok, state, diagnostic, message, body}`; agent-machine's own refusals surface in `diagnostic`.

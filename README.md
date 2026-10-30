@@ -867,6 +867,17 @@ The [daemon revision API](docs/daemon-api.md) lists pending soul revisions and
 accepts owner actions with a presented agent-comms principal credential (#293).
 The population bearer alone cannot approve a revision.
 
+### agent-machine client (#1254)
+
+When the host runs `managed-machine`'s agent-machine daemon, the owner pairs
+this account's agent-daemon with it once: `agent-bot machine pair` (owner
+action) writes `peers/agent-daemon.next` + `.confirm` under
+`~/.config/agent-machine/` and pins `daemon.pub` in agent-bot state; a key
+swap needs `--repin`. `agent-bot machine unpair` revokes the peer.
+`agent-bot machine status` reports pairing state and a signed status round
+trip. Agents reach it through `POST /v0/machine` (binding proof; the daemon
+fills soul/harness/session_id) or the `machine_*` MCP tools.
+
 ### MCP server: bind a conversation to its identity
 
 `agent-bot mcp` serves the sanctioned agent-bot MCP tools over stdio, so any

@@ -625,6 +625,110 @@
       "kind": "failure",
       "summary": "The MCP guide tool named a topic no bundled skill reference covers.",
       "registered": "0.15.5"
+    },
+    {
+      "n": 79,
+      "code": "machine-verb-unknown",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "POST /v0/machine or the client named a verb outside status, receipts, plan, apply, update.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 80,
+      "code": "machine-field-invalid",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "An agent-machine field failed the wire shape (string, 1..128 chars, restricted alphabet).",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 81,
+      "code": "machine-unreachable",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The agent-machine socket refused or dropped the connection.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 82,
+      "code": "machine-timeout",
+      "component": "host",
+      "kind": "failure",
+      "summary": "agent-machine did not answer within the client timeout.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 83,
+      "code": "machine-reply-invalid",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The agent-machine reply was unsigned or malformed.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 84,
+      "code": "machine-reply-tampered",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The agent-machine reply signature does not verify against the pinned daemon key.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 85,
+      "code": "machine-reply-stale",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The agent-machine reply timestamp is outside the +-5 minute window.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 86,
+      "code": "machine-not-paired",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "No daemon.pub pin exists; run agent-bot machine pair first.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 87,
+      "code": "machine-legacy-peers",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "Legacy top-level peer.* files exist beside peers/; agent-machine has not run since the layout moved.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 88,
+      "code": "machine-peers-invalid",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "peers/ contains a file that is not a known client key; agent-machine would refuse to start.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 89,
+      "code": "machine-not-running",
+      "component": "host",
+      "kind": "failure",
+      "summary": "agent-machine's directory or daemon.pub is absent; install and start it first.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 90,
+      "code": "machine-pin-mismatch",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "agent-machine's daemon.pub differs from the pinned key; re-pair with --repin.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 91,
+      "code": "derived-field-mismatch",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "A supplied field disagrees with a value the daemon derives from the binding (soul, harness, session).",
+      "registered": "0.15.5"
     }
   ]
 }

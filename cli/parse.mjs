@@ -19,6 +19,7 @@ const PUBLIC_COMMANDS = new Set([
   'approvals',
   'audit',
   'mcp',
+  'machine',
   'reach-mcp',
   'wake',
   'web',

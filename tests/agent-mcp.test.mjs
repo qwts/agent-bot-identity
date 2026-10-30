@@ -476,3 +476,15 @@ test('guide resolves topics through the same map the CLI --for uses', async () =
   assert.equal(bad.isError, true);
   assert.match(bad.text, /unknown-topic/);
 });
+
+test('machine tools class correctly through the meta-tools', async () => {
+  const state = createMcpState({ client: fakeClient() });
+  for (const [name, cls] of [['machine_status', 'read'], ['machine_receipts', 'read'], ['machine_plan', 'write'], ['machine_apply', 'write'], ['machine_update', 'write']]) {
+    const d = JSON.parse((await callTool(state, 'describe_tool', { name })).text);
+    assert.equal(d.class, cls, name);
+  }
+  const wrong = await callTool(state, 'call_tool', { name: 'machine_apply', arguments: {} });
+  assert.match(wrong.text, /use-call-write-tool/);
+  const wrong2 = await callTool(state, 'call_write_tool', { name: 'machine_status', arguments: {} });
+  assert.match(wrong2.text, /use-call-tool/);
+});
