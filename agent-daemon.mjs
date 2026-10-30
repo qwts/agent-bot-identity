@@ -805,7 +805,7 @@ export function createDaemonServer({
         case 'GET /v0/health': {
           // `busy`: souls with any daemon turn in flight, beside
           // the warm pool's connected harnesses.
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid,
+          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, version: runtimeVersion(),
             // The enforcement profile in force (0.4 R8): never stronger than shown.
             profile: enforcementProfile({ env, home, now }),
             // Soul token signing in force (#1196): v2 means the identity

@@ -32,6 +32,7 @@ export async function daemonStatus({
       pid: state.pid,
       port: state.port,
       startedAt: state.startedAt,
+      ...(typeof health.version === 'string' && health.version ? { version: health.version } : {}),
       warmPool: health.warmPool ?? {},
       busy: Array.isArray(health.busy) ? health.busy : [],
       souls: Array.isArray(health.souls) ? health.souls : [],

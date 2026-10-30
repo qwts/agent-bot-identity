@@ -527,14 +527,29 @@ async function callTool(state, name, args = {}) {
           try { ({ app = null } = await state.client.reconcileApp(existing.secret, claimed)); } catch { /* record unchanged */ }
           return app ? { ...binding, app: repinApp(state, app) } : binding;
         } catch (error) {
-          const cause = describeFetchCause(error);
-          const safeMessage = sanitizeInboxDetail(cause.message ?? error?.message ?? 'unknown error');
-          const causeCode = cause.code ? `${cause.code}: ` : '';
-          throw inboxError(
-            'inbox-daemon-unreachable',
-            `bind failed: the daemon is unreachable to re-bind this worktree (${causeCode}${safeMessage}); run \`agent-bot daemon status\` and \`agent-bot doctor\`, then retry`,
-            { cause: error },
-          );
+          // #1179: if a restarted daemon rejects the stale binding secret (403)
+          // and `setup-worktree` has minted a fresh bind token, fall through to
+          // surrender that token; otherwise tell the caller how to mint one.
+          if (error?.statusCode === 403) {
+            let freshToken = null;
+            try { freshToken = readBindToken(git(state.cwd, 'rev-parse', '--absolute-git-dir')); } catch { freshToken = null; }
+            if (!freshToken) {
+              throw inboxError(
+                'inbox-not-bound',
+                'bind failed: the daemon rejected this worktree\'s existing binding (it may have restarted) — run `agent-bot setup-worktree` to mint a fresh bind token, then retry bind',
+                { cause: error },
+              );
+            }
+          } else {
+            const cause = describeFetchCause(error);
+            const safeMessage = sanitizeInboxDetail(cause.message ?? error?.message ?? 'unknown error');
+            const causeCode = cause.code ? `${cause.code}: ` : '';
+            throw inboxError(
+              'inbox-daemon-unreachable',
+              `bind failed: the daemon is unreachable to re-bind this worktree (${causeCode}${safeMessage}); run \`agent-bot daemon status\` and \`agent-bot doctor\`, then retry`,
+              { cause: error },
+            );
+          }
         }
       }
       if (typeof args.transcript_id !== 'string' || args.transcript_id === '') {
