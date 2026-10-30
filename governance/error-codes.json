@@ -577,6 +577,14 @@
       "kind": "failure",
       "summary": "The session's stated Agent ID differs from the soul the bind token names; nothing was consumed or changed.",
       "registered": "0.15.4"
+    },
+    {
+      "n": 73,
+      "code": "soul-retired",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "A bind named a retired soul; the single-use token is left in place. Join another soul or remove the worktree pin.",
+      "registered": "0.15.4"
     }
   ]
 }

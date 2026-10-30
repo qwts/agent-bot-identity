@@ -893,8 +893,12 @@ test('a bind for a retired soul is refused', async () => {
       method: 'POST',
       body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
     });
-    assert.notEqual(res.status, 200);
-    assert.match((await res.json()).error, /retired/);
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.equal(body.code, 'soul-retired');
+    assert.match(body.error, /retired; join another soul or remove the worktree pin/);
+    // The refusal happens before consumption: the token survives for retry.
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true);
   });
 });
 
