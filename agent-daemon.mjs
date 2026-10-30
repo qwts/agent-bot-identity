@@ -56,9 +56,10 @@ import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
-  assertAuthorized, assertPrivateGitDir, assignAgentApp, bindAgentLineage, childBindingPath,
+  assertAuthorized, assertPrivateGitDir, assignAgentApp, bindAgentLineage, bindAgentTranscript, childBindingPath,
   consumeBindToken, createBindingRegistry, createIdentityAppJobs, createIdentityRoutes,
-  createInboxTaker, createServerNotices, ensureAgentIdentity, extractToken, identityAppFailure, identityAppOperation,
+  createInboxTaker, createServerNotices, extractToken, findSessionByTranscript, identityAppFailure, identityAppOperation,
+  openSession,
   keydRequest, listIdentityApps, loadOrCreateVouchKey, lookupBinding as lookupRegistryBinding,
   mint, mintAgentIdentity, parseBindingProof, principalsFile, PROOF_HEADER, readAgentIdentity,
   readBinding, readBindToken, readKeydRecord, resolvePrincipal, signSoulToken, spawnChildIdentity,
@@ -1033,7 +1034,7 @@ export function createDaemonServer({
           REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
           // Identity-service outcomes a credential caller acts on (#1184 goal).
           'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere', 'credential-no-repo'].includes(error.code)
-          || typeof error.code === 'string' && /^(dream|inbox|grant|human|notices)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
+          || typeof error.code === 'string' && /^(dream|inbox|grant|human|notices|transcript|agent-id)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
         // The unsigned challenges a decision route asks the owner to sign (#753).
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
     }
@@ -1194,6 +1195,28 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
   }
   const pending = readBindToken(body.gitDir);
   if (pending) assertPrivateGitDir(body.gitDir, pending.worktree);
+  // A stated expectation names the soul the session believes it belongs to;
+  // a token minted for a different Agent ID is refused without being spent,
+  // like the parent check above (#1257).
+  const expectedAgentId = body.expectedAgentId === undefined || body.expectedAgentId === null
+    ? null
+    : requireAgentId(body.expectedAgentId);
+  if (pending && expectedAgentId !== null && expectedAgentId !== pending.agentId) {
+    throw Object.assign(
+      new Error(`the bind token names soul ${pending.agentId}, not expected Agent ID ${expectedAgentId}`),
+      { statusCode: 409, code: 'agent-id-pin-mismatch' },
+    );
+  }
+  // A bind never mints (ADR-1257): the token's soul is the identity. A
+  // conversation already bound as a session of another soul is refused
+  // while its token still stands, exactly like the pin check above.
+  const elsewhere = pending ? findSessionByTranscript(locator, { stateDir }) : null;
+  if (elsewhere && elsewhere.soul_id !== pending.agentId) {
+    throw Object.assign(
+      new Error(`this transcript is already a session of soul ${elsewhere.soul_id}; a conversation belongs to one soul`),
+      { statusCode: 409, code: 'transcript-bound-elsewhere' },
+    );
+  }
   const record = consumeBindToken({ gitDir: body.gitDir, token: body.token });
   let pinned;
   try {
@@ -1201,29 +1224,22 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
   } catch {
     throw Object.assign(new Error('bind token names an unknown Agent ID'), { statusCode: 409 });
   }
+  if (pinned.status === 'retired') {
+    throw new Error(
+      `agent identity ${pinned.id} is retired; remove the worktree pin ` +
+        '(git config --unset agentBot.id) or start a new session to mint a fresh identity',
+    );
+  }
   const harness = typeof body.harness === 'string' && body.harness !== '' ? body.harness : pinned.harness;
-  // The existing reuse policy decides whether the pinned identity binds this
-  // transcript, an earlier identity already owns it, or a fresh one is minted
-  // (a later conversation reusing the worktree). parentId only applies on a
-  // mint; a reused identity's missing lineage is repaired below.
-  // Reuse the pinned soul. GitHub metadata is copied only when the add-on
-  // is on AND this soul already has it; a soul without `github` stays that
-  // way when the gate is later turned on.
-  const useGithub = isGateEnabled('github-identity', { env, home, config }) && pinned.github != null;
-  const identity = ensureAgentIdentity({
-    currentId: record.agentId,
-    appSlug: useGithub ? pinned.github.appSlug : null,
-    botUid: useGithub ? pinned.github.botUid : null,
-    harness,
-    useGithub,
+  // The legacy `transcript` field keeps naming the soul's first session so
+  // consumers that read it still work; every later conversation binds as an
+  // additional session under the same soul (ADR-1257).
+  const identity = pinned.transcript ? pinned : bindAgentTranscript(pinned.id, locator, { stateDir, now });
+  const session = openSession({
+    soulId: identity.id,
     transcript: locator,
-    fields: {
-      team: pinned.team,
-      squad: pinned.squad,
-      type: pinned.type,
-      level: pinned.level,
-      parentId,
-    },
+    harness,
+    appSlug: identity.github?.appSlug ?? null,
     stateDir,
     now,
   });
@@ -1252,6 +1268,7 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
     app: bound.github?.appSlug ?? null,
     worktree: record.worktree,
     transcript: locator,
+    sessionId: session.session_id,
     harness: bound.harness,
   });
   return {
@@ -1260,10 +1277,10 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
     agentId: bound.id,
     worktree: record.worktree,
     boundAt: soul.lastSeen,
-    // The worktree pin still names the token's original identity when the
-    // reuse policy resolved elsewhere; the caller owns repinning because the
-    // daemon never reaches into worktrees.
-    repinRequired: bound.id !== record.agentId,
+    // A bind never repins: the token's soul is the identity (ADR-1257) and
+    // every later conversation joins it as another session.
+    sessionId: session.session_id,
+    repinRequired: false,
     soul,
   };
 }

@@ -561,6 +561,22 @@
       "kind": "failure",
       "summary": "The soul's private App belongs to a different owner account/org than the checkout's origin, so it can never mint an installation token there.",
       "registered": "0.15.3"
+    },
+    {
+      "n": 71,
+      "code": "transcript-bound-elsewhere",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "This provider conversation is already bound as a session of a different soul; a transcript belongs to one soul (ADR-1257).",
+      "registered": "0.15.4"
+    },
+    {
+      "n": 72,
+      "code": "agent-id-pin-mismatch",
+      "component": "identity",
+      "kind": "failure",
+      "summary": "The session's stated Agent ID differs from the soul the bind token names; nothing was consumed or changed.",
+      "registered": "0.15.4"
     }
   ]
 }

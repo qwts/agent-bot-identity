@@ -115,8 +115,12 @@ after their work merges via the owner-gated `agent-bot soul remove <agentId>`
 (`--plan` first; removal archives the soul's folders and permanently retires
 the identity with no un-retire).
 
-Set `AGENT_BOT_ID` to the returned `agentId`, bind using the MCP `bind` tool,
-and run `agent-bot setup-worktree` in that same linked worktree. Setup verifies
+Set `AGENT_BOT_ID` to the returned `agentId`, bind using the MCP `bind` tool
+(or `agent-bot session bind`) — a bind attaches this conversation to the
+joined soul as a session and never mints another identity (ADR-1257); when
+`AGENT_BOT_ID` is set the daemon refuses a token minted for a different soul
+(`agent-id-pin-mismatch`) — and run `agent-bot setup-worktree` in that same
+linked worktree. Setup verifies
 the App credentials before writing Git attribution. The daemon's credential
 route then uses the App recorded on the bound soul. A `join` alone never writes
 Git author, credential helper, or hooks.

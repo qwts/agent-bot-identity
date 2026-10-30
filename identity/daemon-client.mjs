@@ -207,9 +207,10 @@ export function daemonClient({
     // `app` (#107) is the App the session was explicitly run as. The daemon
     // may ask the owner to verify it, so a bind that names one waits as long
     // as an owner decision does.
-    async bind({ gitDir, token, transcript, parentId = null, harness = null, app = null }) {
-      if (!app) return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness });
-      return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness, app }, {}, OWNER_DECISION_TIMEOUT_MS);
+    async bind({ gitDir, token, transcript, parentId = null, harness = null, app = null, expectedAgentId = null }) {
+      const pin = expectedAgentId ? { expectedAgentId } : {};
+      if (!app) return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness, ...pin });
+      return request('POST', '/v0/bind', { gitDir, token, transcript, parentId, harness, app, ...pin }, {}, OWNER_DECISION_TIMEOUT_MS);
     },
     async binding(secret) {
       const { binding } = await request('GET', '/v0/binding', undefined, {

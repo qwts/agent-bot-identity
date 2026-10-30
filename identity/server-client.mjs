@@ -708,7 +708,7 @@ export function repoFromCheckout(cwd = process.cwd(), env = process.env) {
 // Mint through the server: same shape as the local mint() result.
 // The credential request as an action-ledger entry (0.4 §7, T06): recorded
 // before it is sent; an ambiguous failure is looked up, never re-sent blind.
-async function mintRecorded(session, { harness, repo, taskId, operationId, profile, stateDir }) {
+async function mintRecorded(session, { harness, repo, taskId, operationId, profile, stateDir, sessionId = null }) {
   const request = { kind: 'github_installation_token', harness: serverHarness(harness), repo };
   // An operation already in the ledger is never overwritten: an unknown one
   // is reconciled by lookup; any other is a reused operation_id.
@@ -728,7 +728,7 @@ async function mintRecorded(session, { harness, repo, taskId, operationId, profi
       throw error;
     }
   }
-  writeAction(stateDir, { operation_id: operationId, task_id: taskId, ...request, state: 'prepared', created_at: new Date().toISOString() });
+  writeAction(stateDir, { operation_id: operationId, task_id: taskId, ...request, session_id: sessionId, state: 'prepared', created_at: new Date().toISOString() });
   transition(stateDir, operationId, 'submitted');
   try {
     const out = await session.credential({ harness, repo, taskId, operationId, profile });
@@ -809,7 +809,7 @@ export async function reconcilePendingCredentials({ base, env = process.env, hom
 // One credential per task and operation (credential/v1). The token goes to
 // the caller for this one operation and is never cached or reused; receipts
 // carry the issuance reference instead.
-export async function mintViaServer({ base, harness, repo, env = process.env, home, fetchImpl = fetch, taskId = null, operationId = null, session = null } = {}) {
+export async function mintViaServer({ base, harness, repo, env = process.env, home, fetchImpl = fetch, taskId = null, operationId = null, session = null, sessionId = null } = {}) {
   if (!harness) throw new Error('server mode needs a harness: pass --app, set AGENT_BOT_SERVER_HARNESS, or run inside a detected harness');
   if (!repo) throw new Error('server mode mints per repository: run inside a checkout with an origin remote, or set AGENT_BOT_SERVER_REPO=owner/name');
   const op = operationId ?? newOperationId();
@@ -817,7 +817,7 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
   if (!ID_PART.test(op) || !ID_PART.test(task)) throw new Error('task and operation IDs are 1-128 characters of [A-Za-z0-9._:-]');
   const profile = enforcementProfile({ env, ...(home ? { home } : {}) }).profile;
   const s = session ?? new ServerSession({ base, env, home, fetchImpl });
-  const out = await mintRecorded(s, { harness, repo, taskId: task, operationId: op, profile, stateDir: serverStateDir({ env, ...(home ? { home } : {}) }) });
+  const out = await mintRecorded(s, { harness, repo, taskId: task, operationId: op, profile, stateDir: serverStateDir({ env, ...(home ? { home } : {}) }), sessionId });
   return {
     token: out.token, expires_at: out.expires_at, installation_id: null, repo: out.repo ?? repo, git_author: out.git_author,
     source: 'agent-bot-server', issuance_id: out.issuance_id, task_id: out.task_id, operation_id: out.operation_id,

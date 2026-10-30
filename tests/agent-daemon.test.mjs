@@ -3,7 +3,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createPublicKey, verify } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +25,7 @@ import { loadSoulTokenIssuer } from '../identity-host.mjs';
 import { displayName, recordSoulDisplayName, showSoul, upsertSoul } from '../agent-population.mjs';
 import { initSoulSpace } from '../agent-space.mjs';
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
-import { ensureAgentIdentity, readAgentIdentity } from '../agent-identity.mjs';
+import { ensureAgentIdentity, mintAgentIdentity, readAgentIdentity, retireAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { mintBindToken, readBinding } from '../agent-binding.mjs';
 import { RUNTIME_PROFILE_INTERFACE_VERSION, organizationProfileToConfig } from '../organization-profile.mjs';
@@ -798,6 +798,133 @@ test('a conversation reuses the persisted identity without consuming a new token
   });
 });
 
+
+test('a bind never mints: another transcript joins the pinned soul as a new session (ADR-1257)', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  const stateDir = stateDirectory({ env, home: '/nonexistent' });
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-later' } },
+    })).json();
+    assert.equal(bound.agentId, AGENT_ID);
+    assert.equal(bound.repinRequired, false);
+    assert.match(bound.sessionId, /^ses_/);
+    // Exactly one identity record — the join-minted soul — and its legacy
+    // transcript pin still names the first conversation.
+    const identities = readdirSync(stateDir).filter((n) => n.endsWith('.json'));
+    assert.deepEqual(identities, [`${AGENT_ID}.json`]);
+    assert.equal(readAgentIdentity(AGENT_ID, { stateDir }).transcript.id, 'thread-daemon');
+    // The census records exactly the joined soul: the bind is a sighting,
+    // never a second soul.
+    const census = JSON.parse(readFileSync(env.AGENT_BOT_POPULATION_PATH, 'utf8'));
+    assert.equal(Object.keys(census.souls ?? census).length, 1);
+    assert.ok((census.souls ?? census)[AGENT_ID]);
+    // Binding the same transcript again is idempotent — the same session.
+    const again = mintBindToken({ gitDir, worktree: path.join(root, 'worktree'), agentId: AGENT_ID });
+    const rebound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: again.token, transcript: { provider: 'codex', id: 'thread-later' } },
+    })).json();
+    assert.equal(rebound.sessionId, bound.sessionId);
+  });
+});
+
+test('a transcript bound as a session of another soul refuses without consuming the token', async () => {
+  const { root, env } = scratchEnv();
+  const first = mintWorktreeToken(env, root);
+  const otherId = 'agent_55555555-5555-4555-8555-555555555555';
+  mintAgentIdentity({
+    appSlug: 'you-codex-agent', harness: 'codex',
+    transcript: { provider: 'codex', id: 'thread-other' },
+    stateDir: stateDirectory({ env, home: '/nonexistent' }),
+    idFactory: () => otherId,
+    now: () => new Date('2026-08-12T08:00:00.000Z'),
+  });
+  const otherWorktree = path.join(root, 'other-worktree');
+  mkdirSync(otherWorktree);
+  execFileSync('git', ['init', '-q', otherWorktree]);
+  const otherGitDir = path.join(otherWorktree, '.git');
+  const other = mintBindToken({ gitDir: otherGitDir, worktree: otherWorktree, agentId: otherId });
+  await withServer(env, async ({ call }) => {
+    await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir: first.gitDir, token: first.record.token, transcript: { provider: 'codex', id: 'thread-shared' } },
+    });
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir: otherGitDir, token: other.token, transcript: { provider: 'codex', id: 'thread-shared' } },
+    });
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).code, 'transcript-bound-elsewhere');
+    assert.equal(existsSync(path.join(otherGitDir, 'agent-bind-token.json')), true);
+    assert.equal(readAgentIdentity(otherId, { stateDir: stateDirectory({ env, home: '/nonexistent' }) }).transcript.id, 'thread-other');
+  });
+});
+
+test('a bind that expects a different Agent ID is refused before the token is spent', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call }) => {
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: {
+        gitDir, token: record.token,
+        transcript: { provider: 'codex', id: 'thread-daemon' },
+        expectedAgentId: 'agent_99999999-9999-4999-8999-999999999999',
+      },
+    });
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).code, 'agent-id-pin-mismatch');
+    assert.equal(existsSync(path.join(gitDir, 'agent-bind-token.json')), true);
+  });
+});
+
+test('a bind for a retired soul is refused', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  retireAgentIdentity(AGENT_ID, {
+    stateDir: stateDirectory({ env, home: '/nonexistent' }),
+    now: () => new Date('2026-08-13T08:00:00.000Z'),
+  });
+  await withServer(env, async ({ call }) => {
+    const res = await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    });
+    assert.notEqual(res.status, 200);
+    assert.match((await res.json()).error, /retired/);
+  });
+});
+
+test('the credential-mint audit receipt and action ledger carry the binding session_id', async () => {
+  const { root, env } = scratchEnv();
+  const { gitDir, record } = mintWorktreeToken(env, root);
+  const minted = [];
+  await withServer(env, async ({ call }) => {
+    const bound = await (await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
+    })).json();
+    const res = await call('/v0/credential', {
+      method: 'POST',
+      body: {},
+      headers: { 'x-agent-binding': bound.secret },
+    });
+    assert.equal(res.status, 200);
+    minted.push(await res.json());
+    const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line))
+      .filter((receipt) => receipt.event === 'credential-mint');
+    assert.equal(receipts.at(-1).session_id, bound.sessionId);
+  }, {
+    mintImpl: async ({ slug, taskId, operationId }) => ({
+      token: 't', expires_at: '2030-01-01T00:00:00Z', issuance_id: 'iss_1', installation_id: 42,
+    }),
+  });
+});
+
 test('each /v0/credential is one operation of the soul\'s task; identity-service failures keep stable codes and local work goes on', async () => {
   const { root, env } = scratchEnv();
   const { gitDir, record } = mintWorktreeToken(env, root);
@@ -1005,9 +1132,10 @@ test('a refusal by the github-identity gate receipts its reason and mints nothin
     const receipts = readFileSync(path.join(env.AGENT_BOT_INTERACTION_HOME, 'audit.jsonl'), 'utf8')
       .trim().split('\n').map((line) => JSON.parse(line))
       .filter((receipt) => receipt.event === 'credential-mint');
-    // With the add-on off the soul's record carries no App to name.
+    // The soul is the pinned one (ADR-1257): the refusal names the App its
+    // record carries even while the add-on keeps it unusable.
     assert.deepEqual(receipts.map(({ decision, appSlug, reason }) => ({ decision, appSlug, reason })), [
-      { decision: 'denied', appSlug: undefined, reason: 'github-identity-off' },
+      { decision: 'denied', appSlug: 'you-codex-agent', reason: 'github-identity-off' },
     ]);
   } finally {
     await new Promise((resolve) => { server.close(resolve); });
