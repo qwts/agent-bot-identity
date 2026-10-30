@@ -17,7 +17,8 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Unload the identity-daemon supervisor | `agent-bot daemon disable` |
 | Supervise an embedded host's own runtime (re-run after update or move) | `AGENT_BOT_SERVICE_LABEL=<label> agent-bot daemon install [--json]` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
-| Restore an App key and issuer from pass-cli | `agent-bot ensure-private-key --app <slug> [--force]` |
+| Get a token (server mode, the default) | `GH_AGENT_APP=<slug> agent-bot mint-token` in a checkout with an `origin` remote; `git`/`gh` mint via the credential helper and `gh` shim automatically — see `agent-bot server status` |
+| Restore an App key and issuer from pass-cli (legacy local custody only) | `agent-bot ensure-private-key --app <slug> [--force]` |
 | Read an authorized password/API key | `agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>` |
 
 ## Bootstrap a fresh machine
@@ -148,7 +149,25 @@ organization governance (`qwts/qwts-agent-org`, `qwts/agent-sop`), the identity
 runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
 (`qwts/managed-machine`). Walk and verify each step in order:
 
-1. **Provision credentials and prepare the backend store.** For locally stored
+1. **Get a token: server mode first.** Run `agent-bot server status`. When the
+   device is enrolled, App keys live on the identity service
+   (agents.true-line.ai) and the device mints short-lived repo-scoped tokens —
+   do **not** reach for `pass-cli` or `agent-bot ensure-private-key`. `git` and
+   `gh` mint automatically through the credential helper and `gh` shim; for an
+   explicit token run `GH_AGENT_APP=<slug> agent-bot mint-token` inside a
+   checkout whose `origin` remote names the repository (or set
+   `AGENT_BOT_SERVER_REPO=owner/name` outside one). A bound member gets a
+   credential reference, not the token; the App must be among the device's
+   approved harnesses (`agent-bot server status`). Failures:
+   `credential-unavailable`, `device-revoked` (re-enroll with
+   `agent-bot server enroll --force`, an owner action), `outcome-unknown`
+   (`agent-bot server reconcile`). `--permissions` is unavailable in server
+   mode. See `docs/server-mode.md`.
+
+   **Legacy local custody (off by default; only if `legacyLocalCustody` is
+   opted in — `AGENT_BOT_LEGACY_LOCAL_CUSTODY=1` /
+   `settings.legacyLocalCustody`, opt-in expires 2027-01-31; unopted calls fail
+   `legacy-local-custody-off`).** For locally stored
    Apps (`file`, `keychain`, `pass-cli`, or legacy
    `~/.config/<slug>/{app-id,private-key.pem}`), confirm `pass-cli` is signed in
    with access to the `Agent Identities` vault, then run:
@@ -191,7 +210,7 @@ runtime and `gh` shim (`qwts/agent-bot-identity`), and machine setup
      `file` or `keychain` store (or until `setup-worktree` /
      `reconcileAppCredentials` is updated to prepare and verify through the
      daemon).
-2. **Verify the first token mint without triggering owner-approval prompts.**
+2. **Verify the first token mint without triggering owner-approval prompts (legacy local custody).**
    In the owner's account, `agent-bot mint-token --app <slug>` from an unpinned
    context with no stated identity fires the owner-approval gate and asks the
    owner through agent-bot-keyd (Touch ID or login password — never
