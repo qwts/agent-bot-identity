@@ -471,6 +471,12 @@ if [ -z "$TARGET" ]; then
   done
 fi
 TARGET="\${TARGET%.git}"
+# A slashless target is no repository: it can never be outside scope, so it
+# takes the exec path like an untargeted call.
+case "$TARGET" in
+  */*) ;;
+  *)   TARGET="" ;;
+esac
 ORIGIN=""
 if [ -n "$TARGET" ]; then
   ORIGIN_URL=$(git config --get remote.origin.url 2>/dev/null || true)

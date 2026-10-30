@@ -89,6 +89,29 @@ test('endSession closes the record; the transcript still belongs to the soul', (
   );
 });
 
+
+test('a contested open refuses and removes the just-written record, never an index orphan', () => {
+  const { stateDir } = fixture();
+  const held = openSession({ soulId: SOUL_A, transcript: T1, harness: 'codex', stateDir });
+  assert.throws(
+    () => openSession({ soulId: SOUL_B, transcript: T1, harness: 'claude', stateDir }),
+    (error) => error.code === 'transcript-bound-elsewhere',
+  );
+  // Exactly the winner's record exists; nothing the loser wrote survives.
+  const records = readdirSync(path.join(stateDir, 'sessions')).filter((n) => n.endsWith('.json'));
+  assert.deepEqual(records, [`${held.session_id}.json`]);
+  assert.equal(findSessionByTranscript(T1, { stateDir }).soul_id, SOUL_A);
+});
+
+test('an index whose record is missing reads as bound-unknown, never as unbound', () => {
+  const { stateDir } = fixture();
+  const held = openSession({ soulId: SOUL_A, transcript: T1, harness: 'codex', stateDir });
+  rmSync(path.join(stateDir, 'sessions', `${held.session_id}.json`));
+  const found = findSessionByTranscript(T1, { stateDir });
+  assert.equal(found.soul_id, null, 'the claim stands but names no soul');
+  assert.equal(found.session_id, held.session_id);
+});
+
 test('session state lives in the registry dir, never under the soul directory', () => {
   const { root, stateDir } = fixture();
   const soulDir = path.join(root, 'soul');

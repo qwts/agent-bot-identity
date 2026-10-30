@@ -700,6 +700,12 @@ test('the pass-through stays quiet for the worktree repo and for successful call
 });
 
 
+test('a slashless api path is no repository: it execs and never hints (#1262 nit)', () => {
+  const failed = runShim({ agentEnv: {}, args: ['api', 'repos/foo'], realExit: 22 });
+  assert.equal(failed.status, 22);
+  assert.equal(failed.stderr.includes('outside it'), false);
+});
+
 test('the same-repo path execs gh so signals reach it; only cross-repo calls keep the wrapper (#1259)', () => {
   const direct = runShim({ agentEnv: {}, args: ['mypid'], realExit: 0 });
   // Under exec, gh inherits the shim's PID slot: the test process is its parent.

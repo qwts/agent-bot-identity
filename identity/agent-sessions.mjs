@@ -154,12 +154,17 @@ export function openSession({
       flag: 'wx',
       mode: 0o600,
     });
+    // The record lands before the index claim: a crash in between leaves an
+    // orphan record (harmless — unindexed records are ignored) instead of an
+    // index pointing at nothing.
+    linkSync(temporary, target);
+    rmSync(temporary, { force: true });
     try {
       linkSync(indexTemporary, indexFile);
     } catch (error) {
+      rmSync(target, { force: true });
       if (error.code !== 'EEXIST') throw error;
       const winner = readFileSync(indexFile, 'utf8').trim();
-      rmSync(temporary, { force: true });
       const existing = readSessionFile(stateDir, winner);
       if (existing.soul_id !== soul) throw transcriptBoundError(existing.soul_id);
       existing.last_seen = now().toISOString();
@@ -168,8 +173,6 @@ export function openSession({
     } finally {
       rmSync(indexTemporary, { force: true });
     }
-    linkSync(temporary, target);
-    rmSync(temporary, { force: true });
     return record;
   });
 }
@@ -196,7 +199,9 @@ export function findSessionByTranscript(transcript, { stateDir = stateDirectory(
   try {
     return readSessionFile(stateDir, existingId);
   } catch {
-    return null;
+    // The index claim survives its record: bound-unknown. Callers fail closed
+    // (a soul_id of null can never equal the binding soul).
+    return { session_id: existingId, soul_id: null, transcript: locator, status: 'unknown' };
   }
 }
 

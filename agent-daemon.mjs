@@ -1034,7 +1034,7 @@ export function createDaemonServer({
           REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
           // Identity-service outcomes a credential caller acts on (#1184 goal).
           'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere', 'credential-no-repo'].includes(error.code)
-          || typeof error.code === 'string' && /^(dream|inbox|grant|human|notices|transcript|agent-id)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
+          || typeof error.code === 'string' && /^(dream|inbox|grant|human|notices|soul|transcript|agent-id)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
         // The unsigned challenges a decision route asks the owner to sign (#753).
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
     }
@@ -1217,18 +1217,26 @@ function bindWorktreeConversation({ body, bindings, env, home, config, now, pres
       { statusCode: 409, code: 'transcript-bound-elsewhere' },
     );
   }
+  if (pending) {
+    let soul;
+    try {
+      soul = readAgentIdentity(pending.agentId, { stateDir });
+    } catch {
+      throw Object.assign(new Error('bind token names an unknown Agent ID'), { statusCode: 409 });
+    }
+    if (soul.status === 'retired') {
+      throw Object.assign(
+        new Error(`agent identity ${soul.id} is retired; join another soul or remove the worktree pin (git config --unset agentBot.agentId)`),
+        { statusCode: 409, code: 'soul-retired' },
+      );
+    }
+  }
   const record = consumeBindToken({ gitDir: body.gitDir, token: body.token });
   let pinned;
   try {
     pinned = readAgentIdentity(record.agentId, { stateDir });
   } catch {
     throw Object.assign(new Error('bind token names an unknown Agent ID'), { statusCode: 409 });
-  }
-  if (pinned.status === 'retired') {
-    throw new Error(
-      `agent identity ${pinned.id} is retired; remove the worktree pin ` +
-        '(git config --unset agentBot.id) or start a new session to mint a fresh identity',
-    );
   }
   const harness = typeof body.harness === 'string' && body.harness !== '' ? body.harness : pinned.harness;
   // The legacy `transcript` field keeps naming the soul's first session so
