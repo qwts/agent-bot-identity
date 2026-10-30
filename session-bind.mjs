@@ -126,26 +126,43 @@ export async function sessionBind({
     // a binding outlives its session, so a session run as another App
     // reconciles here as a first bind would (#107). Without this the daemon
     // keeps minting the previously recorded App and the newly selected slug
-    // is refused as an identity crossover.
-    const binding = await client.binding(existing.secret);
-    const result = {
-      status: 'live',
-      alreadyBound: true,
-      agentId: binding.agentId,
-      worktree: binding.worktree ?? cwd,
-    };
-    const claimed = resolveSlugImpl(env, cwd);
-    if (claimed && typeof client.reconcileApp === 'function') {
-      let app = null;
-      try { ({ app = null } = await client.reconcileApp(existing.secret, claimed)); } catch { /* record unchanged */ }
-      if (app) {
-        result.app = app.status === 'reconciled'
-          ? (repinImpl(cwd, 'agentBot.app', app.claimed),
-            { ...app, next: 'run agent-bot setup-worktree in this checkout to commit as the reconciled App' })
-          : app;
+    // is refused as an identity crossover. When a restarted daemon rejects
+    // the stale binding secret (403) and `setup-worktree` has minted a fresh
+    // bind token, fall through to surrender that token (#1179).
+    let binding = null;
+    try {
+      binding = await client.binding(existing.secret);
+    } catch (error) {
+      if (error?.statusCode !== 403) throw error;
+      let hasFreshToken = false;
+      try { hasFreshToken = Boolean(readBindTokenImpl(gitDirImpl(cwd))); } catch { hasFreshToken = false; }
+      if (!hasFreshToken) {
+        throw new Error(
+          'the daemon rejected this worktree\'s existing binding (it may have restarted) — '
+          + 'run `agent-bot setup-worktree` to mint a fresh bind token, then re-run `agent-bot session bind`',
+        );
       }
     }
-    return result;
+    if (binding) {
+      const result = {
+        status: 'live',
+        alreadyBound: true,
+        agentId: binding.agentId,
+        worktree: binding.worktree ?? cwd,
+      };
+      const claimed = resolveSlugImpl(env, cwd);
+      if (claimed && typeof client.reconcileApp === 'function') {
+        let app = null;
+        try { ({ app = null } = await client.reconcileApp(existing.secret, claimed)); } catch { /* record unchanged */ }
+        if (app) {
+          result.app = app.status === 'reconciled'
+            ? (repinImpl(cwd, 'agentBot.app', app.claimed),
+              { ...app, next: 'run agent-bot setup-worktree in this checkout to commit as the reconciled App' })
+            : app;
+        }
+      }
+      return result;
+    }
   }
 
   let transcript = transcriptId

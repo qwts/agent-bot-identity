@@ -399,19 +399,34 @@ function credentialNamesCheck({ home, env, serviceEnv, read }) {
   });
 }
 
-async function daemonHealthCheck({ home, env, probe, skipLoad }) {
+async function daemonHealthCheck({ home, env, probe, skipLoad, expectedVersion = null }) {
   const status = await probe({ home, env });
   if (status.running) {
+    const evidence = {
+      running: true,
+      pid: status.pid,
+      port: status.port,
+      started_at: status.startedAt,
+    };
+    if (status.version && expectedVersion && status.version !== expectedVersion) {
+      return readinessCheck({
+        id: 'daemon.health',
+        status: 'warning',
+        code: 'daemon-version-mismatch',
+        message: `identity daemon is running version ${status.version} while this CLI is ${expectedVersion}`,
+        action: 'run: agent-bot update',
+        evidence: {
+          ...evidence,
+          version: status.version,
+          expected_version: expectedVersion,
+        },
+      });
+    }
     return readinessCheck({
       id: 'daemon.health',
       status: 'ready',
       message: `identity daemon running (pid ${status.pid}, port ${status.port})`,
-      evidence: {
-        running: true,
-        pid: status.pid,
-        port: status.port,
-        started_at: status.startedAt,
-      },
+      evidence,
     });
   }
   if (skipLoad) {
@@ -3001,6 +3016,7 @@ export async function collectReadiness({
       env: serviceEnv,
       probe: probeDaemon,
       skipLoad: supervisorSkipLoad(serviceEnv),
+      expectedVersion: readPackageVersion(join(ROOT, 'package.json')),
     });
     machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
     machineChecks.push(await keydVersionCheck({ home, env, probe: probeKeyd }));

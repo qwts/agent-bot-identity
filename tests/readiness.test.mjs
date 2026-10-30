@@ -2994,6 +2994,28 @@ test('doctor flags a shadowing gh binary on PATH ahead of the managed shim (#113
   assert.match(check.action, /install-gh-shim/);
 });
 
+test('doctor warns when the running daemon version differs from the CLI version (#1179)', async () => {
+  const home = tempRoot();
+  const report = await collectReadiness({
+    ...machineDependencies(home),
+    scope: 'machine',
+    readPackageVersion: () => '0.15.6',
+    probeDaemon: async () => ({
+      running: true,
+      pid: 4242,
+      port: 50003,
+      startedAt: '2026-08-16T00:00:00.000Z',
+      version: '0.14.3',
+    }),
+  });
+  const check = report.machine.checks.find(({ id }) => id === 'daemon.health');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'daemon-version-mismatch');
+  assert.equal(check.evidence.version, '0.14.3');
+  assert.equal(check.evidence.expected_version, '0.15.6');
+  assert.match(check.action, /agent-bot update/);
+});
+
 test('worktree.app_owner flags bound checkouts whose private App belongs to another owner', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'abi-owner-dr-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

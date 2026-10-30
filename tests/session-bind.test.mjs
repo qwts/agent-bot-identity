@@ -154,3 +154,45 @@ test('session bind on an existing binding survives a failed reconcile (record un
   assert.equal(result.status, 'live');
   assert.equal(result.app, undefined);
 });
+
+test('session bind recovers when a restarted daemon rejects a stale binding and setup-worktree minted a fresh token (#1179)', async () => {
+  const staleSecret = 'e'.repeat(43);
+  const freshSecret = 'f'.repeat(43);
+  const result = await sessionBind({
+    cwd: '/worktree',
+    env: { QWEN_CODE_SESSION_ID: 'qwen-session-1' },
+    gitDirImpl: () => '/worktree/.git/worktrees/x',
+    readBindingImpl: () => ({ agentId: 'agent_11111111-1111-4111-8111-111111111111', secret: staleSecret }),
+    readBindTokenImpl: () => ({ token: '9'.repeat(64) }),
+    clientFactory: async () => ({
+      binding: async () => {
+        throw Object.assign(new Error('valid worktree binding required'), { statusCode: 403 });
+      },
+      bind: async (req) => {
+        assert.equal(req.token, '9'.repeat(64));
+        return { agentId: 'agent_11111111-1111-4111-8111-111111111111', worktree: '/worktree', secret: freshSecret };
+      },
+    }),
+  });
+  assert.equal(result.status, 'live');
+  assert.equal(result.alreadyBound, false);
+  assert.doesNotMatch(JSON.stringify(result), /[ef]{20,}/);
+});
+
+test('session bind names setup-worktree when a restarted daemon rejects a stale binding with no fresh token (#1179)', async () => {
+  await assert.rejects(
+    () => sessionBind({
+      cwd: '/worktree',
+      env: {},
+      gitDirImpl: () => '/worktree/.git/worktrees/x',
+      readBindingImpl: () => ({ agentId: 'agent_11111111-1111-4111-8111-111111111111', secret: 'e'.repeat(43) }),
+      readBindTokenImpl: () => null,
+      clientFactory: async () => ({
+        binding: async () => {
+          throw Object.assign(new Error('valid worktree binding required'), { statusCode: 403 });
+        },
+      }),
+    }),
+    /run `agent-bot setup-worktree` to mint a fresh bind token/,
+  );
+});
