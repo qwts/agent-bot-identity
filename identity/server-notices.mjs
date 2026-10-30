@@ -79,14 +79,22 @@ export function createServerNotices({ env = process.env, fetchImpl = fetch, home
     },
     ack: async ({ harness, ids: v } = {}) => s().call('POST', '/api/daemon/notices/ack', { ...noticeQuery({ harness }), ids: ids(v) }),
     release: async ({ harness, ids: v } = {}) => s().call('POST', '/api/daemon/notices/release', { ...noticeQuery({ harness }), ids: ids(v) }),
-    // take_inbox compatibility: the oldest notice for one repository, acked
-    // on return so it is not handed out twice (at-most-once, like the Worker's pull).
+    // take_inbox compatibility: the oldest notice for one repository, acked on
+    // return so it is not handed out twice. If the ack fails, the lease is
+    // released best-effort so the notice goes back to the queue now rather
+    // than at lease expiry, and the caller sees the ack error: delivery is
+    // at-least-once on that path.
     async takeOne({ app, repo }) {
       const harness = harnessForApp(app, api.device(), { env, config });
       const out = await api.take({ harness, repo, count: 1 });
       const n = out?.notices?.[0];
       if (!n) return { event: null };
-      await api.ack({ harness, ids: [n.lease] });
+      try {
+        await api.ack({ harness, ids: [n.lease] });
+      } catch (ackError) {
+        try { await api.release({ harness, ids: [n.lease] }); } catch { /* lease expiry still bounds the retry */ }
+        throw ackError;
+      }
       const { lease, lease_expires_at: _exp, ...event } = n;
       return { event: { ...event, pulled: true } };
     },
