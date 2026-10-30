@@ -675,3 +675,39 @@ test('an agent account is agent context with no env markers at all', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /token helper or Node is unavailable.*refusing stock human gh/);
 });
+
+// #1257: a failing call aimed at another repository names the token scope;
+// a success or a same-repo target prints nothing extra.
+test('the pass-through hints when a failed call targets a different repository', () => {
+  const other = runShim({ agentEnv: {}, args: ['api', 'repos/another-org/other-repo'], realExit: 1 });
+  assert.equal(other.status, 1);
+  assert.match(other.stderr, /token is scoped to qwts\/agent-bot-identity/);
+  assert.match(other.stderr, /another-org\/other-repo is outside it/);
+  assert.match(other.stderr, /agent-bot setup-worktree/);
+});
+
+test('the pass-through stays quiet for the worktree repo and for successful calls', () => {
+  const same = runShim({ agentEnv: {}, args: ['api', 'repos/QWTS/agent-bot-identity'], realExit: 1 });
+  assert.equal(same.status, 1);
+  assert.ok(!same.stderr.includes('token is scoped to'), 'same owner/name (any case) gets no hint');
+  const ok = runShim({ agentEnv: {}, args: ['api', 'repos/another-org/other-repo'], realExit: 0 });
+  assert.equal(ok.status, 0);
+  assert.ok(!ok.stderr.includes('token is scoped to'), 'a successful cross-repo call gets no hint');
+});
+
+// #1257 rework: TARGET reduces to owner/name — deeper same-repo paths and the
+// -R variants must not false-positive.
+test('the cross-repo hint ignores path segments beyond owner/name', () => {
+  const sameDeep = runShim({ agentEnv: {}, args: ['api', 'repos/qwts/agent-bot-identity/pulls/999'], realExit: 1 });
+  assert.ok(!sameDeep.stderr.includes('token is scoped to'), 'same-repo api path gets no hint');
+  const leadingSlash = runShim({ agentEnv: {}, args: ['api', '/repos/other/repo/issues'], realExit: 1 });
+  assert.match(leadingSlash.stderr, /other\/repo is outside it/);
+  const url = runShim({ agentEnv: {}, args: ['issue', 'view', 'https://github.com/other/repo/pull/1'], realExit: 1 });
+  assert.match(url.stderr, /other\/repo is outside it/);
+  const repoFlag = runShim({ agentEnv: {}, args: ['-R', 'other/repo', 'issue', 'list'], realExit: 1 });
+  assert.match(repoFlag.stderr, /other\/repo is outside it/);
+  const hostFlag = runShim({ agentEnv: {}, args: ['-R', 'github.example.com/other/repo', 'issue', 'list'], realExit: 1 });
+  assert.match(hostFlag.stderr, /other\/repo is outside it/);
+  const urlFlag = runShim({ agentEnv: {}, args: ['-R', 'https://github.com/other/repo', 'issue', 'list'], realExit: 1 });
+  assert.match(urlFlag.stderr, /other\/repo is outside it/);
+});
