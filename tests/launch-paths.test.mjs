@@ -76,7 +76,7 @@ const LAUNCH_PATHS = {
   'identity/resolve-agent.mjs': [1, 'git'],
   'setup-worktree.mjs': [2, 'git'],
   'identity/server-client.mjs': [1, 'git; reads the checkout\'s origin remote for server-mode minting'],
-  'session-bind.mjs': [3, 'git; first-party: the installed agent-bot under the caller\'s own env'],
+  'session-bind.mjs': [4, 'git; first-party: the installed agent-bot under the caller\'s own env; devin list, the Devin session lookup (#1275)'],
   'identity/signed-commit.mjs': [1, 'git'],
   'sop.mjs': [1, 'git'],
   'soul-coauthor.mjs': [1, 'git'],

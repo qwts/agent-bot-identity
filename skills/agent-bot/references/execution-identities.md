@@ -46,8 +46,16 @@ still refuses `gh`. Bind the current harness session from any harness —
 including ones with no MCP surface — with:
 
 ```bash
-agent-bot session bind --transcript-id <session-id>
+agent-bot session bind [--transcript-id <session-id>]
 ```
+
+Without `--transcript-id` it reads the harness's own id: `CODEX_THREAD_ID`,
+`CLAUDE_SESSION_ID`, `CURSOR_CONVERSATION_ID`, `QWEN_CODE_SESSION_ID`, a
+lifecycle hook's session id, or Devin's session list when it names exactly
+one session for this worktree; otherwise it refuses (#1275). The
+`session-start/15-bind-session` hook runs it at session start in a soul
+worktree. The `agent-space` skill's "Bind the session" table says where each
+id comes from.
 
 Use `--soul-workspace <path>` when the checkout is not under the soul's
 worktree root. Where the harness exposes an MCP `bind` tool, that remains an

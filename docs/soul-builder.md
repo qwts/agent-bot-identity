@@ -967,8 +967,8 @@ is a warning, because OpenCode sessions there run without the guards.
 
 Qwen Code's entries go in the `hooks` key of the soul's `.qwen/settings.json`,
 beside the MCP entry and every key the soul declared there, in the `qwen`
-row's Claude-shaped form. Like OpenCode, Qwen has no user-level lifecycle
-adapter, so the file always carries one `PreToolUse` entry on `pre-tool-use`
+row's Claude-shaped form. Qwen's user-level adapter carries `SessionStart`
+only (#1275), so the file always carries one `PreToolUse` entry on `pre-tool-use`
 (`QWEN_GUARD_EVENTS`), hooks declared or not: that is where the runner's
 identity guard scans `run_shell_command` and confinement checks
 `write_file`, `edit` and `notebook_edit`. With comms off the file stays for
