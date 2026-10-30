@@ -867,3 +867,10 @@ test('population projects selected models per soul without writing the census', 
   assert.equal(rows.find((row) => row.id === SECOND_ID).model, null);
   assert.equal(readFileSync(file, 'utf8'), before);
 });
+
+test('population with no subcommand runs list, flags included (#1257)', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'population-default-'));
+  const out = spawnSync(process.execPath, [CLI, 'population', '--json'], { env: { ...process.env, HOME: home }, cwd: home, encoding: 'utf8' });
+  assert.equal(out.status, 0, out.stderr);
+  assert.doesNotThrow(() => JSON.parse(out.stdout));
+});

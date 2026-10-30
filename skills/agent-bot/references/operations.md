@@ -404,3 +404,5 @@ is a fresh read, safe after connectivity or configuration is repaired; do
 not label a previous snapshot current. Fresh discovery does not activate
 policy hooks, personas, or change launch snapshots. Review and activate
 those through their existing owner-gated workflows.
+
+- `gh issue create --parent` for an issue in another repository fails for GitHub Apps with `Resource not accessible by integration (addSubIssue)` — a GitHub Apps limitation, not a shim bug. The hosted `agents.true-line.ai` MCP has no `bind` tool; binding a session is only on the local `agent-bot mcp`.

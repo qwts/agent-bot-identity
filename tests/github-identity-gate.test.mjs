@@ -235,7 +235,7 @@ test('worktree readiness accepts a linked no-App checkout and still verifies its
   worktreeSoul(env, linked);
   const setup = runNode(SETUP_CLI, [], { cwd: linked, env });
   assert.equal(setup.status, 0, setup.stderr);
-  const report = collectReadiness({ scope: 'worktree', cwd: linked, home: env.HOME, env });
+  const report = collectReadiness({ scope: 'worktree', cwd: linked, home: env.HOME, env, detectHarnessImpl: () => null });
   return Promise.resolve(report).then((ready) => {
     assert.equal(ready.worktree.status, 'ready', JSON.stringify(ready.worktree.checks));
     assert.equal(ready.worktree.checks.some((check) => check.id === 'worktree.app'), false);

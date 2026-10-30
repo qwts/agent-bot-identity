@@ -57,7 +57,7 @@ export function encodeRefPath(ref) {
 }
 
 function git(args, { cwd, encoding = 'utf8' } = {}) {
-  return execFileSync('git', args, {
+  return execFileSync('git', ['-c', 'log.showSignature=false', ...args], {
     cwd,
     encoding,
     maxBuffer: MAX_BUFFER,

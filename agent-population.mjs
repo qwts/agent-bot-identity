@@ -1453,7 +1453,8 @@ export function showSoulByName(name, { file = populationFile() } = {}) {
 }
 
 function parseCli(argv) {
-  const [command = 'list', ...tokens] = argv.slice(2);
+  const sliced = argv.slice(2);
+  const [command, ...tokens] = sliced[0]?.startsWith('-') ? ['list', ...sliced] : [sliced[0] ?? 'list', ...sliced.slice(1)];
   const positional = [];
   const flags = new Map();
   for (let index = 0; index < tokens.length; index++) {

@@ -2728,7 +2728,7 @@ function sectionStatus(checks, apps = []) {
   return failed ? 'not_ready' : 'ready';
 }
 
-function firstActionableFailure(report) {
+export function firstActionableFailure(report, operationFailure = null) {
   const candidates = [
     ...report.machine.checks.map((check) => ({ scope: 'machine', check })),
     ...report.machine.apps.flatMap((app) => [
@@ -2737,7 +2737,9 @@ function firstActionableFailure(report) {
     ]),
     ...report.worktree.checks.map((check) => ({ scope: 'worktree', check })),
   ];
-  const found = candidates.find(({ check }) => check.status === 'failed' && check.action)
+  const found = candidates.find(({ check }) => operationFailure && check === operationFailure.check)
+    ?? candidates.find(({ check }) => check.code === 'agent-needs-soul-worktree')
+    ?? candidates.find(({ check }) => check.status === 'failed' && check.action)
     ?? candidates.find(({ check }) => check.status === 'failed');
   if (!found) return null;
   return {
@@ -2817,6 +2819,7 @@ export function buildReadinessReport({
   apps = [],
   worktreeStatus = 'not_requested',
   worktreeChecks: currentWorktreeChecks = [],
+  operationFailure = null,
 } = {}) {
   const machine = scope === 'worktree'
     ? { status: 'not_requested', checks: [], apps: [] }
@@ -2833,7 +2836,7 @@ export function buildReadinessReport({
     worktree,
     first_actionable_failure: null,
   };
-  report.first_actionable_failure = firstActionableFailure(report);
+  report.first_actionable_failure = firstActionableFailure(report, operationFailure);
   return report;
 }
 
@@ -2869,7 +2872,7 @@ export async function collectReadiness({
   inspectCodexDesktopGh = inspectConfiguredCodexDesktopGh,
   probeDaemon = daemonStatus,
   probeKeyd = keydStatus,
-  isSoulBoundImpl = isSoulBound,
+  isSoulBoundImpl = isSoulBound, detectHarnessImpl = detectHarness,
   readBindingImpl = readBinding,
   probeSecretStore = defaultProbeSecretStore,
   readPackageVersion = readManifestVersion,
@@ -3108,15 +3111,36 @@ export async function collectReadiness({
       cwd, env, git, roster: configValid ? roster : [],
       isSoulBoundImpl, readBindingImpl,
     })];
+    const harness = detectHarnessImpl(env);
+    // A stated bot session (agent account, GH_AGENT_APP, Agent ID or a pinned
+    // worktree) inside a checkout where nothing can mint is not a warning for
+    // an agent caller — it is the first actionable failure, so it is promoted
+    // with the concrete join/bind/setup sequence. A delegate (harness process
+    // but no stated bot identity) keeps the human-persona warnings, and a
+    // bound worktree keeps its own precise liveness actions (#1257).
+    const stated = Boolean(env.AGENT_BOT_ACCOUNT || env.QWTS_ACCOUNT
+      || env.GH_AGENT_APP || env.QWTS_GH_AGENT_APP
+      || env.AGENT_BOT_ID || env.QWTS_AGENT_ID
+      || bindingChecks.some((check) => check.id === 'worktree.binding' && check.evidence?.app_slug));
+    const needsSoulWorktree = (check) => check.status === 'warning'
+      && ((check.id === 'worktree.kind' && check.code === 'primary-checkout')
+        || (check.id === 'worktree.binding'
+          && (check.code === 'worktree-binding-absent' || check.code === 'worktree-binding-no-roster')));
+    const promoted = harness
+      && stated
+      ? bindingChecks.map((check) => needsSoulWorktree(check)
+        ? { ...check, status: 'failed', code: 'agent-needs-soul-worktree', action: `agent-bot join --name NAME --harness ${harness} [--soul AGENT_ID] (from the soul's workspace or a linked worktree), then bind with the local 'agent-bot mcp' bind tool, then 'agent-bot setup-worktree'; see docs/joining.md` }
+        : check)
+      : bindingChecks;
     worktree = {
       // A failed live-session-binding check is an identity failure even
       // when the directory classification said not_applicable: the pin
       // was readable enough to know GitHub operations would refuse.
       status: worktree.status === 'not_applicable'
-        && !bindingChecks.some((check) => check.id === 'worktree.session_binding' && check.status === 'failed')
+        && !promoted.some((check) => check.id === 'worktree.session_binding' && check.status === 'failed')
         ? 'not_applicable'
-        : sectionStatus(bindingChecks),
-      checks: bindingChecks,
+        : sectionStatus(promoted),
+      checks: promoted,
     };
     if (operationFailure?.scope === 'worktree') {
       worktree = {
@@ -3144,6 +3168,7 @@ export async function collectReadiness({
     apps,
     worktreeStatus: worktree.status,
     worktreeChecks: worktree.checks,
+    operationFailure,
   });
 }
 
