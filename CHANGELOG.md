@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.3
+
+- Private App ownership is checked before a soul's App is recorded for a checkout: in server mode, `agent-bot join` and `agent-bot setup-worktree` refuse with `app-owner-mismatch` when the App's owner differs from the origin's owner (e.g. a `trueline-*` App on a `qwts/…` checkout), and `agent-bot doctor` reports existing mismatched bindings as `worktree.app_owner`.
+- Server-mode notices replace `take_inbox`: new `agent-bot notices take|peek|ack|release` and MCP tools `take_notices`, `peek_notices`, `ack_notices`, `release_notices` lease GitHub App notices from the agent-bot server (filters: `--count`, `--type discussion|issue|pr|review|comment`, `--kind`, `--repo`, `--since`, `--lease`). Un-acked notices come back after their lease. See [docs/notices.md](docs/notices.md).
+  - `take_inbox` is deprecated. With `AGENT_BOT_SERVER` set it is a shim that takes one notice for the bound repository and acks it, without reading the gh-app-hook bearer; without it, it still pulls from the gh-app-hook Worker.
+
 ## 0.15.2
 
 - A broker `wake` event carrying more than 512 message ids — a whole mailbox backlog unioned after a fresh agent-comms pairing — no longer fails `wake dispatch`: the daemon splits it into ordered wakes of at most 512 ids each, each with its own frame, report and receipt, so no message is dropped and none is re-woken out of order. The event's own bound is a 4096-id sanity ceiling; each dispatched wake stays within the wire's 512. A chunk whose dispatch or report fails no longer strands the rest: every chunk is attempted in order and the first failure is rethrown after the last one.

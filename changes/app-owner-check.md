@@ -1,1 +1,0 @@
-- Private App ownership is checked before a soul's App is recorded for a checkout: in server mode, `agent-bot join` and `agent-bot setup-worktree` refuse with `app-owner-mismatch` when the App's owner differs from the origin's owner (e.g. a `trueline-*` App on a `qwts/…` checkout), and `agent-bot doctor` reports existing mismatched bindings as `worktree.app_owner`.
