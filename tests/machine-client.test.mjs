@@ -80,6 +80,8 @@ test('bodySpan finds the raw body value inside a line', () => {
   // A "body" string inside another value is not the key.
   const tricky = '{"ok":true,"message":"set \"body\":{x} here","body":"s","timestamp":1,"nonce":"n"}';
   assert.equal(bodySpan(tricky).toString(), '"s"');
+  // An escaped quote inside an earlier key does not split it early.
+  assert.equal(bodySpan('{"we\\"ird":"v","body":{"n":1},"ok":true}').toString(), '{"n":1}');
   // Scalar bodies scan the same way.
   assert.equal(bodySpan('{"ok":true,"body":7,"timestamp":1}').toString(), '7');
   assert.equal(bodySpan('{"body":{"k":[1]},"ok":true}').toString(), '{"k":[1]}');

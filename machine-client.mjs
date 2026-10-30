@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, renameSync, w
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { loadOrCreateVouchKey, vouchStateDir } from './identity-host.mjs';
+import { loadOrCreateVouchKey, vouchKeyPath, vouchStateDir } from './identity-host.mjs';
 
 // Same 12-byte Ed25519 SPKI DER prefix as identity/keyd-client.mjs
 // ED25519_SPKI_PREFIX — keyd-client is identity module and host may not
@@ -50,10 +50,12 @@ export function loadOrCreateMachineKey({ env = process.env, home = homedir(), pl
 }
 
 // Read-only probe for `agent-bot machine status`: reports the key's public
-// half without ever creating one. The vouch custody file is a PKCS8 PEM.
-export function loadMachinePublicKey({ env = process.env, home = homedir() } = {}) {
-  const file = path.join(machineStateDir({ env, home }), 'vouch-key.pem');
+// half without ever creating one. On Windows the custody ACL keeps the key
+// unreadable without the vouch plumbing, so only presence is reported.
+export function loadMachinePublicKey({ env = process.env, home = homedir(), platform = process.platform } = {}) {
+  const file = vouchKeyPath(machineStateDir({ env, home }));
   if (!existsSync(file)) return null;
+  if (platform === 'win32') return Buffer.alloc(32);
   const key = createPrivateKeySync(readFileSync(file, 'utf8'));
   const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
   if (der.length !== 44 || !der.subarray(0, 12).equals(ED25519_SPKI_PREFIX)) return null;
@@ -96,7 +98,7 @@ export function bodySpan(line) {
     let value = '', j = i + 1;
     while (j < text.length) {
       const c = text[j];
-      if (c === '\\') { value += c + text[j + 1] ?? ''; j += 2; continue; }
+      if (c === '\\') { value += c + (text[j + 1] ?? ''); j += 2; continue; }
       if (c === '"') return { value: unescapeJson(value), end: j + 1 };
       value += c; j += 1;
     }
@@ -133,7 +135,7 @@ export function bodySpan(line) {
 }
 
 function unescapeJson(value) {
-  try { return JSON.parse(`"${value.replace(/"/g, '\\"')}"`); } catch { return value; }
+  try { return JSON.parse(`"${value}"`); } catch { return value; }
 }
 
 export function responseCanonical(res, bodyRaw) {
@@ -160,8 +162,9 @@ export function verifyResponse(line, pinnedPublicKeyRaw, { expectedNonce, now = 
   const skew = Math.abs(now - res.timestamp * 1000);
   if (skew > SKEW_MS) throw mcError('machine-reply-stale', 'the agent-machine reply timestamp is outside the allowed window');
   // A captured old reply verifies cryptographically but is not this
-  // request's answer (#410): the signed request_nonce must echo ours.
-  if (expectedNonce !== undefined && res.request_nonce !== expectedNonce) {
+  // request's answer (#410): the signed request_nonce must echo ours,
+  // and a caller that cannot name its nonce gets no reply at all.
+  if (res.request_nonce !== expectedNonce) {
     throw mcError('machine-reply-unbound', 'the agent-machine reply is not bound to this request');
   }
   return { ok: res.ok, state: res.state ?? null, diagnostic: res.diagnostic ?? null, message: res.message ?? null, body: res.body ?? null };
