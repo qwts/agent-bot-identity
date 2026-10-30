@@ -149,7 +149,7 @@ export function createIdentityRoutes({
           binding = requireBinding(req, bindings);
         } catch (error) {
           appendAuditReceipt(
-            { event: 'credential-mint', operation: 'tier1-app-token', decision: 'denied', reason: 'no-live-binding' },
+            { event: 'credential-mint', operation: 'tier1-app-token', decision: 'denied', session_id: null, reason: 'no-live-binding' },
             { env, home, now },
           );
           // Stable codes for diagnostics (#983); the response is unchanged.
@@ -166,6 +166,7 @@ export function createIdentityRoutes({
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
+            session_id: binding.sessionId ?? null,
             operation: 'tier1-app-token',
             decision: 'failed',
             reason: 'identity-unreadable',
@@ -178,6 +179,7 @@ export function createIdentityRoutes({
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
+            session_id: binding.sessionId ?? null,
             operation: 'tier1-app-token',
             decision: 'denied',
             ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
@@ -192,6 +194,7 @@ export function createIdentityRoutes({
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
+            session_id: binding.sessionId ?? null,
             operation: 'tier1-app-token',
             decision: 'denied',
             ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
@@ -207,6 +210,7 @@ export function createIdentityRoutes({
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
+            session_id: binding.sessionId ?? null,
             operation: 'tier1-app-token',
             decision: 'denied',
             ...(appSlug ? { appSlug } : {}),
@@ -236,7 +240,7 @@ export function createIdentityRoutes({
             }
           }
           grant = await mintImpl({
-            slug: appSlug, env, agentId: binding.agentId, taskId, operationId, repo,
+            slug: appSlug, env, agentId: binding.agentId, taskId, operationId, repo, sessionId: binding.sessionId ?? null,
             fetchImpl: serverFetch,
             viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
           });
@@ -249,6 +253,7 @@ export function createIdentityRoutes({
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
+            session_id: binding.sessionId ?? null,
             operation: 'tier1-app-token',
             decision: 'failed',
             appSlug,
@@ -267,6 +272,7 @@ export function createIdentityRoutes({
         appendAuditReceipt({
           event: 'credential-mint',
           agentId: binding.agentId,
+          session_id: binding.sessionId ?? null,
           operation: 'tier1-app-token',
           decision: 'granted',
           appSlug,

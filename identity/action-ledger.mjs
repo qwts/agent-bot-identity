@@ -33,7 +33,7 @@ const TERMINAL = new Set(['succeeded', 'rejected']);
 // A record holds identifiers and states only — an allowlist, never a
 // denylist: the fields every caller writes, no more, and scalar values only.
 const LEDGER_FIELDS = new Set([
-  'operation_id', 'task_id', 'kind', 'harness', 'repo',
+  'operation_id', 'task_id', 'kind', 'harness', 'repo', 'session_id',
   'state', 'reason', 'issuance_id', 'replayed', 'reconciled',
   'created_at', 'updated_at',
 ]);

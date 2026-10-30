@@ -121,6 +121,7 @@ export async function sessionBind({
     transcript: { provider: provider ?? detectAgentHarness(env) ?? 'custom', id: transcriptId },
     parentId: parentAgentId,
     app: resolveSlugImpl(env, cwd),
+    expectedAgentId: env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? null,
   });
   // The daemon may repin attribution; mirror the MCP tool's follow-up.
   if (result.repinRequired) repinImpl(cwd, 'agentBot.agentId', result.agentId);

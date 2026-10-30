@@ -343,7 +343,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       }
       save();
     },
-    bind({ agentId, worktree, gitDir, parent = null, app = null, transcript = null, harness = null, spawnedBy, replacesWorktree = null }) {
+    bind({ agentId, worktree, gitDir, parent = null, app = null, transcript = null, harness = null, sessionId = null, spawnedBy, replacesWorktree = null }) {
       expire();
       if (spawnedBy) {
         const source = bindings.get(spawnedBy);
@@ -352,7 +352,7 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       if (bindings.size >= MAX_LIVE_BINDINGS) throw fail('too many live bindings', 429);
       const secret = randomBytes(32).toString('base64url');
       const createdAt = now().toISOString();
-      const entry = { ...(spawnedBy ? { spawnedBy } : {}), agentId: validateAgentId(agentId), parent, gitDir, app, worktree, transcript, harness, createdAt, lastUsedAt: createdAt, boundAt: createdAt };
+      const entry = { ...(spawnedBy ? { spawnedBy } : {}), agentId: validateAgentId(agentId), parent, gitDir, app, worktree, transcript, harness, sessionId, createdAt, lastUsedAt: createdAt, boundAt: createdAt };
       if (file && (!gitDir || !path.isAbsolute(gitDir) || !daemon)) throw fail('binding requires a private git dir and daemon URL');
       if (file) assertPrivateGitDir(gitDir, worktree);
       bindings.set(hash(secret), entry);

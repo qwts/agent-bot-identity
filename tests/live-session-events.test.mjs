@@ -291,7 +291,7 @@ test('a soul without an App slug is refused; not enrolled fails closed', async (
   const { token } = mintBindToken({ gitDir: join(worktree2, '.git'), worktree: worktree2, agentId: agentId2 });
   const bind = await fetch(`http://127.0.0.1:${server2.address().port}/v0/bind`, {
     method: 'POST', headers: { authorization: `Bearer ${server2.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ gitDir: join(worktree2, '.git'), token, transcript: { provider: 'codex', id: 'thread-events' } }),
+    body: JSON.stringify({ gitDir: join(worktree2, '.git'), token, transcript: { provider: 'codex', id: 'thread-events-soul2' } }),
   }).then((r) => r.json());
   const noApp = await fetch(`http://127.0.0.1:${server2.address().port}/v0/events/wait`, {
     method: 'POST', headers: { 'x-agent-binding': bind.secret, 'content-type': 'application/json' }, body: '{}',

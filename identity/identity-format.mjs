@@ -177,7 +177,7 @@ function receiptDetail(value) {
 }
 
 export function appendAuditReceipt(
-  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null, bearerSource = null, issuanceId = null, taskId = null, operationId = null },
+  { event, principalId = null, transport = null, agentId = null, operation = null, decision = null, detail = null, appSlug = null, reason = null, bearerSource = null, issuanceId = null, taskId = null, operationId = null, session_id = null },
   { env = process.env, home = homedir(), now = () => new Date() } = {},
 ) {
   if (bearerSource !== null && !BEARER_SOURCES.has(bearerSource)) throw new Error('audit receipt bearerSource must be env or pass-cli');
@@ -206,6 +206,7 @@ export function appendAuditReceipt(
     ...(issuanceId === null ? {} : { issuanceId: reference('issuanceId', issuanceId) }),
     ...(taskId === null ? {} : { taskId: reference('taskId', taskId) }),
     ...(operationId === null ? {} : { operationId: reference('operationId', operationId) }),
+    ...(session_id === null ? {} : { session_id: reference('session_id', session_id) }),
   };
   const file = auditFile({ env, home });
   ensurePrivateDirectory(path.dirname(file));
