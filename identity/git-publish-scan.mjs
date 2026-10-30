@@ -337,7 +337,7 @@ const WRAPPERS = {
 };
 
 export function scanGitPublish(command, { cwd = process.cwd(), env = process.env, depth = 0 } = {}) {
-  const result = { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
+  const result = { publishes: [], aliases: [], gh: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
   if (depth > 8) { result.ambiguous = true; return result; }
   const vars = new Map(Object.entries(env ?? {}));
   const exported = new Set(Object.keys(env ?? {}));
@@ -396,6 +396,7 @@ function envOf(vars, exported) {
 function merge(into, from) {
   into.publishes.push(...from.publishes);
   into.aliases.push(...from.aliases);
+  into.gh.push(...(from.gh ?? []));
   into.ambiguous ||= from.ambiguous;
   into.opaqueExecution ||= from.opaqueExecution;
   into.opaque.push(...from.opaque);
@@ -509,6 +510,10 @@ function evaluate(argv, ctx) {
   if (OPAQUE_EXECUTORS.has(base) || /^python\d+(?:\.\d+)?$/.test(base)) {
     result.opaqueExecution = true;
     result.opaque.push({ cwd });
+    return {};
+  }
+  if (base === 'gh') {
+    result.gh.push({ word, args, cwd, env: Object.fromEntries(env), byPath: word.includes('/') });
     return {};
   }
   if (base === 'git') { gitInvocation(args, { cwd, env, result, depth }); return {}; }
@@ -697,7 +702,7 @@ function rebaseExecs(rest, target, env, result, depth) {
 export function expandAlias(value, target, rest, {
   env = new Map(), result, depth = 0, aliases = new Map(), names = new Map(), hooksOverridden = false,
 }) {
-  const into = result ?? { publishes: [], aliases: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
+  const into = result ?? { publishes: [], aliases: [], gh: [], ambiguous: false, opaqueExecution: false, opaque: [], skipsHooks: false, bypasses: [] };
   const envObject = { ...(env instanceof Map ? Object.fromEntries(env) : env) };
   if (value.startsWith('!')) {
     // A shell alias's git inherits the outer `-c` through this variable.

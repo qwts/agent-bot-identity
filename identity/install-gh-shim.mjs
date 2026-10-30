@@ -20,7 +20,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import {
-  basename, dirname, isAbsolute, join, resolve,
+  basename, delimiter, dirname, isAbsolute, join, resolve,
 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildGhShim, GH_SHIM_MARKER } from './gh-shim.mjs';
@@ -107,6 +107,84 @@ export function isAgentBotGhShim(path, {
     throw error;
   } finally {
     if (descriptor !== undefined) close(descriptor);
+  }
+}
+
+export function managedShimPath(home = homedir()) {
+  return join(home, '.config', 'agent-bot', 'bin', 'gh');
+}
+
+export function shimGhDirs(home = homedir(), { lstat = lstatSync, readFile = readFileSync } = {}) {
+  const dirs = [join(home, '.config', 'agent-bot', 'bin'), join(home, '.local', 'bin')];
+  const codexOverride = join(
+    home, '.cache', 'codex-runtimes', 'codex-primary-runtime', 'dependencies', 'bin', 'override',
+  );
+  if (optionalStat(codexOverride, lstat)?.isDirectory()) dirs.push(codexOverride);
+  try {
+    const state = JSON.parse(readFile(codexDesktopGhStatePath(home), 'utf8'));
+    if (typeof state?.path === 'string' && isAbsolute(state.path) && basename(state.path) === 'gh') {
+      dirs.push(dirname(state.path));
+    }
+  } catch { /* unconfigured */ }
+  return dirs;
+}
+
+export function isManagedGh(candidate, {
+  home = homedir(),
+  lstat = lstatSync,
+  readlink = readlinkSync,
+  realpath = realpathSync,
+  isShim = isAgentBotGhShim,
+} = {}) {
+  const shimPath = managedShimPath(home);
+  const binDir = dirname(shimPath);
+  if (resolve(candidate) === resolve(shimPath)) return true;
+  if (resolvesTo(candidate, shimPath, realpath)) return true;
+  const entry = optionalStat(candidate, lstat);
+  if (entry?.isSymbolicLink()) {
+    const target = resolve(dirname(candidate), readlink(candidate));
+    if (target === shimPath || target.startsWith(`${binDir}/`)) return true;
+  }
+  return Boolean(isShim(candidate));
+}
+
+// What `word` ('gh' or a path ending in '/gh') resolves to under `env` (#1133).
+export function resolveGhWord(word = 'gh', {
+  env = process.env,
+  home = env?.HOME ?? homedir(),
+  cwd = process.cwd(),
+  lstat = lstatSync,
+  stat = statSync,
+  readlink = readlinkSync,
+  realpath = realpathSync,
+  isShim = isAgentBotGhShim,
+} = {}) {
+  const shimPath = managedShimPath(home);
+  const byPath = String(word).includes('/');
+  try {
+    if (byPath) {
+      const homeDir = env?.HOME ?? home;
+      const expanded = String(word)
+        .replace(/^~(?=\/|$)/, homeDir)
+        .replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, homeDir);
+      if (expanded.includes('$')) return { status: 'unverifiable', resolved: null, shimPath, byPath };
+      const resolved = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+      if (isManagedGh(resolved, { home, lstat, readlink, realpath, isShim })) {
+        return { status: 'shim', resolved, shimPath, byPath };
+      }
+      if (!optionalStat(resolved, lstat)) return { status: 'missing', resolved, shimPath, byPath };
+      return { status: 'shadowed', resolved, shimPath, byPath };
+    }
+    const pathValue = env === process.env ? (env.PATH ?? '') : (env?.PATH ?? '');
+    for (const dir of String(pathValue).split(delimiter).filter(Boolean)) {
+      const candidate = join(dir, 'gh');
+      if (!isExecutableFile(candidate, stat)) continue;
+      const managed = isManagedGh(candidate, { home, lstat, readlink, realpath, isShim });
+      return { status: managed ? 'shim' : 'shadowed', resolved: candidate, shimPath, byPath };
+    }
+    return { status: 'missing', resolved: null, shimPath, byPath };
+  } catch {
+    return { status: 'unverifiable', resolved: null, shimPath, byPath };
   }
 }
 

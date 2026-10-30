@@ -78,3 +78,17 @@ test('direct read-only Git and analyzable shell payloads remain transparent', ()
     assert.equal(result.publishes.length, 0, command);
   }
 });
+
+test('gh invocations are recorded in scan.gh and explicit shim paths are not marked opaque (#1133)', () => {
+  const explicit = scanGitPublish('~/.local/bin/gh pr create --title x', { cwd: '/repo', env: { HOME: '/Users/u' } });
+  assert.equal(explicit.opaqueExecution, false);
+  assert.equal(explicit.gh.length, 1);
+  assert.equal(explicit.gh[0].byPath, true);
+
+  const nested = scanGitPublish('PATH=/opt/homebrew/bin:$PATH sh -c "gh pr create --title x"', {
+    cwd: '/repo', env: { PATH: '/Users/u/.local/bin:/usr/bin' },
+  });
+  assert.equal(nested.opaqueExecution, false);
+  assert.equal(nested.gh.length, 1);
+  assert.equal(nested.gh[0].env.PATH, '/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin');
+});

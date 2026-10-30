@@ -52,6 +52,10 @@ const bin = join(root, 'bin');
 mkdirSync(bin);
 writeFileSync(join(bin, 'agent-bot'), '#!/bin/sh\nif [ "$1" = setup-worktree ]; then echo "agent-bot: refusing primary checkout" >&2; exit 1; fi\nexit 0\n');
 chmodSync(join(bin, 'agent-bot'), 0o755);
+// Managed gh shim on PATH so `gh` resolves to the shim unless a test
+// explicitly prepends a shadowing binary (#1133).
+writeFileSync(join(bin, 'gh'), '#!/bin/sh\n# gh shim — agent bot identity. Managed by install-gh-shim.mjs\nexit 0\n');
+chmodSync(join(bin, 'gh'), 0o755);
 
 // The installed runner: the real agent-hook.mjs over this repo's agent-hooks/.
 const hookBin = join(root, 'agent-hook');
@@ -688,4 +692,42 @@ test('qwen: the built-in guard runs with no project hooks, and a broken hook den
     assert.equal(run.stdout, '');
     assert.match(run.stderr, /unparseable/);
   }
+});
+
+test('a stated bot is refused when gh resolves to a shadowing binary, and allowed when calling the shim explicitly (#1133)', () => {
+  const { repo } = primaryCheckout(`${SLUG}[bot]`);
+  const empty = join(root, 'gh-no-hooks');
+  const shadowDir = join(root, 'shadow-gh-bin');
+  const localBin = join(home, '.local', 'bin');
+  const shimDir = join(home, '.config', 'agent-bot', 'bin');
+  mkdirSync(empty, { recursive: true });
+  mkdirSync(shadowDir, { recursive: true });
+  mkdirSync(localBin, { recursive: true });
+  mkdirSync(shimDir, { recursive: true });
+  const shadowGh = join(shadowDir, 'gh');
+  const shimPath = join(shimDir, 'gh');
+  writeFileSync(shadowGh, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(shimPath, '#!/bin/sh\n# gh shim — agent bot identity. Managed by install-gh-shim.mjs\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(localBin, 'gh'), '#!/bin/sh\n# gh shim — agent bot identity. Managed by install-gh-shim.mjs\nexit 0\n', { mode: 0o755 });
+
+  const shadowedEnv = baseEnv({ ...STATED, PATH: `${shadowDir}:${bin}:${process.env.PATH}` });
+  const denied = runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: shadowedEnv,
+    payload: { cwd: repo, tool_name: 'Bash', tool_input: { command: 'gh pr create --title x' } },
+  });
+  assert.equal(denied.decision, 'deny');
+  assert.match(denied.reason, /gh-resolution: .*resolves to .*shadow-gh-bin\/gh.*install-gh-shim/);
+
+  const delegateAllowed = runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty,
+    env: baseEnv({ ...DELEGATE, PATH: `${shadowDir}:${bin}:${process.env.PATH}` }),
+    payload: { cwd: repo, tool_name: 'Bash', tool_input: { command: 'gh pr create --title x' } },
+  });
+  assert.equal(delegateAllowed.decision, 'allow');
+
+  const explicitAllowed = runHooks({
+    dialectKey: 'claude', event: 'pre-command', dir: empty, env: shadowedEnv,
+    payload: { cwd: repo, tool_name: 'Bash', tool_input: { command: '~/.local/bin/gh pr create --title x' } },
+  });
+  assert.equal(explicitAllowed.decision, 'allow');
 });

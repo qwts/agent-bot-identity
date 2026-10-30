@@ -16,7 +16,7 @@ export { isSoulBound } from './git-credential-bot.mjs';
 export { cacheAppDoctorRows, legacyAppFolderStatus, readAppMetadata } from './identity-app-store.mjs';
 export { identityAppFailure, identityAppsCommand } from './identity-apps.mjs';
 export { probeInboxReachability } from './inbox-probe.mjs';
-export { inspectConfiguredCodexDesktopGh, inspectShellGhShim, installGhShim } from './install-gh-shim.mjs';
+export { inspectConfiguredCodexDesktopGh, inspectShellGhShim, installGhShim, resolveGhWord } from './install-gh-shim.mjs';
 export { keydStatus, keydVersionAction } from './keyd-client.mjs';
 export { soulMarkers } from './owner-gate.mjs';
 export { attestedOwnerKeys, keydAttestPins, keydStatementStore } from './owner-presence.mjs';
