@@ -30,6 +30,7 @@ import { readBinding, readBindToken, resolveAgentSlug, serverUrl, loadDevice } f
 import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { SKILL_REFERENCES, skillReferenceFor } from './skill-for-map.mjs';
+import { loadConfig } from './config.mjs';
 const PROTOCOL_VERSION = '2025-06-18';
 
 function serverVersion() {
@@ -305,8 +306,8 @@ function guideText(state, topic) {
 }
 
 function serverStatusReport(state) {
-  const config = (() => { try { return JSON.parse(readFileSync(join(state.home ?? homedir(), '.config', 'agent-bot', 'config.json'), 'utf8')); } catch { return null; } })();
-  const base = serverUrl({ env: state.env, config: config ?? {} });
+  const config = (() => { try { return loadConfig({ home: state.home, env: state.env }); } catch { return {}; } })();
+  const base = serverUrl({ env: state.env, config });
   const device = loadDevice({ env: state.env, home: state.home });
   let repo = null;
   try {
@@ -592,7 +593,7 @@ async function callTool(state, name, args = {}) {
       const root = dirname(fileURLToPath(import.meta.url));
       let out = null;
       try {
-        out = execFileSync(process.execPath, [join(root, 'doctor.mjs'), '--json'],
+        out = execFileSync(process.execPath, [join(root, 'doctor.mjs'), '--json', '--no-verify-apps'],
           { env: state.env, cwd: state.cwd, encoding: 'utf8', timeout: 30000 });
       } catch (error) {
         // doctor exits non-zero when the machine is not ready but still prints

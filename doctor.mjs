@@ -34,6 +34,7 @@ export function parseDoctorArgs(argv = process.argv.slice(2)) {
     json: false,
     machineOnly: false,
     probeInbox: false,
+    verifyApps: true,
     requireSchemaVersion: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -44,6 +45,8 @@ export function parseDoctorArgs(argv = process.argv.slice(2)) {
       options.json = true;
     } else if (arg === '--probe-inbox') {
       options.probeInbox = true;
+    } else if (arg === '--no-verify-apps') {
+      options.verifyApps = false;
     } else if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else if (arg === '--app' || arg === '--require-schema-version') {
@@ -104,6 +107,7 @@ export async function main(
       command: 'doctor',
       scope,
       explicitApps: options.apps,
+      verifyApps: options.verifyApps,
       ...(options.probeInbox ? { probeInbox: probeInboxReachability } : {}),
     });
   }
@@ -112,7 +116,9 @@ export async function main(
       ...([row.credential?.status, row.live_mint?.status].includes('failed') ? { keyRemovable: false } : {}) })); }
     catch { Object.assign(row, { legacyFolderRemovable: false, remainingFiles: ['<unreadable-metadata>'], removalCommand: null }); }
   }
-  try { cache(report); } catch { /* cached mint history is advisory; readiness still reports */ }
+  // A read-only pass (--no-verify-apps) mints nothing and leaves the
+  // advisory cache untouched: MCP callers must not mint or persist.
+  if (options.verifyApps) try { cache(report); } catch { /* cached mint history is advisory; readiness still reports */ }
   output.write(options.json ? renderReadinessJson(report) : renderReadinessReport(report));
   if (!options.json) for (const row of report.machine?.apps ?? []) {
     output.write(`${row.slug} legacyFolderRemovable: ${row.legacyFolderRemovable}; remaining: ${row.remainingFiles.join(', ') || '-'}\n`);

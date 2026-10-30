@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -413,14 +413,16 @@ test('initialize instructions name the version and the write caller', async () =
 test('doctor and server_status return JSON without secret material', async () => {
   const { root } = scratchRepo();
   const stateDir = path.join(root, 'state');
-  writeFileSync(path.join(root, 'cfg.json'), '{}\n');
+  const cfg = path.join(root, 'cfg.json');
+  writeFileSync(cfg, '{"settings":{"agentBotServer":"https://agents.true-line.ai"}}\n');
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(path.join(stateDir, 'device.json'), JSON.stringify({ device_id: 'dev-1', device_name: 'studio-mac', harnesses: ['claude'] }));
-  const env = { PATH: process.env.PATH, HOME: root, AGENT_BOT_SERVER: 'https://agents.true-line.ai', AGENT_BOT_SERVER_STATE: stateDir };
+  const env = { PATH: process.env.PATH, HOME: root, AGENT_BOT_CONFIG: cfg, AGENT_BOT_SERVER_STATE: stateDir };
   const state = createMcpState({ client: fakeClient(), cwd: root, home: root, env });
   const status = await callTool(state, 'server_status');
   const report = JSON.parse(status.text);
-  assert.equal(report.server_mode, true);
+  assert.equal(report.server_mode, true, 'settings.agentBotServer is honoured without AGENT_BOT_SERVER');
+  assert.equal(report.base, 'https://agents.true-line.ai');
   assert.equal(report.enrolled, true);
   assert.equal(report.device_id, 'dev-1');
   assert.equal(report.device_name, 'studio-mac');
@@ -431,6 +433,13 @@ test('doctor and server_status return JSON without secret material', async () =>
   const dreport = JSON.parse(doc.text);
   assert.equal(dreport.ready, false);
   assert.ok(dreport.first_actionable_failure, 'a not-ready fixture must name a failing check');
+  // The MCP doctor is a read tool: the spawned report runs with
+  // --no-verify-apps, so it mints nothing and never writes the advisory
+  // doctor cache (stateDir/identity-apps/doctor.json).
+  assert.ok(!existsSync(path.join(stateDir, 'identity-apps', 'doctor.json')), 'doctor wrote its cache');
+  for (const row of dreport.machine?.apps ?? []) {
+    assert.notEqual(row.live_mint?.status, 'ready', `live mint ran for ${row.slug}`);
+  }
   for (const text of [status.text, doc.text]) {
     // No secret-shaped material: key material, PEM blocks, or credential
     // values. Field names and prose may say "token"/"secret" legitimately.
@@ -439,6 +448,20 @@ test('doctor and server_status return JSON without secret material', async () =>
       assert.doesNotMatch(key, /token|secret|private|pem/i);
     }
   }
+});
+
+test('doctor --no-verify-apps skips live verification and the cache write', async () => {
+  let verifyApps = null;
+  let cacheCalls = 0;
+  const written = [];
+  const { main } = await import('../doctor.mjs');
+  await main(['--json', '--no-verify-apps'], {
+    collect: async (opts) => { verifyApps = opts.verifyApps; return { machine: {}, ready: true }; },
+    cache: async () => { cacheCalls += 1; },
+    output: { write: (chunk) => written.push(chunk) },
+  });
+  assert.equal(verifyApps, false, 'verifyApps:false must reach collectReadiness');
+  assert.equal(cacheCalls, 0, 'the advisory cache must not be written');
 });
 
 test('guide resolves topics through the same map the CLI --for uses', async () => {
