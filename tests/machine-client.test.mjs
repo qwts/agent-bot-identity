@@ -1,0 +1,201 @@
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:net';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign } from 'node:crypto';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import {
+  buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
+  machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
+  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath,
+} from '../machine-client.mjs';
+
+const roots = [];
+after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
+const scratch = () => { const r = mkdtempSync(path.join(tmpdir(), 'machine-client-')); roots.push(r); return r; };
+
+// Vectors produced by managed-machine internal/daemon (origin/main d90fcf0+)
+// using its own Sign/signResponse/formatLine — see the PR description.
+const GO_CLIENT_PUB = '79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664';
+const GO_DAEMON_PUB = '274ed6b26805d2fe8d060529ee9a2f28763b6976d9c5fd1dee38ff36b3b76939';
+const GO_REQ = '{"verb":"plan","name":"codex","option":"pin","target":"apps/x.y","plan_id":"p-1","soul":"agent_x","harness":"claude","session_id":"ses_u","timestamp":1730000000,"nonce":"AAAAAAAAAAAAAAAAAAAAAA","public_key":"ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=","signature":"Q/Y06A23Cq7f/I0txe06CgfuMRehIWjHlVxCg4DRpDBtU6IBDoZd2d1BN7cYrG2veza5YNKr0ntBBqfWCukZAA=="}';
+const GO_RES = '{"ok":true,"message":"ok","state":"planned","body":{"a":"\\u003cb\\u003e\\u0026x","u":"héllo","n":{"k":[1,2]}},"timestamp":1730000001,"nonce":"BBBBBBBBBBBBBBBBBBBBBB","request_nonce":"AAAAAAAAAAAAAAAAAAAAAA","signature":"vt18S1HWZcUcIlzdodCc1TPSnPOOSn6Li09MqpzYRqIQEQ0KvYbG2uBQXQfxzsmj8tAARQYogJLRUl/QF8OJAQ=="}';
+// The client key whose raw public half is GO_CLIENT_PUB (seed bytes 1..32).
+const SEED = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1));
+const JWK = { kty: 'OKP', crv: 'Ed25519', d: SEED.toString('base64url'), x: Buffer.from(GO_CLIENT_PUB, 'hex').toString('base64url') };
+
+test('a request built with fixed fields signs byte-identically to Go', async () => {
+  const key = createPrivateKey({ format: 'jwk', key: JWK });
+  const signer = { publicKeyRaw: Buffer.from(GO_CLIENT_PUB, 'hex'), sign: (bytes) => edSign(null, bytes, key) };
+  const req = buildRequest(
+    { verb: 'plan', name: 'codex', option: 'pin', target: 'apps/x.y', plan_id: 'p-1', soul: 'agent_x', harness: 'claude', session_id: 'ses_u' },
+    signer, { now: 1730000000, nonce: 'AAAAAAAAAAAAAAAAAAAAAA' });
+  const go = JSON.parse(GO_REQ);
+  assert.equal(req.signature, go.signature, 'JS signature must equal the Go golden');
+  assert.equal(req.public_key, go.public_key);
+});
+
+test('verifyResponse accepts the Go golden line, raw escaped body and all', () => {
+  const out = verifyResponse(GO_RES, Buffer.from(GO_DAEMON_PUB, 'hex'), { expectedNonce: 'AAAAAAAAAAAAAAAAAAAAAA', now: 1730000001 * 1000 + 10 });
+  assert.equal(out.ok, true);
+  assert.equal(out.state, 'planned');
+  assert.deepEqual(out.body.a, '<b>&x');
+  assert.equal(out.body.u, 'héllo');
+});
+
+test('tamper cases: bad signature, wrong key, stale timestamp, edited body', () => {
+  const pub = Buffer.from(GO_DAEMON_PUB, 'hex');
+  const now = 1730000001 * 1000;
+  const expected = { expectedNonce: 'AAAAAAAAAAAAAAAAAAAAAA', now };
+  assert.throws(() => verifyResponse(GO_RES.replace('"ok":true', '"ok":false'), pub, expected), /machine-reply-tampered/);
+  const other = generateKeyPairSync('ed25519');
+  const otherRaw = Buffer.from(other.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  assert.throws(() => verifyResponse(GO_RES, otherRaw, expected), /machine-reply-tampered/);
+  assert.throws(() => verifyResponse(GO_RES, pub, { expectedNonce: 'AAAAAAAAAAAAAAAAAAAAAA', now: now + 10 * 60 * 1000 }), /machine-reply-stale/);
+  // A byte inside the body span breaks the signature but not JSON parsing.
+  const edited = GO_RES.replace('"n":{"k":[1,2]}', '"n":{"k":[1,3]}');
+  assert.throws(() => verifyResponse(edited, pub, expected), /machine-reply-tampered/);
+});
+
+test('the reply must be bound to the request nonce (#410)', () => {
+  const pub = Buffer.from(GO_DAEMON_PUB, 'hex');
+  const now = 1730000001 * 1000;
+  // A correctly signed reply for another request is refused.
+  assert.throws(() => verifyResponse(GO_RES, pub, { expectedNonce: 'CCCCCCCCCCCCCCCCCCCCCC', now }), /machine-reply-unbound/);
+  // A reply validly signed with no request_nonce is refused as unbound.
+  const keypair = generateKeyPairSync('ed25519');
+  const pub2 = Buffer.from(keypair.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  const res2 = { ok: true, state: 'ready' };
+  res2.timestamp = Math.floor(Date.now() / 1000);
+  res2.nonce = 'TESTNONCE00000000000001';
+  const payload2 = [String(res2.ok), '', '', res2.state, '', String(res2.timestamp), res2.nonce, ''].join('\n');
+  res2.signature = edSign(null, Buffer.from(payload2), keypair.privateKey).toString('base64');
+  assert.throws(() => verifyResponse(JSON.stringify(res2), pub2, { expectedNonce: 'Q', now: Date.now() }), /machine-reply-unbound/);
+});
+
+test('bodySpan finds the raw body value inside a line', () => {
+  const span = bodySpan(GO_RES);
+  assert.equal(span.toString('utf8'), '{"a":"\\u003cb\\u003e\\u0026x","u":"héllo","n":{"k":[1,2]}}');
+  // A "body" string inside another value is not the key.
+  const tricky = '{"ok":true,"message":"set \"body\":{x} here","body":"s","timestamp":1,"nonce":"n"}';
+  assert.equal(bodySpan(tricky).toString(), '"s"');
+  // An escaped quote inside an earlier key does not split it early.
+  assert.equal(bodySpan('{"we\\"ird":"v","body":{"n":1},"ok":true}').toString(), '{"n":1}');
+  // Scalar bodies scan the same way.
+  assert.equal(bodySpan('{"ok":true,"body":7,"timestamp":1}').toString(), '7');
+  assert.equal(bodySpan('{"body":{"k":[1]},"ok":true}').toString(), '{"k":[1]}');
+});
+
+// A fake agent-machine: unix socket, verifies the request signature against
+// the client key, answers with a signed response.
+async function fakeMachine(root, { keypair = generateKeyPairSync('ed25519'), handler } = {}) {
+  const dir = path.join(root, 'am'); mkdirSync(dir, { recursive: true });
+  const sock = path.join(dir, 'daemon.sock');
+  const daemonPub = Buffer.from(keypair.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  writeFileSync(path.join(dir, 'daemon.pub'), daemonPub);
+  const received = [];
+  const server = createServer((conn) => {
+    let buf = '';
+    conn.on('data', (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      const req = JSON.parse(buf.slice(0, nl));
+      received.push(req);
+      const res = handler(req, daemonPub);
+      conn.end(`${JSON.stringify(res)}\n`);
+    });
+  });
+  await new Promise((resolve) => server.listen(sock, resolve));
+  server.unref();
+  return { sock, dir, daemonPub, received, server };
+}
+
+function signResponse(res, priv) {
+  const body = res.body !== undefined ? JSON.stringify(res.body) : '';
+  res.timestamp = Math.floor(Date.now() / 1000);
+  res.nonce = 'TESTNONCE00000000000001';
+  const payload = [String(res.ok), res.diagnostic ?? '', res.message ?? '', res.state ?? '', body, String(res.timestamp), res.nonce, res.request_nonce ?? ''].join('\n');
+  res.signature = edSign(null, Buffer.from(payload), priv).toString('base64');
+  return res;
+}
+
+test('a signed request round-trips through a fake agent-machine', async () => {
+  const root = scratch();
+  const keypair = generateKeyPairSync('ed25519');
+  const fm = await fakeMachine(root, {
+    keypair,
+    handler: (req) => signResponse({ ok: true, state: 'ready', request_nonce: req.nonce }, keypair.privateKey),
+  });
+  const home = path.join(root, 'home'); mkdirSync(path.join(home, '.config', 'agent-machine'), { recursive: true });
+  writeFileSync(path.join(home, '.config', 'agent-machine', 'daemon.pub'), fm.daemonPub);
+  const env = { AGENT_BOT_SERVER_STATE: path.join(home, 'bot-state') };
+  const signer = loadOrCreateMachineKey({ env, home });
+  pinDaemonPub({ env, home });
+  const req = buildRequest({ verb: 'status' }, signer);
+  const line = await machineCall({ socketPath: fm.sock, request: req });
+  const out = verifyResponse(line, fm.daemonPub, { expectedNonce: req.nonce });
+  assert.equal(out.ok, true);
+  assert.equal(fm.received.length, 1);
+  assert.equal(fm.received[0].verb, 'status');
+  assert.equal(fm.received[0].public_key, signer.publicKeyRaw.toString('base64'));
+});
+
+test('a multibyte reply split across socket chunks decodes whole', async () => {
+  const root = scratch();
+  const dir = path.join(root, 'am'); mkdirSync(dir, { recursive: true });
+  const sock = path.join(dir, 'daemon.sock');
+  const server = createServer((conn) => {
+    conn.on('data', () => {
+      const line = Buffer.from(`${JSON.stringify({ ok: true, message: 'héllo' })}\n`, 'utf8');
+      // Split inside the 'é' (0xC3 0xA9) so no chunk holds a complete char.
+      const cut = line.indexOf(0xc3);
+      conn.write(line.subarray(0, cut));
+      setImmediate(() => conn.end(line.subarray(cut)));
+    });
+  });
+  await new Promise((resolve) => server.listen(sock, resolve));
+  server.unref();
+  try {
+    const line = await machineCall({ socketPath: sock, request: { verb: 'status' } });
+    assert.equal(JSON.parse(line).message, 'héllo');
+  } finally {
+    server.close();
+  }
+});
+
+test('pairing file rules: legacy peer.* refuses, unknown peers/ entry refuses, terminal untouched', async () => {
+  const root = scratch();
+  const dir = path.join(root, '.config', 'agent-machine');
+  mkdirSync(path.join(dir, 'peers'), { recursive: true });
+  writeFileSync(path.join(dir, 'peer.pub'), Buffer.alloc(32, 9));
+  assert.throws(() => assertPairingLayout(dir), /machine-legacy-peers/);
+  rmSync(path.join(dir, 'peer.pub'));
+  writeFileSync(path.join(dir, 'peers', 'bogus.pub'), Buffer.alloc(32, 1));
+  assert.throws(() => assertPairingLayout(dir), /machine-peers-invalid/);
+  rmSync(path.join(dir, 'peers', 'bogus.pub'));
+  // terminal files are never touched.
+  writeFileSync(path.join(dir, 'peers', 'terminal.pub'), Buffer.alloc(32, 7));
+  const before = readFileSync(path.join(dir, 'peers', 'terminal.pub'));
+  writeAgentDaemonPeer({ home: root, publicKeyRaw: Buffer.alloc(32, 5) });
+  assert.deepEqual(readFileSync(path.join(dir, 'peers', 'terminal.pub')), before);
+  assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.next')).length, 32);
+  assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.confirm'), 'utf8').length, 64);
+  assert.deepEqual(readdirSync(path.join(dir, 'peers')).sort(), ['agent-daemon.confirm', 'agent-daemon.next', 'terminal.pub']);
+  unpairAgentDaemon({ home: root });
+  assert.ok(readFileSync(path.join(dir, 'peers', 'terminal.pub')).equals(before));
+  assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.revoked')).length, 0);
+});
+
+test('pin mismatch refuses send; no pin refuses with machine-not-paired', () => {
+  const root = scratch();
+  const env = { AGENT_BOT_SERVER_STATE: path.join(root, 'state') };
+  const dir = path.join(root, '.config', 'agent-machine');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'daemon.pub'), Buffer.alloc(32, 3));
+  assert.throws(() => pairedPublicKey({ env, home: root }), /machine-not-paired/);
+  pinDaemonPub({ env, home: root });
+  writeFileSync(path.join(dir, 'daemon.pub'), Buffer.alloc(32, 4));
+  assert.throws(() => pairedPublicKey({ env, home: root }), /machine-pin-mismatch/);
+});

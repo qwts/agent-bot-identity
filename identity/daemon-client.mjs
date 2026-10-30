@@ -137,7 +137,7 @@ export function daemonClient({
         || typeof payload.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(payload.code) ? { code: payload.code } : {},
       // An inbox code comes with the daemon's own sentence, which take_inbox
       // shows as is.
-      typeof payload.code === 'string' && /^inbox-[a-z][a-z-]{0,63}$/.test(payload.code)
+      typeof payload.code === 'string' && (/^inbox-[a-z][a-z-]{0,63}$/.test(payload.code) || /^machine-[a-z][a-z-]{0,63}$/.test(payload.code))
         ? { code: payload.code, detail: String(payload.error ?? '') } : {},
       // So does a delegation grant's (#108).
       typeof payload.code === 'string' && (/^(grant|human)-[a-z][a-z-]{0,63}$/.test(payload.code)
@@ -230,6 +230,12 @@ export function daemonClient({
     // caller is that identity — nothing is being borrowed.
     async credential(secret) {
       return request('POST', '/v0/credential', {}, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
+    },
+    // The agent-machine control route (#1254): the daemon fills soul,
+    // harness and session_id from this binding; the caller names only the
+    // verb and the operation fields agent-machine owns.
+    async machine(secret, body, { timeoutMs = 30000 } = {}) {
+      return request('POST', '/v0/machine', body, { 'x-agent-binding': secret }, timeoutMs);
     },
     // Live-session events for the bound soul's own harness (#39). The wait
     // route holds up to 25 s server-side, so its budget covers that; ack

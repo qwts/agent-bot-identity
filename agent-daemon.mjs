@@ -90,6 +90,7 @@ import {
   daemonClient, daemonStateFile, LOOPBACK_HOSTS, probeDaemonHealth as probeHealth,
   readDaemonState as readStateFile, SCHEMA_VERSION,
 } from './daemon-client.mjs';
+import { buildRequest, machineCall, machineSocketPath, machineStateDir, loadOrCreateMachineKey, pairedPublicKey, verifyResponse } from './machine-client.mjs';
 // Re-exported for importers that predate daemon-client.mjs (#645).
 export { daemonClient, daemonStateFile };
 import { joinLaunchedSoul, leaveLaunchedSoul } from './comms-membership.mjs';
@@ -647,7 +648,7 @@ export function createDaemonServer({
         appendAuditReceipt({ event: 'owner-route', operation: ownerRoute, decision: 'owner-credential-required' }, { env, home, now });
         throw ownerCredentialRequired(`a soul binding cannot authorize ${ownerRoute}`);
       }
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/inbox/take', 'POST /v0/grants/request', 'POST /v0/grants/spend', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered', 'POST /v0/events/wait', 'POST /v0/events/ack'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
+      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/machine', 'POST /v0/inbox/take', 'POST /v0/grants/request', 'POST /v0/grants/spend', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered', 'POST /v0/events/wait', 'POST /v0/events/ack'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
         sendJson(res, 401, { error: 'missing or invalid daemon token' });
         return;
       }
@@ -722,6 +723,30 @@ export function createDaemonServer({
           if (url.search) throw Object.assign(new Error('Dream status accepts no query fields.'), { statusCode: 400 });
           sendJson(res, 200, server.dream.status());
         }
+        return;
+      }
+      if (route === 'POST /v0/machine') {
+        const binding = requireBinding(req, bindings);
+        const body = parseJsonBody(await readBody(req));
+        const unknown = Object.keys(body).filter((key) => !['verb', 'name', 'option', 'target', 'plan_id', 'soul', 'harness', 'session_id'].includes(key));
+        if (unknown.length || typeof body.verb !== 'string') {
+          throw Object.assign(new Error(`POST /v0/machine takes {verb, name?, option?, target?, plan_id?} only`), { statusCode: 400 });
+        }
+        // Derived fields are the daemon's to set: a caller that states one
+        // must state the value this binding already has (#1254 principle).
+        const stated = { soul: binding.agentId, harness: binding.harness ?? null, session_id: binding.sessionId ?? null };
+        for (const field of ['soul', 'harness', 'session_id']) {
+          if (body[field] !== undefined && body[field] !== stated[field]) {
+            throw Object.assign(new Error(`${field} does not match this binding — omit it; the daemon fills it [derived-field-mismatch]`), { statusCode: 409, code: 'derived-field-mismatch' });
+          }
+        }
+        const request = buildRequest(
+          { verb: body.verb, name: body.name, option: body.option, target: body.target, plan_id: body.plan_id, ...stated },
+          machineKey({ env, home }),
+        );
+        const pinned = pairedPublicKey({ env, home });
+        const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
+        sendJson(res, 200, verifyResponse(line, pinned, { expectedNonce: request.nonce }));
         return;
       }
       if (route === 'POST /v0/credential') {
@@ -1310,6 +1335,13 @@ function presentedCredential(req) {
     return { proof, request };
   }
   return typeof req.headers['x-agent-binding'] === 'string' ? req.headers['x-agent-binding'] : '';
+}
+
+const machineKeys = new Map();
+function machineKey({ env, home }) {
+  const dir = machineStateDir({ env, home });
+  if (!machineKeys.has(dir)) machineKeys.set(dir, loadOrCreateMachineKey({ env, home }));
+  return machineKeys.get(dir);
 }
 
 function requireBinding(req, bindings) {

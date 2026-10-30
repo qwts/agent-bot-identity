@@ -196,6 +196,8 @@ const TOOL_CLASS = Object.freeze({
   doctor: 'read', server_status: 'read', guide: 'read',
   bind: 'write', credential: 'write', take_notices: 'write', ack_notices: 'write',
   release_notices: 'write', take_inbox: 'write', request_grant: 'write', spend_grant: 'write',
+  machine_status: 'read', machine_receipts: 'read',
+  machine_plan: 'write', machine_apply: 'write', machine_update: 'write',
 });
 
 function oneLine(text) {
@@ -253,6 +255,37 @@ HIDDEN.set('server_status', {
   name: 'server_status',
   description: 'Server-mode status: whether enrolled, the device id/name, approved harnesses, and the repo this checkout would mint for.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+});
+const MACHINE_FIELDS = {
+  name: { type: 'string', description: 'catalog app name' },
+  option: { type: 'string', description: 'verb-specific option' },
+  target: { type: 'string', description: 'verb-specific target' },
+  plan_id: { type: 'string', description: 'plan id an apply refers back to' },
+};
+HIDDEN.set('machine_status', {
+  name: 'machine_status',
+  description: 'Agent-machine daemon status through the paired machine client (requires bind and machine pairing).',
+  inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+});
+HIDDEN.set('machine_receipts', {
+  name: 'machine_receipts',
+  description: 'Agent-machine operation receipts for this machine.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+});
+HIDDEN.set('machine_plan', {
+  name: 'machine_plan',
+  description: 'Ask agent-machine to plan a catalog operation; returns a plan id to apply.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: MACHINE_FIELDS },
+});
+HIDDEN.set('machine_apply', {
+  name: 'machine_apply',
+  description: 'Apply an agent-machine plan id.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: MACHINE_FIELDS },
+});
+HIDDEN.set('machine_update', {
+  name: 'machine_update',
+  description: 'Ask agent-machine to update a catalog app.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: MACHINE_FIELDS },
 });
 HIDDEN.set('guide', {
   name: 'guide',
@@ -615,6 +648,26 @@ async function callTool(state, name, args = {}) {
         machine: report.machine ?? null,
         worktree: report.worktree ?? null,
       };
+    }
+    case 'machine_status':
+    case 'machine_receipts':
+    case 'machine_plan':
+    case 'machine_apply':
+    case 'machine_update': {
+      if (!state.secret) throw new Error('not bound — call the bind tool first');
+      const verb = name.slice('machine_'.length);
+      const { name: appName, option, target, plan_id } = args ?? {};
+      try {
+        return await state.client.machine(state.secret, {
+          verb,
+          ...(appName !== undefined ? { name: appName } : {}),
+          ...(option !== undefined ? { option } : {}),
+          ...(target !== undefined ? { target } : {}),
+          ...(plan_id !== undefined ? { plan_id } : {}),
+        });
+      } catch (error) {
+        throw new Error(`${name} failed: ${error.detail ?? error.message}`, { cause: error });
+      }
     }
     case 'server_status':
       return serverStatusReport(state);

@@ -27,6 +27,7 @@ export const MODULES = new Map([
   ['approvals', 'agent-approvals.mjs'],
   ['audit', 'agent-audit.mjs'],
   ['mcp', 'agent-mcp.mjs'],
+  ['machine', 'cli/machine.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],
   ['wake', 'wake-listen.mjs'],
   ['web', 'agent-web.mjs'],
