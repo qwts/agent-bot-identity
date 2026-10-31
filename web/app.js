@@ -310,6 +310,75 @@ function wireAgentMachineForms() {
   $('am-update').addEventListener('click', () => propose('update', { name: $('am-plan-name').value.trim() }));
 }
 
+// --- Settings (proposed writes through immutable proposals, #1295) ----------
+
+async function loadSettings() {
+  const res = await api('/ui/api/machine/settings');
+  $('settings-path').textContent = `${res.exists ? 'Config' : 'No config yet'}: ${res.path}`;
+  $('settings-error').textContent = res.error ? `config invalid: ${res.error}` : '';
+  const cfg = res.config;
+  state.settingsConfig = cfg;
+  const editable = $('settings-editable');
+  editable.textContent = '';
+  const pref = el('select', { id: 'set-daemonPreference' });
+  for (const v of ['off', 'prefer', 'required']) {
+    const opt = el('option', { text: v, attributes: { value: v } });
+    if ((cfg.settings.daemonPreference?.value ?? 'off') === v) opt.selected = true;
+    pref.append(opt);
+  }
+  const adapter = el('select', { id: 'set-skillSearchAdapter' });
+  for (const v of ['local-text']) {
+    const opt = el('option', { text: v, attributes: { value: v } });
+    if ((cfg.settings.skillSearchAdapter?.value ?? 'local-text') === v) opt.selected = true;
+    adapter.append(opt);
+  }
+  editable.append(el('label', { text: 'daemonPreference ' }), pref, el('br'),
+    el('label', { text: 'skillSearchAdapter ' }), adapter);
+  for (const [gate, row] of Object.entries(cfg.features)) {
+    const box = el('input', { id: `set-features.${gate}`, type: 'checkbox' });
+    box.checked = !!row.value;
+    editable.append(el('br'), el('label', { text: `features.${gate} ` }), box);
+  }
+  const rows = [
+    ['prefix', cfg.prefix], ['apps', JSON.stringify(cfg.apps)], ['owner', cfg.owner],
+    ['scope', JSON.stringify(cfg.scope)],
+    ...Object.entries(cfg.settings).map(([k, r]) => [`settings.${k}`, `${JSON.stringify(r.value)}${r.editable ? ' (editable)' : ''}`]),
+  ];
+  const table = $('settings-table'); table.textContent = '';
+  const tb = el('tbody');
+  for (const [k, v] of rows) {
+    const tr = el('tr');
+    tr.append(el('td', { text: String(k) }), el('td', { text: String(v ?? '-') }));
+    tb.append(tr);
+  }
+  table.append(tb);
+}
+
+function wireSettingsForm() {
+  $('settings-propose').addEventListener('click', async () => {
+    const changes = {};
+    const cur = state.settingsConfig ?? { settings: {}, features: {} };
+    // Selecting the default when a value is set proposes an unset (null).
+    const pref = $('set-daemonPreference').value;
+    const curPref = cur.settings?.daemonPreference?.value ?? 'off';
+    if (pref !== curPref) changes['settings.daemonPreference'] = pref === 'off' ? null : pref;
+    const adapter = $('set-skillSearchAdapter').value;
+    const curAdapter = cur.settings?.skillSearchAdapter?.value ?? 'local-text';
+    if (adapter !== curAdapter) changes['settings.skillSearchAdapter'] = adapter === 'local-text' ? null : adapter;
+    for (const input of document.querySelectorAll('#settings-editable input[type=checkbox]')) {
+      const gate = input.id.slice('set-'.length);
+      const curGate = cur.features?.[gate.slice('features.'.length)]?.value ?? false;
+      if (input.checked !== !!curGate) changes[gate] = input.checked;
+    }
+    if (Object.keys(changes).length === 0) { $('settings-status').textContent = 'nothing changed'; return; }
+    try {
+      const res = await api('/ui/api/machine/settings/proposals', { method: 'POST', body: { changes } });
+      $('settings-status').textContent = `proposal ${res.proposal.proposalId} — approve it in the Approvals tab`;
+      showView('approvals');
+    } catch (error) { $('settings-status').textContent = error.message; }
+  });
+}
+
 // --- Jobs ---------------------------------------------------------------------
 
 async function loadJobs() {
@@ -462,6 +531,7 @@ async function refresh() {
   if (state.view === 'agent-machine') await loadAgentMachine();
   if (state.view === 'conversation') await loadConversation();
   if (state.view === 'souls') await loadSouls();
+  if (state.view === 'settings') await loadSettings();
   if (state.view === 'jobs') await loadJobs();
   await loadApprovals();
 }
@@ -483,6 +553,7 @@ async function boot() {
     navButton.addEventListener('click', () => showView(navButton.dataset.view));
   }
   wireAgentMachineForms();
+  wireSettingsForm();
 
   // A one-time pairing code arrives in the URL fragment (never sent to any
   // server in a request line) and is scrubbed from the address bar and

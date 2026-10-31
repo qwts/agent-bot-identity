@@ -108,6 +108,12 @@ export function parseConfig(raw, path = 'agent-bot config') {
   return config;
 }
 
+// Validate a candidate config object (as the settings proposal writer does)
+// through the same path a file load takes.
+export function validateConfig(candidate) {
+  return parseConfig(JSON.stringify(candidate), 'agent-bot config');
+}
+
 function settingsSection(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('agent-bot config must be an object');

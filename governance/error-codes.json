@@ -793,6 +793,14 @@
       "kind": "failure",
       "summary": "agent-bot-keyd could not ask, and the loosening has no administrator-dialog fallback.",
       "registered": "0.15.5"
+    },
+    {
+      "n": 100,
+      "code": "settings-drifted",
+      "component": "web",
+      "kind": "refusal",
+      "registered": "0.15.5",
+      "summary": "The config file changed between settings proposal and approval; the write was refused."
     }
   ]
 }
