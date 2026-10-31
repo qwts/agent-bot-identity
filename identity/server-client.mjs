@@ -239,7 +239,29 @@ export function loadDeviceKey(opts = {}, { create = false } = {}) {
 
 export function loadDevice(opts = {}) {
   const { device } = statePaths(opts);
-  return existsSync(device) ? JSON.parse(readFileSync(device, 'utf8')) : null;
+  if (!existsSync(device)) return null;
+  const parsed = JSON.parse(readFileSync(device, 'utf8'));
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  try {
+    const actions = listActions(serverStateDir(opts));
+    const latest = {};
+    for (const action of actions) {
+      if (!action?.harness || typeof action.harness !== 'string') continue;
+      latest[action.harness] = {
+        operation_id: action.operation_id ?? null,
+        state: action.state ?? null,
+        reason: action.reason ?? null,
+        repo: action.repo ?? null,
+        issuance_id: action.issuance_id ?? null,
+        replayed: Boolean(action.replayed),
+        reconciled: Boolean(action.reconciled),
+        updated_at: action.updated_at ?? action.created_at ?? null,
+      };
+    }
+    return { ...parsed, last_mint_outcomes: latest };
+  } catch {
+    return parsed;
+  }
 }
 
 function saveDevice(opts, record) {

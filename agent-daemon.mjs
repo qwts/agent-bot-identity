@@ -2499,7 +2499,42 @@ function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-export async function startDaemon({ env = process.env, home = homedir(), moduleUrl = import.meta.url } = {}) {
+// When run on a managed macOS host under `admin` (the Homebrew/agent-machine
+// account), warn that agent-daemon and `web open` belong to the owner's `user`
+// session rather than the `admin` account.
+export function wrongAccountWarning({
+  env = process.env,
+  uid = typeof process.getuid === 'function' ? process.getuid() : null,
+  username = null,
+  stat = statSync,
+  command = 'daemon start',
+} = {}) {
+  let acct = username ?? env.USER ?? env.LOGNAME ?? null;
+  if (!acct) {
+    try { acct = userInfo().username; } catch { acct = null; }
+  }
+  let isAdminAccount = acct === 'admin';
+  if (!isAdminAccount && typeof uid === 'number' && uid !== 0) {
+    for (const prefix of ['/opt/homebrew', '/usr/local/Homebrew']) {
+      try {
+        const st = stat(prefix);
+        if (st.uid === uid && acct && acct !== 'user') { isAdminAccount = true; break; }
+      } catch { /* absent */ }
+    }
+  }
+  if (!isAdminAccount) return null;
+  return `warning: \`agent-bot ${command}\` is running as '${acct ?? 'admin'}' (the Homebrew and agent-machine account); the agent-bot daemon runs in the owner's user account`;
+}
+
+export async function startDaemon({
+  env = process.env,
+  home = homedir(),
+  moduleUrl = import.meta.url,
+  warn = (line) => process.stderr.write(`${line}\n`),
+  accountWarning = wrongAccountWarning,
+} = {}) {
+  const notice = accountWarning({ env, command: 'daemon start' });
+  if (notice) warn(notice);
   const existing = await daemonStatus({ env, home });
   if (existing.running) return { ...existing, alreadyRunning: true };
   // fileURLToPath, not URL.pathname: a checkout path with spaces stays

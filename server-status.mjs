@@ -30,6 +30,14 @@ export function serverStatusReport({ env = process.env, home = homedir(), cwd = 
       if (m) repo = `${m[1]}/${m[2]}`;
     } catch { repo = null; }
   }
+  const last_mint_outcomes = {};
+  const recorded = device?.last_mint_outcomes && typeof device.last_mint_outcomes === 'object' ? device.last_mint_outcomes : {};
+  for (const harness of device?.harnesses ?? []) {
+    if (typeof harness === 'string') last_mint_outcomes[harness] = recorded[harness] ?? null;
+  }
+  for (const [harness, outcome] of Object.entries(recorded)) {
+    if (!(harness in last_mint_outcomes)) last_mint_outcomes[harness] = outcome;
+  }
   return {
     server_mode: Boolean(base),
     base: base ?? null,
@@ -37,6 +45,7 @@ export function serverStatusReport({ env = process.env, home = homedir(), cwd = 
     device_id: device?.device_id ?? null,
     device_name: device?.device_name ?? null,
     approved_harnesses: device?.harnesses ?? [],
+    last_mint_outcomes,
     repo,
   };
 }

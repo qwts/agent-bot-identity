@@ -47,7 +47,7 @@ import {
   pairedPublicKey, pinDaemonPub, pinPath, unpairAgentDaemon, verifyResponse,
   writeAgentDaemonPeer,
 } from './machine-client.mjs';
-import { daemonStateFile, daemonStatus } from './agent-daemon.mjs';
+import { daemonStateFile, daemonStatus, wrongAccountWarning } from './agent-daemon.mjs';
 
 export const UI_CSRF_HEADER = 'x-agent-bot-ui';
 export const PAIRING_CODE_TTL_MS = 2 * 60_000;
@@ -1228,7 +1228,7 @@ function selectPrincipal({ env, home, requested }) {
   const active = records.filter((record) => record.status === 'active');
   if (active.length === 1) return active[0];
   if (active.length === 0) {
-    throw new Error('no active principals; enroll one with `agent-bot principal enroll --label <label>`');
+    throw new Error('no active principals; enroll one with `agent-bot principal enroll --label <label>` and authorize it with `agent-bot principal allow --principal <principal-id> --souls \'*\' --operations observe,message,approve,cancel`');
   }
   throw new Error('multiple active principals; pick one with --principal <principal-id>');
 }
@@ -1254,10 +1254,14 @@ export async function webOpen({
   home = homedir(),
   requestedPrincipal = null,
   fetchImpl = fetch,
+  warn = (line) => process.stderr.write(`${line}\n`),
+  accountWarning = wrongAccountWarning,
 } = {}) {
+  const notice = accountWarning({ env, command: 'web open' });
+  if (notice) warn(notice);
   const status = await daemonStatus({ env, home });
   if (!status.running) {
-    throw new Error('daemon is not running; start it with `agent-bot daemon start`');
+    throw new Error(`daemon is not running; start it with \`agent-bot daemon start\`${notice ? ` (${notice})` : ''}`);
   }
   const state = readDaemonState({ env, home });
   if (!state) throw new Error('daemon state file could not be read');
