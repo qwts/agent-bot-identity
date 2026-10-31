@@ -2007,3 +2007,77 @@ test('index.html: unique nav targets, every view-* section once and never nested
   }
   assert.equal(maxDepth, 1, 'a view-* section is nested inside another');
 });
+
+test('webOpen and wrongAccountWarning guide the operator on no active principals and wrong account', async () => {
+  const { root, env } = scratch();
+  const { wrongAccountWarning } = await import('../agent-daemon.mjs');
+  const { webOpen } = await import('../agent-web.mjs');
+
+  assert.match(wrongAccountWarning({ env: { USER: 'admin' }, uid: 501, stat: () => ({ uid: 501 }), command: 'web open' }),
+    /running as 'admin'.*user account/);
+  assert.equal(wrongAccountWarning({ env: { USER: 'user' }, uid: 502, stat: () => ({ uid: 501 }), command: 'web open' }), null);
+
+  await withServer(env, async ({ port, server }) => {
+    writeFileSync(env.AGENT_BOT_DAEMON_STATE_PATH, JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      port,
+      token: server.token,
+      startedAt: '2026-08-12T09:00:00.000Z',
+    }));
+    const warnings = [];
+    await assert.rejects(
+      webOpen({ env: { ...env, USER: 'admin' }, home: root, warn: (w) => warnings.push(w) }),
+      (error) => /no active principals/.test(error.message) && /agent-bot principal allow/.test(error.message),
+    );
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /running as 'admin'/);
+  }, { home: root });
+});
+
+test('serverStatusReport and GET /ui/api/machine/server include last_mint_outcomes per identity (#1295)', async () => {
+  const { root, env } = scratch();
+  const stateDir = path.join(root, 'server-state');
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, 'device.json'), JSON.stringify({
+    device_id: 'dev_1',
+    device_name: 'mac',
+    harnesses: ['qwts-cursor-agent', 'qwts-devin-agent'],
+  }));
+  const { writeAction, transition } = await import('../identity/action-ledger.mjs');
+  writeAction(stateDir, {
+    operation_id: 'op_1',
+    task_id: 't1',
+    kind: 'github_installation_token',
+    harness: 'qwts-cursor-agent',
+    repo: 'qwts/agent-bot-identity',
+    state: 'prepared',
+    created_at: '2026-10-31T10:00:00.000Z',
+  });
+  transition(stateDir, 'op_1', 'succeeded', { issuance_id: 'iss_1', replayed: false });
+  const srvEnv = { ...env, AGENT_BOT_SERVER: 'https://agents.true-line.ai', AGENT_BOT_SERVER_STATE: stateDir };
+  const { serverStatusReport } = await import('../server-status.mjs');
+  const status = serverStatusReport({ env: srvEnv, home: root });
+  assert.equal(status.last_mint_outcomes['qwts-cursor-agent']?.state, 'succeeded');
+  assert.equal(status.last_mint_outcomes['qwts-cursor-agent']?.repo, 'qwts/agent-bot-identity');
+  assert.equal(status.last_mint_outcomes['qwts-devin-agent'], null);
+
+  await withServer(srvEnv, async ({ ui, pairCookie }) => {
+    const full = seedPrincipal(srvEnv, { label: 'full', souls: ['*'], operations: ['observe'] });
+    const cookie = await pairCookie(full.principalId);
+    const res = await ui('/ui/api/machine/server', { cookie });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.last_mint_outcomes['qwts-cursor-agent']?.state, 'succeeded');
+    assert.equal(body.last_mint_outcomes['qwts-devin-agent'], null);
+    for (const [at, value] of walk(body)) {
+      assert.doesNotMatch(String(value), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY/, at);
+      assert.doesNotMatch(at, SECRET_SHAPE, at);
+    }
+  }, {
+    home: root,
+    webDeps: {
+      doctor: async () => ({ ready: true, machine: { checks: [] }, worktree: null }),
+    },
+  });
+});

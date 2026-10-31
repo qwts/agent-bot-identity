@@ -218,6 +218,27 @@ async function loadServer() {
     tr.append(el('th', { text: k }), el('td', { text: v }));
     rows.append(tr);
   }
+  const outcomes = $('server-mint-outcomes');
+  if (outcomes) {
+    outcomes.textContent = '';
+    const map = data.last_mint_outcomes ?? {};
+    const names = [...new Set([...(data.approved_harnesses ?? []), ...Object.keys(map)])];
+    for (const identity of names) {
+      const entry = map[identity] ?? null;
+      const tr = el('tr');
+      const detail = entry
+        ? [entry.reason, entry.issuance_id, entry.reconciled ? 'reconciled' : null, entry.replayed ? 'replayed' : null].filter(Boolean).join(' · ')
+        : '';
+      tr.append(
+        el('td', { class: 'mono', text: identity }),
+        statusCell(entry?.state ?? 'none'),
+        el('td', { class: 'mono', text: entry?.repo ?? '-' }),
+        el('td', { text: entry?.updated_at ?? '-' }),
+        el('td', { text: detail }),
+      );
+      outcomes.append(tr);
+    }
+  }
   const readiness = data.readiness ?? {};
   $('server-readiness-summary').textContent = readiness.error
     ? `readiness unavailable (${readiness.error})`

@@ -833,3 +833,25 @@ test('routine CLI consent asks through keyd presence only, with informative pros
     presence: async () => { throw Object.assign(new Error('the owner did not approve'), { code: 'owner-declined' }); },
   }), { code: 'owner-declined' });
 });
+
+test('presenceUnavailableError and describeUnpinnedKeyd name the underlying cause', async (t) => {
+  const { dir } = home(t);
+  const { describeUnpinnedKeyd } = await import('../owner-presence.mjs');
+  assert.match(describeUnpinnedKeyd({ env: { HOME: dir }, home: dir, record: null }), /agent-bot-keyd is not installed/);
+  assert.match(describeUnpinnedKeyd({ env: { HOME: dir }, home: dir, record: { bin: '/x/agent-bot-keyd' } }), /settings\.keydTeamId.*is not set/);
+  assert.match(describeUnpinnedKeyd({
+    env: { HOME: dir, AGENT_BOT_KEYD_TEAM_ID: TEAM },
+    home: dir,
+    record: { bin: '/x/agent-bot-keyd' },
+    verifyBinary: () => { throw new Error('unsigned'); },
+  }), /failed Developer ID verification for team ABCDE12345/);
+
+  await assert.rejects(
+    presenceOrConsent(`soul comms ${ID} off`, {
+      env: { HOME: dir },
+      presence: async () => { throw Object.assign(new Error('settings.keydTeamId (or AGENT_BOT_KEYD_TEAM_ID) is not set'), { code: 'presence-unavailable' }); },
+      summarize: (text) => text,
+    }),
+    (error) => error.code === 'presence-unavailable' && /settings\.keydTeamId/.test(error.message),
+  );
+});

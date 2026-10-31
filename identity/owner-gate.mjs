@@ -132,13 +132,14 @@ export function ownerActionSummary(action, { souls = null, listSouls = null } = 
 // prose is the runtime's, not the caller's: it names the action in the
 // gate's own summary words, says what approval would mean, and warns off
 // the administrator-password dialog this gate never raises.
-export function presenceUnavailableError(action, summary) {
+export function presenceUnavailableError(action, summary, cause = null) {
+  const detail = cause?.message ? ` (${cause.message})` : '';
   return Object.assign(new Error(
-    `${action} was not approved: agent-bot-keyd could not ask the owner here, so nobody approved "${summary}". `
+    `${action} was not approved: agent-bot-keyd could not ask the owner here${detail}, so nobody approved "${summary}". `
     + 'Install or fix agent-bot-keyd, or run the owner command from a signed-in GUI session on this Mac, then retry. '
     + 'agent-bot never asks for administrator credentials: approve only the agent-bot-keyd prompt (Touch ID or your login password, which agent-bot cannot see). '
     + 'If a dialog asks for an administrator password, cancel it — it did not come from agent-bot.',
-  ), { code: 'presence-unavailable' });
+  ), { code: 'presence-unavailable', ...(cause ? { cause } : {}) });
 }
 
 // keyd presence first (Touch ID or the login password, asked by keyd with
@@ -157,12 +158,14 @@ export async function presenceOrConsent(action, {
   onUnavailable = null,
 } = {}) {
   const summary = summarize(action, { env, listSouls });
+  let unavailableCause = null;
   try {
     return await presence(summary, { env });
   } catch (error) {
     if (error.code !== 'presence-unavailable') {
       throw Object.assign(new Error(`${action} was not approved: ${error.message}`), { code: error.code, cause: error });
     }
+    unavailableCause = error;
   }
   if (challenge) {
     const proof = await challenge(action, { summary, env });
@@ -172,7 +175,7 @@ export async function presenceOrConsent(action, {
   // name it through onUnavailable; it may only refuse, never approve —
   // approval requires keyd presence or a verified challenge reply.
   if (onUnavailable) return onUnavailable(action, { summary, env });
-  throw presenceUnavailableError(action, summary);
+  throw presenceUnavailableError(action, summary, unavailableCause);
 }
 
 // Deciding a soul's waiting tool request (#438) lets that soul act, so the

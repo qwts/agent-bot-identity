@@ -345,6 +345,38 @@ export async function requireOwnerPresence(action, {
   }
 }
 
+// Why pinnedPresenceKey returned null when no presence key could be pinned.
+export function describeUnpinnedKeyd({
+  env = process.env,
+  home = env.HOME || homedir(),
+  record = readKeydRecord({ env, home }),
+  verifyBinary = codesignVerify,
+  run = runPresenceKey,
+  signer = keydSigner,
+} = {}) {
+  if (!record?.bin) return 'agent-bot-keyd is not installed (`agent-bot keyd install --bin <path>`)';
+  let wanted;
+  try { wanted = signer({ env, home }); } catch (error) {
+    return `invalid keyd signer setting (${error.message})`;
+  }
+  if (!wanted.teamId) {
+    return 'settings.keydTeamId (or AGENT_BOT_KEYD_TEAM_ID) is not set';
+  }
+  try {
+    verifyBinary(record.bin, developerIdRequirement(wanted));
+  } catch {
+    return `${record.bin} failed Developer ID verification for team ${wanted.teamId} (${wanted.identifier})`;
+  }
+  try {
+    const out = String(run(record.bin)).trim();
+    if (!rawKey(out)) return 'agent-bot-keyd presence-key returned an invalid public key';
+  } catch (error) {
+    const detail = String(error?.stderr ?? error?.message ?? '').trim().split('\n').at(-1);
+    return `agent-bot-keyd presence-key failed${detail ? `: ${detail}` : ''}`;
+  }
+  return 'agent-bot-keyd is not set up for owner approval here';
+}
+
 // Asks the owner through keyd to approve `action`, one line naming the soul
 // and the change. Returns the authorization to record.
 export async function keydPresence(action, {
@@ -356,7 +388,7 @@ export async function keydPresence(action, {
   nonce = () => randomBytes(18).toString('base64url'),
 } = {}) {
   const key = pinned({ env, home });
-  if (!key) throw unavailable('agent-bot-keyd is not set up for owner approval here');
+  if (!key) throw unavailable(describeUnpinnedKeyd({ env, home }));
   const sent = nonce();
   let result;
   try {
