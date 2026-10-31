@@ -233,6 +233,48 @@ async function loadServer() {
   }
 }
 
+// --- Agent machine (read-only machine view, #1295) -------------------------
+
+async function loadAgentMachine() {
+  const data = await api('/ui/api/machine/agent-machine');
+  const pairing = data.pairing ?? {};
+  const rows = $('am-pairing');
+  rows.textContent = '';
+  for (const [k, v] of [
+    ['Client key', pairing.client_key ? 'present' : 'absent'],
+    ['Pinned daemon.pub', pairing.pin_fingerprint ?? '-'],
+    ['agent-daemon peer', (pairing.agent_daemon_peer ?? []).join(', ') || 'none'],
+    ['Terminal paired', pairing.terminal_paired ? 'yes' : 'no'],
+  ]) {
+    const tr = el('tr'); tr.append(el('th', { text: k }), el('td', { text: v })); rows.append(tr);
+  }
+  $('am-pair-command').hidden = !(pairing.pin_fingerprint === null);
+  $('am-pair-command').textContent = pairing.pin_fingerprint === null ? `pair first: ${pairing.pair_command}` : '';
+  for (const [id, section] of [['status', data.status], ['receipts', data.receipts]]) {
+    const errEl = $(`am-${id}-error`);
+    errEl.hidden = !section.error;
+    errEl.textContent = section.error ? `${section.message ?? ''} [${section.error}]` : '';
+  }
+  const status = $('am-status');
+  status.textContent = '';
+  if (!data.status.error) {
+    for (const [k, v] of [['ok', data.status.ok], ['state', data.status.state], ['diagnostic', data.status.diagnostic], ['message', data.status.message]]) {
+      const tr = el('tr'); tr.append(el('th', { text: k }), el('td', { text: String(v ?? '-') })); status.append(tr);
+    }
+  }
+  const receipts = $('am-receipts');
+  receipts.textContent = '';
+  if (!data.receipts.error) {
+    for (const row of data.receipts.records ?? []) {
+      const tr = el('tr');
+      for (const f of ['plan', 'command', 'outcome', 'soul', 'harness', 'session_id', 'at']) {
+        tr.append(el('td', { text: String(row[f] ?? '-') }));
+      }
+      receipts.append(tr);
+    }
+  }
+}
+
 // --- Jobs ---------------------------------------------------------------------
 
 async function loadJobs() {
@@ -336,6 +378,7 @@ async function refresh() {
   if (!state.me) return;
   if (state.view === 'population') await loadPopulation();
   if (state.view === 'server') await loadServer();
+  if (state.view === 'agent-machine') await loadAgentMachine();
   if (state.view === 'conversation') await loadConversation();
   if (state.view === 'jobs') await loadJobs();
   await loadApprovals();

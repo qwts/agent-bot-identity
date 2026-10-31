@@ -2,14 +2,13 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign } from 'node:crypto';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { loadOrCreateVouchKey } from '../identity-host.mjs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import {
-  buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
+import { buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
   machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
-  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath,
-} from '../machine-client.mjs';
+  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, loadMachinePublicKey, machineStateDir } from '../machine-client.mjs';
 
 const roots = [];
 after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
@@ -82,6 +81,7 @@ test('bodySpan finds the raw body value inside a line', () => {
   assert.equal(bodySpan(tricky).toString(), '"s"');
   // An escaped quote inside an earlier key does not split it early.
   assert.equal(bodySpan('{"we\\"ird":"v","body":{"n":1},"ok":true}').toString(), '{"n":1}');
+
   // Scalar bodies scan the same way.
   assert.equal(bodySpan('{"ok":true,"body":7,"timestamp":1}').toString(), '7');
   assert.equal(bodySpan('{"body":{"k":[1]},"ok":true}').toString(), '{"k":[1]}');
@@ -198,4 +198,56 @@ test('pin mismatch refuses send; no pin refuses with machine-not-paired', () => 
   pinDaemonPub({ env, home: root });
   writeFileSync(path.join(dir, 'daemon.pub'), Buffer.alloc(32, 4));
   assert.throws(() => pairedPublicKey({ env, home: root }), /machine-pin-mismatch/);
+});
+
+test('loadMachineSigner is load-only, and on win32 loads an existing key through vouch', () => {
+  const root = scratch();
+  const env = { AGENT_BOT_SERVER_STATE: path.join(root, 'state') };
+  const custody = { currentSid: () => 'S-1', assertOwnedFile: () => {}, restrictPrivateFile: () => {} };
+  assert.equal(loadMachineSigner({ env, home: root, platform: 'win32', custody }), null);
+  const signer = loadOrCreateMachineKey({ env, home: root });
+  const loaded = loadMachineSigner({ env, home: root, platform: 'win32', custody });
+  assert.deepEqual(loaded.publicKeyRaw, signer.publicKeyRaw);
+  assert.ok(loaded.sign(Buffer.from('x')).length === 64, 'the win32 signer signs');
+});
+
+test('load-only key readers keep vouch custody: symlink, FIFO and foreign file refused', async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX custody checks');
+  const root = scratch();
+  const env = { AGENT_BOT_SERVER_STATE: path.join(root, 'state') };
+  const dir = machineStateDir({ env, home: root });
+  const file = path.join(dir, 'vouch-key.pem');
+  // Absent: null, and nothing was created.
+  assert.equal(loadMachinePublicKey({ env, home: root }), null);
+  assert.equal(loadMachineSigner({ env, home: root }), null);
+  assert.equal(existsSync(dir), false);
+  // A symlink at the key path is refused, not followed and signed with.
+  mkdirSync(dir, { recursive: true });
+  const real = path.join(dir, 'real.pem');
+  writeFileSync(real, loadOrCreateVouchKey(path.join(dir, 'src')).privateKey.export({ type: 'pkcs8', format: 'pem' }));
+  symlinkSync(real, file);
+  assert.throws(() => loadMachineSigner({ env, home: root }), /not a regular file owned by this account/);
+  assert.throws(() => loadMachinePublicKey({ env, home: root }), /not a regular file owned by this account/);
+  // A FIFO opens without blocking (O_NONBLOCK) and fails the file check.
+  rmSync(file);
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('mkfifo', [file]);
+  assert.throws(() => loadMachinePublicKey({ env, home: root }), /not a regular file owned by this account/);
+});
+
+test('a reply exceeding the 64 KiB cap is refused, never buffered', async () => {
+  const root = scratch();
+  const dir = path.join(root, 'am'); mkdirSync(dir, { recursive: true });
+  const sock = path.join(dir, 'daemon.sock');
+  const server = createServer((conn) => {
+    conn.on('data', () => { conn.write(Buffer.alloc(64 * 1024 + 1, 0x61)); });
+  });
+  await new Promise((resolve) => server.listen(sock, resolve));
+  server.unref();
+  try {
+    await assert.rejects(() => machineCall({ socketPath: sock, request: { verb: 'status' } }),
+      (error) => error.code === 'machine-reply-invalid');
+  } finally {
+    server.close();
+  }
 });
