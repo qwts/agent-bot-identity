@@ -1,1 +1,0 @@
-- `agent-bot mint-token` now withholds the raw token and prints only `{ schema_version: 1, credential_ref, task_id, operation_id, expires_at }` for unbound soul-marked and harness-detected callers in server mode (`credential_ref ?? issuance_id`), matching bound checkouts (#1293).
