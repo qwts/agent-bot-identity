@@ -37,7 +37,7 @@ export { hookBypassReason, readGitConfig, resolveAgentSlug, shadowedGhReason, st
 export { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
 export { createSecretProviderRegistry, getSecret } from './secret-store.mjs';
 export { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
-export { ServerSession, fetchSoulTokenIssuer, loadDevice, loadSoulTokenIssuer, newOperationId, saveSoulTokenIssuer, serverUrl } from './server-client.mjs';
+export { ServerSession, fetchCatalog, fetchSoulTokenIssuer, loadDevice, loadSoulTokenIssuer, newOperationId, saveSoulTokenIssuer, serverUrl } from './server-client.mjs';
 export { validateApprovalScope } from './session-approvals.mjs';
 export { loadOrCreateVouchKey, loadVouchKey, signSoulToken, vouchKeyPath, vouchPublicKeyPem, vouchStateDir } from './vouch.mjs';
 export { brokeredProviderEnv, dropProviderKey, ensureProviderKey, fetchProviderKey, heldProviderEnv, inferenceProxyOrigin, launchProviderEnv, pilotProviderCheck, providerKeyStale, providerKeyStatus, startInferenceProxy, stopInferenceProxy } from './provider-key.mjs';

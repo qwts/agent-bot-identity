@@ -22,6 +22,7 @@
     <button data-view="agent-machine" type="button">Agent machine</button>
     <button data-view="souls" type="button">Souls</button>
     <button data-view="settings" type="button">Settings</button>
+    <button data-view="catalog" type="button">Catalog</button>
   </nav>
   <div id="whoami"></div>
 </header>
@@ -135,6 +136,16 @@
     <button id="settings-propose" type="button">Propose changes</button>
     <p id="settings-status" class="hint"></p>
     <table id="settings-table"></table>
+  </section>
+
+  <section id="view-catalog" hidden>
+    <h2>Catalog</h2>
+    <p class="hint">Signed agent-machine catalog. Drafts are published and signed in the admin console.</p>
+    <p id="catalog-meta" class="hint"></p>
+    <p id="catalog-status" class="hint"></p>
+    <button id="catalog-deliver" type="button">Deliver to agent-machine</button>
+    <table id="catalog-items"><thead><tr><th>Name</th><th>Provider</th><th>Version</th><th>Installed</th><th></th></tr></thead><tbody></tbody></table>
+    <p id="catalog-digest" class="hint"></p>
   </section>
 
   <section id="view-approvals" hidden>

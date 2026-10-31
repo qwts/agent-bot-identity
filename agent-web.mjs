@@ -31,7 +31,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { assertMachineAuthorized, getPrincipal, listPrincipals, listSessions, loadDevice, principalsFile, serverUrl } from './identity-host.mjs';
+import { assertMachineAuthorized, fetchCatalog, getPrincipal, listPrincipals, listSessions, loadDevice, principalsFile, serverUrl } from './identity-host.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { configPath, FEATURE_GATES, loadConfig, SKILL_SEARCH_ADAPTERS, validateConfig } from './config.mjs';
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
@@ -203,6 +203,11 @@ export function createWebLayer({
   confirmDecision = null,
   now = () => new Date(),
   reconcileInFlight = { current: null },
+  catalogFetch = { inFlight: null, result: null, at: 0 },
+  lastDelivery = { current: null },
+  fetchCatalogImpl = fetchCatalog,
+  digestUploadStatus = () => ({ at: null, outcome: null }),
+  notifyMachineWrite = () => {},
   // Server actions (#1295): CLI spawns, injected for tests.
   spawnServerCli = null,
   webRoot = webRootDirectory(),
@@ -495,7 +500,7 @@ const enrollChildren = new Set();
         return inFlight;
       };
       const [status, receipts] = await Promise.all([verb('status'), verb('receipts')]);
-      sendJson(res, 200, { pairing, status, receipts });
+      sendJson(res, 200, { pairing, status, receipts, last_digest_upload: digestUploadStatus() });
       return;
     }
     if (req.method === 'POST' && pathname === '/ui/api/machine/agent-machine/plan') {
@@ -538,7 +543,11 @@ const enrollChildren = new Set();
         transport: WEB_TRANSPORT,
         operation,
         summary: `agent-machine ${operation.verb}${operation.plan_id ? ` ${operation.plan_id}` : operation.name ? ` ${operation.name}` : ''}`,
-        execute: () => machineVerb(operation.verb, operation),
+        execute: async () => {
+          const result = await machineVerb(operation.verb, operation);
+          if (result?.ok === true) notifyMachineWrite();
+          return result;
+        },
       });
       sendJson(res, 200, { proposal });
       return;
@@ -806,6 +815,68 @@ const enrollChildren = new Set();
         },
       });
       sendJson(res, 200, { proposal });
+      return;
+    }
+    if (req.method === 'GET' && pathname === '/ui/api/machine/catalog') {
+      try { assertMachineAuthorized({ principal, operation: 'observe' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      catalogFetch.inFlight ??= (async () => {
+        try {
+          if (catalogFetch.result && now().getTime() - catalogFetch.at < 5 * 60 * 1000) {
+            return catalogFetch.result;
+          }
+          const fetched = await fetchCatalogImpl({ env, home });
+          const catalog = fetched.catalog ?? {};
+          const rawItems = Array.isArray(catalog) ? catalog : (catalog.items ?? []);
+          // Installed state joins from agent-machine status records when paired.
+          let installed = {};
+          try {
+            const st = await machineVerb('status');
+            for (const rec of st.records ?? []) if (rec?.name) installed[rec.name] = rec.state ?? rec.version ?? 'installed';
+          } catch { installed = null; }
+          const items = rawItems.map((it) => ({
+            name: it?.name ?? null,
+            provider: it?.provider ?? it?.formula ?? it?.package ?? it?.cask ?? null,
+            version: it?.version ?? it?.sha256 ?? null,
+            installed: installed === null ? 'unknown' : (installed[it?.name] ?? null),
+          }));
+          const result = {
+            key_id: fetched.catalog_key.key_id,
+            version: fetched.envelope?.version ?? null,
+            issued_at: fetched.envelope?.issued_at ?? null,
+            floor_min_version: fetched.floor.min_version,
+            items, delivered: lastDelivery.current,
+            drafts_note: 'Drafts are published and signed in the admin console.',
+          };
+          catalogFetch.result = result; catalogFetch.at = now().getTime();
+          return result;
+        } catch (error) {
+          return { error: error?.code ?? 'error', message: error?.message ?? String(error) };
+        } finally {
+          setTimeout(() => { catalogFetch.inFlight = null; }, 0);
+        }
+      })();
+      const result = await catalogFetch.inFlight;
+      sendJson(res, 200, { ...result, delivered: result?.error ? result.delivered : lastDelivery.current });
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/ui/api/machine/catalog/deliver') {
+      try { assertMachineAuthorized({ principal, operation: 'approve' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      for (const key of Object.keys(body)) throw failure(400, 'unknown field');
+      try {
+        // Fresh fetch + verify: agent-machine pins the key on first delivery
+        // and enforces the floor itself, so no proposal gates this relay.
+        const fetched = await fetchCatalogImpl({ env, home });
+        const res2 = await machineVerb('catalog', {
+          catalog_key: fetched.catalog_key, floor: fetched.floor, envelope: fetched.envelope,
+        });
+        lastDelivery.current = { at: now().toISOString(), outcome: res2.ok ? res2.state : res2.diagnostic };
+        sendJson(res, 200, res2);
+      } catch (error) {
+        lastDelivery.current = { at: now().toISOString(), outcome: error?.code ?? 'error' };
+        throw failure(/^machine-[a-z-]+$|^catalog-[a-z-]+$/.test(error?.code ?? '') ? 409 : 502, error?.message ?? 'deliver failed');
+      }
       return;
     }
     if (req.method === 'GET' && pathname === '/ui/api/population') {

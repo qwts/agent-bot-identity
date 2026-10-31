@@ -443,6 +443,52 @@ export async function enroll({
   return loadDevice(opts);
 }
 
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex'); // same prefix as keyd-client (JWK export is unstable, #1111)
+
+function catalogError(code, message) { return serverError(code, `catalog fetch: ${message}`); }
+
+// GET /api/daemon/catalog + local envelope verification (true-line/agent-bot
+// catalog delivery; the agent-machine relay enforces the same checks).
+export async function fetchCatalog({ base, env = process.env, home, fetchImpl = fetch, session = null } = {}) {
+  const s = session ?? new ServerSession({ base: base ?? serverUrl({ env }), env, home, fetchImpl });
+  const out = await s.call('GET', '/api/daemon/catalog');
+  const key = out?.catalog_key;
+  const keyIdMatch = typeof key?.public_key === 'string' && /^ed25519:([A-Za-z0-9+/=]{44})$/.exec(key.public_key);
+  if (!keyIdMatch || typeof key?.key_id !== 'string') throw catalogError('catalog-malformed', 'catalog_key missing or malformed');
+  const rawKey = Buffer.from(keyIdMatch[1], 'base64');
+  if (rawKey.length !== 32) throw catalogError('catalog-malformed', 'catalog_key public_key is not 32 bytes');
+  if (crypto.createHash('sha256').update(rawKey).digest('hex').slice(0, 16) !== key.key_id) {
+    throw catalogError('catalog-key-mismatch', 'catalog_key key_id is not sha256(public key)[:16]');
+  }
+  const floor = out.floor;
+  if (floor === null) throw catalogError('catalog-malformed', 'floor is null');
+  if (!floor || floor.key_id !== key.key_id || !Number.isInteger(floor.min_version)) {
+    throw catalogError('catalog-key-mismatch', 'floor is missing or names a different key');
+  }
+  const envelope = out.envelope ?? null;
+  let catalogBytes = null; let catalog = null;
+  if (envelope !== null) {
+    if (envelope.format !== 'agent-bot-catalog/1' || envelope.key_id !== key.key_id) {
+      throw catalogError('catalog-key-mismatch', 'envelope is missing or names a different key/format');
+    }
+    if (typeof envelope.catalog !== 'string' || typeof envelope.sig !== 'string'
+        || !Number.isInteger(envelope.version) || !Number.isInteger(envelope.issued_at)) {
+      throw catalogError('catalog-malformed', 'envelope payload is malformed');
+    }
+    try { catalogBytes = Buffer.from(envelope.catalog, 'base64'); } catch { throw catalogError('catalog-malformed', 'envelope catalog is not base64'); }
+    if (catalogBytes.length > 256 * 1024) throw catalogError('catalog-malformed', 'catalog exceeds 256 KiB');
+    if (envelope.version < floor.min_version) throw catalogError('catalog-below-floor', 'envelope version is below the published floor');
+    const signed = `agent-bot-catalog/1\n${envelope.key_id}\n${envelope.version}\n${envelope.issued_at}\n${crypto.createHash('sha256').update(catalogBytes).digest('hex')}\n`;
+    const pub = crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, rawKey]), format: 'der', type: 'spki' });
+    let sig; try { sig = Buffer.from(envelope.sig, 'base64'); } catch { sig = null; }
+    if (!sig || !crypto.verify(null, Buffer.from(signed), pub, sig)) {
+      throw catalogError('catalog-signature-invalid', 'envelope signature does not verify');
+    }
+    try { catalog = JSON.parse(catalogBytes.toString('utf8')); } catch { throw catalogError('catalog-malformed', 'catalog bytes are not JSON'); }
+  }
+  return { catalog_key: key, floor, envelope, catalog, catalogBytes };
+}
+
 export function logout(opts = {}) {
   const { dir } = statePaths(opts);
   rmSync(dir, { recursive: true, force: true });
@@ -535,7 +581,7 @@ export class ServerSession {
         res = await this.send(url, {
           method,
           headers: { authorization: `DPoP ${tok.value}`, dpop, accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}) },
-          body: payload ? JSON.stringify(payload) : undefined,
+          body: payload === undefined || payload === null ? undefined : (typeof payload === 'string' ? payload : JSON.stringify(payload)),
         });
       } catch (error) { throw Object.assign(error, { ambiguous: ambiguous && !error.neverSent }); }
       let buf;
@@ -564,6 +610,7 @@ export class ServerSession {
           agent_bound_elsewhere: 'soul-bound-elsewhere',
           rate_limited: 'event-rate-limited',
           recipient_stale: 'event-recipient-stale',
+          catalog_key_unavailable: 'catalog-key-unavailable',
         }[json.error];
         const e = known
           ? serverError(known, `the identity service answered ${route}: ${json.error}${json.error_description ? ` (${json.error_description})` : ''}`, { body: json })

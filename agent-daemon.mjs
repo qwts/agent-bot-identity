@@ -433,6 +433,7 @@ export function createDaemonServer({
   // Soul token v2 (#1196): in server mode the identity service signs soul
   // tokens; tests inject a fake. The default posts through ServerSession.
   soulTokenImpl = null,
+  digestSession = null,
   // Web-layer dependency overrides for tests (#1295).
   webDeps = {},
 } = {}) {
@@ -574,7 +575,48 @@ export function createDaemonServer({
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
-  const web = createWebLayer({ env, home, config, interaction, daemonToken: token, confirmDecision, now, soulBindings: (soulId) => bindings.list(soulId), ...(webDeps ?? {}) });
+  // Status-digest upload (#1295): every 15 min and after each successful
+  // apply/update, relay ~/.config/agent-machine/status-digest.json byte-exact
+  // to the server; refusals are logged once per digest, never retried.
+  const digestStatus = { at: null, outcome: null };
+  async function uploadMachineDigest() {
+    try {
+      const file = path.join(home ?? homedir(), '.config', 'agent-machine', 'status-digest.json');
+      let raw;
+      try { raw = readFileSync(file, 'utf8'); } catch { return; }
+      if (Buffer.byteLength(raw) > 64 * 1024) return;
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { return; }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      let base; try { base = serverUrl({ env }); } catch { return; }
+      if (!base || !loadDevice({ env, home })) return;
+      const sha = createHash('sha256').update(raw).digest('hex');
+      // The digest only changes on a write; once the server accepted (or
+      // 409'd) a given sha256, re-uploading it is wasted work.
+      if (sha === uploadMachineDigest.lastHandled) return;
+      const session = digestSession ?? new ServerSession({ base, env, home });
+      try {
+        const out = await session.call('POST', '/api/daemon/relay/status', `{"digest":${raw}}`);
+        digestStatus.at = now().toISOString();
+        digestStatus.outcome = out?.accepted === true && out?.verified === true ? 'verified' : 'unexpected';
+        if (out?.accepted === true) uploadMachineDigest.lastHandled = sha;
+      } catch (error) {
+        if (error?.statusCode === 409) uploadMachineDigest.lastHandled = sha;
+        const once = `${error?.statusCode ?? ''}:${error?.code ?? error?.message ?? 'error'}:${createHash('sha256').update(raw).digest('hex').slice(0, 12)}`;
+        if (once !== uploadMachineDigest.lastLogged) {
+          uploadMachineDigest.lastLogged = once;
+          log(`agent-machine status digest upload refused: ${error?.message ?? error}`);
+        }
+        digestStatus.at = now().toISOString();
+        digestStatus.outcome = error?.code ?? 'error';
+      }
+    } catch { /* a digest upload never blocks the daemon */ }
+  }
+  const digestTimer = setInterval(() => { void uploadMachineDigest(); }, 15 * 60 * 1000);
+  digestTimer.unref?.();
+  const web = createWebLayer({ env, home, config, interaction, daemonToken: token, confirmDecision, now,
+    soulBindings: (soulId) => bindings.list(soulId),
+    notifyMachineWrite: () => { void uploadMachineDigest(); }, digestUploadStatus: () => ({ ...digestStatus }), ...(webDeps ?? {}) });
   // A grant route's caller is a live binding; anyone else is receipted.
   const grantBinding = (req, operation) => {
     try { return requireBinding(req, bindings); } catch (error) {
@@ -748,6 +790,7 @@ export function createDaemonServer({
         );
         const pinned = pairedPublicKey({ env, home });
         const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
+        if ((body.verb === 'apply' || body.verb === 'update') && line.ok === true) void uploadMachineDigest();
         sendJson(res, 200, verifyResponse(line, pinned, { expectedNonce: request.nonce }));
         return;
       }
@@ -1066,7 +1109,7 @@ export function createDaemonServer({
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
     }
   });
-  server.once('close', () => { appJobs.close(); web.close?.(); });
+  server.once('close', () => { clearInterval(digestTimer); appJobs.close(); web.close?.(); });
   server.on('listening', () => {
     const address = server.address();
     bindings.rewrite(`http://${address.address === '::1' ? '[::1]' : '127.0.0.1'}:${address.port}`);

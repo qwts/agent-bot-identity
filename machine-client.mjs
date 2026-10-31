@@ -20,7 +20,7 @@ import { loadOrCreateVouchKey, loadVouchKey, vouchKeyPath, vouchStateDir } from 
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 const REQUEST_FIELDS = ['verb', 'name', 'option', 'target', 'plan_id', 'soul', 'harness', 'session_id'];
-const VERBS = new Set(['status', 'receipts', 'plan', 'apply', 'update']);
+const VERBS = new Set(['status', 'receipts', 'plan', 'apply', 'update', 'catalog']);
 const SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 30000;
 const SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,127}$/;
@@ -77,11 +77,32 @@ export function loadMachinePublicKey({ env = process.env, home = homedir(), plat
 }
 
 export function requestCanonical(r) {
-  return Buffer.from(REQUEST_FIELDS.map((f) => r[f] ?? '').join('\n') + '\n' + String(r.timestamp) + '\n' + r.nonce);
+  const base = REQUEST_FIELDS.map((f) => r[f] ?? '').join('\n') + '\n' + String(r.timestamp) + '\n' + r.nonce;
+  // The catalog verb's eleventh part (catalogCanonical, protocol.go): only
+  // when any catalog field is present, joined key\nfloor\nenvelope.
+  if (r.catalog_key || r.floor || r.envelope) {
+    const key = r.catalog_key ? `${r.catalog_key.public_key}\n${r.catalog_key.key_id}` : '';
+    const floor = r.floor ? `${r.floor.key_id}\n${r.floor.min_version}` : '';
+    const env = r.envelope ? [r.envelope.format, r.envelope.key_id, String(r.envelope.version), String(r.envelope.issued_at), r.envelope.catalog, r.envelope.sig].join('\n') : '';
+    return Buffer.from(`${base}\n${[key, floor, env].join('\n')}`);
+  }
+  return Buffer.from(base);
 }
 
-export function buildRequest({ verb, name, option, target, plan_id, soul, harness, session_id }, signer, { now = Math.floor(Date.now() / 1000), nonce = randomBytes(16).toString('base64url') } = {}) {
+// The catalog verb relays a signed agent-bot catalog: it carries only
+// catalog_key, floor and envelope — no soul/harness/session or op fields —
+// and its canonical signature gains one more line-joined part
+// (catalogCanonical in managed-machine internal/daemon/protocol.go).
+export function buildRequest({ verb, name, option, target, plan_id, soul, harness, session_id, catalog_key = null, floor = null, envelope = null }, signer, { now = Math.floor(Date.now() / 1000), nonce = randomBytes(16).toString('base64url') } = {}) {
   if (!VERBS.has(verb)) throw mcError('machine-verb-unknown', `verb is not one of ${[...VERBS].join(', ')}`);
+  const catalogFields = { catalog_key, floor, envelope };
+  const hasCatalog = catalog_key !== null || floor !== null || envelope !== null;
+  if (verb === 'catalog' && [name, option, target, plan_id, soul, harness, session_id].some((v) => v !== undefined)) {
+    throw mcError('machine-field-invalid', 'catalog carries only catalog_key, floor and envelope');
+  }
+  if (verb !== 'catalog' && hasCatalog) {
+    throw mcError('machine-field-invalid', 'catalog fields belong only to the catalog verb');
+  }
   for (const [field, value] of Object.entries({ name, option, target, plan_id })) {
     if (value !== undefined && (typeof value !== 'string' || !SHAPE.test(value))) {
       throw mcError('machine-field-invalid', `${field} fails the wire shape`);
@@ -91,6 +112,12 @@ export function buildRequest({ verb, name, option, target, plan_id, soul, harnes
   for (const f of REQUEST_FIELDS.slice(1)) {
     const v = { name, option, target, plan_id, soul, harness, session_id }[f];
     if (v) request[f] = v;
+  }
+  if (hasCatalog) {
+    // Never send raw nulls: a null catalog field is refused on any verb.
+    if (catalog_key !== null) request.catalog_key = catalog_key;
+    if (floor !== null) request.floor = floor;
+    if (envelope !== null) request.envelope = envelope;
   }
   request.timestamp = now;
   request.nonce = nonce;
