@@ -8,11 +8,11 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { readBinding } from '../agent-binding.mjs';
 import { appendAuditReceipt } from '../identity-format.mjs';
-import { mintForCaller } from '../git-credential-bot.mjs';
+import { isSoulBound, mintForCaller } from '../git-credential-bot.mjs';
 import { MINT_USAGE, parseMintArgs, selectionReason } from '../mint-token.mjs';
-import { explicitAppArg, ownerApprovalRequired } from '../owner-approval.mjs';
+import { ambientSlug, explicitAppArg, ownerApprovalRequired } from '../owner-approval.mjs';
 import { requireOwnerPresence } from '../owner-presence.mjs';
-import { formatMintGrant } from './mint-output.mjs';
+import { formatMemberReference, formatMintGrant } from './mint-output.mjs';
 
 async function main() {
   const options = parseMintArgs(process.argv.slice(2));
@@ -56,11 +56,15 @@ async function main() {
     reason: approvalRequired ? 'owner-approved' : (selection?.reason ?? selectionReason()),
     grant,
   });
-  // In a soul-bound checkout the caller is a member, and members get
-  // credential references only (#1184 goal): git and gh there authenticate
-  // per operation through the credential helper and the gh shim.
-  if (bound && grant.credential_ref) {
-    process.stdout.write(`${JSON.stringify({ schema_version: 1, credential_ref: grant.credential_ref, task_id: grant.task_id ?? null, operation_id: grant.operation_id ?? null, expires_at: grant.expires_at })}\n`);
+  // In a soul-bound checkout (or any non-owner-approved soul/harness call in
+  // server mode, #1293) the caller is a member, and members get credential
+  // references only (#1184 goal): git and gh there authenticate per operation
+  // through the credential helper and the gh shim.
+  const memberRef = formatMemberReference(grant, {
+    approvalRequired, bound, soulBound: isSoulBound(), ambient: Boolean(ambientSlug({ detect: true })),
+  });
+  if (memberRef) {
+    process.stdout.write(memberRef);
     console.error('mint-token: this checkout is soul-bound; members get a credential reference, not a token. git and gh here authenticate per operation.');
     return;
   }
