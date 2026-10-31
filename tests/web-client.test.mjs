@@ -1662,3 +1662,103 @@ test('enroll execution: the final non-prompt record supplies device_id', async (
     assert.deepEqual(outcome.result.harnesses, ['codex', 'claude']);
   }, { home: root, webDeps: { spawnServerCli: spawnFake } });
 });
+
+// --- catalog + status digest (#1295) -----------------------------------------
+
+test('catalog view verifies server envelope; deliver relays it; digest uploads', async () => {
+  const { root, env } = scratch();
+  env.AGENT_BOT_SERVER = 'https://identity.example.test';
+  // A real signed envelope fixture: ed25519 key, key_id = sha256(pub)[:16].
+  const { generateKeyPairSync, createHash: ch } = await import('node:crypto');
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const rawPub = publicKey.export({ type: 'spki', format: 'der' }).subarray(12);
+  const keyId = ch('sha256').update(rawPub).digest('hex').slice(0, 16);
+  const catBytes = Buffer.from(JSON.stringify({ items: [{ name: 'codex', provider: 'formula', version: '1.2.3' }] }));
+  const { sign } = await import('node:crypto');
+  const signed = `agent-bot-catalog/1\n${keyId}\n7\n1700000000\n${ch('sha256').update(catBytes).digest('hex')}\n`;
+  const sig = sign(null, Buffer.from(signed), privateKey).toString('base64');
+  const catalog_key = { public_key: `ed25519:${rawPub.toString('base64')}`, key_id: keyId };
+  const floor = { key_id: keyId, min_version: 5 };
+  const envelope = { format: 'agent-bot-catalog/1', key_id: keyId, version: 7, issued_at: 1700000000, catalog: catBytes.toString('base64'), sig };
+  const fetches = [];
+  const fetchImpl = async () => { fetches.push(1); return { catalog_key, floor, envelope, catalog: JSON.parse(catBytes.toString()), catalogBytes: catBytes }; };
+  const fm = await fakeAgentMachine(root, {
+    replies: { catalog: { ok: true, state: 'accepted' }, status: { ok: true, state: 'ready', body: [{ name: 'codex', state: 'installed' }] } },
+  });
+  pinDaemonPub({ env, home: root });
+  loadOrCreateMachineKey({ env, home: root });
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  const scoped = seedPrincipal(env, { label: 's', souls: [AGENT_ID], operations: ['observe', 'approve'] });
+  const uploads = [];
+  const digestSession = { call: async (m, route, body) => { uploads.push({ m, route, body }); return { accepted: true, verified: true }; } };
+  mkdirSync(path.join(root, '.config', 'agent-machine'), { recursive: true });
+  const digestRaw = JSON.stringify({ state: 'ready', applied: 3 });
+  writeFileSync(path.join(root, '.config', 'agent-machine', 'status-digest.json'), digestRaw);
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const s = await pairCookie(scoped.principalId);
+    assert.equal((await ui('/ui/api/machine/catalog', { cookie: s })).status, 403);
+    assert.equal((await ui('/ui/api/machine/catalog/deliver', { method: 'POST', body: {}, cookie: s })).status, 403);
+    const view = await (await ui('/ui/api/machine/catalog', { cookie: w })).json();
+    assert.equal(view.key_id, keyId);
+    assert.equal(view.version, 7);
+    assert.equal(view.floor_min_version, 5);
+    assert.equal(view.items[0].name, 'codex');
+    assert.equal(view.items[0].provider, 'formula');
+    assert.equal(view.items[0].version, '1.2.3');
+    assert.equal(view.items[0].installed, 'installed');
+    assert.ok(view.drafts_note.includes('admin console'));
+    // 5-min single-flight cache: second GET does not refetch.
+    await ui('/ui/api/machine/catalog', { cookie: w });
+    assert.equal(fetches.length, 1);
+    // Deliver: fake agent-machine receives the exact fetched objects.
+    const del = await (await ui('/ui/api/machine/catalog/deliver', { method: 'POST', body: {}, cookie: w })).json();
+    assert.equal(del.ok, true);
+    const sent = fm.received.at(-1);
+    assert.equal(sent.verb, 'catalog');
+    assert.deepEqual(sent.catalog_key, catalog_key);
+    assert.deepEqual(sent.floor, floor);
+    assert.deepEqual(sent.envelope, envelope);
+    assert.equal(sent.soul, undefined);
+    assert.equal(sent.harness, undefined);
+    const view2 = await (await ui('/ui/api/machine/catalog', { cookie: w })).json();
+    assert.equal(view2.delivered.outcome, 'accepted');
+    // Digest upload fired after the successful catalog/apply path? catalog
+    // isn't a write — deliver alone doesn't upload; an apply does (web path).
+    for (const [at, v] of walk(view)) {
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} is secret-shaped`);
+    }
+  }, { home: root, webDeps: { fetchCatalogImpl: fetchImpl }, digestSession });
+});
+
+// fetchCatalog verification matrix (identity-side)
+test('fetchCatalog: each local-verification failure gets its stable code', async () => {
+  const { fetchCatalog } = await import('../identity/server-client.mjs');
+  const { generateKeyPairSync, createHash: ch, sign } = await import('node:crypto');
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const rawPub = publicKey.export({ type: 'spki', format: 'der' }).subarray(12);
+  const keyId = ch('sha256').update(rawPub).digest('hex').slice(0, 16);
+  const catBytes = Buffer.from('{"items":[]}');
+  const mkEnv = (over = {}) => ({
+    format: 'agent-bot-catalog/1', key_id: keyId, version: 7, issued_at: 1700000000,
+    catalog: catBytes.toString('base64'),
+    sig: sign(null, Buffer.from(`agent-bot-catalog/1\n${keyId}\n${over.version ?? 7}\n1700000000\n${ch('sha256').update(Buffer.from((over.catalog ?? catBytes.toString('base64')), 'base64')).digest('hex')}\n`), privateKey).toString('base64'),
+    ...over,
+  });
+  const session = (body) => ({ call: async () => body });
+  const good = { catalog_key: { public_key: `ed25519:${rawPub.toString('base64')}`, key_id: keyId }, floor: { key_id: keyId, min_version: 5 }, envelope: mkEnv() };
+  const ok = await fetchCatalog({ session: session(good), home: '/x' });
+  assert.deepEqual(ok.catalog, { items: [] });
+  const cases = [
+    [{ catalog_key: { public_key: 'ed25519:AAAA', key_id: keyId }, floor: good.floor, envelope: null }, 'catalog-malformed'],
+    [{ ...good, catalog_key: { ...good.catalog_key, key_id: 'beef'.repeat(4) } }, 'catalog-key-mismatch'],
+    [{ ...good, floor: { key_id: 'other', min_version: 5 } }, 'catalog-key-mismatch'],
+    [{ ...good, envelope: { ...mkEnv(), format: 'x' } }, 'catalog-key-mismatch'],
+    [{ ...good, envelope: mkEnv({ version: 3 }) }, 'catalog-below-floor'],
+    [{ ...good, envelope: { ...mkEnv(), sig: Buffer.alloc(64).toString('base64') } }, 'catalog-signature-invalid'],
+    [{ ...good, envelope: mkEnv({ catalog: Buffer.from('{{{').toString('base64') }) }, 'catalog-malformed'],
+  ];
+  for (const [body, code] of cases) {
+    await assert.rejects(fetchCatalog({ session: session(body), home: '/x' }), (e) => e.code === code, code);
+  }
+});

@@ -809,6 +809,46 @@
       "kind": "refusal",
       "registered": "0.15.5",
       "summary": "An enrollment grant is already open or running; a second forced enrollment would replace its staged key."
+    },
+    {
+      "n": 102,
+      "code": "catalog-key-unavailable",
+      "component": "identity",
+      "kind": "failure",
+      "registered": "0.15.5",
+      "summary": "the identity service has no catalog signing key published (503)."
+    },
+    {
+      "n": 103,
+      "code": "catalog-signature-invalid",
+      "component": "identity",
+      "kind": "failure",
+      "registered": "0.15.5",
+      "summary": "the fetched catalog envelope signature does not verify."
+    },
+    {
+      "n": 104,
+      "code": "catalog-key-mismatch",
+      "component": "identity",
+      "kind": "failure",
+      "registered": "0.15.5",
+      "summary": "catalog key_id, floor or envelope names a different key or format."
+    },
+    {
+      "n": 105,
+      "code": "catalog-below-floor",
+      "component": "identity",
+      "kind": "failure",
+      "registered": "0.15.5",
+      "summary": "the fetched catalog envelope version is below the published floor."
+    },
+    {
+      "n": 106,
+      "code": "catalog-malformed",
+      "component": "identity",
+      "kind": "failure",
+      "registered": "0.15.5",
+      "summary": "the fetched catalog payload is malformed (key, bytes, or JSON)."
     }
   ]
 }

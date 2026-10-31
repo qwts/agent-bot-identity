@@ -251,3 +251,26 @@ test('a reply exceeding the 64 KiB cap is refused, never buffered', async () => 
     server.close();
   }
 });
+
+test('catalog verb: request matches the Go golden signature byte-for-byte', () => {
+  // Scratch Go (managed-machine catalogCanonical + ed25519, /tmp/catgolden):
+  // identical key seed, fields, timestamp and nonce must sign identically.
+  const seed = Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', 'hex');
+  const privateKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]), format: 'der', type: 'pkcs8' });
+  const signer = {
+    publicKeyRaw: Buffer.from('A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=', 'base64'),
+    sign: (bytes) => edSign(null, bytes, privateKey),
+  };
+  const catalog_key = { public_key: `ed25519:${Buffer.alloc(32).toString('base64')}`, key_id: 'aaaaaaaabbbbcccc' };
+  const floor = { key_id: 'aaaaaaaabbbbcccc', min_version: 7 };
+  const envelope = {
+    format: 'agent-bot-catalog/1', key_id: 'aaaaaaaabbbbcccc', version: 9, issued_at: 1700000000,
+    catalog: Buffer.from('{}').toString('base64'), sig: Buffer.alloc(64).toString('base64'),
+  };
+  const req = buildRequest({ verb: 'catalog', catalog_key, floor, envelope }, signer,
+    { now: 1700000001, nonce: 'AAAAAAAAAAAAAAAAAAAAAA' });
+  assert.equal(req.signature, Buffer.from('409e670116e9cc968357ebae6eb4fa99c28e7afb2bf1c703fcd408ff53d4213b2baec059ac066ac35d1e5c34f544e3d146fc9ce55ee6a016cac60c18e598630a', 'hex').toString('base64'));
+  // catalog fields are refused on other verbs; op fields on catalog.
+  assert.throws(() => buildRequest({ verb: 'status', catalog_key }, signer), /catalog fields belong only/);
+  assert.throws(() => buildRequest({ verb: 'catalog', catalog_key, soul: 'x' }, signer), /catalog carries only/);
+});

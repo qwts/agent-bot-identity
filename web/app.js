@@ -310,6 +310,42 @@ function wireAgentMachineForms() {
   $('am-update').addEventListener('click', () => propose('update', { name: $('am-plan-name').value.trim() }));
 }
 
+// --- Catalog (verified relay to agent-machine, #1295) -----------------------
+
+async function loadCatalog() {
+  const res = await api('/ui/api/machine/catalog');
+  if (res.error) { $('catalog-meta').textContent = `catalog: ${res.error} — ${res.message ?? ''}`; return; }
+  $('catalog-meta').textContent = `key ${res.key_id} · version ${res.version ?? '-'} · issued ${res.issued_at ?? '-'} · floor ${res.floor_min_version}`;
+  $('catalog-digest').textContent = res.delivered ? `last delivery: ${res.delivered.outcome} at ${res.delivered.at}` : '';
+  const tb = $('catalog-items').querySelector('tbody'); tb.textContent = '';
+  for (const it of res.items ?? []) {
+    const tr = el('tr');
+    tr.append(el('td', { text: String(it.name ?? '-') }), el('td', { text: String(it.provider ?? '-') }),
+      el('td', { text: String(it.version ?? '-') }), el('td', { text: String(it.installed ?? '-') }));
+    const btn = el('button', { text: 'Update', type: 'button' });
+    btn.addEventListener('click', async () => {
+      try {
+        const r = await api('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'update', name: it.name } });
+        $('catalog-status').textContent = `proposal ${r.proposal.proposalId} — approve in Approvals`;
+        showView('approvals');
+      } catch (e) { $('catalog-status').textContent = e.message; }
+    });
+    tr.append(el('td')).lastChild.append(btn);
+    tb.append(tr);
+  }
+}
+
+function wireCatalog() {
+  $('catalog-deliver').addEventListener('click', async () => {
+    $('catalog-status').textContent = 'delivering…';
+    try {
+      const res = await api('/ui/api/machine/catalog/deliver', { method: 'POST', body: {} });
+      $('catalog-status').textContent = res.ok ? `delivered: ${res.state}` : `refused: ${res.diagnostic ?? res.message}`;
+      await loadCatalog();
+    } catch (e) { $('catalog-status').textContent = e.message; }
+  });
+}
+
 // --- Settings (proposed writes through immutable proposals, #1295) ----------
 
 async function loadSettings() {
@@ -564,6 +600,7 @@ async function refresh() {
   if (!state.me) return;
   if (state.view === 'population') await loadPopulation();
   if (state.view === 'agent-machine') await loadAgentMachine();
+  if (state.view === 'catalog') await loadCatalog();
   if (state.view === 'conversation') await loadConversation();
   if (state.view === 'souls') await loadSouls();
   if (state.view === 'settings') await loadSettings();
@@ -591,6 +628,7 @@ async function boot() {
   wireAgentMachineForms();
   wireSettingsForm();
   wireServerActions();
+  wireCatalog();
 
   // A one-time pairing code arrives in the URL fragment (never sent to any
   // server in a request line) and is scrubbed from the address bar and
