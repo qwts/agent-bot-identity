@@ -86,11 +86,11 @@ function seedPrincipal(env, {
 // executor and an adjustable clock, plus browser-shaped fetch helpers.
 // The owner gate is always a stub here: nothing in this file may reach keyd,
 // Touch ID, or the admin dialog.
-async function withServer(env, run, { executor, ownerGate = async () => ({ method: 'presence', via: 'test' }), webDeps } = {}) {
+async function withServer(env, run, { executor, ownerGate = async () => ({ method: 'presence', via: 'test' }), webDeps, home = '/nonexistent' } = {}) {
   const clock = { value: new Date('2026-08-12T09:00:00.000Z') };
   const server = createDaemonServer({
     env,
-    home: '/nonexistent',
+    home,
     config: {},
     executor,
     ownerGate,
@@ -1048,4 +1048,98 @@ test('machine/server honours a narrowed principal immediately — the principal 
     serverStatus: () => ({ server_mode: false, base: null, enrolled: false, device_id: null, device_name: null, approved_harnesses: [], repo: null }),
     doctor: async () => ({ ready: true, machine: { checks: [] }, worktree: null }),
   } });
+});
+
+
+// --- agent-machine view (#1295) ---------------------------------------------
+import { createServer } from 'node:net';
+import { generateKeyPairSync, sign as amSign } from 'node:crypto';
+import { chmodSync } from 'node:fs';
+import { AGENT_MACHINE_DIR, loadOrCreateMachineKey, machineSocketPath, pinDaemonPub } from '../machine-client.mjs';
+
+async function fakeAgentMachine(home, { keypair = generateKeyPairSync('ed25519'), signKey = null, replies = {} } = {}) {
+  const dir = AGENT_MACHINE_DIR(home);
+  mkdirSync(path.join(dir, 'peers'), { recursive: true });
+  const sock = machineSocketPath({ home });
+  const daemonPub = Buffer.from(keypair.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  writeFileSync(path.join(dir, 'daemon.pub'), daemonPub);
+  const received = [];
+  const server = createServer((conn) => {
+    let buf = '';
+    conn.on('data', (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      const req = JSON.parse(buf.slice(0, nl));
+      received.push(req);
+      const res = replies[req.verb] ?? { ok: true, state: 'ready' };
+      res.timestamp = Math.floor(Date.now() / 1000);
+      res.nonce = 'REPLYNONCE0000000001';
+      res.request_nonce = req.nonce;
+      const body = res.body !== undefined ? JSON.stringify(res.body) : '';
+      const payload = [String(res.ok), res.diagnostic ?? '', res.message ?? '', res.state ?? '', body, String(res.timestamp), res.nonce, res.request_nonce ?? ''].join('\n');
+      res.signature = amSign(null, Buffer.from(payload), signKey ?? keypair.privateKey).toString('base64');
+      conn.end(`${JSON.stringify(res)}\n`);
+    });
+  });
+  await new Promise((resolve) => server.listen(sock, resolve));
+  server.unref();
+  return { received, server, daemonPub, keypair };
+}
+
+test('agent-machine view: unpaired shows client_key false and machine-not-paired; tamper stays 200', async () => {
+  const { root, env } = scratch();
+  const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const denied = await ui('/ui/api/machine/agent-machine');
+    assert.equal(denied.status, 401);
+    const cookie = await pairCookie(full.principalId);
+    const res = await ui('/ui/api/machine/agent-machine', { cookie });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.pairing.client_key, false);
+    assert.equal(body.pairing.pin_fingerprint, null);
+    assert.equal(body.pairing.pair_command, 'agent-bot machine pair');
+    assert.equal(body.status.error, 'machine-not-paired');
+    for (const [at, v] of walk(body)) {
+      assert.doesNotMatch(String(v), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY/, `${at} leaks material`);
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} is secret-shaped`);
+    }
+  }, { home: root });
+});
+
+test('agent-machine view: paired shows status records and receipts; tamper is a section error, not a route failure', async () => {
+  const { root, env } = scratch();
+  const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+  const fm = await fakeAgentMachine(root, {
+    replies: {
+      status: { ok: true, state: 'ready', body: [{ id: 'daemon-ready', ok: true }] },
+      receipts: { ok: true, body: [{ plan: 'p-1', command: 'update codex', state: 'applied', account: 'owner', soul: 'agent_x', harness: 'codex', session_id: 'ses_1', outcome: 'ok', at: '2026-08-12T09:00:00Z' }] },
+    },
+  });
+  pinDaemonPub({ env, home: root });
+  loadOrCreateMachineKey({ env, home: root });
+  // terminal.pub with mode 000: existence-only check must still work.
+  writeFileSync(path.join(AGENT_MACHINE_DIR(root), 'peers', 'terminal.pub'), Buffer.alloc(32, 1));
+  chmodSync(path.join(AGENT_MACHINE_DIR(root), 'peers', 'terminal.pub'), 0o000);
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const cookie = await pairCookie(full.principalId);
+    const res = await ui('/ui/api/machine/agent-machine', { cookie });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.pairing.client_key, true);
+    assert.equal(body.pairing.terminal_paired, true);
+    assert.equal(body.status.ok, true);
+    assert.equal(body.receipts.records[0].command, 'update codex');
+    assert.deepEqual(fm.received.map((r) => r.verb).sort(), ['receipts', 'status']);
+    assert.equal(fm.received[0].soul, undefined, 'reads carry no soul attribution');
+    // Tamper: a reply signed by a different key (same advertised
+    // daemon.pub, so the pin still matches) becomes a section error.
+    fm.server.close();
+    const wrong = generateKeyPairSync('ed25519');
+    await fakeAgentMachine(root, { keypair: fm.keypair, signKey: wrong.privateKey });
+    const bad = await (await ui('/ui/api/machine/agent-machine', { cookie })).json();
+    assert.equal(bad.status.error, 'machine-reply-tampered');
+  }, { home: root });
+  chmodSync(path.join(AGENT_MACHINE_DIR(root), 'peers', 'terminal.pub'), 0o600);
 });

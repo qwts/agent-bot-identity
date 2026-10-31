@@ -1373,6 +1373,8 @@ execution-provenance requests into focused references while all executable
 behavior remains in this zero-dependency runtime. Orders that arrive on a
 GitHub thread are `skills/thread-orders`.
 
+The **Agent machine** section (`GET /ui/api/machine/agent-machine`) is a read-only view of the local agent-machine daemon under the same authorization (observe on souls exactly `['*']`): pairing state (whether the client key exists, the pinned `daemon.pub` fingerprint, which `peers/agent-daemon.*` files are present, whether `terminal.pub` exists — its contents are never read) plus signed `status` and `receipts` round trips. Agent-machine failures are reported inside the section; the route still answers.
+
 The **Server** section (`GET /ui/api/machine/server`) is a machine-level view — enrollment status, the device, the approved identities, and a read-only doctor readiness summary. It is only for principals whose `observe` authorization lists souls exactly `['*']`; anything narrower gets 403.
 
 ## Server mode (agent-bot server)

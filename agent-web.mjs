@@ -24,7 +24,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -32,6 +32,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { getPrincipal, listPrincipals, principalsFile } from './identity-host.mjs';
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
+import {
+  AGENT_MACHINE_DIR, buildRequest, daemonFingerprint, loadMachinePublicKey,
+  loadMachineSigner, machineCall, machineSocketPath, pairedPublicKey, pinPath,
+  verifyResponse,
+} from './machine-client.mjs';
 import { daemonStateFile, daemonStatus } from './agent-daemon.mjs';
 
 export const UI_CSRF_HEADER = 'x-agent-bot-ui';
@@ -174,6 +179,30 @@ export function createWebLayer({
   // they die with the daemon, are never written to disk, and are therefore
   // never available to another local account or a later process.
   let doctorInFlight = null;
+  const machineInFlight = new Map(); // verb -> Promise (one signed round trip at a time per verb)
+
+  // Machine-level views are only for a principal the owner allowed to
+  // observe every soul — exactly ['*'], not a subset with '*' adjacent
+  // to other entries (#1295).
+  function requireMachineView(principal) {
+    const auth = principal.authorizations ?? {};
+    if (!Array.isArray(auth.operations) || !auth.operations.includes('observe')
+      || !Array.isArray(auth.souls) || auth.souls.length !== 1 || auth.souls[0] !== '*') {
+      throw failure(403, 'principal is not authorized for this operation');
+    }
+  }
+
+  // A signed verb round trip; an agent-machine failure is data, never a
+  // thrown route error — the Server section keeps working when it is down.
+  async function machineVerb(verb) {
+    const pinned = pairedPublicKey({ env, home });
+    const signer = loadMachineSigner({ env, home });
+    if (!signer) throw Object.assign(new Error('client key absent'), { code: 'machine-not-paired' });
+    const request = buildRequest({ verb }, signer);
+    const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
+    const res = verifyResponse(line, pinned, { expectedNonce: request.nonce });
+    return { ok: res.ok, state: res.state, diagnostic: res.diagnostic, message: res.message, records: res.body };
+  }
   const pairingCodes = new Map(); // code -> { principalId, expiresAt }
   const sessions = new Map(); // cookie token -> { principalId, expiresAt }
 
@@ -371,11 +400,7 @@ export function createWebLayer({
       // Machine-level views are only for a principal the owner allowed to
       // observe every soul — exactly ['*'], not a subset with '*' adjacent
       // to other entries (#1295).
-      const auth = principal.authorizations ?? {};
-      if (!Array.isArray(auth.operations) || !auth.operations.includes('observe')
-        || !Array.isArray(auth.souls) || auth.souls.length !== 1 || auth.souls[0] !== '*') {
-        throw failure(403, 'principal is not authorized for this operation');
-      }
+      requireMachineView(principal);
       // One doctor run at a time: a burst of viewers awaits the same
       // subprocess instead of spawning a stampede, and awaiting it keeps
       // the event loop free for the daemon's other routes.
@@ -390,6 +415,38 @@ export function createWebLayer({
       }
       const status = serverStatus({ env, home });
       sendJson(res, 200, { ...status, readiness });
+      return;
+    }
+    if (req.method === 'GET' && pathname === '/ui/api/machine/agent-machine') {
+      requireMachineView(principal);
+      // Pairing is a file view only: the client key is probed load-only,
+      // peers/agent-daemon.* is enumerated by name, terminal files are
+      // never opened, and nothing here creates state.
+      const machineDir = AGENT_MACHINE_DIR(home);
+      const peers = path.join(machineDir, 'peers');
+      const suffixes = existsSync(peers)
+        ? ['.pub', '.next', '.confirm', '.revoked'].filter((sfx) => existsSync(path.join(peers, `agent-daemon${sfx}`)))
+        : [];
+      const pin = existsSync(pinPath({ env, home })) ? readFileSync(pinPath({ env, home })) : null;
+      const pairing = {
+        client_key: loadMachinePublicKey({ env, home }) !== null,
+        pin_fingerprint: pin ? daemonFingerprint(pin) : null,
+        agent_daemon_peer: suffixes,
+        terminal_paired: existsSync(path.join(peers, 'terminal.pub')),
+        pair_command: 'agent-bot machine pair',
+      };
+      const verb = async (v) => {
+        let inFlight = machineInFlight.get(v);
+        inFlight ??= Promise.resolve().then(() => machineVerb(v))
+          .catch((error) => /^machine-[a-z-]+$/.test(error?.code ?? '')
+            ? { error: error.code, message: error.message }
+            : { error: 'machine-unreachable', message: error?.message ?? 'agent-machine call failed' })
+          .finally(() => { if (machineInFlight.get(v) === inFlight) machineInFlight.delete(v); });
+        machineInFlight.set(v, inFlight);
+        return inFlight;
+      };
+      const [status, receipts] = await Promise.all([verb('status'), verb('receipts')]);
+      sendJson(res, 200, { pairing, status, receipts });
       return;
     }
     if (req.method === 'GET' && pathname === '/ui/api/population') {
