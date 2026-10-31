@@ -352,3 +352,39 @@ test('roster inspection keeps unreadable-file diagnostics when the store is lock
   assert.equal(missing.local.code, PROVIDER_SESSION_REQUIRED);
   assert.match(missing.local.action, /pass-cli login/);
 });
+
+test('server-enrolled Apps without local key files are ready in ensurePrivateKey and inspectLocalAppCredential (#1316)', () => {
+  const home = tempHome();
+  const stateDir = join(home, 'server-state');
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, 'device.json'), JSON.stringify({
+    deviceId: 'dev_test',
+    harnesses: ['trueline-cursor-agent'],
+  }));
+  const env = {
+    HOME: home,
+    AGENT_BOT_SERVER: 'https://agents.true-line.ai',
+    AGENT_BOT_SERVER_STATE: stateDir,
+    AGENT_BOT_CONFIG: join(home, 'config.json'),
+  };
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({
+    settings: { agentBotServer: 'https://agents.true-line.ai' },
+  }));
+
+  const prepared = ensurePrivateKey({
+    slug: 'trueline-cursor-agent',
+    home,
+    env,
+    provider: { restore: () => assert.fail('provider must not be contacted for server-enrolled App') },
+  });
+  assert.equal(prepared.localStatus, 'ready');
+  assert.equal(prepared.downloaded, false);
+  assert.deepEqual(prepared.restored, []);
+
+  const inspected = inspectLocalAppCredential({
+    slug: 'trueline-cursor-agent',
+    home,
+    env,
+  });
+  assert.equal(inspected.status, 'ready');
+});

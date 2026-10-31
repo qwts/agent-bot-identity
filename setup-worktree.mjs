@@ -278,20 +278,24 @@ function bindTokenState({ gitDir, worktree, agentId }) {
   }
 }
 
-function worktreeConfig(key) {
-  try { return git('config', '--worktree', '--get', key); } catch { return ''; }
+function gitIn(cwd, args) {
+  return git(...(cwd ? ['-C', cwd, ...args] : args));
 }
 
-function unsetWorktreeConfig(key) {
-  try { git('config', '--worktree', '--unset-all', key); } catch { /* absent */ }
+function worktreeConfig(key, cwd) {
+  try { return gitIn(cwd, ['config', '--worktree', '--get', key]); } catch { return ''; }
+}
+
+function unsetWorktreeConfig(key, cwd) {
+  try { gitIn(cwd, ['config', '--worktree', '--unset-all', key]); } catch { /* absent */ }
 }
 
 // Every value of a multi-valued key, exactly: an empty helper (the reset
 // that stops inherited helpers) is a real entry and must survive a rewrite.
-function worktreeConfigAll(key) {
+function worktreeConfigAll(key, cwd) {
   let out;
   try {
-    out = execFileSync('git', ['config', '--worktree', '--get-all', key], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = execFileSync('git', [...(cwd ? ['-C', cwd] : []), 'config', '--worktree', '--get-all', key], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch { return null; }
   return (out.endsWith('\n') ? out.slice(0, -1) : out).split('\n');
 }
@@ -304,28 +308,28 @@ function isBotHelper(value) {
 // Preserve unrelated credential helpers and restore an earlier hooks path.
 // The empty helper that resets inherited helpers stays unless asked: a soul
 // without an App must not fall back to the human's credentials.
-function clearAppAttribution({ dropHelperReset = false } = {}) {
-  const hooks = worktreeConfig('agentBot.chainedHooksPath');
-  if (hooks) git('config', '--worktree', 'core.hooksPath', hooks);
-  for (const key of ['agentBot.app', 'agentBot.chainedHooksPath']) unsetWorktreeConfig(key);
-  if (worktreeConfig('user.name').endsWith('[bot]')) {
-    for (const key of ['user.name', 'user.email']) unsetWorktreeConfig(key);
+function clearAppAttribution({ dropHelperReset = false, cwd } = {}) {
+  const hooks = worktreeConfig('agentBot.chainedHooksPath', cwd);
+  if (hooks) gitIn(cwd, ['config', '--worktree', 'core.hooksPath', hooks]);
+  for (const key of ['agentBot.app', 'agentBot.chainedHooksPath']) unsetWorktreeConfig(key, cwd);
+  if (worktreeConfig('user.name', cwd).endsWith('[bot]')) {
+    for (const key of ['user.name', 'user.email']) unsetWorktreeConfig(key, cwd);
   }
-  const helpers = worktreeConfigAll('credential.helper');
+  const helpers = worktreeConfigAll('credential.helper', cwd);
   if (helpers && helpers.some(isBotHelper)) {
     let retained = helpers.filter((value) => !isBotHelper(value));
     if (dropHelperReset) retained = retained.filter(Boolean);
-    unsetWorktreeConfig('credential.helper');
-    for (const helper of retained) git('config', '--worktree', '--add', 'credential.helper', helper);
+    unsetWorktreeConfig('credential.helper', cwd);
+    for (const helper of retained) gitIn(cwd, ['config', '--worktree', '--add', 'credential.helper', helper]);
   }
-  if (worktreeConfig('commit.gpgsign') === 'false') unsetWorktreeConfig('commit.gpgsign');
+  if (worktreeConfig('commit.gpgsign', cwd) === 'false') unsetWorktreeConfig('commit.gpgsign', cwd);
   // core.hooksPath is removed only when it points at our installed hooks.
-  if (worktreeConfig('core.hooksPath').includes('/share/agent-bot/hooks')) unsetWorktreeConfig('core.hooksPath');
+  if (worktreeConfig('core.hooksPath', cwd).includes('/share/agent-bot/hooks')) unsetWorktreeConfig('core.hooksPath', cwd);
 }
 
-function isLinkedWorktree() {
-  const gitDir = realpathSync(git('rev-parse', '--absolute-git-dir'));
-  return gitDir !== realpathSync(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
+function isLinkedWorktree(cwd) {
+  const gitDir = realpathSync(gitIn(cwd, ['rev-parse', '--absolute-git-dir']));
+  return gitDir !== realpathSync(gitIn(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
 }
 
 // git copies the source checkout's config.worktree into every worktree it
@@ -334,22 +338,22 @@ function isLinkedWorktree() {
 // session soul's own, remove everything agent-bot manages from it, leaving the
 // worktree human until a session soul configures it. Keys agent-bot does not
 // write (sparse checkout, a human author, other credential helpers) stay.
-export function clearInheritedPin(sessionId) {
+export function clearInheritedPin(sessionId, { cwd } = {}) {
   let perWorktree = '';
-  try { perWorktree = git('config', '--type=bool', '--get', 'extensions.worktreeConfig'); } catch { /* unset */ }
+  try { perWorktree = gitIn(cwd, ['config', '--type=bool', '--get', 'extensions.worktreeConfig']); } catch { /* unset */ }
   // Without the extension git copies no config.worktree, so there is nothing
   // inherited, and --worktree would write the shared config instead.
   if (perWorktree !== 'true') return false;
-  if (!isLinkedWorktree()) return false;
-  const pins = AGENT_ID_KEYS.map(worktreeConfig).filter(Boolean);
+  if (!isLinkedWorktree(cwd)) return false;
+  const pins = AGENT_ID_KEYS.map((key) => worktreeConfig(key, cwd)).filter(Boolean);
   // Only a checkout agent-bot configured carries these; a person's own
   // config.worktree (signing off, a helper reset) is not agent-bot's to touch.
-  const attributed = pins.length > 0 || worktreeConfig('agentBot.app') !== ''
-    || worktreeConfig('user.name').endsWith('[bot]') || (worktreeConfigAll('credential.helper') ?? []).some(isBotHelper);
+  const attributed = pins.length > 0 || worktreeConfig('agentBot.app', cwd) !== ''
+    || worktreeConfig('user.name', cwd).endsWith('[bot]') || (worktreeConfigAll('credential.helper', cwd) ?? []).some(isBotHelper);
   if (!attributed) return false;
   if (sessionId && pins.length > 0 && pins.every((pin) => pin === sessionId)) return false;
-  clearAppAttribution({ dropHelperReset: true });
-  for (const key of AGENT_ID_KEYS) unsetWorktreeConfig(key);
+  clearAppAttribution({ dropHelperReset: true, cwd });
+  for (const key of AGENT_ID_KEYS) unsetWorktreeConfig(key, cwd);
   return true;
 }
 

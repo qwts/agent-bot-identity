@@ -43,6 +43,7 @@ import { daemonPreference, isGateEnabled, loadConfig, slugForHarness, soulOwnsAp
 import { pinnedSlug, readBinding, resolveAgentSlug } from './identity-soul.mjs';
 import { refuseAppOwnerMismatch } from './identity-soul.mjs';
 import { ensureSoulDirectory, installSoulHarnesses, soulNpmHarnessDirs } from './soul-home.mjs';
+import { clearInheritedPin } from './setup-worktree.mjs';
 import { bundledStarter, spawnSoulTemplate } from './soul-templates.mjs';
 export { bundledStarter } from './soul-templates.mjs';
 import { linkWorktree, soulWorktreePath } from './soul-worktrees.mjs';
@@ -213,11 +214,20 @@ export async function joinSoul({
   // `ownWorkspace` (soul fork) joins in the soul's own workspace, never a
   // checkout the caller happens to stand in.
   let checkout = ownWorkspace ? null : checkoutOf(cwd);
-  const pinned = checkout ? pinnedSoul(checkout.worktree) : null;
-  const binding = checkout ? readBinding({ env: {}, gitDir: checkout.gitDir }) : null;
   const sessionBinding = !ownWorkspace && env.AGENT_BOT_BINDING ? readBinding({ env, cwd }) : null;
   if (!ownWorkspace && env.AGENT_BOT_BINDING && !sessionBinding) throw new Error('session binding is missing; refusing to join');
   let agentId = soul === null ? null : validateAgentId(soul);
+  const statedSessionId = agentId ?? (!ownWorkspace ? (env.AGENT_BOT_ID || env.QWTS_AGENT_ID || sessionBinding?.agentId || null) : null);
+  const binding = checkout ? readBinding({ env: {}, gitDir: checkout.gitDir }) : null;
+  // #1316: git worktree add copies the source checkout's config.worktree into
+  // the new linked worktree (#648). When a linked worktree has neither a bind
+  // token nor a live binding in its private gitDir and the caller states a
+  // soul (--soul or AGENT_BOT_ID), strip the inherited config.worktree pin
+  // before reading checkout pins.
+  if (checkout && statedSessionId && !binding && !existsSync(path.join(checkout.gitDir, 'agent-bind-token.json'))) {
+    try { clearInheritedPin(statedSessionId, { cwd: checkout.worktree }); } catch { /* leave checkout as-is */ }
+  }
+  const pinned = checkout ? pinnedSoul(checkout.worktree) : null;
   for (const claim of [pinned, binding?.agentId, !ownWorkspace && (env.AGENT_BOT_ID || env.QWTS_AGENT_ID), sessionBinding?.agentId]) {
     if (!claim) continue;
     if (!activeIdentity(claim, stateDir)) throw new Error(`${claim} is not an active soul`);
@@ -241,11 +251,11 @@ export async function joinSoul({
   const repairingDefaultApp = Boolean(
     githubOn && !appPin && !env.GH_AGENT_APP
     && existing?.github?.appSlug && existing.github.appSlug === defaultAppSlug
-    && appSlug && appSlug !== existing.github.appSlug && soulOwnsAppSlug(existing, appSlug, loaded),
+    && appSlug && appSlug !== existing.github.appSlug && soulOwnsAppSlug(existing, appSlug, loaded, { env, home }),
   );
   const matchesSoulApp = Boolean(
     existing?.github?.appSlug && appSlug
-    && (existing.github.appSlug === appSlug || soulOwnsAppSlug(existing, appSlug, loaded)),
+    && (existing.github.appSlug === appSlug || soulOwnsAppSlug(existing, appSlug, loaded, { env, home })),
   );
   if ((appPin && appSlug !== appPin)
       || (appSlug && existing?.github?.appSlug && !matchesSoulApp && !repairingDefaultApp)) {

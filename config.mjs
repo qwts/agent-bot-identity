@@ -512,12 +512,12 @@ function enrolledServerHarnesses({ env = process.env, home = env?.HOME ?? homedi
   }
 }
 
-function isRegisteredAppSlug(slug, config, harnessKey) {
+function isRegisteredAppSlug(slug, config, harnessKey, { env = process.env, home = env?.HOME ?? homedir() } = {}) {
   if (!slug || typeof slug !== 'string') return false;
   if (appLifecycleStatus(slug, config) === 'retired') return false;
   if (Array.isArray(config?.scope?.apps) && !config.scope.apps.includes(slug)) return false;
   if (config?.identityApps && Object.hasOwn(config.identityApps, slug)) return true;
-  if (enrolledServerHarnesses({ config }).includes(slug)) return true;
+  if (enrolledServerHarnesses({ env, home, config }).includes(slug)) return true;
   const profileIdentity = runtimeProfileInfo(config)?.identities.find((entry) => entry.slug === slug);
   if (profileIdentity) return profileIdentity.status === 'active';
   if (config?.apps && Object.values(config.apps).includes(slug)) return true;
@@ -533,7 +533,7 @@ export function isOrgHarnessAppSlug(slug, harness, config = loadConfig()) {
   return new RegExp(`^[a-z0-9-]+-(?:${escaped.join('|')})-agent$`).test(slug);
 }
 
-export function soulOwnsAppSlug(identity, candidateSlug, config = loadConfig()) {
+export function soulOwnsAppSlug(identity, candidateSlug, config = loadConfig(), { env = process.env, home = env?.HOME ?? homedir() } = {}) {
   if (!identity || typeof candidateSlug !== 'string' || !candidateSlug) return false;
   const recorded = identity.github?.appSlug ?? null;
   if (recorded === candidateSlug) return true;
@@ -545,11 +545,11 @@ export function soulOwnsAppSlug(identity, candidateSlug, config = loadConfig()) 
   if (recordedKey && recordedKey !== key) return false;
   if (!isOrgHarnessAppSlug(recorded, harness, config)) return false;
   if (!isOrgHarnessAppSlug(candidateSlug, harness, config)) return false;
-  if (!isRegisteredAppSlug(recorded, config, key)) return false;
-  return isRegisteredAppSlug(candidateSlug, config, key);
+  if (!isRegisteredAppSlug(recorded, config, key, { env, home })) return false;
+  return isRegisteredAppSlug(candidateSlug, config, key, { env, home });
 }
 
-export function slugForOriginOwner(originOwner, harness, config = loadConfig()) {
+export function slugForOriginOwner(originOwner, harness, config = loadConfig(), { env = process.env, home = env?.HOME ?? homedir() } = {}) {
   if (!originOwner || !harness) return null;
   const owner = String(originOwner).trim().toLowerCase();
   if (!owner) return null;
@@ -559,16 +559,16 @@ export function slugForOriginOwner(originOwner, harness, config = loadConfig()) 
   for (const prefix of prefixes) {
     for (const h of harnessKeys) {
       const candidate = `${prefix}-${h}-agent`;
-      if (isRegisteredAppSlug(candidate, config, h)) return candidate;
+      if (isRegisteredAppSlug(candidate, config, h, { env, home })) return candidate;
     }
   }
   return null;
 }
 
-export function slugForHarness(harness, config = loadConfig(), { originOwner = null } = {}) {
+export function slugForHarness(harness, config = loadConfig(), { originOwner = null, env = process.env, home = env?.HOME ?? homedir() } = {}) {
   if (!harness) return null;
   if (originOwner) {
-    const matched = slugForOriginOwner(originOwner, harness, config);
+    const matched = slugForOriginOwner(originOwner, harness, config, { env, home });
     if (matched) return matched;
   }
   const key = harness === 'claude-code' ? 'claude' : harness;
