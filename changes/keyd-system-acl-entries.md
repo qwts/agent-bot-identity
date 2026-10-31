@@ -1,0 +1,1 @@
+- keyd accepts the two system access-list entries macOS plants on every item it creates — a null-application integrity marker and a null-application partition record naming keyd's own Team ID — so a signed keyd no longer refuses its own items as untrusted (#767).

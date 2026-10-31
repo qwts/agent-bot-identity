@@ -13,12 +13,22 @@ import { keydVersionCheck } from '../readiness.mjs';
 
 const keydDir = new URL('../keyd/', import.meta.url);
 
-test('the pinned keyd version is the version keyd/ builds', () => {
+test('the pinned keyd version is the version keyd/ builds, or its predecessor', () => {
+  // A fix may bump the crate ahead of the pin: the signed build catches the
+  // pin up when GeniusBar ships it, and the source never lags behind (#767).
   const manifest = readFileSync(new URL('Cargo.toml', keydDir), 'utf8');
-  assert.equal(manifest.match(/^\[package\][^[]*?^version = "([^"]+)"/ms)?.[1], KEYD_PINNED_VERSION);
+  const built = manifest.match(/^\[package\][^[]*?^version = "([^"]+)"/ms)?.[1];
+  assert.equal(built === KEYD_PINNED_VERSION || isPatchAhead(built, KEYD_PINNED_VERSION), true,
+    `keyd/ builds ${built}, pinned ${KEYD_PINNED_VERSION}`);
   const lock = readFileSync(new URL('Cargo.lock', keydDir), 'utf8');
-  assert.match(lock, new RegExp(`name = "agent-bot-keyd"\\nversion = "${KEYD_PINNED_VERSION.replaceAll('.', '\\.')}"\\n`));
+  assert.match(lock, new RegExp(`name = "agent-bot-keyd"\\nversion = "${built.replaceAll('.', '\\.')}"\\n`));
 });
+
+function isPatchAhead(a, b) {
+  const [am, an, ap] = a.split('.').map(Number);
+  const [bm, bn, bp] = b.split('.').map(Number);
+  return am === bm && an === bn && ap === bp + 1;
+}
 
 function fixture(t) {
   const home = mkdtempSync(path.join(tmpdir(), 'keyd-pin-'));
