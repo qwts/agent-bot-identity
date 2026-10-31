@@ -368,6 +368,20 @@ test('a failed delegate-surface mint is receipted and still fails', async (t) =>
   assert.deepEqual(calls.receipts.map((fields) => [fields.decision, fields.reason, fields.appSlug]), [['failed', 'mint-failed', 'codex-app']]);
 });
 
+test('formatMemberReference withholds raw server-mode tokens from bound, soul-marked, and harness callers (#1293)', async () => {
+  const { formatMemberReference } = await import('../identity/cli/mint-output.mjs');
+  const serverGrant = { token: 'ghs_secret', issuance_id: 'iss_42', task_id: 't1', operation_id: 'op_1', expires_at: '2026-10-31T02:34:33Z' };
+  for (const flags of [{ bound: true }, { soulBound: true }, { ambient: true }]) {
+    const out = formatMemberReference(serverGrant, flags);
+    assert.ok(out && !out.includes('ghs_secret'));
+    assert.deepEqual(JSON.parse(out), {
+      schema_version: 1, credential_ref: 'iss_42', task_id: 't1', operation_id: 'op_1', expires_at: '2026-10-31T02:34:33Z',
+    });
+  }
+  assert.equal(formatMemberReference(serverGrant, { approvalRequired: true, ambient: true }), null);
+  assert.equal(formatMemberReference({ token: 'ghs_legacy', expires_at: '2026-10-31T02:34:33Z' }, { soulBound: true }), null);
+});
+
 test('a receipt that cannot be written does not stop a delegate-surface mint', async (t) => {
   const { options } = callerFixture(t, { bound: false });
   const result = await mintForCaller({
