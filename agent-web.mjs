@@ -31,8 +31,14 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { assertMachineAuthorized, fetchCatalog, getPrincipal, listPrincipals, listSessions, loadDevice, principalsFile, serverUrl } from './identity-host.mjs';
+import { assertAuthorized, assertMachineAuthorized, fetchCatalog, getPrincipal, listPrincipals, loadDevice, principalsFile, serverUrl, listSessions } from './identity-host.mjs';
 import { stateDirectory } from './state-paths.mjs';
+import { operationDigest } from './agent-jobs.mjs';
+import { populationFile } from './agent-population.mjs';
+import { listSoulProposals, revisionCommand } from './soul-revisions.mjs';
+import { setColdWake } from './cold-wake-settings.mjs';
+import { removalPlan, soulRemoveCommand } from './soul-remove.mjs';
+import { appendAuditReceipt } from './identity-format.mjs';
 import { configPath, FEATURE_GATES, loadConfig, SKILL_SEARCH_ADAPTERS, validateConfig } from './config.mjs';
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
 import {
@@ -108,6 +114,31 @@ export function enrollStdoutChunk(tail, chunk, onLine) {
 // Only the non-secret reconcile fields the UI needs ever leave the server.
 function reconcileRow(row) {
   return { operation_id: row?.operation_id ?? null, state: row?.state ?? null, reason: row?.reason ?? null };
+}
+
+// The web-proposal owner gate (#1295), built inside an approved proposal's
+// execute. It accepts only the exact action string the implementation will
+// pass for this operation and returns the consent-shaped authorization
+// naming the proposal as the owner decision — every other caller and the
+// default gates are untouched.
+export function proposalOwnerGate({ expected, proposalId, principalId, digest, env, home, now }) {
+  return async (action) => {
+    if (action !== expected) throw Object.assign(new Error('owner-gate action mismatch'), { code: 'ui-proposal-gate-mismatch' });
+    appendAuditReceipt({ event: 'ui-proposal-decision', proposalId, principal: principalId,
+      operationDigest: digest, action, decision: 'approved' }, { env, home, now });
+    return { method: 'consent', via: `ui-proposal:${proposalId}` };
+  };
+}
+
+// The removal-plan compact summary — the digest-covered shape the proposal
+// summary names and the executor re-checks before removing anything.
+async function soulRemovePlan(agentId, { env, home, stateDir }) {
+  const plan = await removalPlan(agentId, {
+    scope: 'soul', file: populationFile({ env, home }), env, home, stateDir,
+    running: async () => null,
+  });
+  return { archived: plan.archived.map((e) => e.agentId).sort(),
+    independent: plan.independent.map((e) => e.agentId).sort(), unchanged: plan.unchanged.length };
 }
 
 export function webRootDirectory() {
@@ -208,14 +239,13 @@ export function createWebLayer({
   fetchCatalogImpl = fetchCatalog,
   digestUploadStatus = () => ({ at: null, outcome: null }),
   notifyMachineWrite = () => {},
+  soulBindings = () => [],
   // Server actions (#1295): CLI spawns, injected for tests.
   spawnServerCli = null,
   webRoot = webRootDirectory(),
   // Injectable for tests: the shared server/doctor probes (#1295).
   serverStatus = serverStatusReport,
   doctor = doctorReportAsync,
-  // Live binding registry projection for the souls view (#1295).
-  soulBindings = () => [],
 } = {}) {
   void config; // reserved; the web layer holds no policy of its own
   const root = path.resolve(webRoot);
@@ -552,10 +582,11 @@ const enrollChildren = new Set();
       sendJson(res, 200, { proposal });
       return;
     }
-    if (req.method === 'GET' && (match = pathname.match(/^\/ui\/api\/machine\/agent-machine\/proposals\/([^/]+)$/))) {
-      try { assertMachineAuthorized({ principal, operation: 'observe' }); }
-      catch { throw failure(403, 'principal is not authorized for this operation'); }
-      try { sendJson(res, 200, interaction.machineOutcome(match[1])); }
+    if (req.method === 'GET' && (match = pathname.match(/^\/ui\/api\/(?:machine\/)?(?:agent-machine\/)?proposals\/([^/]+)$/))) {
+      // Authorization is per proposal scope inside ownerOutcome: machine.*
+      // needs the machine gate, soul.* needs observe on that soul, anything
+      // else is a 404 that never mutates the store.
+      try { sendJson(res, 200, interaction.ownerOutcome({ principal: caller.principal, transport: WEB_TRANSPORT, proposalId: match[1] })); }
       catch (error) { throw failure(error?.statusCode ?? 404, error?.message ?? 'unknown proposal'); }
       return;
     }
@@ -877,6 +908,68 @@ const enrollChildren = new Set();
         lastDelivery.current = { at: now().toISOString(), outcome: error?.code ?? 'error' };
         throw failure(/^machine-[a-z-]+$|^catalog-[a-z-]+$/.test(error?.code ?? '') ? 409 : 502, error?.message ?? 'deliver failed');
       }
+      return;
+    }
+    if (req.method === 'GET' && (match = pathname.match(/^\/ui\/api\/souls\/([^/]+)\/revisions$/))) {
+      const agentId = decodeURIComponent(match[1]);
+      try { assertAuthorized({ principal, agentId, operation: 'observe' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      const proposals = listSoulProposals(agentId, { stateDir: stateDirectory({ env, home }) })
+        .filter((p) => p.status === 'pending')
+        .map(({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }) =>
+          ({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }));
+      sendJson(res, 200, { proposals });
+      return;
+    }
+    if (req.method === 'POST' && (match = pathname.match(/^\/ui\/api\/souls\/([^/]+)\/proposals$/))) {
+      const agentId = decodeURIComponent(match[1]);
+      const EXTRA = { 'revision.approve': ['revision_id'], 'revision.reject': ['revision_id'], 'cold-wake': ['enabled'], 'remove': [] };
+      const verb = body.verb;
+      if (!(verb in EXTRA)) throw failure(400, 'unknown verb');
+      const allowedKeys = ['verb', ...EXTRA[verb]];
+      for (const key of Object.keys(body)) if (!allowedKeys.includes(key)) throw failure(400, 'unknown field');
+      const stateDir = stateDirectory({ env, home });
+      const gateFor = (expected, report) => proposalOwnerGate({ expected, proposalId: report.proposalId,
+        principalId: caller.principal.principalId, digest: operationDigest(operation), env, home, now });
+      let operation; let summary; let execute;
+      if (verb === 'revision.approve' || verb === 'revision.reject') {
+        const command = verb === 'revision.approve' ? 'approve' : 'reject';
+        const revisionId = body.revision_id;
+        if (typeof revisionId !== 'string' || revisionId === '') throw failure(400, 'revision_id is required');
+        const pending = listSoulProposals(agentId, { stateDir }).filter((p) => p.status === 'pending');
+        if (!pending.some((p) => p.proposalId === revisionId)) throw failure(400, 'unknown or decided revision');
+        operation = { verb, revision_id: revisionId };
+        summary = `soul revision ${command} ${revisionId} on ${agentId}`;
+        execute = async (report) => revisionCommand([command, agentId, revisionId, `ui-proposal:${report.proposalId}`],
+          { env, home, now, stateDir, assertUser: gateFor(`soul revision ${command} ${agentId}`, report) });
+      } else if (verb === 'cold-wake') {
+        if (typeof body.enabled !== 'boolean') throw failure(400, 'enabled must be a boolean');
+        const change = body.enabled ? 'on' : 'off';
+        operation = { verb, enabled: body.enabled };
+        summary = `cold-wake ${change} for ${agentId}`;
+        execute = async (report) => {
+          // setColdWake takes no gate param — the proposal IS the owner
+          // decision, so the stub fires here (same audit receipt) and the
+          // real setter applies the approved change.
+          await gateFor(`soul cold-wake ${agentId} ${change}`, report)(`soul cold-wake ${agentId} ${change}`, {});
+          return setColdWake(agentId, body.enabled, { env, home, now });
+        };
+      } else {
+        const plan = await soulRemovePlan(agentId, { env, home, stateDir });
+        operation = { verb, scope: 'soul', plan };
+        summary = `remove ${agentId}: archives ${plan.archived.length} (${plan.archived.join(', ') || 'none'}), ` +
+          `independent ${plan.independent.join(', ') || 'none'}, unchanged ${plan.unchanged}`;
+        execute = async (report) => {
+          const again = await soulRemovePlan(agentId, { env, home, stateDir });
+          if (JSON.stringify(again) !== JSON.stringify(plan)) {
+            throw Object.assign(new Error('soul removal plan changed between proposal and approval'), { code: 'soul-remove-plan-changed' });
+          }
+          return soulRemoveCommand([agentId], { env, home, now, gate: gateFor(`soul remove ${agentId}`, report) });
+        };
+      }
+      const { proposal } = interaction.requestOwnerApproval({ principal: caller.principal, transport: WEB_TRANSPORT,
+        agentId, operation, summary, execute });
+      sendJson(res, 200, { proposal });
       return;
     }
     if (req.method === 'GET' && pathname === '/ui/api/population') {

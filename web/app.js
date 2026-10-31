@@ -310,6 +310,95 @@ function wireAgentMachineForms() {
   $('am-update').addEventListener('click', () => propose('update', { name: $('am-plan-name').value.trim() }));
 }
 
+// --- Souls (read-only, #1295) ------------------------------------------------
+
+async function loadSouls() {
+  const { souls } = await api('/ui/api/souls');
+  const list = $('souls-list');
+  list.textContent = '';
+  // A specialist whose parent isn't in the returned collection renders as
+  // a root labelled with its (unseen) parent id.
+  const visible = new Set(souls.map((s) => s.id));
+  const roots = souls.filter((o) => !o.parentId || !visible.has(o.parentId));
+  const render = (soul, nested, orphanOf = null) => {
+    const box = el('div', { class: nested ? 'soul soul-nested' : 'soul' });
+    box.append(el('h3', { text: `${soul.role === 'lead' ? '● ' : '○ '}${soul.id}` }),
+      el('p', { class: 'hint', text: `${soul.appSlug ?? '-'} · ${soul.status ?? '-'} · ${soul.role}${orphanOf ? ` · specialist of ${orphanOf}` : ''}` }));
+    const st = el('table');
+    const sh = el('tr');
+    for (const h of ['session', 'harness', 'status', 'started', 'last seen', 'ended']) sh.append(el('th', { text: h }));
+    st.append(sh);
+    const tb = el('tbody');
+    for (const s of soul.sessions ?? []) {
+      const tr = el('tr');
+      for (const v of [s.session_id, s.harness, s.status, s.started_at, s.last_seen, s.ended_at]) tr.append(el('td', { text: String(v ?? '-') }));
+      tb.append(tr);
+    }
+    st.append(tb); box.append(st);
+    const bt = el('table');
+    const bh = el('tr');
+    for (const h of ['harness', 'session', 'worktree', 'bound', 'last used']) bh.append(el('th', { text: h }));
+    bt.append(bh);
+    const bb = el('tbody');
+    for (const b of soul.bindings ?? []) {
+      const tr = el('tr');
+      for (const v of [b.harness, b.sessionId, b.worktree, b.boundAt, b.lastUsedAt]) tr.append(el('td', { text: String(v ?? '-') }));
+      bb.append(tr);
+    }
+    bt.append(bb); box.append(bt);
+    // Write controls (#1295): pending revisions with Approve/Reject, a
+    // cold-wake checkbox, and Remove — each creates a proposal.
+    const revBox = el('div', { class: 'soul-revisions' });
+    api(`/ui/api/souls/${soul.id}/revisions`).then(({ proposals }) => {
+      for (const p of proposals ?? []) {
+        const row = el('p', { class: 'revision-row' });
+        row.append(el('span', { text: `pending revision ${p.proposalId} ` }));
+        row.append(el('button', { type: 'button', text: 'Approve',
+          'data-soul-action': 'revision.approve', 'data-agent': soul.id, 'data-revision': p.proposalId }));
+        row.append(el('button', { type: 'button', text: 'Reject',
+          'data-soul-action': 'revision.reject', 'data-agent': soul.id, 'data-revision': p.proposalId }));
+        revBox.append(row);
+      }
+    }).catch(() => {});
+    const cw = el('input', { id: `cw-${soul.id}`, type: 'checkbox' });
+    const controls = el('p', { class: 'soul-controls' });
+    controls.append(el('label', { text: ' cold wake ' }));
+    controls.querySelector('label').append(cw);
+    controls.append(el('button', { type: 'button', text: 'Propose cold-wake change',
+      'data-soul-action': 'cold-wake', 'data-agent': soul.id, 'data-cw': `cw-${soul.id}` }));
+    controls.append(el('button', { type: 'button', text: 'Remove…',
+      'data-soul-action': 'remove', 'data-agent': soul.id }));
+    box.append(revBox, controls);
+    list.append(box);
+    for (const child of souls.filter((o) => o.parentId === soul.id)) render(child, true);
+  };
+  for (const soul of roots) render(soul, false, soul.parentId && !visible.has(soul.parentId) ? soul.parentId : null);
+}
+
+// --- Souls write controls (#1295) — one delegated listener ---------------
+
+function wireSoulsActions() {
+  $('souls-list').addEventListener('click', async (event) => {
+    const btn = event.target.closest('button[data-soul-action]');
+    if (!btn) return;
+    const agentId = btn.dataset.agent;
+    const action = btn.dataset.soulAction;
+    try {
+      if (action === 'cold-wake') {
+        const enabled = $(btn.dataset.cw)?.checked === true;
+        await api(`/ui/api/souls/${agentId}/proposals`, { method: 'POST', body: { verb: 'cold-wake', enabled } });
+      } else if (action === 'remove') {
+        if (!window.confirm(`Propose removing ${agentId}? The proposal shows the archive plan; the owner approves in Approvals.`)) return;
+        await api(`/ui/api/souls/${agentId}/proposals`, { method: 'POST', body: { verb: 'remove' } });
+      } else {
+        await api(`/ui/api/souls/${agentId}/proposals`, { method: 'POST',
+          body: { verb: action, revision_id: btn.dataset.revision } });
+      }
+      showView('approvals');
+    } catch (error) { setBanner(error.message); }
+  });
+}
+
 // --- Catalog (verified relay to agent-machine, #1295) -----------------------
 
 async function loadCatalog() {
@@ -504,47 +593,6 @@ async function cancelJob(invocationId) {
   await refresh();
 }
 
-// --- Souls (read-only, #1295) ------------------------------------------------
-
-async function loadSouls() {
-  const { souls } = await api('/ui/api/souls');
-  const list = $('souls-list');
-  list.textContent = '';
-  // A specialist whose parent isn't in the returned collection renders as
-  // a root labelled with its (unseen) parent id.
-  const visible = new Set(souls.map((s) => s.id));
-  const roots = souls.filter((o) => !o.parentId || !visible.has(o.parentId));
-  const render = (soul, nested, orphanOf = null) => {
-    const box = el('div', { class: nested ? 'soul soul-nested' : 'soul' });
-    box.append(el('h3', { text: `${soul.role === 'lead' ? '● ' : '○ '}${soul.id}` }),
-      el('p', { class: 'hint', text: `${soul.appSlug ?? '-'} · ${soul.status ?? '-'} · ${soul.role}${orphanOf ? ` · specialist of ${orphanOf}` : ''}` }));
-    const st = el('table');
-    const sh = el('tr');
-    for (const h of ['session', 'harness', 'status', 'started', 'last seen', 'ended']) sh.append(el('th', { text: h }));
-    st.append(sh);
-    const tb = el('tbody');
-    for (const s of soul.sessions ?? []) {
-      const tr = el('tr');
-      for (const v of [s.session_id, s.harness, s.status, s.started_at, s.last_seen, s.ended_at]) tr.append(el('td', { text: String(v ?? '-') }));
-      tb.append(tr);
-    }
-    st.append(tb); box.append(st);
-    const bt = el('table');
-    const bh = el('tr');
-    for (const h of ['harness', 'session', 'worktree', 'bound', 'last used']) bh.append(el('th', { text: h }));
-    bt.append(bh);
-    const bb = el('tbody');
-    for (const b of soul.bindings ?? []) {
-      const tr = el('tr');
-      for (const v of [b.harness, b.sessionId, b.worktree, b.boundAt, b.lastUsedAt]) tr.append(el('td', { text: String(v ?? '-') }));
-      bb.append(tr);
-    }
-    bt.append(bb); box.append(bt);
-    list.append(box);
-    for (const child of souls.filter((o) => o.parentId === soul.id)) render(child, true);
-  };
-  for (const soul of roots) render(soul, false, soul.parentId && !visible.has(soul.parentId) ? soul.parentId : null);
-}
 
 // --- Approvals -----------------------------------------------------------------
 
@@ -601,8 +649,8 @@ async function refresh() {
   if (state.view === 'population') await loadPopulation();
   if (state.view === 'agent-machine') await loadAgentMachine();
   if (state.view === 'catalog') await loadCatalog();
-  if (state.view === 'conversation') await loadConversation();
   if (state.view === 'souls') await loadSouls();
+  if (state.view === 'conversation') await loadConversation();
   if (state.view === 'settings') await loadSettings();
   if (state.view === 'server') { await loadServer(); await pollEnrollOutcome(); }
   if (state.view === 'jobs') await loadJobs();
@@ -629,6 +677,7 @@ async function boot() {
   wireSettingsForm();
   wireServerActions();
   wireCatalog();
+  wireSoulsActions();
 
   // A one-time pairing code arrives in the URL fragment (never sent to any
   // server in a request line) and is scrubbed from the address bar and
