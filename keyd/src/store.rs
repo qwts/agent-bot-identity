@@ -463,7 +463,8 @@ pub mod keychain {
             allocator: *const c_void,
             data: CFDataRef,
             options: u64,
-            format: *mut i32,
+            // CFPropertyListFormat is a CFIndex: pointer-sized.
+            format: *mut isize,
             error: *mut CFTypeRef,
         ) -> CFTypeRef;
         fn CFGetTypeID(cf: CFTypeRef) -> usize;
@@ -749,17 +750,17 @@ pub mod keychain {
     /// missing, or a member is not a string.
     fn plist_partition_teams(bytes: &[u8]) -> Option<Vec<String>> {
         let data = CFData::from_buffer(bytes);
-        let mut format: i32 = 0;
-        let mut error: CFTypeRef = std::ptr::null();
-        // SAFETY: live data and valid out-pointers; a NULL allocator asks
-        // for the default, and zero options makes the result immutable.
+        // SAFETY: live data; a NULL allocator asks for the default, zero
+        // options makes the result immutable, and NULL format and error
+        // outputs mean the framework writes neither (the format is unused,
+        // and a failure is a NULL result).
         let plist = unsafe {
             CFPropertyListCreateWithData(
                 std::ptr::null(),
                 data.as_concrete_TypeRef() as CFDataRef,
                 0,
-                &mut format,
-                &mut error,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             )
         };
         if plist.is_null() {
