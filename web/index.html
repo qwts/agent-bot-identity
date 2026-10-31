@@ -76,6 +76,11 @@
     <h2>Server</h2>
     <p class="hint">Machine-level view of the identity server and device enrollment.</p>
     <table class="kv"><tbody id="server-rows"></tbody></table>
+    <p>
+      <button id="server-reconcile" type="button">Reconcile pending credentials</button>
+      <button id="server-enroll" type="button">Re-enroll device</button>
+    </p>
+    <p id="server-action-status" class="hint"></p>
     <h3>Readiness</h3>
     <p id="server-readiness-summary" class="hint"></p>
     <div class="scroll"><table>

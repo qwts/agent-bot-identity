@@ -1066,7 +1066,7 @@ export function createDaemonServer({
         ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
     }
   });
-  server.once('close', () => appJobs.close());
+  server.once('close', () => { appJobs.close(); web.close?.(); });
   server.on('listening', () => {
     const address = server.address();
     bindings.rewrite(`http://${address.address === '::1' ? '[::1]' : '127.0.0.1'}:${address.port}`);

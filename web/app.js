@@ -381,6 +381,42 @@ function wireSettingsForm() {
 
 // --- Jobs ---------------------------------------------------------------------
 
+// --- Server actions (reconcile directly; re-enroll via proposal, #1295) ----
+
+function wireServerActions() {
+  $('server-reconcile').addEventListener('click', async () => {
+    $('server-action-status').textContent = 'reconciling…';
+    try {
+      const res = await api('/ui/api/machine/server/reconcile', { method: 'POST', body: {} });
+      $('server-action-status').textContent = res.reconciled === 0
+        ? 'no pending credential operations'
+        : `reconciled ${res.reconciled}: ` + res.results.map((r) => `${r.operation_id}=${r.state}`).join(', ');
+    } catch (error) { $('server-action-status').textContent = error.message; }
+  });
+  $('server-enroll').addEventListener('click', async () => {
+    try {
+      const res = await api('/ui/api/machine/server/enroll', { method: 'POST', body: {} });
+      $('server-action-status').textContent = `proposal ${res.proposal.proposalId} — approve it in the Approvals tab`;
+      state.enrollProposalId = res.proposal.proposalId;
+      showView('approvals');
+    } catch (error) { $('server-action-status').textContent = error.message; }
+  });
+}
+
+async function pollEnrollOutcome() {
+  if (!state.enrollProposalId) return;
+  try {
+    const out = await api(`/ui/api/machine/agent-machine/proposals/${state.enrollProposalId}`);
+    if (out.status === 'pending-approval') {
+      $('server-action-status').textContent =
+        `approve this device at ${out.verification_uri} — code ${out.user_code} (key ${out.thumbprint})`;
+    } else if (out.status !== 'open') {
+      $('server-action-status').textContent = `enroll ${out.status}${out.error ? `: ${out.error}` : ''}`;
+      state.enrollProposalId = null;
+    }
+  } catch { /* next poll */ }
+}
+
 async function loadJobs() {
   const { invocations } = await api('/ui/api/invocations');
   state.jobs = invocations;
@@ -527,11 +563,11 @@ async function decide(proposal, decision) {
 async function refresh() {
   if (!state.me) return;
   if (state.view === 'population') await loadPopulation();
-  if (state.view === 'server') await loadServer();
   if (state.view === 'agent-machine') await loadAgentMachine();
   if (state.view === 'conversation') await loadConversation();
   if (state.view === 'souls') await loadSouls();
   if (state.view === 'settings') await loadSettings();
+  if (state.view === 'server') { await loadServer(); await pollEnrollOutcome(); }
   if (state.view === 'jobs') await loadJobs();
   await loadApprovals();
 }
@@ -554,6 +590,7 @@ async function boot() {
   }
   wireAgentMachineForms();
   wireSettingsForm();
+  wireServerActions();
 
   // A one-time pairing code arrives in the URL fragment (never sent to any
   // server in a request line) and is scrubbed from the address bar and

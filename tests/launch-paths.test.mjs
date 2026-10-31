@@ -50,7 +50,7 @@ const LAUNCH_PATHS = {
   'identity/secret-providers/proton-pass.mjs': [1, 'owner-run: proton-pass'],
   'identity/owner-statement.mjs': [1, 'owner-run: ssh-keygen'],
   'shell-path.mjs': [1, 'owner-run: zsh-profile writing the owner\'s profile'],
-  'agent-web.mjs': [1, 'browser open'],
+  'agent-web.mjs': [3, 'browser open; server CLI spawns (reconcile/enroll)'],
   'server-status.mjs': [5, 'git, doctor (sync + async)'],
   'identity/identity-apps.mjs': [1, 'browser open'],
   // OS tools.

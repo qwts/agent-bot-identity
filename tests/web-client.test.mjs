@@ -24,6 +24,9 @@ import {
   PAIRING_CODE_TTL_MS,
   UI_CSRF_HEADER,
   WEB_SESSION_TTL_MS,
+  enrollPromptReport,
+  enrollStdoutChunk,
+  parseEnrollLine,
   webRootDirectory,
 } from '../agent-web.mjs';
 import { addArtifact, createSession, operationDigest } from '../agent-jobs.mjs';
@@ -1517,4 +1520,145 @@ test('settings: prototype keys refused, unset removes key, summary shows values,
     assert.equal('daemonPreference' in (written.settings ?? {}), false);
     assert.equal(written.settings.mysteriousKey, 1);
   }, { home: root });
+});
+
+// --- server actions (#1295) --------------------------------------------------
+
+test('server reconcile and enroll: gates, pending-approval outcome, drift-free device file', async () => {
+  const { root, env } = scratch();
+  env.AGENT_BOT_SERVER = 'https://identity.example.test';
+  // Plant a device record so enroll reuses its harness list.
+  const { statePaths } = await import('../identity/server-client.mjs');
+  const deviceFile = statePaths({ env, home: root }).device;
+  mkdirSync(path.dirname(deviceFile), { recursive: true, mode: 0o700 });
+  writeFileSync(deviceFile, JSON.stringify({
+    server: env.AGENT_BOT_SERVER, device_id: 'dev_1', jkt: 'JKT1', method: 'device_code',
+    platform: 'test', device_name: 'box', harnesses: ['codex'], read_only: false,
+    ephemeral: false, expires_at: null, management: 'managed', server_key_id: 'k1',
+    enrolled_at: '2026-01-01T00:00:00Z',
+  }, null, 2) + '\n', { mode: 0o600 });
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  const scoped = seedPrincipal(env, { label: 's', souls: [AGENT_ID], operations: ['observe', 'approve'] });
+  const spawns = [];
+  let finishEnroll = () => {};
+  const enrollGate = new Promise((r) => { finishEnroll = r; });
+  const spawnFake = async (args, report) => {
+    spawns.push(args);
+    if (args[0] === 'reconcile') {
+      return { stdout: JSON.stringify({ reconciled: [{ operation_id: 'op_1', state: 'issued', reason: 'expired', token: 'ghs_x' }] }) };
+    }
+    // enroll: emit the prompt line, hold pending until the test releases,
+    // then print the record — mirroring the real --json stream.
+    report?.({ status: 'pending-approval', user_code: 'ABCD-EFGH',
+      verification_uri: 'https://identity.example.test/device',
+      expires_at: '2026-08-12T09:15:00Z', thumbprint: 'JKT1' });
+    await enrollGate;
+    return { stdout: JSON.stringify({ device_id: 'dev_2', harnesses: ['codex'] }) };
+  };
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const s = await pairCookie(scoped.principalId);
+    // Gates.
+    assert.equal((await ui('/ui/api/machine/server/reconcile', { method: 'POST', body: {}, cookie: s })).status, 403);
+    assert.equal((await ui('/ui/api/machine/server/enroll', { method: 'POST', body: {}, cookie: s })).status, 403);
+    // Reconcile: counts, no secrets.
+    const rec = await (await ui('/ui/api/machine/server/reconcile', { method: 'POST', body: {}, cookie: w })).json();
+    assert.equal(rec.reconciled, 1);
+    assert.deepEqual(rec.results, [{ operation_id: 'op_1', state: 'issued', reason: 'expired' }]);
+    for (const [at, v] of walk(rec)) {
+      assert.doesNotMatch(String(v), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY/, at);
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} is secret-shaped`);
+    }
+    // Enroll: proposal → pending-approval with prompt fields → executed.
+    const { proposal } = await (await ui('/ui/api/machine/server/enroll', { method: 'POST', body: {}, cookie: w })).json();
+    assert.equal(proposal.tool, 'machine.enroll');
+    const decided = await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: proposal.operationDigest }, cookie: w });
+    assert.equal(decided.status, 200);
+    const pending = await waitFor(async () => {
+      const out = await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json();
+      return out.status === 'pending-approval' ? out : null;
+    });
+    assert.equal(pending.user_code, 'ABCD-EFGH');
+    assert.equal(pending.verification_uri, 'https://identity.example.test/device');
+    assert.equal(pending.thumbprint, 'JKT1');
+    finishEnroll();
+    await waitFor(async () => (await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json()).status === 'executed');
+    assert.ok(spawns.some((a) => a[0] === 'enroll' && a.includes('--force')));
+    // Deny: spawn never happens.
+    spawns.length = 0;
+    const { proposal: p2 } = await (await ui('/ui/api/machine/server/enroll', { method: 'POST', body: {}, cookie: w })).json();
+    await ui(`/ui/api/approvals/${p2.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'deny', digest: p2.operationDigest }, cookie: w });
+    assert.equal(spawns.length, 0);
+  }, { home: root, webDeps: { spawnServerCli: spawnFake } });
+});
+
+test('enroll stdout parser: chunked JSON lines, non-JSON ignored, complete URI wins', () => {
+  const seen = [];
+  let tail = enrollStdoutChunk('', '{"prompt":{"user_code":"ABCD-EFGH","verification_uri":"https://agents.true-l', (l) => seen.push(l));
+  tail = enrollStdoutChunk(tail, 'ine.ai/device","verification_uri_complete":"https://agents.true-line.ai/device?user_code=ABCD-EFGH","expires_in":600,"jkt":"j1"}}\nnot json at all\n{"rec', (l) => seen.push(l));
+  enrollStdoutChunk(tail, '"ord":{"device_id":"d1"}}\n', (l) => seen.push(l));
+  assert.equal(seen.length, 3);
+  assert.equal(parseEnrollLine(seen[1]), null); // the non-JSON line is ignored
+  assert.equal(parseEnrollLine('garbage'), null);
+  const reported = [];
+  enrollPromptReport(parseEnrollLine(seen[0]).prompt, (r) => reported.push(r), () => new Date('2026-08-12T09:00:00Z'));
+  assert.equal(reported[0].verification_uri, 'https://agents.true-line.ai/device?user_code=ABCD-EFGH');
+  reported.length = 0;
+  enrollPromptReport({ user_code: 'WXYZ-1234', verification_uri: 'https://agents.true-line.ai/device' }, (r) => reported.push(r));
+  assert.equal(reported[0].verification_uri, 'https://agents.true-line.ai/device?user_code=WXYZ-1234');
+});
+
+test('enroll serialization: a second enroll while one is open or running is refused', async () => {
+  const { root, env } = scratch();
+  env.AGENT_BOT_SERVER = 'https://identity.example.test';
+  const { statePaths } = await import('../identity/server-client.mjs');
+  const deviceFile = statePaths({ env, home: root }).device;
+  mkdirSync(path.dirname(deviceFile), { recursive: true, mode: 0o700 });
+  writeFileSync(deviceFile, JSON.stringify({ server: env.AGENT_BOT_SERVER, device_id: 'dev_1', jkt: 'J', method: 'device_code', platform: 't', device_name: 'b', harnesses: ['codex'], read_only: false, ephemeral: false, expires_at: null, management: 'managed', server_key_id: 'k1', enrolled_at: '2026-01-01T00:00:00Z' }) + '\n', { mode: 0o600 });
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  const spawnFake = async () => ({ stdout: '{"record":{"device_id":"d9","harnesses":["codex"]}}\n' });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const first = await ui('/ui/api/machine/server/enroll', { method: 'POST', body: {}, cookie: w });
+    assert.equal(first.status, 200);
+    // An open machine.enroll proposal blocks the second creation with the
+    // registered refusal code, and it stays blocked once executing.
+    const second = await ui('/ui/api/machine/server/enroll', { method: 'POST', body: {}, cookie: w });
+    assert.equal(second.status, 409);
+    assert.match((await second.text()), /enroll-in-flight/);
+  }, { home: root, webDeps: { spawnServerCli: spawnFake } });
+});
+
+test('enroll execution: the final non-prompt record supplies device_id', async () => {
+  const { root, env } = scratch();
+  env.AGENT_BOT_SERVER = 'https://identity.example.test';
+  const { statePaths } = await import('../identity/server-client.mjs');
+  const deviceFile = statePaths({ env, home: root }).device;
+  mkdirSync(path.dirname(deviceFile), { recursive: true, mode: 0o700 });
+  writeFileSync(deviceFile, JSON.stringify({ server: env.AGENT_BOT_SERVER, device_id: 'dev_1', jkt: 'J', method: 'device_code', platform: 't', device_name: 'b', harnesses: ['codex'], read_only: false, ephemeral: false, expires_at: null, management: 'managed', server_key_id: 'k1', enrolled_at: '2026-01-01T00:00:00Z' }) + '\n', { mode: 0o600 });
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  // The real --json stream: a prompt line, a non-JSON line, then the final
+  // record — each newline-terminated.
+  const stdout = [
+    '{"prompt":{"user_code":"ABCD-EFGH","verification_uri":"https://agents.true-line.ai/device","verification_uri_complete":"https://agents.true-line.ai/device?user_code=ABCD-EFGH","expires_in":600,"jkt":"j1"}}',
+    'not json at all',
+    '{"record":{"device_id":"dev_new","harnesses":["codex","claude"]}}',
+    '',
+  ].join('\n');
+  const spawnFake = async () => ({ stdout });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const { proposal } = await (await ui('/ui/api/machine/server/enroll', { method: 'POST', body: {}, cookie: w })).json();
+    await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: proposal.operationDigest }, cookie: w });
+    const outcome = await waitFor(async () => {
+      const out = await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json();
+      return out.status === 'executed' || out.status === 'failed' ? out : null;
+    });
+    assert.equal(outcome.status, 'executed');
+    assert.equal(outcome.result.device_id, 'dev_new');
+    assert.deepEqual(outcome.result.harnesses, ['codex', 'claude']);
+  }, { home: root, webDeps: { spawnServerCli: spawnFake } });
 });
