@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.15.10
+
+- `agent-bot mint-token` now withholds the raw token and prints only `{ schema_version: 1, credential_ref, task_id, operation_id, expires_at }` for unbound soul-marked and harness-detected callers in server mode (`credential_ref ?? issuance_id`), matching bound checkouts (#1293).
+- Registry coverage now runs source->registry too: a test scans
+  agent-mcp.mjs, machine-client.mjs, cli/machine.mjs and agent-daemon.mjs
+  for emitted stable codes (mcpError/mcError literals and code: object
+  literals) and asserts each is in governance/error-codes.json, so an
+  emitted-but-unregistered code like doctor-unavailable can't slip past
+  review again. Seven codes the daemon already emitted unregistered are
+  now registered (n93-n99).
+- Web client gains a read-only Server section (#1295): GET
+  /ui/api/machine/server returns enrollment status, device id/name,
+  approved identities and a doctor readiness summary for principals whose
+  observe authorization covers souls exactly ['*']. The MCP
+  server_status and doctor tools now share their probes through
+  server-status.mjs.
+
 ## 0.15.9
 
 - `isRegisteredAppSlug` (`config.mjs`) now includes the enrolled server-mode device's `harnesses` (`device.json`) so org-matched Apps such as `trueline-qwen-agent` resolve via `slugForOriginOwner` and `soulOwnsAppSlug` without triggering the `keyd` foreign-App owner gate; `keydStatus`/`keydVersionCheck` report `keyd-binary-missing` when `keyd.json` points to an absent binary; and `agent-bot setup-worktree` resolves the owning soul when run directly inside `<soulDir>/worktrees/<repo>` without `AGENT_BOT_ID` exported (#1288).
