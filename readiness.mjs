@@ -450,11 +450,24 @@ async function daemonHealthCheck({ home, env, probe, skipLoad, expectedVersion =
 
 // keyd against the version this release pins (#767). Only a keyd that is
 // installed or answering is checked; without one, keys stay in the #395 stores.
-export async function keydVersionCheck({ home, env, probe = keydStatus }) {
+export async function keydVersionCheck({ home, env, probe = keydStatus, exists = null }) {
   const status = await probe({ home, env });
   const evidence = { running: status.running, bin: status.bin, version: status.version, expected_version: status.expectedVersion };
   if (!status.running && !status.bin) {
     return readinessCheck({ id: 'keyd.version', status: 'not_applicable', message: 'agent-bot-keyd is not installed', evidence });
+  }
+  const binPresent = status.binExists !== undefined
+    ? status.binExists
+    : (typeof exists === 'function' && status.bin ? Boolean(exists(status.bin)) : true);
+  if (!status.running && !binPresent) {
+    return readinessCheck({
+      id: 'keyd.version',
+      status: 'warning',
+      code: 'keyd-binary-missing',
+      message: `agent-bot-keyd record points to ${status.bin}, which is not on disk`,
+      action: 'run: agent-bot keyd uninstall',
+      evidence: { ...evidence, bin_exists: false },
+    });
   }
   if (!status.running) {
     return readinessCheck({
@@ -3019,7 +3032,7 @@ export async function collectReadiness({
       expectedVersion: readPackageVersion(join(ROOT, 'package.json')),
     });
     machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
-    machineChecks.push(await keydVersionCheck({ home, env, probe: probeKeyd }));
+    machineChecks.push(await keydVersionCheck({ home, env, probe: probeKeyd, exists: probeKeyd === keydStatus ? exists : null }));
     machineChecks.push(spacesRootCheck({ home, env, config }));
     machineChecks.push(sopPolicyCheck({ home, env }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));

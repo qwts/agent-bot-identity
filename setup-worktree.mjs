@@ -12,7 +12,7 @@ import { AGENT_ID_KEYS } from './identity-format.mjs';
 import { loadConfig, isGateEnabled, isOrgHarnessAppSlug, soulOwnsAppSlug, apiBase, daemonPreference, githubHost } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
-import { listSouls, showSoul, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, locateSoulDir, showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { refuseAppOwnerMismatch } from './identity-soul.mjs';
 import { assertWorktreeArea, placeWorktree, soulWorktreePath } from './soul-worktrees.mjs';
 
@@ -52,7 +52,7 @@ function parseArgs(argv) {
 }
 
 // Never consult a checkout pin or directory to discover the session's soul.
-function sessionIdentity() {
+function sessionIdentity(options = {}) {
   const fromEnv = process.env.AGENT_BOT_ID || process.env.QWTS_AGENT_ID;
   const binding = process.env.AGENT_BOT_BINDING ? readBinding() : null;
   if (process.env.AGENT_BOT_BINDING && !binding) throw new Error('session binding is missing; check in again with agent-bot join');
@@ -61,16 +61,32 @@ function sessionIdentity() {
   let identity = id ? identityOp('read', { id }) : null;
   if (!identity) {
     const transcript = identityOp('discover-transcript');
-    if (!transcript) return null;
-    // One child reads every candidate; the first unreadable one fails the
-    // lookup, as reading them one by one did.
-    const read = identityOp('read-many', { ids: listSouls().filter((soul) => soul.status !== 'retired').map((soul) => soul.id) });
-    const unreadable = read.find((entry) => entry.error);
-    if (unreadable) throw Object.assign(new Error(unreadable.error.message), { code: unreadable.error.code });
-    const matches = read.map((entry) => entry.record)
-      .filter((record) => record.transcript?.provider === transcript.provider && record.transcript.id === transcript.id);
-    if (matches.length > 1) throw new Error('multiple souls match this session; supply AGENT_BOT_ID from agent-bot join');
-    identity = matches[0];
+    if (transcript) {
+      // One child reads every candidate; the first unreadable one fails the
+      // lookup, as reading them one by one did.
+      const read = identityOp('read-many', { ids: listSouls().filter((soul) => soul.status !== 'retired').map((soul) => soul.id) });
+      const unreadable = read.find((entry) => entry.error);
+      if (unreadable) throw Object.assign(new Error(unreadable.error.message), { code: unreadable.error.code });
+      const matches = read.map((entry) => entry.record)
+        .filter((record) => record.transcript?.provider === transcript.provider && record.transcript.id === transcript.id);
+      if (matches.length > 1) throw new Error('multiple souls match this session; supply AGENT_BOT_ID from agent-bot join');
+      identity = matches[0];
+    }
+  }
+  // #1288: when run directly (not from a git hook) inside an installed soul's
+  // own <soulDir>/worktrees/<repo> and AGENT_BOT_ID was not explicitly cleared,
+  // resolve the owning soul from its .agent-soul.json marker.
+  if (!identity && !options.hook && process.env.AGENT_BOT_ID === undefined && process.env.QWTS_AGENT_ID === undefined) {
+    try {
+      const located = locateSoulDir(process.cwd());
+      if (located?.status === 'installed' && located.agentId && located.path) {
+        const worktreesDir = realpathSync(join(located.path, 'worktrees'));
+        const here = realpathSync(process.cwd());
+        if (here.startsWith(`${worktreesDir}/`)) {
+          identity = identityOp('read', { id: located.agentId });
+        }
+      }
+    } catch { /* not inside an installed soul's worktrees dir */ }
   }
   if (!identity) return null;
   if (identity.status === 'retired' || showSoul(identity.id).status === 'retired') throw new Error('session soul is retired');
