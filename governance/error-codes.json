@@ -737,6 +737,62 @@
       "kind": "refusal",
       "summary": "The agent-machine reply verifies but its request_nonce is absent or not the request we sent.",
       "registered": "0.15.5"
+    },
+    {
+      "n": 93,
+      "code": "identity-app-invalid",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "The /v0/identity/apps request body was not valid JSON.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 94,
+      "code": "identity-app-not-found",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "No /v0/identity/apps route matches the path.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 95,
+      "code": "dream-service-unavailable",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The dream subsystem is not configured on this daemon.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 96,
+      "code": "dream-control-audit-unconfirmed",
+      "component": "host",
+      "kind": "failure",
+      "summary": "A dream control's audit receipt could not be confirmed written.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 97,
+      "code": "dream-history-query",
+      "component": "host",
+      "kind": "refusal",
+      "summary": "The dream history query fields are invalid.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 98,
+      "code": "owner-consent-unavailable",
+      "component": "host",
+      "kind": "failure",
+      "summary": "The owner-consent surface needed for the decision is unavailable.",
+      "registered": "0.15.5"
+    },
+    {
+      "n": 99,
+      "code": "presence-unavailable",
+      "component": "host",
+      "kind": "failure",
+      "summary": "agent-bot-keyd could not ask, and the loosening has no administrator-dialog fallback.",
+      "registered": "0.15.5"
     }
   ]
 }
