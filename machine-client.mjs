@@ -193,8 +193,15 @@ export function machineCall({ socketPath, request, timeoutMs = DEFAULT_TIMEOUT_M
     socket.on('data', (chunk) => {
       // 0x0a never appears inside a UTF-8 multibyte sequence, so the raw-byte
       // scan is safe and the line decodes whole — a chunk boundary inside a
-      // character must not split it.
+      // character must not split it. agent-machine's own maxMessage caps a
+      // message at 64 KiB; anything larger is refused rather than buffered.
       buf = Buffer.concat([buf, chunk]);
+      if (buf.length > 64 * 1024) {
+        clearTimeout(timer);
+        socket.destroy();
+        reject(mcError('machine-reply-invalid', 'the agent-machine reply exceeds the 64 KiB message cap'));
+        return;
+      }
       const nl = buf.indexOf(0x0a);
       if (nl === -1) return;
       clearTimeout(timer);

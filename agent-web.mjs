@@ -427,14 +427,22 @@ export function createWebLayer({
       const suffixes = existsSync(peers)
         ? ['.pub', '.next', '.confirm', '.revoked'].filter((sfx) => existsSync(path.join(peers, `agent-daemon${sfx}`)))
         : [];
-      const pin = existsSync(pinPath({ env, home })) ? readFileSync(pinPath({ env, home })) : null;
-      const pairing = {
-        client_key: loadMachinePublicKey({ env, home }) !== null,
+      // A corrupt or symlinked key or pin is reported inside the section,
+      // never a 500: the probe stays a 200 view.
+      const pairing = {};
+      try {
+        pairing.client_key = loadMachinePublicKey({ env, home }) !== null;
+      } catch { pairing.client_key = 'invalid'; pairing.client_key_error = 'key-unreadable'; }
+      let pin = null;
+      try {
+        pin = existsSync(pinPath({ env, home })) ? readFileSync(pinPath({ env, home })) : null;
+      } catch { pairing.pin = 'invalid'; pairing.pin_error = 'pin-unreadable'; }
+      Object.assign(pairing, {
         pin_fingerprint: pin ? daemonFingerprint(pin) : null,
         agent_daemon_peer: suffixes,
         terminal_paired: existsSync(path.join(peers, 'terminal.pub')),
         pair_command: 'agent-bot machine pair',
-      };
+      });
       const verb = async (v) => {
         let inFlight = machineInFlight.get(v);
         inFlight ??= Promise.resolve().then(() => machineVerb(v))

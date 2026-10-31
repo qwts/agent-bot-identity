@@ -1143,3 +1143,26 @@ test('agent-machine view: paired shows status records and receipts; tamper is a 
   }, { home: root });
   chmodSync(path.join(AGENT_MACHINE_DIR(root), 'peers', 'terminal.pub'), 0o600);
 });
+
+test('agent-machine view: a corrupt client key reports invalid inside the section, still 200', async () => {
+  const { root, env } = scratch();
+  const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+  // A key file that fails the custody/shape checks must not throw out of the probe.
+  // A symlinked key is refused by the custody read — it must surface as a
+  // section value, not a thrown 500.
+  const { machineStateDir } = await import('../machine-client.mjs');
+  const { vouchKeyPath } = await import('../identity/vouch.mjs');
+  const dir = machineStateDir({ env, home: root });
+  mkdirSync(dir, { recursive: true });
+  const target = path.join(root, 'elsewhere.key');
+  writeFileSync(target, 'x');
+  symlinkSync(target, vouchKeyPath(dir));
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const cookie = await pairCookie(full.principalId);
+    const res = await ui('/ui/api/machine/agent-machine', { cookie });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.pairing.client_key, 'invalid');
+    assert.equal(body.pairing.client_key_error, 'key-unreadable');
+  }, { home: root });
+});

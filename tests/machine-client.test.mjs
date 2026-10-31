@@ -234,3 +234,20 @@ test('load-only key readers keep vouch custody: symlink, FIFO and foreign file r
   execFileSync('mkfifo', [file]);
   assert.throws(() => loadMachinePublicKey({ env, home: root }), /not a regular file owned by this account/);
 });
+
+test('a reply exceeding the 64 KiB cap is refused, never buffered', async () => {
+  const root = scratch();
+  const dir = path.join(root, 'am'); mkdirSync(dir, { recursive: true });
+  const sock = path.join(dir, 'daemon.sock');
+  const server = createServer((conn) => {
+    conn.on('data', () => { conn.write(Buffer.alloc(64 * 1024 + 1, 0x61)); });
+  });
+  await new Promise((resolve) => server.listen(sock, resolve));
+  server.unref();
+  try {
+    await assert.rejects(() => machineCall({ socketPath: sock, request: { verb: 'status' } }),
+      (error) => error.code === 'machine-reply-invalid');
+  } finally {
+    server.close();
+  }
+});
