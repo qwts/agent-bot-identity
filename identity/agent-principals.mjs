@@ -477,6 +477,25 @@ export function assertAuthorized({ principal, agentId, operation }) {
   return true;
 }
 
+// Machine-level operations (#1295): no soul is the target, so the gate is
+// the operation itself plus souls exactly ['*'] — the only list the
+// vocabulary allows containing the wildcard at all.
+export function assertMachineAuthorized({ principal, operation }) {
+  const refused = () => Object.assign(
+    new Error('principal is not authorized for this operation'),
+    { statusCode: 403 },
+  );
+  if (!PRINCIPAL_OPERATIONS.includes(operation)) {
+    throw new Error('operations must be a subset of the interaction operations');
+  }
+  if (!principal || typeof principal !== 'object') throw refused();
+  if (principal.status !== 'active') throw refused();
+  const souls = principal.authorizations?.souls;
+  if (!principal.authorizations.operations.includes(operation)) throw refused();
+  if (!Array.isArray(souls) || souls.length !== 1 || souls[0] !== '*') throw refused();
+  return true;
+}
+
 export function getPrincipal(principalId, { file = principalsFile() } = {}) {
   const principal = readDocument(file).principals[validatePrincipalId(principalId)];
   if (!principal) throw new Error('unknown principal');
