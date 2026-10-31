@@ -30,7 +30,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { assertMachineAuthorized, getPrincipal, listPrincipals, principalsFile } from './identity-host.mjs';
+import { assertMachineAuthorized, getPrincipal, listPrincipals, listSessions, principalsFile } from './identity-host.mjs';
+import { stateDirectory } from './state-paths.mjs';
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
 import {
   AGENT_MACHINE_DIR, buildRequest, daemonFingerprint, loadMachinePublicKey,
@@ -172,6 +173,8 @@ export function createWebLayer({
   // Injectable for tests: the shared server/doctor probes (#1295).
   serverStatus = serverStatusReport,
   doctor = doctorReportAsync,
+  // Live binding registry projection for the souls view (#1295).
+  soulBindings = () => [],
 } = {}) {
   void config; // reserved; the web layer holds no policy of its own
   const root = path.resolve(webRoot);
@@ -507,6 +510,38 @@ export function createWebLayer({
       catch { throw failure(403, 'principal is not authorized for this operation'); }
       try { sendJson(res, 200, interaction.machineOutcome(match[1])); }
       catch (error) { throw failure(error?.statusCode ?? 404, error?.message ?? 'unknown proposal'); }
+      return;
+    }
+    if (req.method === 'GET' && pathname === '/ui/api/souls') {
+      const { souls } = interaction.listAuthorizedSouls(caller);
+      const sessionsDir = stateDirectory({ env, home });
+      const view = souls.map((soul) => ({
+        id: soul.id,
+        appSlug: soul.appSlug ?? null,
+        parentId: soul.parentId ?? null,
+        status: soul.status ?? null,
+        lastSeen: soul.lastSeen ?? null,
+        role: soul.parentId ? 'specialist' : 'lead',
+        // Transcript locators and every path/token/proof-shaped field stay
+        // server-side; only the public record fields cross the wire.
+        sessions: listSessions(soul.id, { stateDir: sessionsDir }).map((s) => ({
+          session_id: s.session_id,
+          harness: s.harness ?? null,
+          status: s.status ?? null,
+          started_at: s.started_at ?? null,
+          last_seen: s.last_seen ?? null,
+          ended_at: s.ended_at ?? null,
+        })),
+        bindings: soulBindings(soul.id).map((b) => ({
+          agentId: b.agentId,
+          harness: b.harness ?? null,
+          sessionId: b.sessionId ?? null,
+          worktree: b.worktree ? path.basename(b.worktree) : null,
+          boundAt: b.boundAt ?? null,
+          lastUsedAt: b.lastUsedAt ?? null,
+        })),
+      }));
+      sendJson(res, 200, { souls: view });
       return;
     }
     if (req.method === 'GET' && pathname === '/ui/api/population') {

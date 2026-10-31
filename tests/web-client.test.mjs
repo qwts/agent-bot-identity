@@ -56,13 +56,13 @@ function scratch() {
   return { root, env };
 }
 
-function seedSoul(env, { id = AGENT_ID, status = 'active' } = {}) {
+function seedSoul(env, { id = AGENT_ID, status = 'active', parentId = null } = {}) {
   const spacePath = path.join(path.dirname(env.AGENT_BOT_POPULATION_PATH), 'spaces', id);
   mkdirSync(spacePath, { recursive: true });
   return upsertSoul({
     id,
     appSlug: 'you-codex-agent',
-    parentId: null,
+    parentId,
     status,
     spacePath,
     transcriptLocator: null,
@@ -1319,4 +1319,63 @@ test('machine plan/proposal fields are type-checked strings capped at 128; card 
     assert.match(app, /proposal\.operation/);
 assert.deepEqual(proposal.operation, { verb: 'update', harness: 'web-ui', name: 'example' });
   }, { home: root });
+});
+
+// --- souls view (#1295) -----------------------------------------------------
+
+test('GET /ui/api/souls: per-soul observe only; sessions/bindings projected without paths or secrets', async () => {
+  const { env } = scratch();
+  seedSoul(env);
+  seedSoul(env, { id: OTHER_ID });
+  const scoped = seedPrincipal(env, { label: 'scoped', souls: [AGENT_ID], operations: ['observe'] });
+  const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+  // Plant distinctive values that must never appear in the projection.
+  const { openSession } = await import('../identity/agent-sessions.mjs');
+  const { stateDirectory } = await import('../state-paths.mjs');
+  const stateDir = stateDirectory({ env, home: '/nonexistent' });
+  openSession({ soulId: AGENT_ID, transcript: { provider: 'codex', id: 'TRANSCRIPT_LOCATOR_SECRET_PATH' }, harness: 'codex', stateDir });
+  const bindingsView = [{ agentId: AGENT_ID, harness: 'codex', sessionId: 'ses_bind_1',
+    worktree: '/very/secret/abs/path/worktree-1', boundAt: '2026-08-12T08:00:00Z', lastUsedAt: '2026-08-12T09:00:00Z' }];
+  await withServer(env, async ({ ui, pairCookie }) => {
+    assert.equal((await ui('/ui/api/souls')).status, 401);
+    const cookie = await pairCookie(scoped.principalId);
+    const scopedView = await (await ui('/ui/api/souls', { cookie })).json();
+    assert.equal(scopedView.souls.length, 1);
+    assert.equal(scopedView.souls[0].id, AGENT_ID);
+    assert.equal(scopedView.souls[0].role, 'lead');
+    assert.equal(scopedView.souls[0].sessions.length, 1);
+    assert.equal(scopedView.souls[0].bindings.length, 1);
+    assert.equal(scopedView.souls[0].bindings[0].worktree, 'worktree-1');
+    const all = await (await ui('/ui/api/souls', { cookie: await pairCookie(full.principalId) })).json();
+    assert.equal(all.souls.length, 2);
+    const flat = JSON.stringify(scopedView);
+    for (const leak of ['TRANSCRIPT_LOCATOR_SECRET_PATH', '/very/secret/abs/path', 'secret', 'transcript', '.git']) {
+      assert.ok(!flat.includes(leak), `projection leaks ${leak}`);
+    }
+    // Denied principal gets nothing.
+    const none = seedPrincipal(env, { label: 'none', souls: [], operations: [] });
+    assert.equal((await ui('/ui/api/souls', { cookie: await pairCookie(none.principalId) })).status, 403);
+  }, { webDeps: { soulBindings: () => bindingsView } });
+});
+
+
+test('souls projection: orphan specialists returned; app.js uses the route field names', async () => {
+  const { root, env } = scratch();
+  seedSoul(env, { id: 'agent_66666666-6666-4666-8666-666666666666', parentId: 'agent_77777777-7777-4777-8777-777777777777' });
+  const scoped = seedPrincipal(env, { label: 's', souls: ['agent_66666666-6666-4666-8666-666666666666'], operations: ['observe'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(scoped.principalId);
+    const { souls } = await (await ui('/ui/api/souls', { cookie: w })).json();
+    const found = souls.find((s) => s.id === 'agent_66666666-6666-4666-8666-666666666666');
+    assert.ok(found, 'a scoped principal sees its specialist soul');
+    assert.equal(found.parentId, 'agent_77777777-7777-4777-8777-777777777777');
+    assert.equal(found.role, 'specialist');
+  }, { home: root });
+  // The shipped UI reads the field names the route actually sends, and
+  // treats souls whose parent is absent from the collection as roots.
+  const app = readFileSync(path.join(WEB_ROOT, 'app.js'), 'utf8');
+  assert.match(app, /s\.started_at/);
+  assert.match(app, /s\.ended_at/);
+  assert.match(app, /!visible\.has\(o\.parentId\)/);
+  assert.match(app, /specialist of \$\{orphanOf\}/);
 });

@@ -363,6 +363,48 @@ async function cancelJob(invocationId) {
   await refresh();
 }
 
+// --- Souls (read-only, #1295) ------------------------------------------------
+
+async function loadSouls() {
+  const { souls } = await api('/ui/api/souls');
+  const list = $('souls-list');
+  list.textContent = '';
+  // A specialist whose parent isn't in the returned collection renders as
+  // a root labelled with its (unseen) parent id.
+  const visible = new Set(souls.map((s) => s.id));
+  const roots = souls.filter((o) => !o.parentId || !visible.has(o.parentId));
+  const render = (soul, nested, orphanOf = null) => {
+    const box = el('div', { class: nested ? 'soul soul-nested' : 'soul' });
+    box.append(el('h3', { text: `${soul.role === 'lead' ? '● ' : '○ '}${soul.id}` }),
+      el('p', { class: 'hint', text: `${soul.appSlug ?? '-'} · ${soul.status ?? '-'} · ${soul.role}${orphanOf ? ` · specialist of ${orphanOf}` : ''}` }));
+    const st = el('table');
+    const sh = el('tr');
+    for (const h of ['session', 'harness', 'status', 'started', 'last seen', 'ended']) sh.append(el('th', { text: h }));
+    st.append(sh);
+    const tb = el('tbody');
+    for (const s of soul.sessions ?? []) {
+      const tr = el('tr');
+      for (const v of [s.session_id, s.harness, s.status, s.started_at, s.last_seen, s.ended_at]) tr.append(el('td', { text: String(v ?? '-') }));
+      tb.append(tr);
+    }
+    st.append(tb); box.append(st);
+    const bt = el('table');
+    const bh = el('tr');
+    for (const h of ['harness', 'session', 'worktree', 'bound', 'last used']) bh.append(el('th', { text: h }));
+    bt.append(bh);
+    const bb = el('tbody');
+    for (const b of soul.bindings ?? []) {
+      const tr = el('tr');
+      for (const v of [b.harness, b.sessionId, b.worktree, b.boundAt, b.lastUsedAt]) tr.append(el('td', { text: String(v ?? '-') }));
+      bb.append(tr);
+    }
+    bt.append(bb); box.append(bt);
+    list.append(box);
+    for (const child of souls.filter((o) => o.parentId === soul.id)) render(child, true);
+  };
+  for (const soul of roots) render(soul, false, soul.parentId && !visible.has(soul.parentId) ? soul.parentId : null);
+}
+
 // --- Approvals -----------------------------------------------------------------
 
 async function loadApprovals() {
@@ -419,6 +461,7 @@ async function refresh() {
   if (state.view === 'server') await loadServer();
   if (state.view === 'agent-machine') await loadAgentMachine();
   if (state.view === 'conversation') await loadConversation();
+  if (state.view === 'souls') await loadSouls();
   if (state.view === 'jobs') await loadJobs();
   await loadApprovals();
 }

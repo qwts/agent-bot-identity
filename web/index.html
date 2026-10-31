@@ -20,6 +20,7 @@
     <button data-view="approvals" type="button">Approvals<span id="approvals-badge" hidden></span></button>
     <button data-view="server" type="button">Server</button>
     <button data-view="agent-machine" type="button">Agent machine</button>
+    <button data-view="souls" type="button">Souls</button>
   </nav>
   <div id="whoami"></div>
 </header>
@@ -111,6 +112,10 @@
       <thead><tr><th>Plan</th><th>Command</th><th>Outcome</th><th>Soul</th><th>Harness</th><th>Session</th><th>At</th></tr></thead>
       <tbody id="am-receipts"></tbody>
     </table></div>
+  <section id="view-souls" hidden>
+    <h2>Souls</h2>
+    <p class="hint">Souls this principal may observe, with sessions and live bindings.</p>
+    <div id="souls-list"></div>
   </section>
 
   <section id="view-approvals" hidden>
