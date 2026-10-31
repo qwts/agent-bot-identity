@@ -575,6 +575,7 @@ export function createDaemonServer({
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
+
   // Status-digest upload (#1295): every 15 min and after each successful
   // apply/update, relay ~/.config/agent-machine/status-digest.json byte-exact
   // to the server; refusals are logged once per digest, never retried.

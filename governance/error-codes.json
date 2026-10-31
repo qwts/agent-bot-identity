@@ -849,6 +849,14 @@
       "kind": "failure",
       "registered": "0.15.5",
       "summary": "the fetched catalog payload is malformed (key, bytes, or JSON)."
+    },
+    {
+      "n": 107,
+      "code": "soul-remove-plan-changed",
+      "component": "web",
+      "kind": "refusal",
+      "registered": "0.15.11",
+      "summary": "The soul removal plan changed between proposal and approval; nothing was removed."
     }
   ]
 }

@@ -27,6 +27,7 @@ import {
   enrollPromptReport,
   enrollStdoutChunk,
   parseEnrollLine,
+  proposalOwnerGate,
   webRootDirectory,
 } from '../agent-web.mjs';
 import { addArtifact, createSession, operationDigest } from '../agent-jobs.mjs';
@@ -1761,4 +1762,140 @@ test('fetchCatalog: each local-verification failure gets its stable code', async
   for (const [body, code] of cases) {
     await assert.rejects(fetchCatalog({ session: session(body), home: '/x' }), (e) => e.code === code, code);
   }
+});
+
+// --- soul writes as owner-gated proposals (#1295) ----------------------------
+
+test('soul proposals: per-soul scope, gate stub, revision/cold-wake/remove', async () => {
+  const { root, env } = scratch();
+  seedSoul(env);
+  seedSoul(env, { id: OTHER_ID });
+  const approveA = seedPrincipal(env, { label: 'a', souls: [AGENT_ID], operations: ['observe', 'approve'] });
+  const approveAll = seedPrincipal(env, { label: 'all', souls: ['*'], operations: ['observe', 'approve'] });
+  const observeOnly = seedPrincipal(env, { label: 'o', souls: [AGENT_ID], operations: ['observe'] });
+  // A real pending revision on AGENT_ID for the revision verbs.
+  const { join } = await import('node:path');
+  const { mintAgentIdentity } = await import('../agent-identity.mjs');
+  const { adoptSoulPackage, proposeSoulRevision } = await import('../soul-revisions.mjs');
+  const { computePackageRevision } = await import('../soul-package.mjs');
+  const { stateDirectory } = await import('../state-paths.mjs');
+  const stateDir = stateDirectory({ env, home: root });
+  const revOpts = { env, home: root, cwd: root, stateDir, now: () => new Date('2026-10-02T12:00:00Z') };
+  const packagePath = join(root, 'example.soul');
+  mkdirSync(packagePath);
+  const manifest = { formatVersion: 1, name: 'Test', description: 'Test soul', displaySeed: 'test',
+    preferredHarnesses: [], revision: `sha256:${'0'.repeat(64)}`, parentRevision: null };
+  writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
+  writeFileSync(join(packagePath, 'AGENTS.md'), 'Initial\n');
+  manifest.revision = computePackageRevision(packagePath);
+  writeFileSync(join(packagePath, 'soul.json'), JSON.stringify(manifest));
+  const { id: revSoul } = mintAgentIdentity({ ...revOpts, appSlug: 'test-agent', packageRevision: manifest.revision });
+  adoptSoulPackage(revSoul, packagePath, { ...revOpts, reason: 'Start' });
+  writeFileSync(join(packagePath, 'AGENTS.md'), 'Proposed\n');
+  const revProposal = proposeSoulRevision(revSoul, packagePath, { ...revOpts, reason: 'Improve' });
+  const ownerRev = seedPrincipal(env, { label: 'r', souls: [revSoul], operations: ['observe', 'approve'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const a = await pairCookie(approveA.principalId);
+    const all = await pairCookie(approveAll.principalId);
+    const o = await pairCookie(observeOnly.principalId);
+    const r = await pairCookie(ownerRev.principalId);
+    // Scope: observe-only cannot create; A-only cannot create for B.
+    assert.equal((await ui(`/ui/api/souls/${AGENT_ID}/proposals`, {
+      method: 'POST', body: { verb: 'cold-wake', enabled: true }, cookie: o })).status, 403);
+    assert.equal((await ui(`/ui/api/souls/${OTHER_ID}/proposals`, {
+      method: 'POST', body: { verb: 'cold-wake', enabled: true }, cookie: a })).status, 403);
+    // Unknown field and unknown verb are 400.
+    for (const body of [{ verb: 'cold-wake', enabled: true, extra: 1 }, { verb: 'soul.delete' }, { verb: 'revision.approve', revision_id: 'x', bonus: 2 }]) {
+      assert.equal((await ui(`/ui/api/souls/${AGENT_ID}/proposals`, { method: 'POST', body, cookie: a })).status, 400, JSON.stringify(body));
+    }
+    // Unknown/decided revision id → 400.
+    assert.equal((await ui(`/ui/api/souls/${revSoul}/proposals`, {
+      method: 'POST', body: { verb: 'revision.approve', revision_id: 'rev_nonexistent' }, cookie: r })).status, 400);
+    // The revisions list is observe-scoped and shows the pending one.
+    const revs = await (await ui(`/ui/api/souls/${revSoul}/revisions`, { cookie: r })).json();
+    assert.ok(revs.proposals.some((p) => p.proposalId === revProposal.proposalId));
+    // Revision approve: proposal → owner approve → revision decided through the stub.
+    const { proposal: rp } = await (await ui(`/ui/api/souls/${revSoul}/proposals`, {
+      method: 'POST', body: { verb: 'revision.approve', revision_id: revProposal.proposalId }, cookie: r })).json();
+    assert.equal(rp.tool, 'soul.revision.approve');
+    const decided = await ui(`/ui/api/approvals/${rp.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: rp.operationDigest }, cookie: r });
+    assert.equal(decided.status, 200);
+    await waitFor(async () => (await (await ui(`/ui/api/proposals/${rp.proposalId}`, { cookie: r })).json()).status === 'executed');
+    const { listSoulProposals } = await import('../soul-revisions.mjs');
+    const after = listSoulProposals(revSoul, { stateDir }).find((p) => p.proposalId === revProposal.proposalId);
+    assert.notEqual(after.status, 'pending');
+    // Cold-wake: approve toggles the stored setting.
+    const { proposal: cp } = await (await ui(`/ui/api/souls/${AGENT_ID}/proposals`, {
+      method: 'POST', body: { verb: 'cold-wake', enabled: true }, cookie: a })).json();
+    await ui(`/ui/api/approvals/${cp.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: cp.operationDigest }, cookie: a });
+    await waitFor(async () => (await (await ui(`/ui/api/proposals/${cp.proposalId}`, { cookie: a })).json()).status === 'executed');
+    const { readColdWakeSnapshot } = await import('../cold-wake-settings.mjs');
+    assert.equal(readColdWakeSnapshot(AGENT_ID, { env, home: root }).setting, true);
+    // Remove: plan is in the digest-covered operation; approve archives.
+    const { proposal: rm } = await (await ui(`/ui/api/souls/${AGENT_ID}/proposals`, {
+      method: 'POST', body: { verb: 'remove' }, cookie: a })).json();
+    assert.deepEqual(rm.operation.plan.archived, [AGENT_ID]);
+    assert.match(rm.summary, /archives 1/);
+    await ui(`/ui/api/approvals/${rm.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: rm.operationDigest }, cookie: a });
+    await waitFor(async () => (await (await ui(`/ui/api/proposals/${rm.proposalId}`, { cookie: a })).json()).status === 'executed');
+    const { listSouls } = await import('../agent-population.mjs');
+    const removed = listSouls({ file: env.AGENT_BOT_POPULATION_PATH }).find((s) => s.id === AGENT_ID);
+    assert.equal(removed?.status, 'retired', 'the soul is retired by the archived removal');
+    // Remove whose plan drifts before approval fails with soul-remove-plan-changed.
+    const { proposal: rm2 } = await (await ui(`/ui/api/souls/${OTHER_ID}/proposals`, {
+      method: 'POST', body: { verb: 'remove' }, cookie: all })).json();
+    seedSoul(env, { id: 'agent_88888888-8888-4888-8888-888888888888', parentId: OTHER_ID });
+    await ui(`/ui/api/approvals/${rm2.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: rm2.operationDigest }, cookie: all });
+    const failed = await waitFor(async () => {
+      const out = await (await ui(`/ui/api/proposals/${rm2.proposalId}`, { cookie: all })).json();
+      return out.status === 'failed' ? out : null;
+    });
+    assert.match(failed.error, /plan changed/);
+    // Denied removal does nothing.
+    const { proposal: rm3 } = await (await ui(`/ui/api/souls/${OTHER_ID}/proposals`, {
+      method: 'POST', body: { verb: 'remove' }, cookie: all })).json();
+    // The summary names each independent specialist id, not just a count.
+    assert.match(rm3.summary, /agent_88888888-8888-4888-8888-888888888888/);
+    await ui(`/ui/api/approvals/${rm3.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'deny', digest: rm3.operationDigest }, cookie: all });
+    await waitFor(async () => (await (await ui(`/ui/api/proposals/${rm3.proposalId}`, { cookie: all })).json()).status === 'denied');
+    assert.ok(listSouls({ file: env.AGENT_BOT_POPULATION_PATH }).some((s) => s.id === OTHER_ID));
+    // Secret walk over proposal views.
+    for (const [at, v] of walk([rp, rm, failed])) {
+      assert.doesNotMatch(String(v), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY/, at);
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} is secret-shaped`);
+    }
+  }, { home: root });
+});
+
+test('proposalOwnerGate refuses any action string but the expected one', async () => {
+  const { root, env } = scratch();
+  const gate = proposalOwnerGate({ expected: 'soul cold-wake agent_x on',
+    proposalId: 'prop_1', principalId: 'principal_x', digest: 'digest_x', env, home: root, now: () => new Date() });
+  await assert.rejects(() => gate('soul cold-wake agent_x off', {}), /owner-gate action mismatch/);
+  const ok = await gate('soul cold-wake agent_x on', {});
+  assert.equal(ok.via, 'ui-proposal:prop_1');
+  assert.equal(ok.method, 'consent');
+});
+
+test('index.html: unique nav targets, every view-* section once and never nested', () => {
+  const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  const navTargets = [...html.matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(navTargets).size, navTargets.length, `dup nav target: ${navTargets}`);
+  // Every view-* section appears exactly once, and no section contains another.
+  const sections = [...html.matchAll(/<section id="(view-[^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(sections).size, sections.length, `dup section: ${sections}`);
+  for (const nav of navTargets) assert.ok(sections.includes(`view-${nav}`), `nav ${nav} has no section`);
+  const parts = html.split(/<section id="view-[^"]+" hidden>|<\/section>/);
+  let depth = 0, maxDepth = 0;
+  for (const chunk of html.match(/<section id="view-[^"]+" hidden>|<\/section>/g)) {
+    depth += chunk.startsWith('<section') ? 1 : -1;
+    maxDepth = Math.max(maxDepth, depth);
+    assert.ok(depth >= 0, 'unbalanced </section>');
+  }
+  assert.equal(maxDepth, 1, 'a view-* section is nested inside another');
 });

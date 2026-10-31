@@ -835,17 +835,23 @@ export function createInteractionService({
 
     // The owner's view (#85): every open proposal. Only the local CLI, past
     // the owner gate, and the daemon-token routes reach this.
-    // Machine-level operation approval (#1295): a proposal with no soul and
-    // tool 'machine.<verb>'; the digest covers the exact machine request. The
+    // Owner approval shared by machine and soul operations (#1295). The
     // execute closure runs once only on approval, and the outcome is kept
-    // in memory for the status route.
-    requestMachineApproval({ principal, transport, operation, summary, execute, ttlMs = DEFAULT_PROPOSAL_TTL_MS }) {
+    // in memory for the status route. agentId null → machine.* under the
+    // machine gate; a soul-scoped proposal carries its agentId, is created
+    // under per-soul 'approve', decided through the existing soul path, and
+    // listed through the per-soul observe filter.
+    requestOwnerApproval({ principal, transport, agentId = null, operation, summary, execute, ttlMs = DEFAULT_PROPOSAL_TTL_MS }) {
       const wantedTransport = validated(() => validateTransport(transport));
-      assertMachineAuthorized({ principal, operation: 'approve' });
+      if (agentId === null) {
+        assertMachineAuthorized({ principal, operation: 'approve' });
+      } else {
+        authorize({ principal, transport: wantedTransport, agentId, operation: 'approve' });
+      }
       audit('accepted', { principal, transport: wantedTransport, operation: 'approve' });
       const digest = operationDigest(operation);
       const proposal = createProposal(
-        { agentId: null, tool: `machine.${operation.verb}`, operationDigest: digest, summary, operation },
+        { agentId, tool: `${agentId === null ? 'machine' : 'soul'}.${operation.verb}`, operationDigest: digest, summary, operation },
         { ...storeOptions, ttlMs },
       );
       appendAuditReceipt({ event: 'approval-requested', operation: 'approve', decision: 'open' }, storeOptions);
@@ -854,15 +860,17 @@ export function createInteractionService({
         clearTimeout(timer);
         approvalWaiters.delete(proposal.proposalId);
         if (outcome.decision === 'approve') {
+          const report = (fields) => recordMachineOutcome(proposal.proposalId, fields);
+          report.proposalId = proposal.proposalId;
           Promise.resolve()
-            .then(() => execute((fields) => recordMachineOutcome(proposal.proposalId, fields)))
+            .then(() => execute(report))
             .then((result) => recordMachineOutcome(proposal.proposalId, { status: 'executed', result }))
             .catch((error) => recordMachineOutcome(proposal.proposalId, { status: 'failed', error: error?.message ?? 'failed' }));
         } else {
           recordMachineOutcome(proposal.proposalId, { status: outcome.expired ? 'expired' : 'denied' });
         }
       });
-      approvalSources.set(proposal.proposalId, { kind: 'machine' });
+      approvalSources.set(proposal.proposalId, { kind: agentId === null ? 'machine' : 'soul' });
       const timer = setTimeout(() => {
         const waiter = approvalWaiters.get(proposal.proposalId);
         try { decideProposal(proposal.proposalId, { decision: 'expired' }, storeOptions); } catch { /* already decided */ }
@@ -872,18 +880,30 @@ export function createInteractionService({
       return { proposal: publicProposal(proposal, null) };
     },
 
-    // The stored outcome of a decided machine proposal, for the web status
-    // route. An overdue proposal is settled expired on access — the same
-    // access-time check settleProposal applies.
-    machineOutcome(proposalId) {
+    requestMachineApproval(options) {
+      return this.requestOwnerApproval({ ...options, agentId: null });
+    },
+
+    // The stored outcome of a decided machine or soul proposal, for the web
+    // status route. Authorization happens per scope before any settlement:
+    // machine.* needs the machine gate, soul.* needs observe on that soul.
+    // An overdue proposal is settled expired on access — the same access-time
+    // check settleProposal applies — but only after authorization.
+    ownerOutcome({ principal, transport, proposalId }) {
+      const wantedTransport = validated(() => validateTransport(transport));
       const stored = machineOutcomes.get(proposalId);
-      if (stored) return stored;
       const proposal = getProposal(proposalId, storeOptions);
-      // Only machine.* proposals answer here — any other id is a 404 and
-      // the access-time expiry never mutates a proposal it doesn't own.
-      if (!proposal || !(proposal.tool ?? '').startsWith('machine.')) {
+      const tool = proposal?.tool ?? '';
+      if (!proposal || !(tool.startsWith('machine.') || tool.startsWith('soul.'))) {
         throw failure(404, 'unknown proposal');
       }
+      if (tool.startsWith('machine.')) {
+        try { assertMachineAuthorized({ principal, operation: 'observe' }); }
+        catch { throw failure(403, 'principal is not authorized for this operation'); }
+      } else {
+        authorize({ principal, transport: wantedTransport, agentId: proposal.agentId, operation: 'observe' });
+      }
+      if (stored) return stored;
       if (proposal.status === 'open' && now().getTime() > new Date(proposal.expiresAt).getTime()) {
         const waiter = approvalWaiters.get(proposalId);
         try { decideProposal(proposalId, { decision: 'expired' }, storeOptions); } catch { /* already decided */ }
