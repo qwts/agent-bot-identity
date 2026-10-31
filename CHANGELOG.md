@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.15.11
+
+- Web client gains a read-only agent-machine section (#1295): GET
+  /ui/api/machine/agent-machine reports pairing state (load-only client
+  key, pinned daemon.pub fingerprint, agent-daemon peer files,
+  terminal-paired) plus signed status and receipts round trips through
+  machine-client. Agent-machine errors become section data — the route
+  stays 200 and the Server section keeps working when it is down.
+- Web client gains the Catalog section (#1295): GET /ui/api/machine/catalog
+  fetches and verifies the signed server catalog (ed25519 envelope, key id
+  derived from the key, floor enforcement) with a 5-minute single-flight
+  cache, and POST .../catalog/deliver relays the verified catalog_key/floor/
+  envelope to agent-machine's catalog verb — agent-machine pins the key on
+  first delivery and enforces the floor itself. Per-item Update routes
+  through the existing machine.update proposal. The daemon also uploads
+  the agent-machine status-digest to /api/daemon/relay/status every 15
+  minutes and after each successful apply/update, byte-exact, skipping
+  silently when unenrolled or undigested.
+- The agent-machine web section gains writes through immutable
+  proposals (#1295): POST /ui/api/machine/agent-machine/plan runs a
+  signed plan round trip, and POST .../proposals creates a soul-less
+  machine.<verb> proposal decided through the existing approvals flow —
+  apply/update reach agent-machine only after an approved digest, with
+  attribution harness 'web-ui' and no soul/session_id. Authorization
+  uses assertMachineAuthorized: the principal needs the operation
+  ('approve' for writes, 'observe' for the outcome view) on souls
+  exactly ['*'].
+- Web client gains Server actions (#1295): POST
+  /ui/api/machine/server/reconcile settles pending unknown credential
+  operations through `server reconcile --json` (single in-flight run,
+  no proposal since it never mints), and POST .../server/enroll creates
+  an immutable machine.enroll proposal that re-enrolls with the current
+  harness set through `server enroll --force --json` — the device-code
+  prompt streams as a JSON line so the outcome route reports
+  pending-approval with user_code/verification_uri/thumbprint until the
+  server-side approval lands. ServerSession reads device.json per
+  request, so no daemon restart is needed.
+- Web client gains a Settings section (#1295): GET /ui/api/machine/settings
+  projects the secret-free config with per-key editable flags, and
+  POST .../settings/proposals writes the settled editable keys
+  (settings.daemonPreference, settings.skillSearchAdapter, features.*)
+  through an immutable machine.settings proposal — approval re-validates
+  the file's sha256 base (settings-drifted n100), applies changes
+  preserving key order and file mode, and runs full config validation.
+- Web client: soul writes as owner-gated proposals (#1295). The Souls tab offers the four settled soul writes — `revision.approve` / `revision.reject`, `cold-wake`, `remove` — as immutable `soul.<verb>` proposals created by `requestOwnerApproval` (the generalized `requestMachineApproval`; the machine path is a thin wrapper). Approval in the Approvals tab executes with a server-side gate stub that accepts only the operation's exact owner-action string, writes an audit receipt naming the proposal, principal and operation digest, and records `via: 'ui-proposal:<id>'` as the authorization. Removal plans are digest-covered and re-checked at execution (`soul-remove-plan-changed`, n107); archiving is never skippable. Outcomes read via `/ui/api/proposals/{id}` (the older machine paths still work), authorized per proposal scope.
+- Web client gains a read-only Souls section (#1295): GET /ui/api/souls
+  projects each soul the principal may observe with its ADR-1257 session
+  records and live binding registry entries (worktree basenames only,
+  never transcript locators, paths, secrets or proofs).
+
 ## 0.15.10
 
 - `agent-bot mint-token` now withholds the raw token and prints only `{ schema_version: 1, credential_ref, task_id, operation_id, expires_at }` for unbound soul-marked and harness-detected callers in server mode (`credential_ref ?? issuance_id`), matching bound checkouts (#1293).
