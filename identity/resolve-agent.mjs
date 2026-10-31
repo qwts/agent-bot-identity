@@ -152,7 +152,7 @@ export function resolveAgentSlug({
       const app = identity.github?.appSlug;
       const identityHarness = identity.harness ?? (app ? harnessForSlug(app, cfg) : null) ?? harness ?? (detect ? detectHarness(env) : null);
       const originApp = originOwner && identityHarness
-        ? slugForOriginOwner(originOwner, identityHarness, cfg)
+        ? slugForOriginOwner(originOwner, identityHarness, cfg, { env })
         : null;
       const resolvedApp = (originApp && (!app || isOrgHarnessAppSlug(app, identityHarness, cfg))) ? originApp : app;
       if (resolvedApp && (cfg.identityApps[resolvedApp] || resolvedApp === originApp)) {
@@ -164,10 +164,10 @@ export function resolveAgentSlug({
   // detection — a harness account resolves to its own App whatever tool runs
   // there. In the owner's account it yields nothing.
   const accountKey = accountHarness(cfg, account);
-  if (accountKey) return slugForHarness(accountKey, cfg, { originOwner });
+  if (accountKey) return slugForHarness(accountKey, cfg, { originOwner, env });
   const resolvedHarness = harness ?? (detect ? detectHarness(env) : null);
   if (!resolvedHarness) return null;
-  return slugForHarness(resolvedHarness, cfg, { originOwner });
+  return slugForHarness(resolvedHarness, cfg, { originOwner, env });
 }
 
 // No human fallback (#749, carried requirement 6 of #104). A session that

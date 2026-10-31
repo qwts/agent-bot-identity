@@ -839,3 +839,58 @@ test('a single soul works across multiple GitHub organizations (qwts and true-li
   }
 });
 
+test('join clears an inherited config.worktree pin on a fresh linked worktree when a soul is stated (#1316)', async (t) => {
+  const a = mappedAccount(t, 'codex');
+  const first = await a.join({ name: 'first-soul', cwd: a.outside });
+  const second = await a.join({ name: 'second-soul', cwd: a.outside });
+
+  const primary = path.join(a.root, 'repo-primary');
+  const linked = path.join(a.root, 'repo-linked');
+  mkdirSync(primary);
+  git(primary, 'init', '-q', '-b', 'main');
+  git(primary, 'config', 'user.name', 'Owner');
+  git(primary, 'config', 'user.email', 'owner@example.com');
+  git(primary, 'config', 'core.hooksPath', '/dev/null');
+  git(primary, 'commit', '--allow-empty', '-q', '-m', 'init');
+  git(primary, 'config', 'extensions.worktreeConfig', 'true');
+  // Simulate a primary checkout whose config.worktree was pinned to `first`.
+  git(primary, 'config', '--worktree', 'agentBot.agentId', first.agentId);
+  git(primary, 'config', '--worktree', 'agentBot.app', 'other-codex-app');
+  git(primary, 'config', '--worktree', 'user.name', 'other-codex-app[bot]');
+  // git worktree add copies config.worktree into the new linked worktree.
+  git(primary, '-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '-q', '-b', 'codex/linked', linked);
+  assert.equal(git(linked, 'config', '--worktree', '--get', 'agentBot.agentId'), first.agentId);
+
+  // Joining in the fresh linked worktree with --soul second.agentId strips the
+  // inherited pin (since linked has no bind token or binding) and pins second.
+  const joined = await joinSoul({
+    name: 'second-soul',
+    harness: 'codex',
+    soul: second.agentId,
+    template: null,
+    cwd: linked,
+    env: a.env,
+    home: a.home,
+    config: a.config,
+  });
+  assert.equal(joined.agentId, second.agentId);
+  assert.equal(git(linked, 'config', '--worktree', '--get', 'agentBot.agentId'), second.agentId);
+  assert.equal(git(primary, 'config', '--worktree', '--get', 'agentBot.agentId'), first.agentId, 'source checkout untouched');
+
+  // Once joined (bind token minted in linked), joining as a third soul is still refused.
+  const third = await a.join({ name: 'third-soul', cwd: a.outside });
+  await assert.rejects(
+    joinSoul({
+      name: 'third-soul',
+      harness: 'codex',
+      soul: third.agentId,
+      template: null,
+      cwd: linked,
+      env: a.env,
+      home: a.home,
+      config: a.config,
+    }),
+    /already pinned to/,
+  );
+});
+
