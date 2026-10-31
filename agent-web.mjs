@@ -24,7 +24,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -32,6 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { assertMachineAuthorized, getPrincipal, listPrincipals, listSessions, principalsFile } from './identity-host.mjs';
 import { stateDirectory } from './state-paths.mjs';
+import { configPath, FEATURE_GATES, loadConfig, SKILL_SEARCH_ADAPTERS, validateConfig } from './config.mjs';
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
 import {
   AGENT_MACHINE_DIR, buildRequest, daemonFingerprint, loadMachinePublicKey,
@@ -542,6 +543,140 @@ export function createWebLayer({
         })),
       }));
       sendJson(res, 200, { souls: view });
+      return;
+    }
+    if (req.method === 'GET' && pathname === '/ui/api/machine/settings') {
+      try { assertMachineAuthorized({ principal, operation: 'observe' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      const file = configPath({ home, env });
+      let parsed = null; let error = null;
+      try {
+        parsed = loadConfig({ home, env });
+      } catch (loadError) {
+        error = loadError.message;
+      }
+      const cfg = parsed ?? {};
+      // Only settings keys config.mjs validates are echoed (each with its
+      // editable flag); anything else under settings is counted, never read.
+      const KNOWN_SETTINGS = [
+        'agentBotServer', 'daemonPreference', 'diagnosticsOtlpEndpoint', 'keydIdentifier',
+        'keydTeamId', 'ownerKeys', 'skillSearchAdapter', 'soulCoauthorDomain', 'soulsRoot',
+        'spacesRoot', 'unmanagedAuthors',
+      ];
+      const EDITABLE_SETTINGS = new Set(['daemonPreference', 'skillSearchAdapter']);
+      const settings = {};
+      let settingsExtra = 0;
+      for (const [key, value] of Object.entries(cfg.settings ?? {})) {
+        if (KNOWN_SETTINGS.includes(key)) settings[key] = { value, editable: EDITABLE_SETTINGS.has(key) };
+        else settingsExtra += 1;
+      }
+      const features = {};
+      for (const gate of FEATURE_GATES) {
+        features[gate] = { value: cfg.features?.[gate] ?? false, editable: true };
+      }
+      sendJson(res, 200, {
+        path: file, exists: existsSync(file), valid: error === null, error,
+        config: {
+          prefix: cfg.prefix ?? null, owner: cfg.owner ?? null,
+          // apps projects harness → slug strings only — nothing else a
+          // config could smuggle into the object.
+          apps: Object.fromEntries(Object.entries(cfg.apps ?? {}).filter(([, v]) => typeof v === 'string')),
+          scope: cfg.scope ?? null, features, settings, settingsExtra,
+        },
+      });
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/ui/api/machine/settings/proposals') {
+      try { assertMachineAuthorized({ principal, operation: 'approve' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      for (const key of Object.keys(body)) if (key !== 'changes') throw failure(400, 'unknown field');
+      const changes = body.changes;
+      if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw failure(400, 'changes must be an object');
+      const keys = Object.keys(changes);
+      if (keys.length < 1 || keys.length > 8) throw failure(400, 'changes must hold 1..8 keys');
+      const editable = Object.assign(Object.create(null), {
+        'settings.daemonPreference': true, 'settings.skillSearchAdapter': true,
+      });
+      for (const gate of FEATURE_GATES) editable[`features.${gate}`] = true;
+      for (const key of keys) if (!Object.hasOwn(editable, key)) throw failure(400, `key is not editable: ${key}`);
+      // null unsets daemonPreference/skillSearchAdapter (restores the default);
+      // feature gates only take booleans.
+      const UNSETTABLE = new Set(['settings.daemonPreference', 'settings.skillSearchAdapter']);
+      for (const key of keys) {
+        if (changes[key] === null && !UNSETTABLE.has(key)) throw failure(400, `invalid ${key}: null is not allowed`);
+      }
+      if ('settings.daemonPreference' in changes && changes['settings.daemonPreference'] !== null && !['off', 'prefer', 'required'].includes(changes['settings.daemonPreference'])) {
+        throw failure(400, 'invalid settings.daemonPreference');
+      }
+      if ('settings.skillSearchAdapter' in changes && changes['settings.skillSearchAdapter'] !== null && !SKILL_SEARCH_ADAPTERS.includes(changes['settings.skillSearchAdapter'])) {
+        throw failure(400, 'invalid settings.skillSearchAdapter');
+      }
+      for (const key of keys) if (key.startsWith('features.') && typeof changes[key] !== 'boolean') {
+        throw failure(400, `invalid ${key}: expected boolean`);
+      }
+      const file = configPath({ home, env });
+      let baseBytes = '';
+      try { baseBytes = readFileSync(file, 'utf8'); } catch { /* absent */ }
+      const base = createHash('sha256').update(baseBytes).digest('hex');
+      const operation = { verb: 'settings', changes, base };
+      const { proposal } = interaction.requestMachineApproval({
+        principal: caller.principal,
+        transport: WEB_TRANSPORT,
+        operation,
+        summary: `settings change: ${(() => {
+            const loaded = loadConfig({ home, env });
+            return keys.map((k) => {
+              const [sec, nm] = k.split('.');
+              const cur = sec === 'features' ? (loaded?.features?.[nm] ?? false) : (loaded?.settings?.[nm] ?? null);
+              return `${k}: ${cur === null ? 'unset' : cur} → ${changes[k] === null ? 'unset' : changes[k]}`;
+            }).join(', ');
+          })()}`,
+        execute: () => {
+          let current = '';
+          try { current = readFileSync(file, 'utf8'); } catch { /* absent */ }
+          if (createHash('sha256').update(current).digest('hex') !== base) {
+            throw Object.assign(new Error('config changed since the proposal was created'), { code: 'settings-drifted' });
+          }
+          const candidate = current === '' ? {} : JSON.parse(current);
+          for (const [key, value] of Object.entries(changes)) {
+            const [section, name] = key.split('.');
+            if (!Object.hasOwn(editable, key)) continue;
+            const next = { ...(candidate[section] ?? {}) };
+            if (value === null) delete next[name]; else next[name] = value;
+            candidate[section] = next;
+          }
+          validateConfig(candidate);
+          // A symlinked config path would write through to a foreign file —
+          // refuse it, and fail if a same-named temp file already exists.
+          let previousMode = null;
+          try {
+            const st = lstatSync(file);
+            if (st.isSymbolicLink()) throw Object.assign(new Error('config path is a symlink; refusing to write'), { code: 'settings-unsafe-path' });
+            previousMode = statSync(file).mode;
+          } catch (error) {
+            if (error?.code === 'settings-unsafe-path') throw error;
+          }
+          mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+          // A crashed earlier write can leave a *.tmp-* sibling — sweep
+          // stale ones so the atomic dir stays clean, and give this write a
+          // unique name so 'wx' never collides with one.
+          for (const entry of readdirSync(path.dirname(file))) {
+            if (!entry.startsWith(`${path.basename(file)}.tmp-`)) continue;
+            try { unlinkSync(path.join(path.dirname(file), entry)); } catch { /* racing writer */ }
+          }
+          const tmp = `${file}.tmp-${process.pid}-${createHash('sha256').update(`${Date.now()}`).digest('hex').slice(0, 8)}`;
+          try {
+            writeFileSync(tmp, `${JSON.stringify(candidate, null, 2)}
+`, { mode: previousMode ?? 0o600, flag: 'wx' });
+          } catch (error) {
+            try { unlinkSync(tmp); } catch {}
+            throw error;
+          }
+          renameSync(tmp, file);
+          return { written: true, changed: keys };
+        },
+      });
+      sendJson(res, 200, { proposal });
       return;
     }
     if (req.method === 'GET' && pathname === '/ui/api/population') {

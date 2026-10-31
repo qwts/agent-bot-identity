@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -1378,4 +1380,141 @@ test('souls projection: orphan specialists returned; app.js uses the route field
   assert.match(app, /s\.ended_at/);
   assert.match(app, /!visible\.has\(o\.parentId\)/);
   assert.match(app, /specialist of \$\{orphanOf\}/);
+});
+
+// --- settings section (#1295) ------------------------------------------------
+
+test('settings view is machine-observe; proposals edit only the settled keys', async () => {
+  const { root, env } = scratch();
+  const configFile = path.join(env.XDG_CONFIG_HOME ?? root, 'agent-bot', 'config.json');
+  mkdirSync(path.dirname(configFile), { recursive: true });
+  writeFileSync(configFile, JSON.stringify({
+    prefix: 'alice', apps: { codex: 'custom' }, owner: 'org',
+    settings: { daemonPreference: 'off', unmanagedAuthors: ['ai9d'], spacesRoot: '/abs/path' },
+  }, null, 2) + '\n', { mode: 0o640 });
+  env.AGENT_BOT_CONFIG = configFile;
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  const scoped = seedPrincipal(env, { label: 's', souls: [AGENT_ID], operations: ['observe', 'approve'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const s = await pairCookie(scoped.principalId);
+    // GET: observe gate + projection with editable flags.
+    assert.equal((await ui('/ui/api/machine/settings', { cookie: s })).status, 403);
+    const view = await (await ui('/ui/api/machine/settings', { cookie: w })).json();
+    assert.equal(view.path, configFile);           // AGENT_BOT_CONFIG honored
+    assert.equal(view.valid, true);
+    assert.equal(view.config.settings.daemonPreference.editable, true);
+    assert.equal(view.config.settings.spacesRoot.editable, false);
+    assert.equal(view.config.settings.unmanagedAuthors.editable, false);
+    assert.equal(view.config.features['github-identity'].editable, true);
+    assert.equal(view.config.owner, 'org');
+
+    // POST validation: trust-root and unknown keys refused; bad values refused.
+    for (const body of [
+      { changes: { 'settings.ownerKeys': ['x'] } },
+      { changes: { 'settings.spacesRoot': '/x' } },
+      { changes: { 'owner': 'x' } },
+      { changes: { 'settings.daemonPreference': 'sometimes' } },
+      { changes: { 'features.github-identity': 'yes' } },
+      { changes: {} },
+      { changes: { 'settings.daemonPreference': 'on' }, extra: 1 },
+    ]) {
+      assert.equal((await ui('/ui/api/machine/settings/proposals', { method: 'POST', body, cookie: w })).status, 400, JSON.stringify(body));
+    }
+    assert.equal((await ui('/ui/api/machine/settings/proposals', { method: 'POST', body: { changes: { 'settings.daemonPreference': 'prefer' } }, cookie: s })).status, 403);
+
+    // Approved proposal: file updated, other keys + order + mode preserved.
+    const { proposal } = await (await ui('/ui/api/machine/settings/proposals', {
+      method: 'POST', body: { changes: { 'settings.daemonPreference': 'prefer', 'features.github-identity': true } }, cookie: w })).json();
+    assert.equal(proposal.tool, 'machine.settings');
+    const decided = await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: proposal.operationDigest }, cookie: w });
+    assert.equal(decided.status, 200);
+    await waitFor(async () => (await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json()).status === 'executed');
+    const after = JSON.parse(readFileSync(configFile, 'utf8'));
+    assert.equal(after.settings.daemonPreference, 'prefer');
+    assert.equal(after.settings.unmanagedAuthors[0], 'ai9d');
+    assert.equal(after.settings.spacesRoot, '/abs/path');
+    assert.equal(after.features['github-identity'], true);
+    assert.equal(Object.keys(after)[0], 'prefix'); // order preserved
+    assert.equal(statSync(configFile).mode & 0o777, 0o640); // mode preserved
+    // Old path still works.
+    assert.equal((await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json()).status, 'executed');
+
+    // Drift: file changes between proposal and approval → settings-drifted, untouched.
+    const { proposal: p2 } = await (await ui('/ui/api/machine/settings/proposals', {
+      method: 'POST', body: { changes: { 'settings.daemonPreference': 'required' } }, cookie: w })).json();
+    appendFileSync(configFile, '');
+    writeFileSync(configFile, readFileSync(configFile, 'utf8') + ' ');
+    await ui(`/ui/api/approvals/${p2.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: p2.operationDigest }, cookie: w });
+    await waitFor(async () => (await (await ui(`/ui/api/machine/agent-machine/proposals/${p2.proposalId}`, { cookie: w })).json()).status === 'failed');
+    const outcome = await (await ui(`/ui/api/machine/agent-machine/proposals/${p2.proposalId}`, { cookie: w })).json();
+    assert.match(outcome.error, /settings-drifted|changed since/);
+    assert.equal(JSON.parse(readFileSync(configFile, 'utf8')).settings.daemonPreference, 'prefer');
+
+    // Deny: file untouched.
+    const { proposal: p3 } = await (await ui('/ui/api/machine/settings/proposals', {
+      method: 'POST', body: { changes: { 'settings.daemonPreference': 'required' } }, cookie: w })).json();
+    await ui(`/ui/api/approvals/${p3.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'deny', digest: p3.operationDigest }, cookie: w });
+    assert.equal(JSON.parse(readFileSync(configFile, 'utf8')).settings.daemonPreference, 'prefer');
+
+    // Absent config + absent directory: the proposal creates both.
+    const fresh = path.join(root, 'nowhere', 'agent-bot', 'config.json');
+    env.AGENT_BOT_CONFIG = fresh;
+    const absent = await (await ui('/ui/api/machine/settings', { cookie: w })).json();
+    assert.equal(absent.exists, false);
+    const { proposal: p4 } = await (await ui('/ui/api/machine/settings/proposals', {
+      method: 'POST', body: { changes: { 'settings.daemonPreference': 'required' } }, cookie: w })).json();
+    await ui(`/ui/api/approvals/${p4.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: p4.operationDigest }, cookie: w });
+    await waitFor(async () => (await (await ui(`/ui/api/machine/agent-machine/proposals/${p4.proposalId}`, { cookie: w })).json()).status === 'executed');
+    assert.equal(JSON.parse(readFileSync(fresh, 'utf8')).settings.daemonPreference, 'required');
+    assert.equal(statSync(fresh).mode & 0o777, 0o600);
+    assert.equal(Object.keys(JSON.parse(readFileSync(fresh, 'utf8'))).length, 1); // only the changed keys
+    env.AGENT_BOT_CONFIG = configFile;
+
+    // Secret walk over the GET projection.
+    for (const [at, v] of walk(view)) {
+      assert.doesNotMatch(String(v), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY/, at);
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} is secret-shaped`);
+    }
+  }, { home: root });
+});
+
+test('settings: prototype keys refused, unset removes key, summary shows values, unknowns counted', async () => {
+  const { root, env } = scratch();
+  const configFile = path.join(root, '.config', 'agent-bot', 'config.json');
+  mkdirSync(path.dirname(configFile), { recursive: true, mode: 0o700 });
+  writeFileSync(configFile, JSON.stringify({
+    settings: { daemonPreference: 'prefer', mysteriousKey: 1 },
+  }), { mode: 0o600 });
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    // GET projection: known keys flagged editable, unknowns counted not echoed.
+    const view = await (await ui('/ui/api/machine/settings', { cookie: w })).json();
+    assert.equal(view.config.settings.daemonPreference.editable, true);
+    assert.equal(view.config.settings.mysteriousKey, undefined);
+    assert.equal(view.config.settingsExtra, 1);
+    // Prototype keys fail closed before reaching the writer.
+    for (const key of ['__proto__', 'constructor', 'hasOwnProperty', 'toString']) {
+      const res = await ui('/ui/api/machine/settings/proposals', { method: 'POST', body: { changes: { [key]: 'x' } }, cookie: w });
+      assert.equal(res.status, 400, `${key} must be refused`);
+    }
+    // Summary shows old -> new for every change.
+    const { proposal: p2 } = await (await ui('/ui/api/machine/settings/proposals', {
+      method: 'POST', body: { changes: { 'settings.daemonPreference': 'required' } }, cookie: w })).json();
+    assert.match(p2.summary, /daemonPreference.*prefer.*→.*required|daemonPreference: prefer → required/);
+    // Approve the unset: daemonPreference goes to null -> key removed, other keys intact.
+    const { proposal: p3 } = await (await ui('/ui/api/machine/settings/proposals', {
+      method: 'POST', body: { changes: { 'settings.daemonPreference': null } }, cookie: w })).json();
+    await ui(`/ui/api/approvals/${p3.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: p3.operationDigest }, cookie: w });
+    await waitFor(async () => (await (await ui(`/ui/api/machine/agent-machine/proposals/${p3.proposalId}`, { cookie: w })).json()).status === 'executed');
+    const written = JSON.parse(readFileSync(configFile, 'utf8'));
+    assert.equal('daemonPreference' in (written.settings ?? {}), false);
+    assert.equal(written.settings.mysteriousKey, 1);
+  }, { home: root });
 });
