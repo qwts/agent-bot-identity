@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.9
+
+- `isRegisteredAppSlug` (`config.mjs`) now includes the enrolled server-mode device's `harnesses` (`device.json`) so org-matched Apps such as `trueline-qwen-agent` resolve via `slugForOriginOwner` and `soulOwnsAppSlug` without triggering the `keyd` foreign-App owner gate; `keydStatus`/`keydVersionCheck` report `keyd-binary-missing` when `keyd.json` points to an absent binary; and `agent-bot setup-worktree` resolves the owning soul when run directly inside `<soulDir>/worktrees/<repo>` without `AGENT_BOT_ID` exported (#1288).
+
 ## 0.15.8
 
 - `agent-bot mcp --help` and `agent-bot reach-mcp --help` now print usage and exit `0` (and reject unknown arguments with exit `1`) instead of opening `stdin` and hanging indefinitely (#1283).
