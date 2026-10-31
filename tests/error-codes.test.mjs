@@ -97,3 +97,19 @@ test('every registered code is used by runtime source or explicitly reserved', (
     `registered codes with no runtime reference and no reserved reason: ${dead.map((e) => e.code).join(', ') || 'none'}`,
   );
 });
+
+// A code emitted on the MCP, machine or daemon surfaces that is not in the
+// registry passes the registry->source direction unnoticed (#1266 found
+// doctor-unavailable only in review). Scan every emitted literal both ways.
+const EMITTED_FILES = ['agent-mcp.mjs', 'machine-client.mjs', 'cli/machine.mjs', 'agent-daemon.mjs'];
+const EMITTED_PATTERN = /(?:mcpError|mcError)\('([a-z][a-z0-9-]+)'|code: '([a-z][a-z0-9-]+)'/g;
+
+test('every stable code the MCP, machine and daemon surfaces emit is registered', () => {
+  const registered = new Set(REGISTRY.codes.map((entry) => entry.code));
+  for (const file of EMITTED_FILES) {
+    const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+    const emitted = [...source.matchAll(EMITTED_PATTERN)].map((m) => m[1] ?? m[2]);
+    const missing = [...new Set(emitted)].filter((code) => !registered.has(code));
+    assert.deepEqual(missing, [], `${file} emits unregistered codes`);
+  }
+});
