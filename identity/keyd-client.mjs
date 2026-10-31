@@ -50,7 +50,7 @@ export const KEYD_LABEL_VARIABLE = 'AGENT_BOT_KEYD_SERVICE_LABEL';
 // The agent-bot-keyd this release is built and tested with: keyd/Cargo.toml's
 // version, which a test keeps equal (#767). A host bundles exactly this
 // version; any other is reported, never quietly accepted.
-export const KEYD_PINNED_VERSION = '0.2.0';
+export const KEYD_PINNED_VERSION = '0.2.1';
 const GRANT_TTL_SECONDS = 60;
 const REQUEST_TIMEOUT_MS = 30_000;
 // Owner operations wait for a person at the Mac.
