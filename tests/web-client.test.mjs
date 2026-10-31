@@ -1327,6 +1327,114 @@ assert.deepEqual(proposal.operation, { verb: 'update', harness: 'web-ui', name: 
   }, { home: root });
 });
 
+test('machine pair, pair --repin, and unpair proposals run through the owner gate (#1295)', async () => {
+  const { root, env } = scratch();
+  const fm = await fakeAgentMachine(root, {
+    replies: {
+      status: { ok: true, state: 'ready', body: [] },
+      receipts: { ok: true, body: [] },
+    },
+  });
+  const writer = seedPrincipal(env, { label: 'writer', souls: ['*'], operations: ['observe', 'approve'] });
+  const reader = seedPrincipal(env, { label: 'reader', souls: ['*'], operations: ['observe'] });
+  const scoped = seedPrincipal(env, { label: 'scoped', souls: [AGENT_ID], operations: ['observe', 'approve'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const r = await pairCookie(reader.principalId);
+    const s = await pairCookie(scoped.principalId);
+
+    // Authorization and validation on pair/unpair proposals.
+    assert.equal((await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'pair' }, cookie: r })).status, 403);
+    assert.equal((await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'pair' }, cookie: s })).status, 403);
+    for (const body of [
+      { verb: 'pair', name: 'x' },
+      { verb: 'pair', repin: 'yes' },
+      { verb: 'unpair', repin: true },
+      { verb: 'unpair', name: 'x' },
+      { verb: 'update', repin: true },
+    ]) {
+      assert.equal((await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body, cookie: w })).status, 400, JSON.stringify(body));
+    }
+
+    // 1. Propose and approve initial pair.
+    const { proposal: pPair } = await (await ui('/ui/api/machine/agent-machine/proposals', {
+      method: 'POST', body: { verb: 'pair' }, cookie: w })).json();
+    assert.equal(pPair.tool, 'machine.pair');
+    assert.deepEqual(pPair.operation, { verb: 'pair' });
+    assert.equal(pPair.summary, 'agent-machine pair');
+    const decPair = await ui(`/ui/api/approvals/${pPair.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: pPair.operationDigest }, cookie: w });
+    assert.equal(decPair.status, 200);
+    const pairOut = await waitFor(async () => {
+      const o = await (await ui(`/ui/api/machine/agent-machine/proposals/${pPair.proposalId}`, { cookie: w })).json();
+      return o.status === 'executed' ? o : (o.status === 'failed' ? o : null);
+    });
+    assert.equal(pairOut.status, 'executed', JSON.stringify(pairOut));
+    assert.equal(pairOut.result.paired, true);
+    assert.match(pairOut.result.pin_fingerprint, /^[0-9a-f]{64}$/);
+    assert.equal(pairOut.result.replaced_fingerprint, null);
+
+    // View now reports paired.
+    const afterPair = await (await ui('/ui/api/machine/agent-machine', { cookie: w })).json();
+    assert.equal(afterPair.pairing.client_key, true);
+    assert.equal(afterPair.pairing.pin_fingerprint, pairOut.result.pin_fingerprint);
+    assert.ok(afterPair.pairing.agent_daemon_peer.includes('.next'));
+
+    // 2. Rotate daemon.pub: pair without repin fails with machine-pin-mismatch; pair with repin succeeds.
+    fm.server.close();
+    const rotated = generateKeyPairSync('ed25519');
+    await fakeAgentMachine(root, {
+      keypair: rotated,
+      replies: { status: { ok: true, state: 'ready', body: [] }, receipts: { ok: true, body: [] } },
+    });
+    const { proposal: pNoRepin } = await (await ui('/ui/api/machine/agent-machine/proposals', {
+      method: 'POST', body: { verb: 'pair' }, cookie: w })).json();
+    await ui(`/ui/api/approvals/${pNoRepin.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: pNoRepin.operationDigest }, cookie: w });
+    const noRepinOut = await waitFor(async () => {
+      const o = await (await ui(`/ui/api/machine/agent-machine/proposals/${pNoRepin.proposalId}`, { cookie: w })).json();
+      return o.status === 'failed' ? o : null;
+    });
+    assert.match(noRepinOut.error, /machine-pin-mismatch/);
+
+    const { proposal: pRepin } = await (await ui('/ui/api/machine/agent-machine/proposals', {
+      method: 'POST', body: { verb: 'pair', repin: true }, cookie: w })).json();
+    assert.deepEqual(pRepin.operation, { verb: 'pair', repin: true });
+    assert.equal(pRepin.summary, 'agent-machine pair --repin');
+    await ui(`/ui/api/approvals/${pRepin.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: pRepin.operationDigest }, cookie: w });
+    const repinOut = await waitFor(async () => {
+      const o = await (await ui(`/ui/api/machine/agent-machine/proposals/${pRepin.proposalId}`, { cookie: w })).json();
+      return o.status === 'executed' ? o : (o.status === 'failed' ? o : null);
+    });
+    assert.equal(repinOut.status, 'executed', JSON.stringify(repinOut));
+    assert.equal(repinOut.result.replaced_fingerprint, pairOut.result.pin_fingerprint);
+    assert.notEqual(repinOut.result.pin_fingerprint, pairOut.result.pin_fingerprint);
+
+    // 3. Propose and approve unpair.
+    const { proposal: pUnpair } = await (await ui('/ui/api/machine/agent-machine/proposals', {
+      method: 'POST', body: { verb: 'unpair' }, cookie: w })).json();
+    assert.equal(pUnpair.tool, 'machine.unpair');
+    assert.deepEqual(pUnpair.operation, { verb: 'unpair' });
+    await ui(`/ui/api/approvals/${pUnpair.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: pUnpair.operationDigest }, cookie: w });
+    const unpairOut = await waitFor(async () => {
+      const o = await (await ui(`/ui/api/machine/agent-machine/proposals/${pUnpair.proposalId}`, { cookie: w })).json();
+      return o.status === 'executed' ? o : (o.status === 'failed' ? o : null);
+    });
+    assert.deepEqual(unpairOut.result, { unpaired: true });
+    const afterUnpair = await (await ui('/ui/api/machine/agent-machine', { cookie: w })).json();
+    assert.equal(afterUnpair.pairing.pin_fingerprint, null);
+    assert.ok(afterUnpair.pairing.agent_daemon_peer.includes('.revoked'));
+
+    // No secret-shaped field or value crosses the pair/unpair proposal responses.
+    for (const [at, v] of walk([pPair, pairOut, pRepin, repinOut, pUnpair, unpairOut])) {
+      assert.doesNotMatch(String(v), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY/, at);
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} is secret-shaped`);
+    }
+  }, { home: root });
+});
+
 // --- souls view (#1295) -----------------------------------------------------
 
 test('GET /ui/api/souls: per-soul observe only; sessions/bindings projected without paths or secrets', async () => {

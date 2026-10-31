@@ -28,6 +28,8 @@ export const MODULES = new Map([
   ['audit', 'agent-audit.mjs'],
   ['mcp', 'agent-mcp.mjs'],
   ['machine', 'cli/machine.mjs'],
+  ['pair', 'cli/machine.mjs'],
+  ['unpair', 'cli/machine.mjs'],
   ['reach-mcp', 'daemon-mcp.mjs'],
   ['wake', 'wake-listen.mjs'],
   ['web', 'agent-web.mjs'],
@@ -268,6 +270,12 @@ export function dispatchAgentBot(parsed) {
   // setup-worktree may then say why it did nothing (#382).
   if (parsed.command === 'setup-worktree') {
     return run(process.execPath, [join(ROOT, module), ...parsed.args], { ...process.env, AGENT_BOT_SETUP_HINT: '1' });
+  }
+  if (parsed.command === 'pair' && parsed.args[0] === 'comms') {
+    return run(process.execPath, [join(ROOT, 'agent-daemon.mjs'), 'pair-comms', ...parsed.args.slice(1)]);
+  }
+  if (parsed.command === 'pair' || parsed.command === 'unpair') {
+    return run(process.execPath, [join(ROOT, module), parsed.command, ...parsed.args]);
   }
   const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
   if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error(SOUL_USAGE);
