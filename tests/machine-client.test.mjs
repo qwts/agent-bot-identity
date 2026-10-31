@@ -5,11 +5,9 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import {
-  buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
+import { buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
   machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
-  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath,
-} from '../machine-client.mjs';
+  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, machineStateDir } from '../machine-client.mjs';
 
 const roots = [];
 after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
@@ -82,6 +80,7 @@ test('bodySpan finds the raw body value inside a line', () => {
   assert.equal(bodySpan(tricky).toString(), '"s"');
   // An escaped quote inside an earlier key does not split it early.
   assert.equal(bodySpan('{"we\\"ird":"v","body":{"n":1},"ok":true}').toString(), '{"n":1}');
+
   // Scalar bodies scan the same way.
   assert.equal(bodySpan('{"ok":true,"body":7,"timestamp":1}').toString(), '7');
   assert.equal(bodySpan('{"body":{"k":[1]},"ok":true}').toString(), '{"k":[1]}');
@@ -198,4 +197,14 @@ test('pin mismatch refuses send; no pin refuses with machine-not-paired', () => 
   pinDaemonPub({ env, home: root });
   writeFileSync(path.join(dir, 'daemon.pub'), Buffer.alloc(32, 4));
   assert.throws(() => pairedPublicKey({ env, home: root }), /machine-pin-mismatch/);
+});
+
+test('loadMachineSigner is load-only, and on win32 loads an existing key through vouch', () => {
+  const root = scratch();
+  const env = { AGENT_BOT_SERVER_STATE: path.join(root, 'state') };
+  assert.equal(loadMachineSigner({ env, home: root, platform: 'win32' }), null);
+  const signer = loadOrCreateMachineKey({ env, home: root });
+  const loaded = loadMachineSigner({ env, home: root, platform: 'win32' });
+  assert.deepEqual(loaded.publicKeyRaw, signer.publicKeyRaw);
+  assert.ok(loaded.sign(Buffer.from('x')).length === 64, 'the win32 signer signs');
 });

@@ -53,7 +53,10 @@ export function loadOrCreateMachineKey({ env = process.env, home = homedir(), pl
 // creates it. Windows reports presence only (custody ACL owns the file).
 export function loadMachineSigner({ env = process.env, home = homedir(), platform = process.platform } = {}) {
   const file = vouchKeyPath(machineStateDir({ env, home }));
-  if (!existsSync(file) || platform === 'win32') return null;
+  if (!existsSync(file)) return null;
+  // The file exists, so custody reads never create: vouch's Windows path
+  // (ACL-owned directory) is the only way to open it there.
+  if (platform === 'win32') return loadOrCreateMachineKey({ env, home });
   const key = createPrivateKeySync(readFileSync(file, 'utf8'));
   const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
   if (der.length !== 44 || !der.subarray(0, 12).equals(ED25519_SPKI_PREFIX)) return null;
