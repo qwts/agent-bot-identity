@@ -27,6 +27,9 @@ Commands:
   approvals          Tool-permission requests souls are waiting on: list [--json] | approve PROPOSAL_ID [--scope once|session] [--json] [--principal-stdin] | deny PROPOSAL_ID [--json] [--principal-stdin]
   audit              Read audit receipts: list [--json] [--since ISO-8601|-P1D] [--agent ID] [--event KIND] [--limit N] | tail [--json] [--agent ID]
   mcp                Serve the agent-bot MCP tools (bind, whoami, population, space_path, credential, take_notices, ack_notices)
+  machine            Pair, unpair, or inspect this account's agent-daemon pairing with agent-machine: machine pair [--repin] | unpair | status
+  pair               Pair this account's agent-daemon with agent-machine (alias for machine pair [--repin]); pair comms [--broker ACCOUNT] [--json] pairs with agent-comms
+  unpair             Revoke the agent-daemon peer and drop the daemon.pub pin (alias for machine unpair)
   reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply, fleet, send_message)
   wake               Hold this session's socket at the daemon's wake plane
   web                Pair a browser with the daemon's private web client

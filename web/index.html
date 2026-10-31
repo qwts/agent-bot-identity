@@ -92,9 +92,14 @@
 
   <section id="view-agent-machine" hidden>
     <h2>Agent machine</h2>
-    <p class="hint">Read-only view of the local agent-machine daemon.</p>
+    <p class="hint">Local agent-machine daemon pairing, plans, status and receipts.</p>
     <table class="kv"><tbody id="am-pairing"></tbody></table>
     <p id="am-pair-command" class="hint" hidden></p>
+    <p id="am-pairing-actions">
+      <button id="am-pair" type="button">Pair</button>
+      <button id="am-repin" type="button">Re-pin</button>
+      <button id="am-unpair" type="button">Unpair</button>
+    </p>
     <h3>Plan an operation</h3>
     <p class="hint">Plan is a read round trip; apply/update need an immutable
     proposal approved in the Approvals tab.</p>

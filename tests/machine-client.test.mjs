@@ -274,3 +274,84 @@ test('catalog verb: request matches the Go golden signature byte-for-byte', () =
   assert.throws(() => buildRequest({ verb: 'status', catalog_key }, signer), /catalog fields belong only/);
   assert.throws(() => buildRequest({ verb: 'catalog', catalog_key, soul: 'x' }, signer), /catalog carries only/);
 });
+
+test('runMachineCli: pair, pair --repin, unpair, status and --help run through the owner gate', async () => {
+  const { runMachineCli } = await import('../cli/machine.mjs');
+  const root = scratch();
+  const keypair = generateKeyPairSync('ed25519');
+  const fm = await fakeMachine(root, {
+    keypair,
+    handler: (req) => signResponse({ ok: true, state: 'ready', request_nonce: req.nonce }, keypair.privateKey),
+  });
+  const home = path.join(root, 'home');
+  const amDir = path.join(home, '.config', 'agent-machine');
+  mkdirSync(amDir, { recursive: true });
+  writeFileSync(path.join(amDir, 'daemon.pub'), fm.daemonPub);
+  const env = { AGENT_BOT_SERVER_STATE: path.join(home, 'bot-state') };
+  const actions = [];
+  const run = async (argv) => {
+    let out = '';
+    let err = '';
+    const code = await runMachineCli(argv, {
+      env,
+      home,
+      socketPath: fm.sock,
+      gate: async (action) => { actions.push(action); },
+      stdout: { write: (s) => { out += s; } },
+      stderr: { write: (s) => { err += s; } },
+    });
+    return { code, out, err };
+  };
+
+  const help = await run(['--help']);
+  assert.equal(help.code, 0);
+  assert.match(help.out, /agent-bot pair \[--repin\]/);
+
+  const bad = await run(['pair', '--bogus']);
+  assert.equal(bad.code, 1);
+  assert.equal(actions.length, 0, 'unknown option fails before the owner gate');
+
+  const paired = await run(['pair']);
+  assert.equal(paired.code, 0, paired.err);
+  assert.deepEqual(actions, ['machine-pair']);
+  assert.match(paired.out, /agent-machine pinned: sha256 [0-9a-f]{64}/);
+  assert.match(paired.out, /paired: agent-machine accepted the agent-daemon key \(ready\)/);
+  assert.ok(existsSync(path.join(amDir, 'peers', 'agent-daemon.next')));
+  assert.ok(existsSync(path.join(amDir, 'peers', 'agent-daemon.confirm')));
+
+  // Rotate daemon.pub: pair without --repin refuses; pair --repin succeeds.
+  const rotated = generateKeyPairSync('ed25519');
+  const rotatedPub = Buffer.from(rotated.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  writeFileSync(path.join(amDir, 'daemon.pub'), rotatedPub);
+  await assert.rejects(() => run(['pair']), (e) => e.code === 'machine-pin-mismatch');
+  fm.server.close();
+  const fm2 = await fakeMachine(root, {
+    keypair: rotated,
+    handler: (req) => signResponse({ ok: true, state: 'ready', request_nonce: req.nonce }, rotated.privateKey),
+  });
+  let repinOut = '';
+  const repinCode = await runMachineCli(['pair', '--repin'], {
+    env,
+    home,
+    socketPath: fm2.sock,
+    gate: async (action) => { actions.push(action); },
+    stdout: { write: (s) => { repinOut += s; } },
+    stderr: { write: () => {} },
+  });
+  assert.equal(repinCode, 0);
+  assert.match(repinOut, /daemon\.pub changed:/);
+
+  const st = await runMachineCli(['status'], {
+    env,
+    home,
+    socketPath: fm2.sock,
+    stdout: { write: () => {} },
+    stderr: { write: () => {} },
+  });
+  assert.equal(st, 0);
+
+  const unpaired = await run(['unpair']);
+  assert.equal(unpaired.code, 0);
+  assert.equal(actions.at(-1), 'machine-unpair');
+  assert.match(unpaired.out, /unpaired: peers\/agent-daemon\.revoked written/);
+});
