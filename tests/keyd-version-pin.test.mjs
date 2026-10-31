@@ -91,3 +91,11 @@ test('doctor warns when an installed keyd does not answer', async () => {
   assert.equal(check.code, 'keyd-not-running');
   assert.equal(check.action, 'run: agent-bot keyd install --bin /Applications/Host.app/keyd');
 });
+
+test('doctor reports keyd-binary-missing when the recorded keyd binary is absent on disk (#1288)', async () => {
+  const check = await keydVersionCheck({ probe: probe({ running: false, bin: '/Applications/Host.app/keyd', binExists: false, version: null, versionMatches: null }) });
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'keyd-binary-missing');
+  assert.match(check.message, /not on disk/);
+  assert.equal(check.action, 'run: agent-bot keyd uninstall');
+});

@@ -38,7 +38,7 @@ import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import {
   OrganizationProfileError,
   PROFILE_HARNESSES,
@@ -488,11 +488,30 @@ export function originOwnerFromRemote(remoteUrl, config = null) {
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(owner) ? owner : null;
 }
 
+// Enrolled server-mode device scope (#1288): when server mode is active,
+// ~/.local/state/agent-bot/server/device.json records the approved App/harness
+// slugs (e.g. trueline-qwen-agent) even when identityApps in config.json only
+// lists local-custody Apps.
+function enrolledServerHarnesses({ env = process.env, home = env?.HOME ?? homedir(), config } = {}) {
+  const server = env?.AGENT_BOT_SERVER || config?.settings?.agentBotServer;
+  if (!server) return [];
+  const stateDir = env?.AGENT_BOT_SERVER_STATE
+    ? resolve(env.AGENT_BOT_SERVER_STATE)
+    : join(env?.XDG_STATE_HOME ? resolve(env.XDG_STATE_HOME) : join(home, '.local', 'state'), 'agent-bot', 'server');
+  try {
+    const raw = JSON.parse(readFileSync(join(stateDir, 'device.json'), 'utf8'));
+    return Array.isArray(raw?.harnesses) ? raw.harnesses.filter((h) => typeof h === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 function isRegisteredAppSlug(slug, config, harnessKey) {
   if (!slug || typeof slug !== 'string') return false;
   if (appLifecycleStatus(slug, config) === 'retired') return false;
   if (Array.isArray(config?.scope?.apps) && !config.scope.apps.includes(slug)) return false;
   if (config?.identityApps && Object.hasOwn(config.identityApps, slug)) return true;
+  if (enrolledServerHarnesses({ config }).includes(slug)) return true;
   const profileIdentity = runtimeProfileInfo(config)?.identities.find((entry) => entry.slug === slug);
   if (profileIdentity) return profileIdentity.status === 'active';
   if (config?.apps && Object.values(config.apps).includes(slug)) return true;
