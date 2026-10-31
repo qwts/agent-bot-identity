@@ -5,6 +5,7 @@ import {
   appIdPath,
   ensurePrivateKey,
   inspectProtonPassSession,
+  isServerEnrolledApp,
   privateKeyPath,
   STORE_UNAVAILABLE_CODES,
   validateIssuer,
@@ -177,6 +178,9 @@ export function inspectLocalAppCredential({
   ];
   const deficiency = components.find((component) => component.status !== 'ready');
   if (deficiency) {
+    if (isServerEnrolledApp(slug, { env, home, config })) {
+      return { status: 'ready', restored: [], evidence: { components: [] } };
+    }
     return {
       ...componentFailure(deficiency),
       evidence: { components },

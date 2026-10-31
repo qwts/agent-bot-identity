@@ -18,8 +18,20 @@ import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppCon
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
 import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './identity-format.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
+import { loadDevice, serverUrl } from './server-client.mjs';
 import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
+
+export function isServerEnrolledApp(slug, { env = process.env, home = homedir(), config } = {}) {
+  const cfg = config ?? loadConfig({ env, home });
+  let server;
+  try { server = serverUrl({ env, config: cfg }); } catch { return null; }
+  if (!server) return null;
+  let device;
+  try { device = loadDevice({ env, home }); } catch { return null; }
+  const harnesses = Array.isArray(device?.harnesses) ? device.harnesses : [];
+  return harnesses.includes(slug) ? server : null;
+}
 
 export const AGENT_IDENTITIES_VAULT = CREDENTIAL_VAULT;
 
@@ -409,6 +421,11 @@ export function ensurePrivateKey({
   const storedPath = stored?.source === 'pass-cli' ? `pass-cli:${credentialVault(env)}/${passCliItem(stored.agentId, slug, names)}`
     : kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:${managedAppItem(slug, names).service}`;
   if (!needKey && !needId) return { path: stored ? storedPath : legacyPath, idPath,
+    downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
+  // In server mode (#1316), an App in the enrolled device's scope has its key
+  // held on the identity service and needs no local key file or pass-cli restore.
+  const server = !force ? isServerEnrolledApp(slug, { env, home, config }) : null;
+  if (server) return { path: `server:${server}/${slug}`, idPath,
     downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
 
   const staging = mkdtempSync(join(home, '.agent-bot-credential-'));
