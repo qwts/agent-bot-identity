@@ -14,6 +14,15 @@ import { loadConfig } from '../config.mjs';
 import { resolveAppCredential } from './soul-credentials.mjs';
 import { readAppMetadata, readManagedAppCredential } from './identity-app-store.mjs';
 import { mint } from './mint-token.mjs';
+import { loadDevice, serverHarnessForSlug, serverUrl } from './server-client.mjs';
+
+function isServerScopedApp(slug, { env = process.env, home = homedir(), config } = {}) {
+  const cfg = config ?? loadConfig({ env, home });
+  if (!serverUrl({ env, config: cfg })) return false;
+  let scope = null;
+  try { scope = loadDevice({ env, home })?.harnesses ?? null; } catch { scope = null; }
+  return Boolean(serverHarnessForSlug({ slug, env, scope, config: cfg }));
+}
 
 export class CredentialReconciliationError extends Error {
   constructor(phase, results) {
@@ -139,6 +148,11 @@ export function inspectLocalAppCredential({
   validateKey = validatePrivateKey,
   env = process.env, config = loadConfig({ env, home }), stores,
 } = {}) {
+  // In server mode, an App in the enrolled device's scope has its key held on
+  // the identity service — no local .pem or pass-cli item is used (#1293).
+  if (isServerScopedApp(slug, { env, home, config })) {
+    return { status: 'ready', restored: [], evidence: { components: [] } };
+  }
   // A keyd-held App (#110) has no readable key; resolveAppCredential below
   // answers for it, as for a keyd soul.
   if (config?.identityApps?.[slug]?.store && config.identityApps[slug].store !== 'keyd') {
@@ -268,14 +282,20 @@ function liveFailure(error) {
 export async function reconcileAppCredentials({
   slugs,
   home = homedir(),
+  env = process.env,
+  config,
   provider,
   prepare = ensurePrivateKey,
-  verify = async (slug) => mint({ slug }),
+  verify = async (slug) => mint({ slug, ...(env ? { env } : {}) }),
   onVerified = () => {},
 } = {}) {
   const roster = validateRoster(slugs ?? []);
   const results = [];
   for (const slug of roster) {
+    if (prepare === ensurePrivateKey && isServerScopedApp(slug, { env, home, config })) {
+      results.push({ slug, local: { status: 'ready', restored: [] }, live: { status: 'pending' } });
+      continue;
+    }
     try {
       const prepared = await prepare({ slug, home, provider });
       results.push({

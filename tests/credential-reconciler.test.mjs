@@ -352,3 +352,20 @@ test('roster inspection keeps unreadable-file diagnostics when the store is lock
   assert.equal(missing.local.code, PROVIDER_SESSION_REQUIRED);
   assert.match(missing.local.action, /pass-cli login/);
 });
+
+test('server-mode enrolled Apps skip local pass-cli preparation and verify directly (#1293)', async () => {
+  const home = tempHome();
+  const stateDir = join(home, 'server');
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(stateDir, 'device.json'), JSON.stringify({
+    device_id: 'dev_test', server: 'https://agents.true-line.ai', harnesses: ['trueline-qwen-agent'],
+  }));
+  const env = { AGENT_BOT_SERVER: 'https://agents.true-line.ai', AGENT_BOT_SERVER_STATE: stateDir };
+  assert.equal(inspectLocalAppCredential({ slug: 'trueline-qwen-agent', home, env, config: {} }).status, 'ready');
+  const results = await reconcileAppCredentials({
+    slugs: ['trueline-qwen-agent'], home, env, config: {},
+    verify: async () => ({ token: 'ghs_server', installation_id: null, expires_at: '2026-10-31T02:34:33Z' }),
+  });
+  assert.equal(results[0].local.status, 'ready');
+  assert.equal(results[0].live.status, 'ready');
+});
