@@ -31,6 +31,7 @@ import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { getPrincipal, listPrincipals, principalsFile } from './identity-host.mjs';
+import { serverStatusReport, doctorReport } from './server-status.mjs';
 import { daemonStateFile, daemonStatus } from './agent-daemon.mjs';
 
 export const UI_CSRF_HEADER = 'x-agent-bot-ui';
@@ -163,6 +164,9 @@ export function createWebLayer({
   confirmDecision = null,
   now = () => new Date(),
   webRoot = webRootDirectory(),
+  // Injectable for tests: the shared server/doctor probes (#1295).
+  serverStatus = serverStatusReport,
+  doctor = doctorReport,
 } = {}) {
   void config; // reserved; the web layer holds no policy of its own
   const root = path.resolve(webRoot);
@@ -360,6 +364,25 @@ export function createWebLayer({
       sendJson(res, 200, { loggedOut: true }, {
         'set-cookie': `${COOKIE_NAME}=; Path=/ui; HttpOnly; SameSite=Strict; Max-Age=0`,
       });
+      return;
+    }
+    if (req.method === 'GET' && pathname === '/ui/api/machine/server') {
+      // Machine-level views are only for a principal the owner allowed to
+      // observe every soul — exactly ['*'], not a subset with '*' adjacent
+      // to other entries (#1295).
+      const auth = principal.authorizations ?? {};
+      if (!Array.isArray(auth.operations) || !auth.operations.includes('observe')
+        || !Array.isArray(auth.souls) || auth.souls.length !== 1 || auth.souls[0] !== '*') {
+        throw failure(403, 'principal is not authorized for this operation');
+      }
+      let readiness = null;
+      try { readiness = doctor({ env, home }); }
+      catch (error) {
+        if (error?.code !== 'doctor-unavailable') throw error;
+        readiness = { error: 'doctor-unavailable' };
+      }
+      const status = serverStatus({ env, home });
+      sendJson(res, 200, { ...status, readiness });
       return;
     }
     if (req.method === 'GET' && pathname === '/ui/api/population') {

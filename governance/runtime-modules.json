@@ -89,6 +89,7 @@
     "agent-jobs.mjs": "host",
     "agent-mcp.mjs": "host",
     "machine-client.mjs": "host",
+    "server-status.mjs": "host",
     "agent-population.mjs": "soul",
     "agent-principals.mjs": "identity",
     "identity/agent-principals.mjs": "identity",

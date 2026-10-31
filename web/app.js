@@ -200,6 +200,39 @@ async function pollEvents(invocationId, container) {
   container.scrollTop = container.scrollHeight;
 }
 
+// --- Server (machine view, #1295) ------------------------------------------
+
+async function loadServer() {
+  const data = await api('/ui/api/machine/server');
+  const rows = $('server-rows');
+  rows.textContent = '';
+  const kv = [
+    ['Server mode', data.server_mode ? 'on' : 'off'],
+    ['Base', data.base ?? '-'],
+    ['Enrolled', data.enrolled ? 'yes' : 'no'],
+    ['Device', data.device_name ?? data.device_id ?? '-'],
+    ['Approved identities', (data.approved_harnesses ?? []).join(', ') || '-'],
+  ];
+  for (const [k, v] of kv) {
+    const tr = el('tr');
+    tr.append(el('th', { text: k }), el('td', { text: v }));
+    rows.append(tr);
+  }
+  const readiness = data.readiness ?? {};
+  $('server-readiness-summary').textContent = readiness.error
+    ? `readiness unavailable (${readiness.error})`
+    : (readiness.ready === true ? 'ready' : (readiness.first_actionable_failure?.action ?? readiness.first_actionable_failure?.check ?? 'not ready'));
+  const checks = $('server-checks');
+  checks.textContent = '';
+  for (const check of readiness.machine?.checks ?? []) {
+    const tr = el('tr');
+    tr.append(el('td', { text: check.id ?? check.name ?? '' }),
+      statusCell(check.status ?? (check.ok === false ? 'fail' : 'ok')),
+      el('td', { text: check.action ?? '' }));
+    checks.append(tr);
+  }
+}
+
 // --- Jobs ---------------------------------------------------------------------
 
 async function loadJobs() {
@@ -302,6 +335,7 @@ async function decide(proposal, decision) {
 async function refresh() {
   if (!state.me) return;
   if (state.view === 'population') await loadPopulation();
+  if (state.view === 'server') await loadServer();
   if (state.view === 'conversation') await loadConversation();
   if (state.view === 'jobs') await loadJobs();
   await loadApprovals();
