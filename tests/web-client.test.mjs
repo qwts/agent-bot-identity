@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -16,6 +17,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { assertLoopbackHost, createDaemonServer, runDaemon } from '../agent-daemon.mjs';
+import { doctorReport } from '../server-status.mjs';
 import {
   PAIRING_CODE_TTL_MS,
   UI_CSRF_HEADER,
@@ -84,7 +86,7 @@ function seedPrincipal(env, {
 // executor and an adjustable clock, plus browser-shaped fetch helpers.
 // The owner gate is always a stub here: nothing in this file may reach keyd,
 // Touch ID, or the admin dialog.
-async function withServer(env, run, { executor, ownerGate = async () => ({ method: 'presence', via: 'test' }) } = {}) {
+async function withServer(env, run, { executor, ownerGate = async () => ({ method: 'presence', via: 'test' }), webDeps } = {}) {
   const clock = { value: new Date('2026-08-12T09:00:00.000Z') };
   const server = createDaemonServer({
     env,
@@ -93,6 +95,7 @@ async function withServer(env, run, { executor, ownerGate = async () => ({ metho
     executor,
     ownerGate,
     now: () => clock.value,
+    webDeps,
   });
   await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const port = server.address().port;
@@ -942,4 +945,107 @@ test('the frontend stays dependency-free and references no external origins', ()
   // No token-bearing storage: the client never touches persistent browser
   // storage APIs at all.
   assert.doesNotMatch(app, /localStorage|sessionStorage|indexedDB|document\.cookie/);
+});
+
+// --- machine view (#1295) ---------------------------------------------------
+
+const SECRET_SHAPE = /token|secret|private|pem|password|ghs_|ghp_|BEGIN/i;
+function* walk(value, at = '') {
+  if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) yield* walk(v, `${at}.${k}`);
+  } else {
+    yield [at, value];
+  }
+}
+
+test('GET /ui/api/machine/server requires an active session and observe on souls ["*"] exactly', async () => {
+  const { env } = scratch();
+  const doctorCalls = [];
+  await withServer(env, async ({ ui, pairCookie, server }) => {
+    // No session at all is refused.
+    const anon = await ui('/ui/api/machine/server', { csrf: false });
+    assert.equal(anon.status, 401);
+
+    // observe on one named soul is not a machine view.
+    const narrow = seedPrincipal(env, { label: 'narrow', souls: [AGENT_ID], operations: ['observe'] });
+    const narrowCookie = await pairCookie(narrow.principalId);
+    const denied = await ui('/ui/api/machine/server', { cookie: narrowCookie });
+    assert.equal(denied.status, 403);
+
+    // The vocabulary itself refuses a mixed wildcard: ['*'] can only be exact.
+    assert.throws(() => seedPrincipal(env, { label: 'mixed', souls: ['*', AGENT_ID], operations: ['observe'] }), /exactly \['\*'\]/);
+
+    // observe on exactly ['*'] gets the machine view.
+    const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+    const cookie = await pairCookie(full.principalId);
+    const res = await ui('/ui/api/machine/server', { cookie });
+    if (res.status !== 200) console.error('MACHINE500', await res.clone().text());
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    for (const key of ['server_mode', 'base', 'enrolled', 'device_id', 'device_name', 'approved_harnesses', 'readiness']) {
+      assert.ok(key in body, key);
+    }
+    // Nothing secret-shaped is projected.
+    for (const [at, value] of walk(body)) {
+      assert.doesNotMatch(String(value), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY|BEGIN OPENSSH/, `${at} leaks key material`);
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} names a secret-shaped field`);
+    }
+    // The readiness probe ran with the never-mint, never-cache flag.
+    assert.equal(doctorCalls.length, 1);
+    assert.ok(doctorCalls[0].includes('--no-verify-apps'), 'doctor spawn lacks --no-verify-apps');
+    assert.ok(doctorCalls[0].includes('--json'));
+  }, { webDeps: {
+    serverStatus: () => ({ server_mode: true, base: 'https://agents.true-line.ai', enrolled: true, device_id: 'dev-1', device_name: 'studio-mac', approved_harnesses: ['codex'], repo: null }),
+    // The real doctorReport path with a spied execFile: asserts the spawn
+    // carries --no-verify-apps while returning a canned report, and nothing
+    // writes the doctor cache.
+    doctor: ({ env: dEnv }) => doctorReport({ env: dEnv, execFile: (file, args) => {
+      doctorCalls.push(args);
+      return JSON.stringify({ ready: false, first_actionable_failure: { check: 'binding-missing', action: 'run agent-bot join' }, machine: { checks: [{ id: 'binding-missing', status: 'fail', action: 'run agent-bot join' }] }, worktree: null });
+    } }),
+  } });
+  // The doctor subprocess never mints and never leaves an advisory cache.
+  assert.ok(!existsSync(path.join(env.XDG_STATE_HOME, 'agent-bot', 'identity-apps', 'doctor.json')));
+});
+
+
+test('machine/server awaits an async doctor without blocking the daemon and dedupes concurrent runs', async () => {
+  const { env } = scratch();
+  let spawns = 0;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+    const cookie = await pairCookie(full.principalId);
+    // Two concurrent server requests share one doctor run.
+    const one = ui('/ui/api/machine/server', { cookie });
+    const two = ui('/ui/api/machine/server', { cookie });
+    // A concurrent cheap route answers while doctor is still held — the
+    // daemon loop is not blocked.
+    const me = await (await ui('/ui/api/me', { cookie })).json();
+    assert.equal(me.principal.principalId, full.principalId);
+    assert.equal(spawns, 1, 'concurrent requests share a single doctor spawn');
+    release({ ready: true, machine: { checks: [] }, worktree: null });
+    const [r1, r2] = await Promise.all([one, two]);
+    assert.equal((await r1.json()).readiness.ready, true);
+    assert.equal((await r2.json()).readiness.ready, true);
+  }, { webDeps: {
+    serverStatus: () => ({ server_mode: false, base: null, enrolled: false, device_id: null, device_name: null, approved_harnesses: [], repo: null }),
+    doctor: () => { spawns += 1; return held; },
+  } });
+});
+
+test('machine/server honours a narrowed principal immediately — the principal is re-read each request', async () => {
+  const { env } = scratch();
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+    const cookie = await pairCookie(full.principalId);
+    assert.equal((await ui('/ui/api/machine/server', { cookie })).status, 200);
+    // Narrow the souls after the session exists: the very next request 403s.
+    authorizeSouls(full.principalId, [AGENT_ID], { file: env.AGENT_BOT_PRINCIPALS_PATH, env, home: '/nonexistent' });
+    assert.equal((await ui('/ui/api/machine/server', { cookie })).status, 403);
+  }, { webDeps: {
+    serverStatus: () => ({ server_mode: false, base: null, enrolled: false, device_id: null, device_name: null, approved_harnesses: [], repo: null }),
+    doctor: async () => ({ ready: true, machine: { checks: [] }, worktree: null }),
+  } });
 });

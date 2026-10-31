@@ -18,6 +18,7 @@
     <button data-view="conversation" type="button">Conversation</button>
     <button data-view="jobs" type="button">Jobs</button>
     <button data-view="approvals" type="button">Approvals<span id="approvals-badge" hidden></span></button>
+    <button data-view="server" type="button">Server</button>
   </nav>
   <div id="whoami"></div>
 </header>
@@ -66,6 +67,18 @@
       <h4>Artifacts</h4>
       <ul id="job-detail-artifacts"></ul>
     </div>
+  </section>
+
+  <section id="view-server" hidden>
+    <h2>Server</h2>
+    <p class="hint">Machine-level view of the identity server and device enrollment.</p>
+    <table class="kv"><tbody id="server-rows"></tbody></table>
+    <h3>Readiness</h3>
+    <p id="server-readiness-summary" class="hint"></p>
+    <div class="scroll"><table>
+      <thead><tr><th>Check</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody id="server-checks"></tbody>
+    </table></div>
   </section>
 
   <section id="view-approvals" hidden>

@@ -433,6 +433,8 @@ export function createDaemonServer({
   // Soul token v2 (#1196): in server mode the identity service signs soul
   // tokens; tests inject a fake. The default posts through ServerSession.
   soulTokenImpl = null,
+  // Web-layer dependency overrides for tests (#1295).
+  webDeps = {},
 } = {}) {
   const vouchSoulToken = soulTokenImpl ?? ((fields) => new ServerSession({ base: serverUrl({ env }), env, home }).soulToken(fields));
   const appOptions = { env, home, gate: settingGate, souls: identityAppSouls };
@@ -572,7 +574,7 @@ export function createDaemonServer({
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
-  const web = createWebLayer({ env, home, config, interaction, daemonToken: token, confirmDecision, now });
+  const web = createWebLayer({ env, home, config, interaction, daemonToken: token, confirmDecision, now, ...(webDeps ?? {}) });
   // A grant route's caller is a live binding; anyone else is receipted.
   const grantBinding = (req, operation) => {
     try { return requireBinding(req, bindings); } catch (error) {

@@ -31,6 +31,7 @@ import { daemonClient } from './daemon-client.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { SKILL_REFERENCES, skillReferenceFor } from './skill-for-map.mjs';
 import { loadConfig } from './config.mjs';
+import { serverStatusReport, doctorReport } from './server-status.mjs';
 const PROTOCOL_VERSION = '2025-06-18';
 
 function serverVersion() {
@@ -338,26 +339,8 @@ function guideText(state, topic) {
   return { topic, reference: file, text: readFileSync(join(skillDir, 'references', file), 'utf8') };
 }
 
-function serverStatusReport(state) {
-  const config = (() => { try { return loadConfig({ home: state.home, env: state.env }); } catch { return {}; } })();
-  const base = serverUrl({ env: state.env, config });
-  const device = loadDevice({ env: state.env, home: state.home });
-  let repo = null;
-  try {
-    const remote = git(state.cwd, 'remote', 'get-url', 'origin');
-    const m = remote.match(/[/:]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/);
-    if (m) repo = `${m[1]}/${m[2]}`;
-  } catch { repo = null; }
-  return {
-    server_mode: Boolean(base),
-    base: base ?? null,
-    enrolled: Boolean(device),
-    device_id: device?.device_id ?? null,
-    device_name: device?.device_name ?? null,
-    approved_harnesses: device?.harnesses ?? [],
-    repo,
-  };
-}
+// serverStatusReport and doctorReport live in server-status.mjs, shared
+// with the web client's machine view (#1295).
 
 export function createMcpState({
   env = process.env,
@@ -638,31 +621,7 @@ async function callTool(state, name, args = {}) {
       }
     }
     case 'doctor': {
-      const root = dirname(fileURLToPath(import.meta.url));
-      let out = null;
-      try {
-        out = execFileSync(process.execPath, [join(root, 'doctor.mjs'), '--json', '--no-verify-apps'],
-          { env: state.env, cwd: state.cwd, encoding: 'utf8', timeout: 30000 });
-      } catch (error) {
-        // doctor exits non-zero when the machine is not ready but still prints
-        // the JSON report — read it from the failed spawn's stdout.
-        out = typeof error?.stdout === 'string' ? error.stdout : null;
-        if (out === null) {
-          throw mcpError('doctor-unavailable', `doctor failed: ${error?.message ?? 'unknown'}`);
-        }
-      }
-      let report;
-      try {
-        report = JSON.parse(out);
-      } catch (error) {
-        throw mcpError('doctor-unavailable', `doctor failed: unreadable report (${error?.message ?? 'unknown'})`);
-      }
-      return {
-        ready: report.ready ?? null,
-        first_actionable_failure: report.first_actionable_failure ?? null,
-        machine: report.machine ?? null,
-        worktree: report.worktree ?? null,
-      };
+      return doctorReport({ env: state.env, cwd: state.cwd });
     }
     case 'machine_status':
     case 'machine_receipts':
@@ -685,7 +644,7 @@ async function callTool(state, name, args = {}) {
       }
     }
     case 'server_status':
-      return serverStatusReport(state);
+      return serverStatusReport({ env: state.env, home: state.home, cwd: state.cwd });
     case 'guide':
       return guideText(state, typeof args.topic === 'string' ? args.topic : null);
     default:
