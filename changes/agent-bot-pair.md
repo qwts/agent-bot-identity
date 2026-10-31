@@ -1,1 +1,0 @@
-- Add top-level `agent-bot pair` (`[--repin]` or `pair comms [--broker <account>]`) and `agent-bot unpair` CLI aliases, and support `pair`, `pair --repin`, and `unpair` as immutable owner-gated proposals in the `/ui` Agent machine section (#1295).
