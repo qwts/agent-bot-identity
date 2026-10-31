@@ -574,7 +574,7 @@ export function createDaemonServer({
   // The private web client (#59) rides the same server and the same loopback
   // peer check; it authenticates browsers with its own pairing-code cookie
   // sessions instead of the bearer token, which never reaches page script.
-  const web = createWebLayer({ env, home, config, interaction, daemonToken: token, confirmDecision, now, ...(webDeps ?? {}) });
+  const web = createWebLayer({ env, home, config, interaction, daemonToken: token, confirmDecision, now, soulBindings: (soulId) => bindings.list(soulId), ...(webDeps ?? {}) });
   // A grant route's caller is a live binding; anyone else is receipted.
   const grantBinding = (req, operation) => {
     try { return requireBinding(req, bindings); } catch (error) {

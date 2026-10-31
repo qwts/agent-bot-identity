@@ -413,6 +413,24 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       }
     },
     size() { return bindings.size; },
+    // Read-only projection for the machine views (#1295): every field a
+    // caller may see, secrets never included.
+    list(agentId = null) {
+      expire();
+      const out = [];
+      for (const entry of bindings.values()) {
+        if (agentId !== null && entry.agentId !== agentId) continue;
+        out.push({
+          agentId: entry.agentId,
+          harness: entry.harness ?? null,
+          sessionId: entry.sessionId ?? null,
+          worktree: entry.worktree ?? null,
+          boundAt: entry.boundAt ?? null,
+          lastUsedAt: entry.lastUsedAt ?? null,
+        });
+      }
+      return out;
+    },
   };
 }
 
