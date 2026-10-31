@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.13
+
+- Add top-level `agent-bot pair` (`[--repin]` or `pair comms [--broker <account>]`) and `agent-bot unpair` CLI aliases, and support `pair`, `pair --repin`, and `unpair` as immutable owner-gated proposals in the `/ui` Agent machine section (#1295).
+- Owner presence errors now include the underlying cause (such as a missing `settings.keydTeamId` or an unverified `agent-bot-keyd` signature), `agent-bot web open` and `agent-bot daemon start` warn when run as `admin` instead of the owner's `user` account, `web open`'s "no active principals" error includes the `principal allow` step, and the `/ui` Server tab renders the last mint outcome per identity from the action ledger (#1295).
+- `agent-bot join` strips a foreign `config.worktree` pin that `git worktree add` copied from the source checkout when run in a linked worktree with no setup or binding state and an explicit soul (`--soul` or `AGENT_BOT_ID`), and `ensurePrivateKey`/`inspectLocalAppCredential` treat Apps in the enrolled server-mode device scope (`device.json`) as ready without requiring a local key file or `pass-cli` (#1316).
+
 ## 0.15.12
 
 - keyd accepts the two system access-list entries macOS plants on every item it creates — a null-application integrity marker and a null-application partition record naming keyd's own Team ID — so a signed keyd no longer refuses its own items as untrusted (#767).
