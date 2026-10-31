@@ -5,7 +5,7 @@ metadata:
   qwts-contract: "1"
   qwts-cli: "agent-bot"
   qwts-versions: ">=0.15.0 <0.16.0"
-  qwts-validated: "0.15.7"
+  qwts-validated: "0.15.8"
   qwts-side-effects: "remote-write"
 ---
 
