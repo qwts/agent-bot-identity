@@ -87,6 +87,21 @@
     <p class="hint">Read-only view of the local agent-machine daemon.</p>
     <table class="kv"><tbody id="am-pairing"></tbody></table>
     <p id="am-pair-command" class="hint" hidden></p>
+    <h3>Plan an operation</h3>
+    <p class="hint">Plan is a read round trip; apply/update need an immutable
+    proposal approved in the Approvals tab.</p>
+    <form id="am-plan-form">
+      <input id="am-plan-name" maxlength="128" placeholder="catalog name (e.g. codex)" required>
+      <input id="am-plan-option" maxlength="128" placeholder="option (optional)">
+      <input id="am-plan-target" maxlength="128" placeholder="target (optional)">
+      <button type="submit">Plan</button>
+    </form>
+    <p id="am-plan-result" class="hint"></p>
+    <div id="am-plan-actions" hidden>
+      <button id="am-apply" type="button">Apply plan</button>
+      <button id="am-update" type="button">Update</button>
+    </div>
+    <p id="am-proposal-status" class="hint"></p>
     <h3>Status</h3>
     <p id="am-status-error" class="hint" hidden></p>
     <div class="scroll"><table><tbody id="am-status"></tbody></table></div>

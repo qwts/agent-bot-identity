@@ -275,6 +275,41 @@ async function loadAgentMachine() {
   }
 }
 
+// --- Agent machine writes: plan now, apply/update via proposals (#1295) ----
+
+function wireAgentMachineForms() {
+  $('am-plan-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    $('am-plan-result').textContent = 'planning…';
+    try {
+      const body = { name: $('am-plan-name').value.trim() };
+      for (const [id, key] of [['am-plan-option', 'option'], ['am-plan-target', 'target']]) {
+        const v = $(id).value.trim(); if (v) body[key] = v;
+      }
+      const res = await api('/ui/api/machine/agent-machine/plan', { method: 'POST', body });
+      $('am-plan-result').textContent = res.ok ? `plan ${res.plan_id ?? res.state}` : `${res.diagnostic ?? res.message ?? res.state}`;
+      state.amPlanId = res.ok ? (res.plan_id ?? null) : null;
+      $('am-plan-actions').hidden = !res.ok;
+    } catch (error) {
+      $('am-plan-result').textContent = error.message;
+      $('am-plan-actions').hidden = true;
+    }
+  });
+  const propose = async (verb, extra = {}) => {
+    try {
+      const res = await api('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb, ...extra } });
+      const id = res.proposal.proposalId;
+      $('am-proposal-status').textContent = `proposal ${id} — approve it in the Approvals tab`;
+      showView('approvals');
+      state.amProposalId = id;
+    } catch (error) {
+      $('am-proposal-status').textContent = error.message;
+    }
+  };
+  $('am-apply').addEventListener('click', () => propose('apply', { plan_id: state.amPlanId }));
+  $('am-update').addEventListener('click', () => propose('update', { name: $('am-plan-name').value.trim() }));
+}
+
 // --- Jobs ---------------------------------------------------------------------
 
 async function loadJobs() {
@@ -341,6 +376,10 @@ async function loadApprovals() {
   list.replaceChildren(...proposals.map((proposal) => {
     const card = el('div', { class: 'proposal' }, [
       el('div', { text: proposal.summary }),
+      // Every digest-covered field is rendered — the owner approves the
+      // exact operation, not just the prose summary.
+      el('div', { class: 'mono hint', text: Object.entries(proposal.operation ?? {})
+        .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n') }),
       el('div', { class: 'mono hint', text: `${proposal.invocationId} · ${proposal.agentId}` }),
       el('div', { class: 'mono digest', text: `sha256 ${proposal.operationDigest}` }),
       el('div', { class: 'hint', text: `expires ${proposal.expiresAt}` }),
@@ -400,6 +439,7 @@ async function boot() {
   for (const navButton of document.querySelectorAll('#nav button')) {
     navButton.addEventListener('click', () => showView(navButton.dataset.view));
   }
+  wireAgentMachineForms();
 
   // A one-time pairing code arrives in the URL fragment (never sent to any
   // server in a request line) and is scrubbed from the address bar and

@@ -30,7 +30,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { getPrincipal, listPrincipals, principalsFile } from './identity-host.mjs';
+import { assertMachineAuthorized, getPrincipal, listPrincipals, principalsFile } from './identity-host.mjs';
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
 import {
   AGENT_MACHINE_DIR, buildRequest, daemonFingerprint, loadMachinePublicKey,
@@ -194,11 +194,11 @@ export function createWebLayer({
 
   // A signed verb round trip; an agent-machine failure is data, never a
   // thrown route error — the Server section keeps working when it is down.
-  async function machineVerb(verb) {
+  async function machineVerb(verb, fields = {}) {
     const pinned = pairedPublicKey({ env, home });
     const signer = loadMachineSigner({ env, home });
     if (!signer) throw Object.assign(new Error('client key absent'), { code: 'machine-not-paired' });
-    const request = buildRequest({ verb }, signer);
+    const request = buildRequest({ verb, ...fields }, signer);
     const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
     const res = verifyResponse(line, pinned, { expectedNonce: request.nonce });
     return { ok: res.ok, state: res.state, diagnostic: res.diagnostic, message: res.message, records: res.body };
@@ -455,6 +455,58 @@ export function createWebLayer({
       };
       const [status, receipts] = await Promise.all([verb('status'), verb('receipts')]);
       sendJson(res, 200, { pairing, status, receipts });
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/ui/api/machine/agent-machine/plan') {
+      try { assertMachineAuthorized({ principal, operation: 'approve' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      const allowed = ['name', 'option', 'target'];
+      for (const key of Object.keys(body)) if (!allowed.includes(key)) throw failure(400, 'unknown field');
+      // buildRequest caps each field at 128 chars and only carries strings —
+      // a non-string or oversized field fails before anything else.
+      for (const f of allowed) {
+        if (body[f] !== undefined && (typeof body[f] !== 'string' || body[f].length > 128)) throw failure(400, `${f} must be a string of at most 128 characters`);
+      }
+      if (typeof body.name !== 'string' || body.name === '') throw failure(400, 'name is required');
+      const fields = { name: body.name };
+      for (const f of ['option', 'target']) if (body[f] !== undefined) fields[f] = body[f];
+      let res2;
+      try { res2 = await machineVerb('plan', fields); }
+      catch (error) {
+        throw failure(/^machine-[a-z-]+$/.test(error?.code ?? '') ? 409 : 502, error?.message ?? 'plan failed');
+      }
+      sendJson(res, 200, { ok: res2.ok, state: res2.state, plan_id: res2.message, diagnostic: res2.diagnostic, message: res2.message });
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/ui/api/machine/agent-machine/proposals') {
+      try { assertMachineAuthorized({ principal, operation: 'approve' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      const allowed = ['verb', 'name', 'option', 'target', 'plan_id'];
+      for (const key of Object.keys(body)) if (!allowed.includes(key)) throw failure(400, 'unknown field');
+      for (const f of ['name', 'option', 'target', 'plan_id']) {
+        if (body[f] !== undefined && (typeof body[f] !== 'string' || body[f].length > 128)) throw failure(400, `${f} must be a string of at most 128 characters`);
+      }
+      if (body.verb !== 'apply' && body.verb !== 'update') throw failure(400, 'verb must be apply or update');
+      if (body.verb === 'apply' && (typeof body.plan_id !== 'string' || body.plan_id === '')) {
+        throw failure(400, 'apply requires plan_id');
+      }
+      const operation = { verb: body.verb, harness: 'web-ui' };
+      for (const f of ['name', 'option', 'target', 'plan_id']) if (body[f] !== undefined) operation[f] = body[f];
+      const { proposal } = interaction.requestMachineApproval({
+        principal: caller.principal,
+        transport: WEB_TRANSPORT,
+        operation,
+        summary: `agent-machine ${operation.verb}${operation.plan_id ? ` ${operation.plan_id}` : operation.name ? ` ${operation.name}` : ''}`,
+        execute: () => machineVerb(operation.verb, operation),
+      });
+      sendJson(res, 200, { proposal });
+      return;
+    }
+    if (req.method === 'GET' && (match = pathname.match(/^\/ui\/api\/machine\/agent-machine\/proposals\/([^/]+)$/))) {
+      try { assertMachineAuthorized({ principal, operation: 'observe' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      try { sendJson(res, 200, interaction.machineOutcome(match[1])); }
+      catch (error) { throw failure(error?.statusCode ?? 404, error?.message ?? 'unknown proposal'); }
       return;
     }
     if (req.method === 'GET' && pathname === '/ui/api/population') {

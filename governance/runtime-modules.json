@@ -485,6 +485,7 @@
         "PROOF_HEADER",
         "ServerSession",
         "assertAuthorized",
+        "assertMachineAuthorized",
         "assertPrivateGitDir",
         "assignAgentApp",
         "bindAgentLineage",

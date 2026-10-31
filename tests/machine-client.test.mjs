@@ -2,13 +2,13 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign } from 'node:crypto';
-import { loadOrCreateVouchKey } from '../identity-host.mjs';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
-  machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
-  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, loadMachinePublicKey, machineStateDir } from '../machine-client.mjs';
+  loadMachinePublicKey, machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
+  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, machineStateDir } from '../machine-client.mjs';
+import { loadOrCreateVouchKey } from '../identity-host.mjs';
 
 const roots = [];
 after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });

@@ -18,7 +18,7 @@
 export { assertPrivateGitDir, childBindingPath, consumeBindToken, createBindingRegistry, lookupBinding, readBinding, readBindToken } from './agent-binding.mjs';
 export { endSession, findSessionByTranscript, listSessions, openSession, readSession } from './agent-sessions.mjs';
 export { assignAgentApp, bindAgentLineage, bindAgentTranscript, ensureAgentIdentity, mintAgentIdentity, readAgentIdentity } from './agent-identity.mjs';
-export { assertAuthorized, getPrincipal, listPrincipals, principalsFile, resolvePrincipal } from './agent-principals.mjs';
+export { assertAuthorized, assertMachineAuthorized, getPrincipal, listPrincipals, principalsFile, resolvePrincipal } from './agent-principals.mjs';
 export { parseBindingProof, PROOF_HEADER, signBindingProof } from './binding-proof.mjs';
 export { expandAlias, scanGitPublish } from './git-publish-scan.mjs';
 export { createIdentityAppJobs, identityAppFailure, identityAppOperation, listIdentityApps } from './identity-apps.mjs';

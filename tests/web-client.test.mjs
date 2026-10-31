@@ -1166,3 +1166,157 @@ test('agent-machine view: a corrupt client key reports invalid inside the sectio
     assert.equal(body.pairing.client_key_error, 'key-unreadable');
   }, { home: root });
 });
+// --- agent-machine writes through immutable proposals (#1295) ---------------
+
+test('machine plan requires approve on souls ["*"]; proposals execute through the approvals route', async () => {
+  const { root, env } = scratch();
+  const applied = [];
+  const fm = await fakeAgentMachine(root, {
+    replies: {
+      plan: { ok: true, state: 'planned', message: 'p-77' },
+      apply: { ok: true, state: 'applied' },
+      update: { ok: true, state: 'updated' },
+      status: { ok: true, state: 'ready' },
+      receipts: { ok: true, body: [] },
+    },
+  });
+  pinDaemonPub({ env, home: root });
+  loadOrCreateMachineKey({ env, home: root });
+  const writer = seedPrincipal(env, { label: 'writer', souls: ['*'], operations: ['observe', 'approve'] });
+  const reader = seedPrincipal(env, { label: 'reader', souls: ['*'], operations: ['observe'] });
+  const soulScoped = seedPrincipal(env, { label: 'scoped', souls: [AGENT_ID], operations: ['observe', 'approve'] });
+  await withServer(env, async ({ ui, pairCookie, clock }) => {
+    const w = await pairCookie(writer.principalId);
+    const r = await pairCookie(reader.principalId);
+    const s = await pairCookie(soulScoped.principalId);
+
+    // Plan: observe-only and soul-scoped principals are refused.
+    assert.equal((await ui('/ui/api/machine/agent-machine/plan', { method: 'POST', body: { name: 'codex' }, cookie: r })).status, 403);
+    assert.equal((await ui('/ui/api/machine/agent-machine/plan', { method: 'POST', body: { name: 'codex' }, cookie: s })).status, 403);
+    // Unknown body key refused; name required.
+    assert.equal((await ui('/ui/api/machine/agent-machine/plan', { method: 'POST', body: { name: 'codex', extra: 1 }, cookie: w })).status, 400);
+    assert.equal((await ui('/ui/api/machine/agent-machine/plan', { method: 'POST', body: { option: 'x' }, cookie: w })).status, 400);
+    const plan = await (await ui('/ui/api/machine/agent-machine/plan', { method: 'POST', body: { name: 'codex' }, cookie: w })).json();
+    assert.equal(plan.plan_id, 'p-77');
+    assert.equal(fm.received.at(-1).verb, 'plan');
+    assert.equal(fm.received.at(-1).soul, undefined);
+
+    // Proposal creation: soul-scoped refused; apply without plan_id refused.
+    assert.equal((await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'apply', plan_id: 'p-77' }, cookie: s })).status, 403);
+    assert.equal((await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'apply' }, cookie: w })).status, 400);
+    const { proposal } = await (await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'apply', plan_id: 'p-77' }, cookie: w })).json();
+    assert.equal(proposal.tool, 'machine.apply');
+    assert.equal(proposal.agentId, null);
+
+    // The soul-scoped principal cannot see the machine proposal.
+    const scopedList = await (await ui('/ui/api/approvals', { cookie: s })).json();
+    assert.equal(scopedList.proposals.length, 0);
+    const wList = await (await ui('/ui/api/approvals', { cookie: w })).json();
+    assert.equal(wList.proposals[0].proposalId, proposal.proposalId);
+
+    // Status endpoint: open while undecided.
+    assert.equal((await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json()).status, 'open');
+
+    // Wrong digest: 409 and agent-machine is never called.
+    const calls = fm.received.length;
+    const forged = createHash('sha256').update('nope').digest('hex');
+    assert.equal((await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: forged }, cookie: w })).status, 409);
+    assert.equal(fm.received.length, calls);
+
+    // Correct digest: the signed apply reaches agent-machine with harness
+    // 'web-ui' and no soul/session_id; the outcome becomes 'executed'.
+    const decided = await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: proposal.operationDigest }, cookie: w });
+    assert.equal(decided.status, 200);
+    await waitFor(async () => (await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json()).status === 'executed');
+    const apply = fm.received.at(-1);
+    assert.equal(apply.verb, 'apply');
+    assert.equal(apply.harness, 'web-ui');
+    assert.equal(apply.soul, undefined);
+    assert.equal(apply.session_id, undefined);
+    assert.equal(apply.plan_id, 'p-77');
+
+    // Deny and expiry never reach agent-machine.
+    const { proposal: p2 } = await (await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'update', name: 'codex' }, cookie: w })).json();
+    await ui(`/ui/api/approvals/${p2.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'deny', digest: p2.operationDigest }, cookie: w });
+    assert.equal((await (await ui(`/ui/api/machine/agent-machine/proposals/${p2.proposalId}`, { cookie: w })).json()).status, 'denied');
+    const calls2 = fm.received.length;
+    assert.equal(fm.received.at(-1).verb, 'apply', 'deny never reached agent-machine');
+
+    // Expiry: advance the clock past the proposal TTL.
+    const { proposal: p3 } = await (await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body: { verb: 'update', name: 'codex' }, cookie: w })).json();
+        clock.value = new Date(clock.value.getTime() + 16 * 60 * 1000);
+    await waitFor(async () => (await (await ui(`/ui/api/machine/agent-machine/proposals/${p3.proposalId}`, { cookie: w })).json()).status !== 'open', { timeoutMs: 2000 });
+    assert.equal((await (await ui(`/ui/api/machine/agent-machine/proposals/${p3.proposalId}`, { cookie: w })).json()).status, 'expired');
+    assert.equal(fm.received.length, calls2);
+
+    // No secret-shaped field or value crosses the write routes.
+    const listing = await (await ui('/ui/api/machine/agent-machine/proposals/' + p3.proposalId, { cookie: w })).json();
+    for (const [at, v] of walk(listing)) {
+      assert.doesNotMatch(String(v), /ghs_|ghp_|BEGIN [A-Z ]*PRIVATE KEY/, at);
+      assert.doesNotMatch(at, SECRET_SHAPE, `${at} is secret-shaped`);
+    }
+  }, { home: root });
+});
+
+test('machine proposal lifecycle: operation visible, no late-expiry overwrite, scope 404', async () => {
+  const { root, env } = scratch();
+  const fm = await fakeAgentMachine(root, { replies: { apply: { ok: true, state: 'applied' } } });
+  pinDaemonPub({ env, home: root });
+  loadOrCreateMachineKey({ env, home: root });
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  const clock = { t: Date.parse('2026-08-12T09:00:00Z') };
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const { proposal } = await (await ui('/ui/api/machine/agent-machine/proposals', {
+      method: 'POST', body: { verb: 'apply', name: 'codex', option: 'latest', target: 'prod', plan_id: 'p-1' }, cookie: w })).json();
+    // Every digest-covered field is visible to the approver.
+    assert.equal(proposal.operation.verb, 'apply');
+    assert.equal(proposal.operation.name, 'codex');
+    assert.equal(proposal.operation.option, 'latest');
+    assert.equal(proposal.operation.target, 'prod');
+    assert.equal(proposal.operation.plan_id, 'p-1');
+    assert.equal(proposal.operation.harness, 'web-ui');
+    // Approve, then advance past the 15-min TTL: outcome stays executed,
+    // never rewritten by the (now-cleared) expiry timer.
+    const dec = await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: proposal.operationDigest }, cookie: w });
+    assert.equal(dec.status, 200, JSON.stringify(await dec.json()));
+    const outcome = await waitFor(async () => {
+      const o = await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json();
+      return o.status === 'executed' ? o : (o.status === 'failed' ? o : null);
+    }).catch(() => null);
+    assert.ok(outcome?.status === 'executed', JSON.stringify(outcome));
+    clock.t += 20 * 60 * 1000;
+    assert.equal((await (await ui(`/ui/api/machine/agent-machine/proposals/${proposal.proposalId}`, { cookie: w })).json()).status, 'executed');
+    // A non-machine proposal id is a 404, not 'open'.
+    assert.equal((await ui('/ui/api/machine/agent-machine/proposals/proposal_deadbeef', { cookie: w })).status, 404);
+  }, { home: root, now: () => new Date(clock.t) });
+});
+
+test('machine plan/proposal fields are type-checked strings capped at 128; card renders the operation', async () => {
+  const { root, env } = scratch();
+  const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe', 'approve'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const cookie = await pairCookie(full.principalId);
+    // Non-string fields and >128-char strings fail 400 before anything runs.
+    for (const body of [
+      { name: 42 }, { name: 'x', option: { a: 1 } }, { name: 'x', target: ['t'] }, { name: 'x'.repeat(129) },
+    ]) {
+      assert.equal((await ui('/ui/api/machine/agent-machine/plan', { method: 'POST', body, cookie })).status, 400, JSON.stringify(body));
+    }
+    for (const body of [
+      { verb: 'apply', plan_id: 7 }, { verb: 'apply', plan_id: 'p', name: {} }, { verb: 'update', option: 'x'.repeat(129) },
+    ]) {
+      assert.equal((await ui('/ui/api/machine/agent-machine/proposals', { method: 'POST', body, cookie })).status, 400, JSON.stringify(body));
+    }
+    // The Approvals card renders every digest-covered operation field.
+    const { proposal } = await (await ui('/ui/api/machine/agent-machine/proposals', {
+      method: 'POST', body: { verb: 'update', name: 'example' }, cookie })).json();
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    assert.match(app, /proposal\.operation/);
+assert.deepEqual(proposal.operation, { verb: 'update', harness: 'web-ui', name: 'example' });
+  }, { home: root });
+});

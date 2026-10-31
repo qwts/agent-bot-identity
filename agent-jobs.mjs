@@ -783,7 +783,11 @@ function normalizeProposal(record) {
     ? null
     : validateInvocationId(record.invocationId);
   const agentId = record.agentId === undefined || record.agentId === null ? null : agentIdOrThrow(record.agentId);
-  if (invocationId === null && agentId === null) throw new Error('proposal needs an invocation or a soul');
+  // Machine-level proposals (#1295) name their surface in `tool`
+  // ('machine.<verb>') instead of a soul; every other proposal needs one.
+  if (invocationId === null && agentId === null && !(record.tool ?? '').startsWith('machine.')) {
+    throw new Error('proposal needs an invocation or a soul');
+  }
   const risk = record.risk === undefined ? 'external' : record.risk;
   if (!['safe', 'destructive', 'external'].includes(risk)) throw new Error('invalid proposal risk');
   const scope = record.scope === undefined ? 'once' : record.scope;
@@ -801,6 +805,8 @@ function normalizeProposal(record) {
       ? {}
       : { tool: printableText('tool', record.tool, { max: 200 }) }),
     operationDigest: matchOrThrow(SHA256_PATTERN, record.operationDigest, 'operation digest must be a sha256 hex digest'),
+    // The operation the digest covers, for the approver to inspect (#1299).
+    ...(record.operation === undefined || record.operation === null ? {} : { operation: record.operation }),
     summary: printableText('summary', record.summary, { max: MAX_PROPOSAL_SUMMARY_LENGTH }),
     createdAt: canonicalTimestamp('createdAt', record.createdAt),
     expiresAt: canonicalTimestamp('expiresAt', record.expiresAt),
@@ -830,7 +836,7 @@ function withProposalsLock(options, operation) {
 }
 
 export function createProposal(
-  { invocationId = null, agentId = null, tool = null, risk = 'external', operationDigest: digest, summary },
+  { invocationId = null, agentId = null, tool = null, risk = 'external', operationDigest: digest, summary, operation = null },
   {
     env = process.env,
     home = homedir(),
@@ -848,6 +854,7 @@ export function createProposal(
     proposalId: idFactory(),
     invocationId,
     agentId: invocationId === null ? agentId : null,
+    ...(operation === null ? {} : { operation }),
     tool,
     risk,
     operationDigest: digest,
