@@ -1007,3 +1007,45 @@ test('GET /ui/api/machine/server requires an active session and observe on souls
   // The doctor subprocess never mints and never leaves an advisory cache.
   assert.ok(!existsSync(path.join(env.XDG_STATE_HOME, 'agent-bot', 'identity-apps', 'doctor.json')));
 });
+
+
+test('machine/server awaits an async doctor without blocking the daemon and dedupes concurrent runs', async () => {
+  const { env } = scratch();
+  let spawns = 0;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+    const cookie = await pairCookie(full.principalId);
+    // Two concurrent server requests share one doctor run.
+    const one = ui('/ui/api/machine/server', { cookie });
+    const two = ui('/ui/api/machine/server', { cookie });
+    // A concurrent cheap route answers while doctor is still held — the
+    // daemon loop is not blocked.
+    const me = await (await ui('/ui/api/me', { cookie })).json();
+    assert.equal(me.principal.principalId, full.principalId);
+    assert.equal(spawns, 1, 'concurrent requests share a single doctor spawn');
+    release({ ready: true, machine: { checks: [] }, worktree: null });
+    const [r1, r2] = await Promise.all([one, two]);
+    assert.equal((await r1.json()).readiness.ready, true);
+    assert.equal((await r2.json()).readiness.ready, true);
+  }, { webDeps: {
+    serverStatus: () => ({ server_mode: false, base: null, enrolled: false, device_id: null, device_name: null, approved_harnesses: [], repo: null }),
+    doctor: () => { spawns += 1; return held; },
+  } });
+});
+
+test('machine/server honours a narrowed principal immediately — the principal is re-read each request', async () => {
+  const { env } = scratch();
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const full = seedPrincipal(env, { label: 'full', souls: ['*'], operations: ['observe'] });
+    const cookie = await pairCookie(full.principalId);
+    assert.equal((await ui('/ui/api/machine/server', { cookie })).status, 200);
+    // Narrow the souls after the session exists: the very next request 403s.
+    authorizeSouls(full.principalId, [AGENT_ID], { file: env.AGENT_BOT_PRINCIPALS_PATH, env, home: '/nonexistent' });
+    assert.equal((await ui('/ui/api/machine/server', { cookie })).status, 403);
+  }, { webDeps: {
+    serverStatus: () => ({ server_mode: false, base: null, enrolled: false, device_id: null, device_name: null, approved_harnesses: [], repo: null }),
+    doctor: async () => ({ ready: true, machine: { checks: [] }, worktree: null }),
+  } });
+});

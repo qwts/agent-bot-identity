@@ -3,7 +3,8 @@
 // the same shapes. Doctor runs as a subprocess with --no-verify-apps so a
 // read surface can never mint an installation token or write the advisory
 // doctor cache.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,19 +41,17 @@ export function serverStatusReport({ env = process.env, home = homedir(), cwd = 
   };
 }
 
-export function doctorReport({ env = process.env, cwd = process.cwd(), root = dirname(fileURLToPath(import.meta.url)), execFile = execFileSync, timeoutMs = 30000 } = {}) {
-  let out;
-  try {
-    out = execFile(process.execPath, [join(root, 'doctor.mjs'), '--json', '--no-verify-apps'],
-      { env, cwd, encoding: 'utf8', timeout: timeoutMs });
-  } catch (error) {
-    // doctor exits non-zero when the machine is not ready but still prints
-    // the JSON report — read it from the failed spawn's stdout.
-    out = typeof error?.stdout === 'string' ? error.stdout : null;
-    if (out === null) {
-      throw Object.assign(new Error(`doctor failed: ${error?.message ?? 'unknown'} [doctor-unavailable]`), { code: 'doctor-unavailable' });
-    }
-  }
+const DOCTOR_ARGS = ['--json', '--no-verify-apps'];
+const DOCTOR_FILE = (root) => join(root, 'doctor.mjs');
+
+// doctor exits non-zero when the machine is not ready but still prints the
+// JSON report — stdout of the failed spawn is still the report.
+function doctorUnavailable(error) {
+  return Object.assign(new Error(`doctor failed: ${error?.message ?? 'unknown'} [doctor-unavailable]`), { code: 'doctor-unavailable' });
+}
+
+function parseDoctorReport(out) {
+  if (typeof out !== 'string') throw doctorUnavailable(new Error('no report'));
   let report;
   try {
     report = JSON.parse(out);
@@ -65,4 +64,33 @@ export function doctorReport({ env = process.env, cwd = process.cwd(), root = di
     machine: report.machine ?? null,
     worktree: report.worktree ?? null,
   };
+}
+
+// Sync variant for the MCP server process — blocking there stalls no one
+// but that agent's own stdio loop.
+export function doctorReport({ env = process.env, cwd = process.cwd(), root = dirname(fileURLToPath(import.meta.url)), execFile = execFileSync, timeoutMs = 30000 } = {}) {
+  let out;
+  try {
+    out = execFile(process.execPath, [DOCTOR_FILE(root), ...DOCTOR_ARGS],
+      { env, cwd, encoding: 'utf8', timeout: timeoutMs });
+  } catch (error) {
+    if (typeof error?.stdout !== 'string') throw doctorUnavailable(error);
+    out = error.stdout;
+  }
+  return parseDoctorReport(out);
+}
+
+// Async variant for surfaces inside the daemon's HTTP loop (#1297): a sync
+// spawn would freeze every in-flight credential and binding request.
+export async function doctorReportAsync({ env = process.env, cwd = process.cwd(), root = dirname(fileURLToPath(import.meta.url)), execFileAsync = promisify(execFile), timeoutMs = 30000 } = {}) {
+  let out;
+  try {
+    const result = await execFileAsync(process.execPath, [DOCTOR_FILE(root), ...DOCTOR_ARGS],
+      { env, cwd, encoding: 'utf8', timeout: timeoutMs });
+    out = result.stdout;
+  } catch (error) {
+    if (typeof error?.stdout !== 'string') throw doctorUnavailable(error);
+    out = error.stdout;
+  }
+  return parseDoctorReport(out);
 }

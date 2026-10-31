@@ -31,7 +31,7 @@ import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { getPrincipal, listPrincipals, principalsFile } from './identity-host.mjs';
-import { serverStatusReport, doctorReport } from './server-status.mjs';
+import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
 import { daemonStateFile, daemonStatus } from './agent-daemon.mjs';
 
 export const UI_CSRF_HEADER = 'x-agent-bot-ui';
@@ -166,13 +166,14 @@ export function createWebLayer({
   webRoot = webRootDirectory(),
   // Injectable for tests: the shared server/doctor probes (#1295).
   serverStatus = serverStatusReport,
-  doctor = doctorReport,
+  doctor = doctorReportAsync,
 } = {}) {
   void config; // reserved; the web layer holds no policy of its own
   const root = path.resolve(webRoot);
   // Pairing codes and cookie sessions are held daemon-side in memory only:
   // they die with the daemon, are never written to disk, and are therefore
   // never available to another local account or a later process.
+  let doctorInFlight = null;
   const pairingCodes = new Map(); // code -> { principalId, expiresAt }
   const sessions = new Map(); // cookie token -> { principalId, expiresAt }
 
@@ -375,8 +376,14 @@ export function createWebLayer({
         || !Array.isArray(auth.souls) || auth.souls.length !== 1 || auth.souls[0] !== '*') {
         throw failure(403, 'principal is not authorized for this operation');
       }
+      // One doctor run at a time: a burst of viewers awaits the same
+      // subprocess instead of spawning a stampede, and awaiting it keeps
+      // the event loop free for the daemon's other routes.
+      doctorInFlight ??= Promise.resolve()
+        .then(() => doctor({ env, home }))
+        .finally(() => { doctorInFlight = null; });
       let readiness = null;
-      try { readiness = doctor({ env, home }); }
+      try { readiness = await doctorInFlight; }
       catch (error) {
         if (error?.code !== 'doctor-unavailable') throw error;
         readiness = { error: 'doctor-unavailable' };

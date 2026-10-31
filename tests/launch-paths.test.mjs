@@ -51,7 +51,7 @@ const LAUNCH_PATHS = {
   'identity/owner-statement.mjs': [1, 'owner-run: ssh-keygen'],
   'shell-path.mjs': [1, 'owner-run: zsh-profile writing the owner\'s profile'],
   'agent-web.mjs': [1, 'browser open'],
-  'server-status.mjs': [2, 'git, doctor'],
+  'server-status.mjs': [5, 'git, doctor (sync + async)'],
   'identity/identity-apps.mjs': [1, 'browser open'],
   // OS tools.
   'daemon-supervisor.mjs': [1, 'OS tool: launchctl/systemctl/schtasks'],
