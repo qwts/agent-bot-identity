@@ -1317,7 +1317,6 @@ test('machine plan/proposal fields are type-checked strings capped at 128; card 
       method: 'POST', body: { verb: 'update', name: 'example' }, cookie })).json();
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /proposal\.operation/);
-    for (const k of Object.keys(proposal.operation)) assert.ok(['verb', 'name', 'harness'].includes(k) || true);
-    assert.deepEqual(proposal.operation, { verb: 'update', harness: 'web-ui', name: 'example' });
+assert.deepEqual(proposal.operation, { verb: 'update', harness: 'web-ui', name: 'example' });
   }, { home: root });
 });
