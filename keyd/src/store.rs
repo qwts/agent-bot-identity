@@ -381,6 +381,7 @@ pub mod keychain {
     use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::data::CFData;
+    use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::CFString;
     use security_framework::os::macos::keychain::SecKeychain;
     use security_framework::os::macos::keychain_item::SecKeychainItem;
@@ -404,7 +405,9 @@ pub mod keychain {
     type CFDataRef = *const c_void;
     type CFTypeRef = *const c_void;
     type SecACLRef = *mut c_void;
+    type SecCodeRef = *mut c_void;
     type SecTrustedApplicationRef = *mut c_void;
+    type CFDictionaryRef = *const c_void;
 
     const NOT_FOUND: i32 = -25300; // errSecItemNotFound
     const DUPLICATE: i32 = -25299; // errSecDuplicateItem
@@ -449,6 +452,25 @@ pub mod keychain {
             acl: *mut SecACLRef,
         ) -> i32;
         fn SecACLUpdateAuthorizations(acl: SecACLRef, authorizations: CFArrayRef) -> i32;
+        fn SecACLCopyAuthorizations(acl: SecACLRef) -> CFArrayRef;
+        fn SecCodeCopySelf(flags: u32, code: *mut SecCodeRef) -> i32;
+        fn SecCodeCopySigningInformation(
+            code: SecCodeRef,
+            flags: u32,
+            info: *mut CFDictionaryRef,
+        ) -> i32;
+        fn CFPropertyListCreateWithData(
+            allocator: *const c_void,
+            data: CFDataRef,
+            options: u64,
+            // CFPropertyListFormat is a CFIndex: pointer-sized.
+            format: *mut isize,
+            error: *mut CFTypeRef,
+        ) -> CFTypeRef;
+        fn CFGetTypeID(cf: CFTypeRef) -> usize;
+        fn CFStringGetTypeID() -> usize;
+        fn CFArrayGetTypeID() -> usize;
+        fn CFDictionaryGetTypeID() -> usize;
         fn SecKeychainItemCreateFromContent(
             class: u32,
             attributes: *mut SecKeychainAttributeList,
@@ -466,7 +488,18 @@ pub mod keychain {
         static kSecACLAuthorizationKeychainItemModify: CFStringRef;
         static kSecACLAuthorizationChangeOwner: CFStringRef;
         static kSecACLAuthorizationChangeACL: CFStringRef;
+        // The two system-planted entries macOS adds to every item it makes:
+        // a null-application integrity marker and a null-application
+        // partition record naming a Team ID in its description.
+        static kSecACLAuthorizationIntegrity: CFStringRef;
+        static kSecACLAuthorizationPartitionID: CFStringRef;
+        // The signing-info key naming the Team ID (value "teamid").
+        static kSecCodeInfoTeamIdentifier: CFStringRef;
     }
+
+    /// kSecCSSigningInformation: asks CopySigningInformation for the
+    /// cryptographic block, where the Team ID lives.
+    const SIGNING_INFORMATION: u32 = 1 << 1;
 
     /// A keychain dialog is never an answer anyone gave: keyd asks the owner
     /// through LocalAuthentication instead. Turned off once for the process,
@@ -527,10 +560,140 @@ pub mod keychain {
         Ok(unsafe { CFArray::wrap_under_create_rule(list as _) })
     }
 
-    /// Whether one entry names keyd's code and nothing else. An entry open to
-    /// any application fails, and so does one that names nobody: the first is
-    /// the hole, the second is not an item keyd made.
-    fn entry_names_only_keyd(acl: SecACLRef, keyd: &[u8]) -> bool {
+    /// The text of a Core Foundation string the framework already owns.
+    fn cf_text(cf: CFStringRef) -> String {
+        // SAFETY: a live string borrowed for the call's duration.
+        unsafe { CFString::wrap_under_get_rule(cf as _) }.to_string()
+    }
+
+    /// An entry's authorization names, canonically: each string the
+    /// framework returns is compared with the SDK's own constants, so a
+    /// planted integrity or partition record is named exactly what the
+    /// constant spells, whatever the spelling is.
+    fn authorization_names(acl: SecACLRef) -> Option<Vec<String>> {
+        // SAFETY: a live entry; the returned array is ours.
+        let list = unsafe { SecACLCopyAuthorizations(acl) };
+        if list.is_null() {
+            return None;
+        }
+        // SAFETY: the new array is ours, and CFArray releases it.
+        let list = unsafe { CFArray::<*const c_void>::wrap_under_create_rule(list as _) };
+        // SAFETY: the constants are valid for the process lifetime.
+        let (integrity, partition) = unsafe {
+            (
+                cf_text(kSecACLAuthorizationIntegrity),
+                cf_text(kSecACLAuthorizationPartitionID),
+            )
+        };
+        Some(
+            list.get_all_values()
+                .iter()
+                .map(|v| {
+                    let name = cf_text(*v);
+                    if name == integrity {
+                        "integrity".to_string()
+                    } else if name == partition {
+                        "partition_id".to_string()
+                    } else {
+                        name
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// keyd's own Team ID, asked for once: a signed build answers it, an
+    /// unsigned build gets None, and a partition record may name only this.
+    fn own_team_id() -> Option<&'static str> {
+        static TEAM: OnceLock<Option<String>> = OnceLock::new();
+        TEAM.get_or_init(|| {
+            let mut code: SecCodeRef = std::ptr::null_mut();
+            // SAFETY: no flags, a valid out-pointer.
+            if unsafe { SecCodeCopySelf(0, &mut code) } != 0 || code.is_null() {
+                return None;
+            }
+            // SAFETY: the new code is ours, and CFType releases it.
+            let code = unsafe { CFType::wrap_under_create_rule(code as CFTypeRef) };
+            let mut info: CFDictionaryRef = std::ptr::null();
+            // SAFETY: a live code and a valid out-pointer; a Code argument is
+            // interrogated through its StaticCode per the header contract.
+            let status = unsafe {
+                SecCodeCopySigningInformation(
+                    code.as_concrete_TypeRef() as SecCodeRef,
+                    SIGNING_INFORMATION,
+                    &mut info,
+                )
+            };
+            if status != 0 || info.is_null() {
+                return None;
+            }
+            // SAFETY: the new dictionary is ours, and CFType releases it.
+            let info =
+                unsafe { CFDictionary::<CFString, CFType>::wrap_under_create_rule(info as _) };
+            // SAFETY: the key constant is valid for the process lifetime.
+            let key = unsafe { CFString::wrap_under_get_rule(kSecCodeInfoTeamIdentifier as _) };
+            info.find(&key)
+                .and_then(|v| v.downcast::<CFString>())
+                .map(|team| team.to_string())
+        })
+        .as_deref()
+    }
+
+    /// A hex string's bytes, or None when it is not even-length hex.
+    fn decode_hex(text: &str) -> Option<Vec<u8>> {
+        let bytes = text.as_bytes();
+        if bytes.is_empty() || !bytes.len().is_multiple_of(2) {
+            return None;
+        }
+        let nibble = |b: u8| -> Option<u8> {
+            match b {
+                b'0'..=b'9' => Some(b - b'0'),
+                b'a'..=b'f' => Some(b - b'a' + 10),
+                b'A'..=b'F' => Some(b - b'A' + 10),
+                _ => None,
+            }
+        };
+        bytes
+            .chunks_exact(2)
+            .map(|pair| nibble(pair[0]).and_then(|hi| nibble(pair[1]).map(|lo| hi << 4 | lo)))
+            .collect()
+    }
+
+    /// Whether one access-control entry is allowed on a keyd-owned item.
+    /// `applications` is None when the entry names no application at all:
+    /// macOS plants two such entries on every item it makes — an integrity
+    /// marker and a partition record — and a null list covering anything
+    /// else is a hole, so the planted entries are admitted only when their
+    /// authorizations are exactly what the system writes and the partition
+    /// record names keyd's own Team ID alone.
+    /// `applications` Some(only_keyd) carries the existing rule.
+    fn acl_entry_acceptable(
+        authorizations: &[String],
+        applications: Option<bool>,
+        partitions: Option<Vec<String>>,
+        own_team: Option<&str>,
+    ) -> bool {
+        match applications {
+            Some(only_keyd) => only_keyd,
+            None => {
+                if authorizations == ["integrity"] {
+                    return true;
+                }
+                if authorizations == ["partition_id"] {
+                    if let (Some(parts), Some(team)) = (partitions, own_team) {
+                        return parts == [format!("teamid:{team}")];
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// Whether one entry names keyd's code and nothing else, or is a system
+    /// entry macOS itself planted. An entry open to any application fails,
+    /// and so does a null list covering a right other than the planted two:
+    /// the first is the hole, the second is not an item keyd made.
+    fn entry_is_keyd_or_system(acl: SecACLRef, keyd: &[u8], own_team: Option<&str>) -> bool {
         let mut apps: CFArrayRef = std::ptr::null();
         let mut description: CFStringRef = std::ptr::null();
         let mut prompt: u16 = 0;
@@ -538,20 +701,98 @@ pub mod keychain {
         if unsafe { SecACLCopyContents(acl, &mut apps, &mut description, &mut prompt) } != 0 {
             return false;
         }
-        if !description.is_null() {
-            // SAFETY: the new string is ours, and CFType releases it.
-            drop(unsafe { CFType::wrap_under_create_rule(description as CFTypeRef) });
-        }
-        if apps.is_null() {
+        let description_text = (!description.is_null()).then(|| cf_text_owned(description));
+        let applications = if apps.is_null() {
+            None
+        } else {
+            // SAFETY: the new array is ours, and CFArray releases it.
+            let apps = unsafe { CFArray::<*const c_void>::wrap_under_create_rule(apps as _) };
+            let trusted = apps.get_all_values();
+            Some(
+                !trusted.is_empty()
+                    && trusted
+                        .iter()
+                        .all(|app| code_identity(*app).as_deref() == Some(keyd)),
+            )
+        };
+        let Some(authorizations) = authorization_names(acl) else {
             return false;
+        };
+        let partitions = (authorizations == ["partition_id"])
+            .then(|| description_text.as_deref().and_then(partition_teams))
+            .flatten();
+        acl_entry_acceptable(&authorizations, applications, partitions, own_team)
+    }
+
+    /// The text of an owned description string, releasing it after the copy.
+    fn cf_text_owned(cf: CFStringRef) -> String {
+        // SAFETY: the new string is ours; wrapping as CFType releases it at
+        // the end of the borrow.
+        let owned = unsafe { CFString::wrap_under_create_rule(cf as _) };
+        owned.to_string()
+    }
+
+    /// A partition entry's description decoded the way macOS writes it: the
+    /// hex encoding of a property list holding a "Partitions" array of
+    /// strings. Anything that does not decode is not a partition record.
+    fn partition_teams(description: &str) -> Option<Vec<String>> {
+        if let Some(bytes) = decode_hex(description) {
+            plist_partition_teams(&bytes)
+        } else {
+            // macOS writes hex; a plain plist description is tolerated only
+            // when it parses as one.
+            plist_partition_teams(description.as_bytes())
         }
-        // SAFETY: the new array is ours, and CFArray releases it.
-        let apps = unsafe { CFArray::<*const c_void>::wrap_under_create_rule(apps as _) };
-        let trusted = apps.get_all_values();
-        !trusted.is_empty()
-            && trusted
-                .iter()
-                .all(|app| code_identity(*app).as_deref() == Some(keyd))
+    }
+
+    /// The strings under "Partitions" in a property list, or None when the
+    /// bytes are not a plist, the root is not a dictionary, the key is
+    /// missing, or a member is not a string.
+    fn plist_partition_teams(bytes: &[u8]) -> Option<Vec<String>> {
+        let data = CFData::from_buffer(bytes);
+        // SAFETY: live data; a NULL allocator asks for the default, zero
+        // options makes the result immutable, and NULL format and error
+        // outputs mean the framework writes neither (the format is unused,
+        // and a failure is a NULL result).
+        let plist = unsafe {
+            CFPropertyListCreateWithData(
+                std::ptr::null(),
+                data.as_concrete_TypeRef() as CFDataRef,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if plist.is_null() {
+            return None;
+        }
+        // SAFETY: the new object is ours, and CFType releases it.
+        let plist = unsafe { CFType::wrap_under_create_rule(plist as CFTypeRef) };
+        let raw = plist.as_concrete_TypeRef() as CFTypeRef;
+        // SAFETY: live references for the type checks below.
+        if unsafe { CFGetTypeID(raw) } != unsafe { CFDictionaryGetTypeID() } {
+            return None;
+        }
+        // SAFETY: borrowed under `plist`, which outlives the value.
+        let dictionary = unsafe { CFDictionary::<CFString, CFType>::wrap_under_get_rule(raw as _) };
+        let members = dictionary.find(CFString::new("Partitions"))?;
+        let raw_arr = (*members).as_concrete_TypeRef() as CFTypeRef;
+        // SAFETY: a live member borrowed from the dictionary.
+        if unsafe { CFGetTypeID(raw_arr) } != unsafe { CFArrayGetTypeID() } {
+            return None;
+        }
+        // SAFETY: borrowed under `plist`, which outlives the values.
+        let members = unsafe { CFArray::<*const c_void>::wrap_under_get_rule(raw_arr as _) };
+        let mut teams = Vec::new();
+        for v in members.get_all_values() {
+            // SAFETY: each element is a live value borrowed from the array;
+            // non-strings are refused before being read as one.
+            if unsafe { CFGetTypeID(v) } != unsafe { CFStringGetTypeID() } {
+                return None;
+            }
+            teams.push(unsafe { CFString::wrap_under_get_rule(v as _) }.to_string());
+        }
+        Some(teams)
     }
 
     /// keyd's code identity, taken once: it cannot change while the process
@@ -586,10 +827,11 @@ pub mod keychain {
             return false;
         };
         let entries = list.get_all_values();
+        let own_team = own_team_id();
         !entries.is_empty()
             && entries
                 .iter()
-                .all(|acl| entry_names_only_keyd(*acl as SecACLRef, keyd))
+                .all(|acl| entry_is_keyd_or_system(*acl as SecACLRef, keyd, own_team))
     }
 
     /// An access for a new item: every entry the system's default
@@ -933,6 +1175,183 @@ pub mod keychain {
                 }
                 None => Ok(false),
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod acl_entry_tests {
+        use super::{acl_entry_acceptable, decode_hex, partition_teams};
+
+        const TEAM: &str = "Z5DM34QS5U";
+
+        // The partition description on Chris's real item: hex for a plist
+        // whose Partitions array names keyd's Team ID alone.
+        const REAL_PARTITION_HEX: &str = "3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e0a3c21444f435459504520706c697374205055424c494320222d2f2f4170706c652f2f44544420504c49535420312e302f2f454e222022687474703a2f2f7777772e6170706c652e636f6d2f445444732f50726f70657274794c6973742d312e302e647464223e0a3c706c6973742076657273696f6e3d22312e30223e0a3c646963743e0a093c6b65793e506172746974696f6e733c2f6b65793e0a093c61727261793e0a09093c737472696e673e7465616d69643a5a35444d3334515335553c2f737472696e673e0a093c2f61727261793e0a3c2f646963743e0a3c2f706c6973743e0a";
+
+        fn names(list: &[&str]) -> Vec<String> {
+            list.iter().map(|s| s.to_string()).collect()
+        }
+
+        fn plist_xml(inner: &str) -> String {
+            let plist = format!(
+                "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Partitions</key><array>{inner}</array></dict></plist>"
+            );
+            plist.bytes().map(|b| format!("{b:02x}")).collect()
+        }
+
+        #[test]
+        fn an_entry_naming_only_keyd_is_accepted() {
+            assert!(acl_entry_acceptable(
+                &names(&["decrypt"]),
+                Some(true),
+                None,
+                None
+            ));
+        }
+
+        #[test]
+        fn an_entry_naming_a_foreign_app_is_refused() {
+            assert!(!acl_entry_acceptable(
+                &names(&["decrypt"]),
+                Some(false),
+                None,
+                None
+            ));
+        }
+
+        #[test]
+        fn the_system_integrity_entry_is_accepted() {
+            assert!(acl_entry_acceptable(
+                &names(&["integrity"]),
+                None,
+                None,
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn the_partition_entry_is_accepted_for_keyds_own_team() {
+            assert!(acl_entry_acceptable(
+                &names(&["partition_id"]),
+                None,
+                Some(names(&["teamid:Z5DM34QS5U"])),
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn a_partition_entry_naming_a_foreign_team_is_refused() {
+            assert!(!acl_entry_acceptable(
+                &names(&["partition_id"]),
+                None,
+                Some(names(&["teamid:FOREIGN99"])),
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn a_partition_entry_is_refused_when_keyd_has_no_team() {
+            assert!(!acl_entry_acceptable(
+                &names(&["partition_id"]),
+                None,
+                Some(names(&["teamid:Z5DM34QS5U"])),
+                None
+            ));
+        }
+
+        #[test]
+        fn a_partition_entry_with_extra_partitions_is_refused() {
+            assert!(!acl_entry_acceptable(
+                &names(&["partition_id"]),
+                None,
+                Some(names(&["teamid:Z5DM34QS5U", "apple-tool:"])),
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn a_partition_entry_named_by_cdhash_is_refused() {
+            assert!(!acl_entry_acceptable(
+                &names(&["partition_id"]),
+                None,
+                Some(names(&["cdhash:beef"])),
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn a_partition_entry_that_decodes_to_nothing_is_refused() {
+            assert!(!acl_entry_acceptable(
+                &names(&["partition_id"]),
+                None,
+                None,
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn a_null_application_entry_granting_decrypt_is_refused() {
+            assert!(!acl_entry_acceptable(
+                &names(&["decrypt"]),
+                None,
+                None,
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn an_entry_covering_integrity_and_more_is_refused() {
+            assert!(!acl_entry_acceptable(
+                &names(&["integrity", "decrypt"]),
+                None,
+                None,
+                Some(TEAM)
+            ));
+        }
+
+        #[test]
+        fn an_entry_with_no_authorizations_is_refused() {
+            assert!(!acl_entry_acceptable(&names(&[]), None, None, None));
+        }
+
+        #[test]
+        fn decode_hex_reads_bytes_and_refuses_malformed_text() {
+            assert_eq!(decode_hex("00ff10"), Some(vec![0x00, 0xff, 0x10]));
+            assert_eq!(decode_hex("0"), None);
+            assert_eq!(decode_hex("zz"), None);
+            assert_eq!(decode_hex(""), None);
+        }
+
+        #[test]
+        fn the_real_partition_description_decodes_to_keyds_team() {
+            assert_eq!(
+                partition_teams(REAL_PARTITION_HEX),
+                Some(names(&["teamid:Z5DM34QS5U"]))
+            );
+        }
+
+        #[test]
+        fn a_two_partition_plist_decodes_both() {
+            let hex = plist_xml("<string>teamid:Z5DM34QS5U</string><string>apple-tool:</string>");
+            assert_eq!(
+                partition_teams(&hex),
+                Some(names(&["teamid:Z5DM34QS5U", "apple-tool:"]))
+            );
+        }
+
+        #[test]
+        fn malformed_hex_and_non_plist_descriptions_decode_to_nothing() {
+            assert_eq!(partition_teams("0"), None);
+            assert_eq!(partition_teams("zz"), None);
+            let not_plist = "deadbeef";
+            assert_eq!(partition_teams(not_plist), None);
+        }
+
+        #[test]
+        fn a_plist_without_partitions_decodes_to_nothing() {
+            let plist = "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict></dict></plist>";
+            let hex: String = plist.bytes().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(partition_teams(&hex), None);
         }
     }
 }
