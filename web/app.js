@@ -308,6 +308,9 @@ function wireAgentMachineForms() {
   };
   $('am-apply').addEventListener('click', () => propose('apply', { plan_id: state.amPlanId }));
   $('am-update').addEventListener('click', () => propose('update', { name: $('am-plan-name').value.trim() }));
+  $('am-pair').addEventListener('click', () => propose('pair'));
+  $('am-repin').addEventListener('click', () => propose('pair', { repin: true }));
+  $('am-unpair').addEventListener('click', () => propose('unpair'));
 }
 
 // --- Souls (read-only, #1295) ------------------------------------------------

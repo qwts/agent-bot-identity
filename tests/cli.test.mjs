@@ -213,6 +213,21 @@ test('agent-bot events is a public command (#1239)', () => {
   });
 });
 
+test('agent-bot pair and unpair are top-level public commands (#1295)', () => {
+  assert.deepEqual(parseAgentBotArgs(['pair']), {
+    kind: 'command', command: 'pair', args: [],
+  });
+  assert.deepEqual(parseAgentBotArgs(['pair', '--repin']), {
+    kind: 'command', command: 'pair', args: ['--repin'],
+  });
+  assert.deepEqual(parseAgentBotArgs(['pair', 'comms', '--broker', 'acct']), {
+    kind: 'command', command: 'pair', args: ['comms', '--broker', 'acct'],
+  });
+  assert.deepEqual(parseAgentBotArgs(['unpair']), {
+    kind: 'command', command: 'unpair', args: [],
+  });
+});
+
 test('mint-token JSON contract is stable and stdout-only secret bearing', () => {
   const output = formatMintGrant({
     token: 'test-token-value',

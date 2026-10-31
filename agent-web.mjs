@@ -43,8 +43,9 @@ import { configPath, FEATURE_GATES, loadConfig, SKILL_SEARCH_ADAPTERS, validateC
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
 import {
   AGENT_MACHINE_DIR, buildRequest, daemonFingerprint, loadMachinePublicKey,
-  loadMachineSigner, machineCall, machineSocketPath, pairedPublicKey, pinPath,
-  verifyResponse,
+  loadMachineSigner, loadOrCreateMachineKey, machineCall, machineSocketPath,
+  pairedPublicKey, pinDaemonPub, pinPath, unpairAgentDaemon, verifyResponse,
+  writeAgentDaemonPeer,
 } from './machine-client.mjs';
 import { daemonStateFile, daemonStatus } from './agent-daemon.mjs';
 
@@ -557,12 +558,70 @@ const enrollChildren = new Set();
     if (req.method === 'POST' && pathname === '/ui/api/machine/agent-machine/proposals') {
       try { assertMachineAuthorized({ principal, operation: 'approve' }); }
       catch { throw failure(403, 'principal is not authorized for this operation'); }
-      const allowed = ['verb', 'name', 'option', 'target', 'plan_id'];
+      const allowed = ['verb', 'name', 'option', 'target', 'plan_id', 'repin'];
       for (const key of Object.keys(body)) if (!allowed.includes(key)) throw failure(400, 'unknown field');
+      if (body.verb === 'pair' || body.verb === 'unpair') {
+        const extra = Object.keys(body).filter((k) => k !== 'verb' && !(body.verb === 'pair' && k === 'repin'));
+        if (extra.length > 0) throw failure(400, 'unknown field');
+        if (body.verb === 'pair' && body.repin !== undefined && typeof body.repin !== 'boolean') {
+          throw failure(400, 'repin must be a boolean');
+        }
+        const repin = body.verb === 'pair' && body.repin === true;
+        const operation = body.verb === 'pair'
+          ? { verb: 'pair', ...(repin ? { repin: true } : {}) }
+          : { verb: 'unpair' };
+        const actionName = body.verb === 'pair' ? 'machine-pair' : 'machine-unpair';
+        const summary = body.verb === 'pair'
+          ? `agent-machine pair${repin ? ' --repin' : ''}`
+          : 'agent-machine unpair';
+        const { proposal } = interaction.requestMachineApproval({
+          principal: caller.principal,
+          transport: WEB_TRANSPORT,
+          operation,
+          summary,
+          execute: async (report) => {
+            const gate = proposalOwnerGate({
+              expected: actionName,
+              proposalId: report.proposalId,
+              principalId: caller.principal.principalId,
+              digest: operationDigest(operation),
+              env,
+              home,
+              now,
+            });
+            await gate(actionName, {});
+            if (body.verb === 'unpair') {
+              unpairAgentDaemon({ env, home });
+              return { unpaired: true };
+            }
+            if (!existsSync(AGENT_MACHINE_DIR(home))) {
+              throw Object.assign(new Error(`${AGENT_MACHINE_DIR(home)} does not exist — install and start agent-machine first (managed-machine daemon install) [machine-not-running]`), { code: 'machine-not-running' });
+            }
+            const key = loadOrCreateMachineKey({ env, home });
+            writeAgentDaemonPeer({ home, publicKeyRaw: key.publicKeyRaw });
+            const pin = pinDaemonPub({ env, home, repin });
+            const request = buildRequest({ verb: 'status' }, key);
+            const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
+            const reply = verifyResponse(line, pin.publicKeyRaw, { expectedNonce: request.nonce });
+            if (!reply.ok) {
+              throw new Error(`pairing staged but agent-machine refused the status check: ${reply.diagnostic ?? ''} ${reply.message ?? ''}`.trim());
+            }
+            return {
+              paired: true,
+              pin_fingerprint: pin.fingerprint,
+              replaced_fingerprint: pin.replaced,
+              state: reply.state ?? reply.message ?? 'ok',
+            };
+          },
+        });
+        sendJson(res, 200, { proposal });
+        return;
+      }
+      if (body.repin !== undefined) throw failure(400, 'unknown field');
       for (const f of ['name', 'option', 'target', 'plan_id']) {
         if (body[f] !== undefined && (typeof body[f] !== 'string' || body[f].length > 128)) throw failure(400, `${f} must be a string of at most 128 characters`);
       }
-      if (body.verb !== 'apply' && body.verb !== 'update') throw failure(400, 'verb must be apply or update');
+      if (body.verb !== 'apply' && body.verb !== 'update') throw failure(400, 'verb must be apply, update, pair, or unpair');
       if (body.verb === 'apply' && (typeof body.plan_id !== 'string' || body.plan_id === '')) {
         throw failure(400, 'apply requires plan_id');
       }

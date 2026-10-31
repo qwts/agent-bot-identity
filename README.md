@@ -870,10 +870,11 @@ The population bearer alone cannot approve a revision.
 ### agent-machine client (#1254)
 
 When the host runs `managed-machine`'s agent-machine daemon, the owner pairs
-this account's agent-daemon with it once: `agent-bot machine pair` (owner
+this account's agent-daemon with it once: `agent-bot pair` (`agent-bot machine pair`, owner
 action) writes `peers/agent-daemon.next` + `.confirm` under
 `~/.config/agent-machine/` and pins `daemon.pub` in agent-bot state; a key
-swap needs `--repin`. `agent-bot machine unpair` revokes the peer.
+swap needs `--repin`. `agent-bot unpair` (`agent-bot machine unpair`) revokes the peer.
+`agent-bot pair comms [--broker <account>]` is the shorthand for `agent-bot daemon pair-comms`.
 `agent-bot machine status` reports pairing state and a signed status round
 trip. Agents reach it through `POST /v0/machine` (binding proof; the daemon
 fills soul/harness/session_id) or the `machine_*` MCP tools.
@@ -1373,7 +1374,7 @@ execution-provenance requests into focused references while all executable
 behavior remains in this zero-dependency runtime. Orders that arrive on a
 GitHub thread are `skills/thread-orders`.
 
-The **Agent machine** section (`GET /ui/api/machine/agent-machine`) is a read-only view of the local agent-machine daemon under the same authorization (observe on souls exactly `['*']`): pairing state (whether the client key exists, the pinned `daemon.pub` fingerprint, which `peers/agent-daemon.*` files are present, whether `terminal.pub` exists — its contents are never read) plus signed `status` and `receipts` round trips. Agent-machine failures are reported inside the section; the route still answers. Writes are split: \`POST .../plan\` runs the signed plan round trip directly (a saved plan changes nothing on the machine), while \`POST .../proposals\` creates an immutable \`machine.<verb>\` proposal — apply/update reach agent-machine only after the proposal's exact digest is approved in the Approvals tab, executed with attribution \`harness: 'web-ui'\` and no soul/session_id. Write routes need \`approve\` on souls exactly \`['*']\` (the outcome route needs \`observe\`).
+The **Agent machine** section (`GET /ui/api/machine/agent-machine`) is a view of the local agent-machine daemon under the same authorization (observe on souls exactly `['*']`): pairing state (whether the client key exists, the pinned `daemon.pub` fingerprint, which `peers/agent-daemon.*` files are present, whether `terminal.pub` exists — its contents are never read) plus signed `status` and `receipts` round trips. Agent-machine failures are reported inside the section; the route still answers. Writes are split: \`POST .../plan\` runs the signed plan round trip directly (a saved plan changes nothing on the machine), while \`POST .../proposals\` creates an immutable \`machine.<verb>\` proposal — \`pair\` (with optional \`repin: true\`), \`unpair\`, \`apply\`, and \`update\` execute only after the proposal's exact digest is approved in the Approvals tab (pairing proposals run through \`proposalOwnerGate\` for \`machine-pair\` / \`machine-unpair\`; \`apply\`/\`update\` reach agent-machine with attribution \`harness: 'web-ui'\` and no soul/session_id). Write routes need \`approve\` on souls exactly \`['*']\` (the outcome route needs \`observe\`).
 The **Settings** section (`GET /ui/api/machine/settings`) projects the secret-free config with per-key editable flags; `POST .../settings/proposals` writes only the settled editable keys (`settings.daemonPreference`, `settings.skillSearchAdapter`, `features.*`) through an immutable `machine.settings` proposal whose approval re-checks the file sha256 (`settings-drifted` on a concurrent edit) and runs full config validation.
 
 The **Souls** section (`GET /ui/api/souls`) lists each soul the principal may observe (the ordinary per-soul observe filter, not the machine gate) with its session records and live bindings — transcript paths and secrets are never projected. The tab also offers the settled soul writes as `soul.<verb>` proposals (`POST /ui/api/souls/{agentId}/proposals` with `GET .../revisions` for pending revisions): `revision.approve`/`revision.reject`, `cold-wake`, and `remove`. Each becomes an immutable digest-bound proposal the owner approves through the same Approvals tab; the executor substitutes a gate stub that names the proposal as the owner decision (`via: 'ui-proposal:<id>'`), re-checks the removal plan (`soul-remove-plan-changed`), and always archives.
