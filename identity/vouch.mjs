@@ -119,6 +119,24 @@ function describeKey(file, privateKey, created) {
   };
 }
 
+// Load-only: the same custody checks as loadOrCreateVouchKey (O_NOFOLLOW,
+// regular file, this account's uid; Windows ACL custody), null when the key
+// is absent, and never creates state — for read surfaces that may not mint.
+export function loadVouchKey(stateDir, { platform = process.platform, custody = null } = {}) {
+  const file = vouchKeyPath(stateDir);
+  if (platform === 'win32') {
+    // An absent key must not consult the custody layer at all (it may not
+    // exist off-Windows); a present one is read through it.
+    try { lstatSync(file); } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+    custody ??= createWindowsAccountCustody();
+    return readVouchKey(file, { platform, custody, sid: custody.currentSid() });
+  }
+  return readVouchKey(file, { platform });
+}
+
 export function loadOrCreateVouchKey(stateDir, {
   platform = process.platform, custody = null, openKeyFile = openSync, writeKeyFile = writeFileSync,
 } = {}) {

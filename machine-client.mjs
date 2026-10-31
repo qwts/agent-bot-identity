@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, renameSync, w
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { loadOrCreateVouchKey, vouchKeyPath, vouchStateDir } from './identity-host.mjs';
+import { loadOrCreateVouchKey, loadVouchKey, vouchKeyPath, vouchStateDir } from './identity-host.mjs';
 
 // Same 12-byte Ed25519 SPKI DER prefix as identity/keyd-client.mjs
 // ED25519_SPKI_PREFIX — keyd-client is identity module and host may not
@@ -51,13 +51,13 @@ export function loadOrCreateMachineKey({ env = process.env, home = homedir(), pl
 
 // Load-only signer for read surfaces: uses the key when it exists, never
 // creates it. Windows reports presence only (custody ACL owns the file).
-export function loadMachineSigner({ env = process.env, home = homedir(), platform = process.platform } = {}) {
+export function loadMachineSigner({ env = process.env, home = homedir(), platform = process.platform, custody = null } = {}) {
   const file = vouchKeyPath(machineStateDir({ env, home }));
   if (!existsSync(file)) return null;
-  // The file exists, so custody reads never create: vouch's Windows path
-  // (ACL-owned directory) is the only way to open it there.
-  if (platform === 'win32') return loadOrCreateMachineKey({ env, home });
-  const key = createPrivateKeySync(readFileSync(file, 'utf8'));
+  // The file exists, so the custody read never creates state — vouch's own
+  // checks (O_NOFOLLOW / owner / regular file; ACL custody on win32).
+  const key = loadVouchKey(machineStateDir({ env, home }), { platform, custody });
+  if (key === null) return null;
   const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
   if (der.length !== 44 || !der.subarray(0, 12).equals(ED25519_SPKI_PREFIX)) return null;
   return { publicKeyRaw: Buffer.from(der.subarray(12)), sign: (bytes) => edSign(null, bytes, key) };
@@ -66,11 +66,11 @@ export function loadMachineSigner({ env = process.env, home = homedir(), platfor
 // Read-only probe for `agent-bot machine status`: reports the key's public
 // half without ever creating one. On Windows the custody ACL keeps the key
 // unreadable without the vouch plumbing, so only presence is reported.
-export function loadMachinePublicKey({ env = process.env, home = homedir(), platform = process.platform } = {}) {
+export function loadMachinePublicKey({ env = process.env, home = homedir(), platform = process.platform, custody = null } = {}) {
   const file = vouchKeyPath(machineStateDir({ env, home }));
   if (!existsSync(file)) return null;
-  if (platform === 'win32') return Buffer.alloc(32);
-  const key = createPrivateKeySync(readFileSync(file, 'utf8'));
+  const key = loadVouchKey(machineStateDir({ env, home }), { platform, custody });
+  if (key === null) return null;
   const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
   if (der.length !== 44 || !der.subarray(0, 12).equals(ED25519_SPKI_PREFIX)) return null;
   return Buffer.from(der.subarray(12));

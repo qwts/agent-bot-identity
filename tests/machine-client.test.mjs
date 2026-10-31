@@ -2,12 +2,13 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign } from 'node:crypto';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { loadOrCreateVouchKey } from '../identity-host.mjs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
   machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
-  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, machineStateDir } from '../machine-client.mjs';
+  writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, loadMachinePublicKey, machineStateDir } from '../machine-client.mjs';
 
 const roots = [];
 after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
@@ -202,9 +203,34 @@ test('pin mismatch refuses send; no pin refuses with machine-not-paired', () => 
 test('loadMachineSigner is load-only, and on win32 loads an existing key through vouch', () => {
   const root = scratch();
   const env = { AGENT_BOT_SERVER_STATE: path.join(root, 'state') };
-  assert.equal(loadMachineSigner({ env, home: root, platform: 'win32' }), null);
+  const custody = { currentSid: () => 'S-1', assertOwnedFile: () => {}, restrictPrivateFile: () => {} };
+  assert.equal(loadMachineSigner({ env, home: root, platform: 'win32', custody }), null);
   const signer = loadOrCreateMachineKey({ env, home: root });
-  const loaded = loadMachineSigner({ env, home: root, platform: 'win32' });
+  const loaded = loadMachineSigner({ env, home: root, platform: 'win32', custody });
   assert.deepEqual(loaded.publicKeyRaw, signer.publicKeyRaw);
   assert.ok(loaded.sign(Buffer.from('x')).length === 64, 'the win32 signer signs');
+});
+
+test('load-only key readers keep vouch custody: symlink, FIFO and foreign file refused', async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX custody checks');
+  const root = scratch();
+  const env = { AGENT_BOT_SERVER_STATE: path.join(root, 'state') };
+  const dir = machineStateDir({ env, home: root });
+  const file = path.join(dir, 'vouch-key.pem');
+  // Absent: null, and nothing was created.
+  assert.equal(loadMachinePublicKey({ env, home: root }), null);
+  assert.equal(loadMachineSigner({ env, home: root }), null);
+  assert.equal(existsSync(dir), false);
+  // A symlink at the key path is refused, not followed and signed with.
+  mkdirSync(dir, { recursive: true });
+  const real = path.join(dir, 'real.pem');
+  writeFileSync(real, loadOrCreateVouchKey(path.join(dir, 'src')).privateKey.export({ type: 'pkcs8', format: 'pem' }));
+  symlinkSync(real, file);
+  assert.throws(() => loadMachineSigner({ env, home: root }), /not a regular file owned by this account/);
+  assert.throws(() => loadMachinePublicKey({ env, home: root }), /not a regular file owned by this account/);
+  // A FIFO opens without blocking (O_NONBLOCK) and fails the file check.
+  rmSync(file);
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('mkfifo', [file]);
+  assert.throws(() => loadMachinePublicKey({ env, home: root }), /not a regular file owned by this account/);
 });
