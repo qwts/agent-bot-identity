@@ -855,7 +855,7 @@ export function createInteractionService({
         approvalWaiters.delete(proposal.proposalId);
         if (outcome.decision === 'approve') {
           Promise.resolve()
-            .then(() => execute())
+            .then(() => execute((fields) => recordMachineOutcome(proposal.proposalId, fields)))
             .then((result) => recordMachineOutcome(proposal.proposalId, { status: 'executed', result }))
             .catch((error) => recordMachineOutcome(proposal.proposalId, { status: 'failed', error: error?.message ?? 'failed' }));
         } else {

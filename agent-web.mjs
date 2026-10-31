@@ -23,14 +23,15 @@
 //     a wider listener here.
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { assertMachineAuthorized, getPrincipal, listPrincipals, listSessions, principalsFile } from './identity-host.mjs';
+import { assertMachineAuthorized, getPrincipal, listPrincipals, listSessions, loadDevice, principalsFile, serverUrl } from './identity-host.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { configPath, FEATURE_GATES, loadConfig, SKILL_SEARCH_ADAPTERS, validateConfig } from './config.mjs';
 import { serverStatusReport, doctorReportAsync } from './server-status.mjs';
@@ -81,6 +82,33 @@ const CONTENT_TYPES = new Map([
 // Flat, boring asset names only. Anything else — traversal, separators,
 // dotfiles, encodings — is an unknown asset, checked again canonically below.
 const ASSET_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+// Enroll stdout is newline-delimited JSON; a record may split across chunks,
+// so the parser carries the partial tail. Non-JSON lines are ignored.
+export function parseEnrollLine(line) {
+  try { return JSON.parse(line); } catch { return null; }
+}
+// The flow's complete URI is the approve link; build one only when absent.
+export function enrollPromptReport(prompt, report, now = () => new Date()) {
+  const verification_uri = prompt.verification_uri_complete
+    ?? (prompt.verification_uri && prompt.user_code
+      ? `${prompt.verification_uri}?user_code=${encodeURIComponent(prompt.user_code)}`
+      : prompt.verification_uri);
+  report({ status: 'pending-approval', user_code: prompt.user_code, verification_uri,
+    expires_at: new Date(now().getTime() + (prompt.expires_in ?? 900) * 1000).toISOString(),
+    thumbprint: prompt.jkt });
+}
+
+export function enrollStdoutChunk(tail, chunk, onLine) {
+  const lines = (tail + chunk).split('\n');
+  const rest = lines.pop();
+  for (const line of lines) if (line.trim()) onLine(line);
+  return rest;
+}
+// Only the non-secret reconcile fields the UI needs ever leave the server.
+function reconcileRow(row) {
+  return { operation_id: row?.operation_id ?? null, state: row?.state ?? null, reason: row?.reason ?? null };
+}
 
 export function webRootDirectory() {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
@@ -162,6 +190,10 @@ function publicPrincipal(principal) {
   };
 }
 
+const execFileAsync = promisify(execFile);
+
+const webRootDirectoryRoot = path.dirname(fileURLToPath(import.meta.url));
+
 export function createWebLayer({
   env = process.env,
   home = homedir(),
@@ -170,6 +202,9 @@ export function createWebLayer({
   daemonToken,
   confirmDecision = null,
   now = () => new Date(),
+  reconcileInFlight = { current: null },
+  // Server actions (#1295): CLI spawns, injected for tests.
+  spawnServerCli = null,
   webRoot = webRootDirectory(),
   // Injectable for tests: the shared server/doctor probes (#1295).
   serverStatus = serverStatusReport,
@@ -183,7 +218,9 @@ export function createWebLayer({
   // they die with the daemon, are never written to disk, and are therefore
   // never available to another local account or a later process.
   let doctorInFlight = null;
-  const machineInFlight = new Map(); // verb -> Promise (one signed round trip at a time per verb)
+  const machineInFlight = new Map();
+let enrollInFlight = false;
+const enrollChildren = new Set();
 
   // Machine-level views are only for a principal the owner allowed to
   // observe every soul — exactly ['*'], not a subset with '*' adjacent
@@ -679,6 +716,98 @@ export function createWebLayer({
       sendJson(res, 200, { proposal });
       return;
     }
+    if (req.method === 'POST' && pathname === '/ui/api/machine/server/reconcile') {
+      try { assertMachineAuthorized({ principal, operation: 'approve' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      reconcileInFlight.current ??= (async () => {
+        const file = path.join(webRootDirectoryRoot, 'identity', 'server-client.mjs');
+        const run = spawnServerCli ?? ((args) => execFileAsync(process.execPath, [file, ...args], { env: { ...process.env, ...env }, timeout: 60000 }));
+        try {
+          const { stdout } = await run(['reconcile', '--json']);
+          const { reconciled = [] } = JSON.parse(stdout);
+          return { reconciled: reconciled.length, results: reconciled.map(reconcileRow) };
+        } catch (error) {
+          if (error?.stdout) {
+            try {
+              const { reconciled = [] } = JSON.parse(error.stdout);
+              return { reconciled: reconciled.length, results: reconciled.map(reconcileRow) };
+            } catch { /* fall through */ }
+          }
+          throw failure(502, error?.message ?? 'reconcile failed');
+        } finally {
+          setTimeout(() => { reconcileInFlight.current = null; }, 0);
+        }
+      })();
+      sendJson(res, 200, await reconcileInFlight.current);
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/ui/api/machine/server/enroll') {
+      try { assertMachineAuthorized({ principal, operation: 'approve' }); }
+      catch { throw failure(403, 'principal is not authorized for this operation'); }
+      for (const key of Object.keys(body)) throw failure(400, 'unknown field');
+      const device = loadDevice({ env, home });
+      const harnesses = device?.harnesses ?? [];
+      if (harnesses.length === 0) throw failure(409, 'no enrolled harnesses to re-enroll');
+      // One enrollment at a time across the whole grant lifecycle: a second
+      // forced run recreates enroll-staging and could promote a mismatched
+      // key+record pair.
+      const open = interaction.listProposalsForOwner().proposals
+        .some((p) => p.tool === 'machine.enroll' && p.status === 'open' && new Date(p.expiresAt) > now());
+      if (open || enrollInFlight) throw Object.assign(failure(409, 'enroll-in-flight: an enrollment grant is already open or running'), { code: 'enroll-in-flight' });
+      const operation = { verb: 'enroll', harnesses, base: serverUrl({ env, home }) };
+      const { proposal } = interaction.requestMachineApproval({
+        principal: caller.principal,
+        transport: WEB_TRANSPORT,
+        operation,
+        summary: `re-enroll device (${harnesses.join(', ')})`,
+        execute: async (report) => {
+          const file = path.join(webRootDirectoryRoot, 'identity', 'server-client.mjs');
+          const args = [file, 'enroll', '--force', '--json', ...harnesses.flatMap((h) => ['--harness', h])];
+          if (spawnServerCli) {
+            // Test seam: a fake CLI that yields captured output — still
+            // parsed line-by-line like the real path.
+            const { stdout } = await spawnServerCli(args.slice(1), report);
+            let last = null;
+            for (const line of stdout.split('\n')) {
+              const msg = parseEnrollLine(line);
+              if (msg?.prompt) enrollPromptReport(msg.prompt, report, now);
+              else if (msg) last = msg;
+            }
+            return { device_id: last?.record?.device_id ?? null, harnesses: last?.record?.harnesses ?? harnesses };
+          }
+          return await new Promise((resolve, reject) => {
+            const child = spawn(process.execPath, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+            enrollChildren.add(child);
+            // The grant flow can outlive a poll window; bound the child
+            // anyway and kill it rather than leave a stale staging dir.
+            const timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, 10 * 60_000);
+            let out = ''; let errTail = ''; let last = null;
+            child.stdout.on('data', (chunk) => {
+              out = enrollStdoutChunk(out, chunk, (line) => {
+                const msg = parseEnrollLine(line); if (!msg) return;
+                if (msg.prompt) enrollPromptReport(msg.prompt, report, now);
+                else last = msg;
+              });
+            });
+            child.stderr.on('data', (chunk) => { errTail = (errTail + chunk).slice(-2000); });
+            child.on('error', (error) => { clearTimeout(timer); enrollChildren.delete(child); enrollInFlight = false; reject(error); });
+            child.on('close', (code) => {
+              clearTimeout(timer);
+              enrollChildren.delete(child);
+              enrollInFlight = false;
+              if (code === 0) {
+                resolve({ device_id: last?.record?.device_id ?? null, harnesses: last?.record?.harnesses ?? harnesses });
+              } else {
+                reject(new Error(errTail.trim().split('\n').at(-1) || `enroll exited ${code}`));
+              }
+            });
+            enrollInFlight = true;
+          });
+        },
+      });
+      sendJson(res, 200, { proposal });
+      return;
+    }
     if (req.method === 'GET' && pathname === '/ui/api/population') {
       sendJson(res, 200, interaction.listAuthorizedSouls(caller));
       return;
@@ -828,7 +957,12 @@ export function createWebLayer({
     }
   }
 
-  return { handle, mintPairingCode };
+  return { handle, mintPairingCode,
+    close() {
+      for (const child of enrollChildren) { try { child.kill('SIGTERM'); } catch {} }
+      enrollChildren.clear();
+      enrollInFlight = false;
+    } };
 }
 
 // ---------------------------------------------------------------------------

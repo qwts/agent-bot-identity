@@ -888,7 +888,13 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
     const record = await enroll({
       base, env, harnesses, tags: a.tags, force: a.force, fetchImpl, ...(sleep ? { sleep } : {}),
       ...(a.name ? { deviceName: a.name } : {}), ...(a.platform ? { platform: a.platform } : {}),
-      onPrompt: (p) => err.write(`Approve this device at ${p.verification_uri_complete}\n  code: ${p.user_code}\n  key:  ${p.jkt}\nWaiting for approval…\n`),
+      // --json also streams the approval prompt as a machine-readable line on
+      // stdout so a supervising process (the web approvals flow) can surface
+      // the code; the human-facing stderr banner is unchanged.
+      onPrompt: (p) => {
+        if (a.json) out.write(`${JSON.stringify({ prompt: { user_code: p.user_code, verification_uri: p.verification_uri, verification_uri_complete: p.verification_uri_complete, expires_in: p.expires_in, jkt: p.jkt } })}\n`);
+        err.write(`Approve this device at ${p.verification_uri_complete}\n  code: ${p.user_code}\n  key:  ${p.jkt}\nWaiting for approval…\n`);
+      },
     });
     if (record.verified === false) err.write(`warning: enrolled, but the first signed check failed: ${record.verify_error}; run \`agent-bot server status\`\n`);
     out.write(a.json ? `${JSON.stringify(record)}\n` : `enrolled ${record.device_id} (${record.management}, harnesses: ${record.harnesses.join(', ')})\n`);

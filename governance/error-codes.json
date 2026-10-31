@@ -801,6 +801,14 @@
       "kind": "refusal",
       "registered": "0.15.5",
       "summary": "The config file changed between settings proposal and approval; the write was refused."
+    },
+    {
+      "n": 101,
+      "code": "enroll-in-flight",
+      "component": "web",
+      "kind": "refusal",
+      "registered": "0.15.5",
+      "summary": "An enrollment grant is already open or running; a second forced enrollment would replace its staged key."
     }
   ]
 }
