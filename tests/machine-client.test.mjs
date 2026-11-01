@@ -5,7 +5,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
+import { AGENT_MACHINE_DIR, buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
   loadMachinePublicKey, machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
   writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, machineStateDir } from '../machine-client.mjs';
 import { loadOrCreateVouchKey } from '../identity-host.mjs';
@@ -354,4 +354,22 @@ test('runMachineCli: pair, pair --repin, unpair, status and --help run through t
   assert.equal(unpaired.code, 0);
   assert.equal(actions.at(-1), 'machine-unpair');
   assert.match(unpaired.out, /unpaired: peers\/agent-daemon\.revoked written/);
+});
+
+test('AGENT_MACHINE_DIR prefers a shared prefix directory on realHome and honours AGENT_MACHINE_DIR env', () => {
+  const root = scratch();
+  assert.equal(
+    AGENT_MACHINE_DIR(root, { env: {}, platform: 'darwin', realHome: root, exists: (p) => p === '/opt/homebrew/var/agent-machine' }),
+    '/opt/homebrew/var/agent-machine',
+  );
+  // A synthetic test home != realHome keeps <home>/.config/agent-machine.
+  assert.equal(
+    AGENT_MACHINE_DIR(root, { env: {}, platform: 'darwin', realHome: '/Users/someone-else', exists: () => true }),
+    path.join(root, '.config', 'agent-machine'),
+  );
+  // Explicit AGENT_MACHINE_DIR env override wins.
+  assert.equal(
+    AGENT_MACHINE_DIR(root, { env: { AGENT_MACHINE_DIR: '/custom/am' }, platform: 'darwin', realHome: '/Users/someone-else', exists: () => false }),
+    '/custom/am',
+  );
 });

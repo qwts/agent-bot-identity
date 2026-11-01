@@ -90,7 +90,7 @@ import {
   daemonClient, daemonStateFile, LOOPBACK_HOSTS, probeDaemonHealth as probeHealth,
   readDaemonState as readStateFile, SCHEMA_VERSION,
 } from './daemon-client.mjs';
-import { buildRequest, machineCall, machineSocketPath, machineStateDir, loadOrCreateMachineKey, pairedPublicKey, verifyResponse } from './machine-client.mjs';
+import { AGENT_MACHINE_DIR, buildRequest, machineCall, machineSocketPath, machineStateDir, loadOrCreateMachineKey, pairedPublicKey, verifyResponse } from './machine-client.mjs';
 // Re-exported for importers that predate daemon-client.mjs (#645).
 export { daemonClient, daemonStateFile };
 import { joinLaunchedSoul, leaveLaunchedSoul } from './comms-membership.mjs';
@@ -582,7 +582,7 @@ export function createDaemonServer({
   const digestStatus = { at: null, outcome: null };
   async function uploadMachineDigest() {
     try {
-      const file = path.join(home ?? homedir(), '.config', 'agent-machine', 'status-digest.json');
+      const file = path.join(AGENT_MACHINE_DIR(home ?? homedir(), { env }), 'status-digest.json');
       let raw;
       try { raw = readFileSync(file, 'utf8'); } catch { return; }
       if (Buffer.byteLength(raw) > 64 * 1024) return;
