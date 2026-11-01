@@ -508,7 +508,24 @@ export async function fetchCatalog({ base, env = process.env, home, fetchImpl = 
     }
     try { catalog = JSON.parse(catalogBytes.toString('utf8')); } catch { throw catalogError('catalog-malformed', 'catalog bytes are not JSON'); }
   }
-  return { catalog_key: key, floor, envelope, catalog, catalogBytes };
+  const publisher = out.publisher && typeof out.publisher === 'object'
+    ? {
+      login: typeof out.publisher.login === 'string' ? out.publisher.login : null,
+      id: Number.isInteger(out.publisher.id) ? out.publisher.id : null,
+    }
+    : null;
+  const drafts = Array.isArray(out.drafts)
+    ? out.drafts.map((d) => ({
+      id: typeof d?.id === 'string' ? d.id : null,
+      name: typeof d?.name === 'string' ? d.name : null,
+      updated_at: typeof d?.updated_at === 'string' ? d.updated_at : null,
+      sha256: typeof d?.sha256 === 'string' ? d.sha256 : null,
+      size: Number.isInteger(d?.size) ? d.size : null,
+      based_on_version: Number.isInteger(d?.based_on_version) ? d.based_on_version : 0,
+      revision: Number.isInteger(d?.revision) ? d.revision : null,
+    }))
+    : [];
+  return { catalog_key: key, floor, envelope, catalog, catalogBytes, publisher, drafts };
 }
 
 export function logout(opts = {}) {

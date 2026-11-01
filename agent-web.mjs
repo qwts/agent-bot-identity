@@ -930,13 +930,33 @@ const enrollChildren = new Set();
             version: it?.version ?? it?.sha256 ?? null,
             installed: installed === null ? 'unknown' : (installed[it?.name] ?? null),
           }));
+          const publisher = fetched.publisher && typeof fetched.publisher === 'object'
+            ? {
+              login: typeof fetched.publisher.login === 'string' ? fetched.publisher.login : null,
+              id: Number.isInteger(fetched.publisher.id) ? fetched.publisher.id : null,
+            }
+            : null;
+          const drafts = Array.isArray(fetched.drafts)
+            ? fetched.drafts.map((d) => ({
+              id: typeof d?.id === 'string' ? d.id : null,
+              name: typeof d?.name === 'string' ? d.name : null,
+              updated_at: typeof d?.updated_at === 'string' ? d.updated_at : null,
+              sha256: typeof d?.sha256 === 'string' ? d.sha256 : null,
+              size: Number.isInteger(d?.size) ? d.size : null,
+              based_on_version: Number.isInteger(d?.based_on_version) ? d.based_on_version : 0,
+              revision: Number.isInteger(d?.revision) ? d.revision : null,
+            }))
+            : [];
           const result = {
             key_id: fetched.catalog_key.key_id,
             version: fetched.envelope?.version ?? null,
             issued_at: fetched.envelope?.issued_at ?? null,
+            publisher,
             floor_min_version: fetched.floor.min_version,
-            items, delivered: lastDelivery.current,
-            drafts_note: 'Drafts are published and signed in the admin console.',
+            items,
+            drafts,
+            delivered: lastDelivery.current,
+            drafts_note: 'Edit and publish drafts in the agents.true-line.ai admin console.',
           };
           catalogFetch.result = result; catalogFetch.at = now().getTime();
           return result;

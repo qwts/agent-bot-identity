@@ -428,7 +428,8 @@ function wireSoulsActions() {
 async function loadCatalog() {
   const res = await api('/ui/api/machine/catalog');
   if (res.error) { $('catalog-meta').textContent = `catalog: ${res.error} — ${res.message ?? ''}`; return; }
-  $('catalog-meta').textContent = `key ${res.key_id} · version ${res.version ?? '-'} · issued ${res.issued_at ?? '-'} · floor ${res.floor_min_version}`;
+  const pub = res.publisher?.login ?? (res.publisher?.id != null ? String(res.publisher.id) : null);
+  $('catalog-meta').textContent = `key ${res.key_id} · version ${res.version ?? '-'} · issued ${res.issued_at ?? '-'}${pub ? ` · publisher ${pub}` : ''} · floor ${res.floor_min_version}`;
   $('catalog-digest').textContent = res.delivered ? `last delivery: ${res.delivered.outcome} at ${res.delivered.at}` : '';
   const tb = $('catalog-items').querySelector('tbody'); tb.textContent = '';
   for (const it of res.items ?? []) {
@@ -445,6 +446,16 @@ async function loadCatalog() {
     });
     tr.append(el('td')).lastChild.append(btn);
     tb.append(tr);
+  }
+  $('catalog-drafts-note').textContent = res.drafts_note ?? '';
+  const dtb = $('catalog-drafts').querySelector('tbody'); dtb.textContent = '';
+  for (const d of res.drafts ?? []) {
+    const tr = el('tr');
+    const sha = typeof d.sha256 === 'string' && d.sha256.length > 12 ? `${d.sha256.slice(0, 12)}…` : (d.sha256 ?? '-');
+    for (const v of [d.id, d.name, d.based_on_version, d.revision, d.size, sha, d.updated_at]) {
+      tr.append(el('td', { text: String(v ?? '-') }));
+    }
+    dtb.append(tr);
   }
 }
 
