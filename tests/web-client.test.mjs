@@ -1789,8 +1789,10 @@ test('catalog view verifies server envelope; deliver relays it; digest uploads',
   const catalog_key = { public_key: `ed25519:${rawPub.toString('base64')}`, key_id: keyId };
   const floor = { key_id: keyId, min_version: 5 };
   const envelope = { format: 'agent-bot-catalog/1', key_id: keyId, version: 7, issued_at: 1700000000, catalog: catBytes.toString('base64'), sig };
+  const publisher = { login: 'qwts', id: 91036491 };
+  const drafts = [{ id: 'cd_1', name: 'next', updated_at: '2026-10-31T19:30:00Z', sha256: 'a'.repeat(64), size: 412, based_on_version: 7, revision: 2 }];
   const fetches = [];
-  const fetchImpl = async () => { fetches.push(1); return { catalog_key, floor, envelope, catalog: JSON.parse(catBytes.toString()), catalogBytes: catBytes }; };
+  const fetchImpl = async () => { fetches.push(1); return { catalog_key, floor, envelope, catalog: JSON.parse(catBytes.toString()), catalogBytes: catBytes, publisher, drafts }; };
   const fm = await fakeAgentMachine(root, {
     replies: { catalog: { ok: true, state: 'accepted' }, status: { ok: true, state: 'ready', body: [{ name: 'codex', state: 'installed' }] } },
   });
@@ -1812,6 +1814,8 @@ test('catalog view verifies server envelope; deliver relays it; digest uploads',
     assert.equal(view.key_id, keyId);
     assert.equal(view.version, 7);
     assert.equal(view.floor_min_version, 5);
+    assert.deepEqual(view.publisher, publisher);
+    assert.deepEqual(view.drafts, drafts);
     assert.equal(view.items[0].name, 'codex');
     assert.equal(view.items[0].provider, 'formula');
     assert.equal(view.items[0].version, '1.2.3');
@@ -1858,6 +1862,18 @@ test('fetchCatalog: each local-verification failure gets its stable code', async
   const good = { catalog_key: { public_key: `ed25519:${rawPub.toString('base64')}`, key_id: keyId }, floor: { key_id: keyId, min_version: 5 }, envelope: mkEnv() };
   const ok = await fetchCatalog({ session: session(good), home: '/x' });
   assert.deepEqual(ok.catalog, { items: [] });
+  assert.equal(ok.publisher, null);
+  assert.deepEqual(ok.drafts, []);
+  const withDrafts = await fetchCatalog({
+    session: session({
+      ...good,
+      publisher: { login: 'qwts', id: 91036491 },
+      drafts: [{ id: 'cd_9', name: 'next', updated_at: '2026-10-31T19:30:00Z', sha256: 'b'.repeat(64), size: 412, based_on_version: 7, revision: 2 }],
+    }),
+    home: '/x',
+  });
+  assert.deepEqual(withDrafts.publisher, { login: 'qwts', id: 91036491 });
+  assert.deepEqual(withDrafts.drafts, [{ id: 'cd_9', name: 'next', updated_at: '2026-10-31T19:30:00Z', sha256: 'b'.repeat(64), size: 412, based_on_version: 7, revision: 2 }]);
   const cases = [
     [{ catalog_key: { public_key: 'ed25519:AAAA', key_id: keyId }, floor: good.floor, envelope: null }, 'catalog-malformed'],
     [{ ...good, catalog_key: { ...good.catalog_key, key_id: 'beef'.repeat(4) } }, 'catalog-key-mismatch'],

@@ -152,12 +152,15 @@
 
   <section id="view-catalog" hidden>
     <h2>Catalog</h2>
-    <p class="hint">Signed agent-machine catalog. Drafts are published and signed in the admin console.</p>
+    <p class="hint">Signed agent-machine catalog. Edit and publish drafts in the agents.true-line.ai admin console.</p>
     <p id="catalog-meta" class="hint"></p>
     <p id="catalog-status" class="hint"></p>
     <button id="catalog-deliver" type="button">Deliver to agent-machine</button>
     <table id="catalog-items"><thead><tr><th>Name</th><th>Provider</th><th>Version</th><th>Installed</th><th></th></tr></thead><tbody></tbody></table>
     <p id="catalog-digest" class="hint"></p>
+    <h3>Pending drafts</h3>
+    <p id="catalog-drafts-note" class="hint"></p>
+    <table id="catalog-drafts"><thead><tr><th>ID</th><th>Name</th><th>Based on</th><th>Revision</th><th>Size</th><th>SHA-256</th><th>Updated</th></tr></thead><tbody></tbody></table>
   </section>
 
   <section id="view-approvals" hidden>

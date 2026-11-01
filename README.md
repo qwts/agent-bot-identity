@@ -1381,6 +1381,8 @@ The **Souls** section (`GET /ui/api/souls`) lists each soul the principal may ob
 
 The **Server** section (`GET /ui/api/machine/server`) is a machine-level view — enrollment status, the device, the approved identities, and a read-only doctor readiness summary. It is only for principals whose `observe` authorization lists souls exactly `['*']`; anything narrower gets 403.
 
+The **Catalog** section (`GET /ui/api/machine/catalog`) fetches and locally verifies the signed `agent-bot-catalog/1` envelope from `/api/daemon/catalog`, joins installed status from `agent-machine`, and projects the published catalog metadata (`key_id`, `version`, `issued_at`, `publisher`, `floor_min_version`), items, and read-only pending `drafts` summaries (`id`, `name`, `based_on_version`, `revision`, `size`, `sha256`, `updated_at`; drafts are edited and signed in the `agents.true-line.ai` admin console). `POST /ui/api/machine/catalog/deliver` relays the verified key, floor, and envelope to `agent-machine`.
+
 ## Server mode (agent-bot server)
 
 Opt-in: set `AGENT_BOT_SERVER=https://…` (or `settings.agentBotServer`) and run `agent-bot server enroll --harness <name>`. Approve the device in the browser, or set `AGENT_BOT_ENROLL_TOKEN` on a cloud VM. After that, `mint-token` gets repo-scoped installation tokens from the server instead of a local App key. Auth uses a 0600 P-256 device key, 15-minute DPoP-bound tokens that are refreshed automatically, and server responses pinned to an Ed25519 key. With the setting unset, nothing changes. See [docs/server-mode.md](docs/server-mode.md).
