@@ -1,1 +1,0 @@
-- Surface catalog `publisher` and read-only pending `drafts` summaries from `GET /api/daemon/catalog` in `fetchCatalog` and the `/ui` Catalog tab (#1295).

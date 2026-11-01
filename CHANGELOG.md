@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.14
+
+- Surface catalog `publisher` and read-only pending `drafts` summaries from `GET /api/daemon/catalog` in `fetchCatalog` and the `/ui` Catalog tab (#1295).
+
 ## 0.15.13
 
 - Add top-level `agent-bot pair` (`[--repin]` or `pair comms [--broker <account>]`) and `agent-bot unpair` CLI aliases, and support `pair`, `pair --repin`, and `unpair` as immutable owner-gated proposals in the `/ui` Agent machine section (#1295).
