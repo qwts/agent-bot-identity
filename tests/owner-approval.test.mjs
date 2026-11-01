@@ -75,7 +75,16 @@ test('a checkout pin is a stated identity — no dialog', () => {
   );
 });
 
-test('harness env markers that resolve a slug are stated identity — no dialog', () => {
+test('AGENT_BOT_ID and harness env markers are not trusted without a live daemon binding (#1336)', () => {
+  assert.equal(
+    ownerApprovalRequired({
+      argv: ['node', 'mint-token.mjs', '--app', 'you-devin-agent'],
+      env: { ...OWNER, AGENT_BOT_ID: 'agent_ac9255e0-ddc4-4c58-b094-daf8c958df0a' },
+      cwd: plainCwd(),
+      config: CONFIG,
+    }),
+    true,
+  );
   assert.equal(
     ownerApprovalRequired({
       argv: ['node', 'mint-token.mjs', '--app', 'you-devin-agent'],
@@ -83,7 +92,7 @@ test('harness env markers that resolve a slug are stated identity — no dialog'
       cwd: plainCwd(),
       config: CONFIG,
     }),
-    false,
+    true,
   );
 });
 
@@ -115,7 +124,7 @@ test('an agent marker that resolves no identity still requires the dialog', () =
   );
 });
 
-test('generic harness agent markers that resolve a slug are stated identity — no dialog (#1120)', () => {
+test('generic harness agent markers are not trusted without a live daemon binding (#1336)', () => {
   assert.equal(
     ownerApprovalRequired({
       argv: ['node', 'mint-token.mjs', '--app', 'you-devin-agent'],
@@ -123,7 +132,17 @@ test('generic harness agent markers that resolve a slug are stated identity — 
       cwd: plainCwd(),
       config: CONFIG,
     }),
+    true,
+  );
+  assert.equal(
+    ownerApprovalRequired({
+      argv: ['node', 'mint-token.mjs', '--app', 'you-codex-agent'],
+      env: { ...OWNER, CODEX_SANDBOX: 'seatbelt' },
+      cwd: plainCwd(),
+      config: CONFIG,
+    }),
     false,
+    'Codex desktop delegate surface still skips the prompt for its own App (#107)',
   );
 });
 

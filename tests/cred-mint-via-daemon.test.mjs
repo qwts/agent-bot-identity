@@ -299,12 +299,13 @@ test('a bound soul\'s own App comes from the daemon with no gate and no local mi
 });
 
 test('another App from a bound checkout asks the owner gate, receipts it, then mints that App', async (t) => {
-  const { calls, options } = callerFixture(t);
+  const { cwd, calls, options } = callerFixture(t);
+  execFileSync('git', ['-C', cwd, 'remote', 'add', 'origin', 'https://github.com/acme/repo.git']);
   const result = await mintForCaller({ ...options, slug: 'other-app', operation: 'signed-commit' });
   assert.equal(result.token, 'ghs_local');
   assert.equal(calls.daemon, 0);
   assert.equal(calls.gate.length, 1);
-  assert.match(calls.gate[0], /other-app\[bot\].*stated as agent_/);
+  assert.match(calls.gate[0], /other-app\[bot\].*in acme\/repo for signed-commit.*stated as agent_/);
   assert.deepEqual(calls.local.map((request) => request.slug), ['other-app']);
   calls.local[0].selected({ appSlug: 'other-app', reason: 'explicit-app' });
   assert.deepEqual(calls.selected, [{ appSlug: 'other-app', reason: 'owner-approved' }]);
@@ -414,17 +415,12 @@ test('an unreadable binding refuses before any mint or gate', async (t) => {
   assert.deepEqual([calls.daemon, calls.local.length, calls.gate.length], [0, 0, 0]);
 });
 
-test('a soul checkout whose binding is gone still asks the owner for another App, and mints its own as before', async (t) => {
+test('a soul checkout whose binding is gone refuses without a prompt or local mint (#1336)', async (t) => {
   const { cwd, calls, options } = callerFixture(t, { bound: false });
   execFileSync('git', ['config', 'agentBot.agentId', agentId], { cwd });
-  await mintForCaller({ ...options, slug: 'other-app' });
-  assert.equal(calls.gate.length, 1);
-  assert.deepEqual(calls.receipts.map((fields) => [fields.agentId, fields.decision]), [[agentId, 'approved']]);
-  await mintForCaller({ ...options });
-  assert.equal(calls.gate.length, 1, 'its own App needs no gate');
-  assert.equal(calls.daemon, 0);
-  // Its own App resolves as before, so the receipt keeps the ambient selector.
-  assert.deepEqual(calls.local.map((request) => request.slug), ['other-app', null]);
+  await assert.rejects(mintForCaller({ ...options, slug: 'other-app' }), /needs a live daemon binding/);
+  await assert.rejects(mintForCaller({ ...options }), /needs a live daemon binding/);
+  assert.deepEqual([calls.daemon, calls.local.length, calls.gate.length], [0, 0, 0]);
 });
 
 test('a stated App with no Agent ID (GH_AGENT_APP or the pin) asks the owner for a different App only', async (t) => {
@@ -441,7 +437,7 @@ test('a stated App with no Agent ID (GH_AGENT_APP or the pin) asks the owner for
 });
 
 test('mintForCaller treats registered multi-org Apps for the same soul harness as own Apps without owner gate (#1139)', async (t) => {
-  const { cwd, calls, options } = callerFixture(t, { bound: false });
+  const { cwd, calls, options } = callerFixture(t, { bound: true });
   const configFile = join(cwd, 'multi-org-config.json');
   writeFileSync(configFile, JSON.stringify({
     prefix: 'qwts',
@@ -455,13 +451,22 @@ test('mintForCaller treats registered multi-org Apps for the same soul harness a
   const env = { ...process.env, AGENT_BOT_CONFIG: configFile, AGENT_BOT_ID: agentId };
   const readIdentityImpl = () => ({ id: agentId, harness: 'muse', github: { appSlug: 'qwts-muse-agent' } });
   const resolveSlugImpl = () => 'trueline-muse-agent';
+  const clientFactory = () => ({
+    credential: async (_secret, reqOpts) => {
+      calls.daemon++;
+      return { ...grant, appSlug: reqOpts?.app ?? 'trueline-muse-agent' };
+    },
+  });
 
   // Minting default checkout App (trueline-muse-agent) or explicit trueline-muse-agent / qwts-muse-agent needs no owner gate.
-  await mintForCaller({ ...options, env, readIdentityImpl, resolveSlugImpl });
-  await mintForCaller({ ...options, env, slug: 'trueline-muse-agent', readIdentityImpl, resolveSlugImpl });
-  await mintForCaller({ ...options, env, slug: 'qwts-muse-agent', readIdentityImpl, resolveSlugImpl });
+  await mintForCaller({ ...options, env, readIdentityImpl, resolveSlugImpl, clientFactory });
+  await mintForCaller({ ...options, env, slug: 'trueline-muse-agent', readIdentityImpl, resolveSlugImpl, clientFactory });
+  await mintForCaller({ ...options, env, slug: 'qwts-muse-agent', readIdentityImpl, resolveSlugImpl, clientFactory: () => ({
+    credential: async () => { calls.daemon++; return { ...grant, appSlug: 'qwts-muse-agent' }; },
+  }) });
   assert.equal(calls.gate.length, 0, 'both org Apps for the soul harness are own Apps');
-  assert.deepEqual(calls.local.map((req) => req.slug), ['trueline-muse-agent', 'trueline-muse-agent', 'qwts-muse-agent']);
+  assert.equal(calls.daemon, 3, 'all own-App mints go through the daemon');
+  assert.deepEqual(calls.local, []);
 
   // Another harness App still triggers the owner gate.
   await mintForCaller({ ...options, env, slug: 'qwts-claude-agent', readIdentityImpl, resolveSlugImpl });

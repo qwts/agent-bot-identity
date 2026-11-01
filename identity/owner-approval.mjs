@@ -67,14 +67,18 @@ export function ownerApprovalRequired({
   // dummy env values alongside an explicit --app must not skip the dialog.
   if (!explicitApp && !env.GH_AGENT_APP
     && env.GH_APP_ID && (env.GH_APP_PRIVATE_KEY || env.GH_APP_PRIVATE_KEY_PATH)) return false;
-  // A stated identity (GH_AGENT_APP, pin, Agent ID) is mintForCaller's to
-  // check against the request, so it skips the dialog here.
-  if (ambientSlug({ env, cwd, config: cfg, account: acct, git, detect: false })) return false;
-  // Harness env markers are not a stated identity: mintForCaller resolves
-  // with detect:false and sees this caller as unmarked, minting whatever
-  // --app names (#1061). They skip the dialog only for the harness's own App.
-  const detected = ambientSlug({ env, cwd, config: cfg, account: acct, git });
-  if (detected && (!explicitApp || explicitApp === detected)) return false;
+  // The Codex desktop UI (`CODEX_SANDBOX=seatbelt`) is the owner's delegate
+  // surface (#107): it mints its configured Codex App without a prompt.
+  // Agent harness markers (AGENT_BOT_ID, QWEN_CODE*, DEVIN_AGENT, AI_AGENT)
+  // are never trusted without a live daemon binding (#1336).
+  if (env.CODEX_SANDBOX) {
+    const codexDetected = ambientSlug({ env: { CODEX_SANDBOX: env.CODEX_SANDBOX }, cwd, config: cfg, account: acct, git });
+    if (codexDetected && (!explicitApp || explicitApp === codexDetected)) return false;
+  }
+  const pinEnv = { ...env };
+  delete pinEnv.AGENT_BOT_ID;
+  delete pinEnv.QWTS_AGENT_ID;
+  if (ambientSlug({ env: pinEnv, cwd, config: cfg, account: acct, git, detect: false })) return false;
   return Boolean(explicitApp);
 }
 
