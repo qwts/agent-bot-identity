@@ -164,15 +164,17 @@ export async function refuseAppOwnerMismatch({ appSlug, env = process.env, confi
 }
 
 // The server's harness name for a resolved App slug — shared by minting and
-// notices so the two never drift: the ambient override wins; a device whose
-// enrolled scope names the slug itself (the server keys Apps by slug, e.g.
-// qwts-devin-agent) uses it; otherwise the slug's harness family.
+// notices so the two never drift: an explicit AGENT_BOT_SERVER_HARNESS
+// override wins; a device whose enrolled scope names the slug itself (the
+// server keys Apps by slug, e.g. qwts-devin-agent) uses it; otherwise
+// GROK_AGENT=1 or the slug's harness family.
 export function serverHarnessForSlug({ slug, env = process.env, config, scope } = {}) {
+  if (env.AGENT_BOT_SERVER_HARNESS) return serverHarness(env.AGENT_BOT_SERVER_HARNESS);
+  const hs = scope ?? loadDevice({ env })?.harnesses ?? [];
+  if (slug && hs.includes(slug)) return slug;
   const ambient = ambientHarness(env);
   if (ambient) return ambient;
   if (!slug) return null; // no App slug resolves: never fall back to a default family
-  const hs = scope ?? loadDevice({ env })?.harnesses ?? [];
-  if (hs.includes(slug)) return slug;
   return harnessForSlug(slug, config);
 }
 

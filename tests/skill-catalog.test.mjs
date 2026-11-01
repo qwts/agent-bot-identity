@@ -10,7 +10,7 @@ import { MODULES } from '../cli/dispatch.mjs';
 import { PUBLIC_COMMANDS } from '../cli/parse.mjs';
 import { NO_SKILL_REFERENCE, SKILL_REFERENCES } from '../cli/skill-references.mjs';
 import {
-  BUNDLED_SKILLS, CATALOG_PATH, SkillError, decodeContents, main, parseCatalog, resolveCatalogEntry, sourceCommit,
+  BUNDLED_SKILLS, CATALOG_PATH, SkillError, decodeContents, ghContentsFetcher, main, parseCatalog, resolveCatalogEntry, sourceCommit,
 } from '../skill.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -258,4 +258,17 @@ test('bundled skill discovery needs neither SOP selection nor a runtime pin', ()
     assert.equal(JSON.parse(stdout).commit, sourceCommit());
     assert.equal(JSON.parse(stdout).text, readFileSync(join(ROOT, 'skills', name, 'SKILL.md'), 'utf8'));
   }
+});
+
+test('ghContentsFetcher falls back to hermetic git read when gh is not logged in (#1331)', () => {
+  const fetchContents = ghContentsFetcher({
+    gh: '/nonexistent/gh',
+    gitFallback: (repo, commit, path) => {
+      assert.equal(repo, 'qwts/managed-machine');
+      assert.equal(commit, PIN_A);
+      assert.equal(path, 'skills/managed-machine/SKILL.md');
+      return MANAGED;
+    },
+  });
+  assert.equal(fetchContents('qwts/managed-machine', 'skills/managed-machine/SKILL.md', PIN_A), MANAGED);
 });

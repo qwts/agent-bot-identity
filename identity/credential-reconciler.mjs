@@ -13,8 +13,10 @@ import {
 } from './ensure-private-key.mjs';
 import { loadConfig } from '../config.mjs';
 import { resolveAppCredential } from './soul-credentials.mjs';
-import { readAppMetadata, readManagedAppCredential } from './identity-app-store.mjs';
+import { readAppMetadata, readManagedAppCredential, writeAppMetadata } from './identity-app-store.mjs';
 import { mint } from './mint-token.mjs';
+import { redactDiagnostic } from '../diagnostic-redact.mjs';
+import { ServerSession } from './server-client.mjs';
 
 export class CredentialReconciliationError extends Error {
   constructor(phase, results) {
@@ -193,16 +195,43 @@ export function inspectLocalAppCredential({
   };
 }
 
+async function defaultVerifyApp(slug, { env = process.env, home = homedir(), config, fetchImpl } = {}) {
+  const base = isServerEnrolledApp(slug, { env, home, config });
+  if (base) {
+    const session = new ServerSession({ base, env, home, ...(fetchImpl ? { fetchImpl } : {}) });
+    const { apps } = await session.harnessApps();
+    const app = (apps ?? []).find((a) => (a.slug ?? a.name) === slug);
+    if (!app) {
+      throw new Error(`server roster at ${base} does not list ${slug} for this enrolled device`);
+    }
+    if (app.bot_user_id) {
+      try {
+        writeAppMetadata(slug, {
+          botUid: String(app.bot_user_id),
+          ...(app.app_id ? { botAvatarUrl: `https://avatars.githubusercontent.com/in/${app.app_id}?v=4` } : {}),
+        }, { home, env });
+      } catch { /* best-effort cache */ }
+    }
+    return {
+      token: 'server-verified',
+      installation_id: Number(app.app_id ?? 0),
+      expires_at: 'server-enrolled',
+      serverVerified: true,
+    };
+  }
+  return mint({ slug, ...(env ? { env } : {}), ...(config ? { config } : {}), ...(fetchImpl ? { fetchImpl } : {}) });
+}
+
 // Diagnose a complete roster with the same fail-closed live boundary as the
 // repairing reconciler. One local failure suppresses every mint; when local
 // state is complete, all Apps are live-tested and no token enters the result.
 export async function inspectAppCredentials({
   slugs,
   home = homedir(),
-  env, config, stores,
+  env, config, stores, fetchImpl,
   inspect = inspectLocalAppCredential,
   inspectSession = inspectProtonPassSession,
-  verify = async (slug) => mint({ slug, ...(env ? { env } : {}) }),
+  verify = async (slug) => defaultVerifyApp(slug, { env, home, config, fetchImpl }),
 } = {}) {
   const roster = validateRoster(slugs ?? []);
   const results = roster.map((slug) => ({
@@ -233,13 +262,13 @@ export async function inspectAppCredentials({
         expiresAt: grant.expires_at,
       };
     } catch (error) {
-      result.live = liveFailure(error);
+      result.live = liveFailure(error, { env, home });
     }
   }
   return results;
 }
 
-function liveFailure(error) {
+function liveFailure(error, { env = process.env, home = homedir() } = {}) {
   const message = String(error?.message ?? '');
   if (/401|bad credentials|jwt/i.test(message)) {
     return {
@@ -262,26 +291,30 @@ function liveFailure(error) {
       action: 'set "owner" to one of the accounts the App is installed on (or GH_APP_INSTALLATION_ID) and retry',
     };
   }
+  const detail = redactDiagnostic(message, { env, home }).trim();
   return {
     status: 'failed',
     code: 'live-verification-failed',
-    action: 'live App verification failed; check network access and run agent-bot doctor for this App',
+    action: detail
+      ? `live App verification failed (${detail}); check network access and run agent-bot doctor for this App`
+      : 'live App verification failed; check network access and run agent-bot doctor for this App',
   };
 }
 
 export async function reconcileAppCredentials({
   slugs,
   home = homedir(),
+  env, config, fetchImpl,
   provider,
   prepare = ensurePrivateKey,
-  verify = async (slug) => mint({ slug }),
+  verify = async (slug) => defaultVerifyApp(slug, { env, home, config, fetchImpl }),
   onVerified = () => {},
 } = {}) {
   const roster = validateRoster(slugs ?? []);
   const results = [];
   for (const slug of roster) {
     try {
-      const prepared = await prepare({ slug, home, provider });
+      const prepared = await prepare({ slug, home, ...(env ? { env } : {}), provider });
       results.push({
         slug,
         local: {
@@ -312,14 +345,14 @@ export async function reconcileAppCredentials({
       if (!grant || typeof grant.token !== 'string' || grant.token.length === 0) {
         throw new Error('live verification returned no token');
       }
-      onVerified(result.slug, grant);
+      if (!grant.serverVerified) onVerified(result.slug, grant);
       result.live = {
         status: 'ready',
         installationId: Number(grant.installation_id),
         expiresAt: grant.expires_at,
       };
     } catch (error) {
-      result.live = liveFailure(error);
+      result.live = liveFailure(error, { env, home });
     }
   }
   if (results.some((result) => result.live.status === 'failed')) {

@@ -24,7 +24,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { resolveSop } from './sop.mjs';
+import { createRunGit, githubRemote, readRepoFile, resolveSop } from './sop.mjs';
 import { SKILL_REFERENCES, NO_SKILL_REFERENCE, skillReferenceFor } from './cli/skill-references.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -156,9 +156,19 @@ export function resolveCatalogEntry(entries, name, catalog = null) {
   return { name, repository: entry.repository, commit: entry.commit, path: `${entry.directory}/SKILL.md` };
 }
 
-// Read one file through `gh api` (GET only), always at a full commit.
+// Read one file through `gh api` (GET only), always at a full commit, falling
+// back to sop.mjs's hermetic blobless git read when gh is unavailable or not
+// logged in (e.g., on a fresh bot box before a session binding exists).
 // Both the selected catalog and the skill it names must have a pin.
-export function ghContentsFetcher({ timeoutMs = FETCH_TIMEOUT_MS, gh = 'gh', env = process.env } = {}) {
+export function ghContentsFetcher({
+  timeoutMs = FETCH_TIMEOUT_MS,
+  gh = 'gh',
+  env = process.env,
+  runGit = createRunGit({ env }),
+  remoteUrl = githubRemote,
+  makeTemp,
+  gitFallback = readRepoFile,
+} = {}) {
   return (repository, path, ref) => {
     if (!COMMIT.test(ref ?? '')) throw new SkillError('skill content reads require a full commit');
     const query = `?ref=${encodeURIComponent(ref)}`;
@@ -174,12 +184,19 @@ export function ghContentsFetcher({ timeoutMs = FETCH_TIMEOUT_MS, gh = 'gh', env
     if (result.error?.code === 'ETIMEDOUT' || result.signal) {
       throw new SkillError(`timed out after ${Math.round(timeoutMs / 1000)}s reading ${repository}/${path}`);
     }
-    if (result.error) throw new SkillError(`cannot run gh to read ${repository}/${path}: ${result.error.code ?? result.error.message}`);
-    if (result.status !== 0) {
-      const reason = (result.stderr ?? '').split('\n').map((line) => line.trim()).find(Boolean) ?? `gh exited ${result.status}`;
-      throw new SkillError(`cannot read ${repository}/${path}${ref ? ` at ${ref}` : ''}: ${reason.slice(0, 200)}`, 1, /HTTP 404/u.test(result.stderr ?? '') ? 'skill-content-missing' : 'skill-content-unreadable');
+    if (!result.error && result.status === 0) {
+      return decodeContents(result.stdout, `${repository}/${path}`);
     }
-    return decodeContents(result.stdout, `${repository}/${path}`);
+    if (!/HTTP 404/u.test(result.stderr ?? '') && gitFallback) {
+      try {
+        return boundedText(gitFallback(repository, ref, path, { runGit, remoteUrl, makeTemp }), `${repository}/${path}`);
+      } catch {
+        // Fall through to report the original gh error.
+      }
+    }
+    if (result.error) throw new SkillError(`cannot run gh to read ${repository}/${path}: ${result.error.code ?? result.error.message}`);
+    const reason = (result.stderr ?? '').split('\n').map((line) => line.trim()).find(Boolean) ?? `gh exited ${result.status}`;
+    throw new SkillError(`cannot read ${repository}/${path}${ref ? ` at ${ref}` : ''}: ${reason.slice(0, 200)}`, 1, /HTTP 404/u.test(result.stderr ?? '') ? 'skill-content-missing' : 'skill-content-unreadable');
   };
 }
 

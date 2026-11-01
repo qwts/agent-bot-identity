@@ -317,11 +317,11 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
 
 async function mintThroughServer({ server, slug, env, config, permissions, selected, taskId = null, operationId = null, fetchImpl, repo, sessionId = null }) {
   if (permissions) throw new Error('--permissions is not available in server mode; the server mints the App\'s installation grant');
-  const { ambientHarness, mintViaServer, repoFromCheckout, serverHarnessForSlug } = await import('./server-client.mjs');
+  const { mintViaServer, repoFromCheckout, serverHarnessForSlug } = await import('./server-client.mjs');
   const explicit = slug ?? (process.argv.includes('--app') ? process.argv[process.argv.indexOf('--app') + 1] : null);
   // The same identity order as a local mint (ENG-0079), mapped to the
-  // server's harness name; AGENT_BOT_SERVER_HARNESS / GROK_AGENT override.
-  const resolvedSlug = ambientHarness(env) ? explicit : resolveAgentSlug({ explicit, env, cwd: process.cwd(), config });
+  // server's harness name; explicit AGENT_BOT_SERVER_HARNESS overrides.
+  const resolvedSlug = env.AGENT_BOT_SERVER_HARNESS ? explicit : resolveAgentSlug({ explicit, env, cwd: process.cwd(), config });
   // The identity service keys Apps by slug where the owner stored them that
   // way (e.g. trueline-grokbot-agent): when this device's scope names the
   // resolved slug itself, ask for it rather than its harness family.

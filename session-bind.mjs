@@ -26,7 +26,8 @@ worktree.
 `;
 
 const NO_TRANSCRIPT = '--transcript-id is required: no session id was found for this conversation '
-  + '(Qwen Code exports QWEN_CODE_SESSION_ID; for Devin, run `devin list --format json` in the directory '
+  + '(run `agent-bot session bind --transcript-id <session-id>` in a plain shell, '
+  + 'Qwen Code exports QWEN_CODE_SESSION_ID; for Devin, run `devin list --format json` in the directory '
   + 'the session started in), or bind with the MCP bind tool';
 
 // Devin exports no session id, so its list is the only witness: the ids it

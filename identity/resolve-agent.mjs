@@ -144,19 +144,27 @@ export function resolveAgentSlug({
   const originOwner = readOriginOwner(cwd, { git, config: cfg });
   // Managed App assignments are explicit soul identity metadata. Existing
   // explicit App/environment/worktree choices retain their precedence.
-  if (cfg.identityApps && Object.keys(cfg.identityApps).length) {
+  const hasServerEnrollment = Boolean(env.AGENT_BOT_SERVER || cfg.settings?.agentBotServer);
+  if ((cfg.identityApps && Object.keys(cfg.identityApps).length) || hasServerEnrollment) {
     const id = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? readGitConfig(cwd, AGENT_ID_KEYS, { git });
     if (id) {
-      const identity = readAgentIdentity(id, { stateDir: stateDirectory({ env, home: env.HOME }) });
-      if (identity.status === 'retired') throw new Error('selected soul is retired');
-      const app = identity.github?.appSlug;
-      const identityHarness = identity.harness ?? (app ? harnessForSlug(app, cfg) : null) ?? harness ?? (detect ? detectHarness(env) : null);
-      const originApp = originOwner && identityHarness
-        ? slugForOriginOwner(originOwner, identityHarness, cfg, { env })
-        : null;
-      const resolvedApp = (originApp && (!app || isOrgHarnessAppSlug(app, identityHarness, cfg))) ? originApp : app;
-      if (resolvedApp && (cfg.identityApps[resolvedApp] || resolvedApp === originApp)) {
-        return requireActiveProfileApp(resolvedApp, cfg);
+      let identity = null;
+      try {
+        identity = readAgentIdentity(id, { stateDir: stateDirectory({ env, home: env.HOME }) });
+      } catch (error) {
+        if (cfg.identityApps && Object.keys(cfg.identityApps).length) throw error;
+      }
+      if (identity) {
+        if (identity.status === 'retired') throw new Error('selected soul is retired');
+        const app = identity.github?.appSlug;
+        const identityHarness = identity.harness ?? (app ? harnessForSlug(app, cfg) : null) ?? harness ?? (detect ? detectHarness(env) : null);
+        const originApp = originOwner && identityHarness
+          ? slugForOriginOwner(originOwner, identityHarness, cfg, { env })
+          : null;
+        const resolvedApp = (originApp && (!app || isOrgHarnessAppSlug(app, identityHarness, cfg))) ? originApp : app;
+        if (resolvedApp && (cfg.identityApps?.[resolvedApp] || resolvedApp === originApp)) {
+          return requireActiveProfileApp(resolvedApp, cfg);
+        }
       }
     }
   }
