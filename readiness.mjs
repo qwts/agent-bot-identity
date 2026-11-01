@@ -2357,7 +2357,7 @@ function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null,
 }
 
 function appCheck(id, source) {
-  const status = source.status === 'ready' || source.status === 'restored'
+  const status = source.status === 'ready' || source.status === 'restored' || source.status === 'server-registered'
     ? 'ready'
     : source.status === 'failed'
       ? 'failed'
@@ -2366,6 +2366,12 @@ function appCheck(id, source) {
   if (source.restored) evidence.restored = [...source.restored];
   if (Number.isSafeInteger(source.installationId) && source.installationId > 0) {
     evidence.installation_id = source.installationId;
+  }
+  if (Number.isSafeInteger(source.appId) && source.appId > 0) {
+    evidence.app_id = source.appId;
+  }
+  if (Number.isSafeInteger(source.botUserId) && source.botUserId > 0) {
+    evidence.bot_user_id = source.botUserId;
   }
   if (
     typeof source.expiresAt === 'string'
@@ -2382,7 +2388,9 @@ function appCheck(id, source) {
         ? source.status === 'restored'
           ? 'local credential was restored and validated'
           : 'local credential is valid'
-        : 'live App mint succeeded')
+        : source.status === 'server-registered'
+          ? 'App is registered on the enrolled identity service (installation verified per repository at mint time)'
+          : 'live App mint succeeded')
       : status === 'failed'
         ? (id === 'credential.local'
           ? (source.code === 'provider-session-required' || source.code === 'provider-locked'

@@ -129,21 +129,45 @@ export function ambientHarness(env = process.env) {
   return null;
 }
 
-// An enrolled App is private to one owner account/org: a mismatch between the
-// App's owner and the checkout origin's owner can never mint an installation
-// token, so it is refused up front rather than at push time. An App absent
-// from the roster is left to the server to refuse (don't block on unknown).
+// Any known App works in any org where it is installed. When the server's
+// GET /api/daemon/harness-apps entry includes installation accounts
+// (installed_owners or installations), check whether the checkout origin's
+// owner is among them. When installation lists are omitted from the static
+// roster, only refuse up front when the App is explicitly marked private or
+// restricted by shared_with; otherwise installation is verified at mint time
+// by POST /api/daemon/credentials (and /api/daemon/installation-token), which
+// queries GitHub's /repos/{owner}/{repo}/installation and fails closed with
+// 404 app_not_installed when the App is not installed on the target repo.
 export async function appOwnerMismatch({ appSlug, repo, session }) {
   if (!appSlug || !repo || !session) return null;
   const repoOwner = String(repo).split('/')[0];
   if (!repoOwner) return null;
-  // A roster that can't be read is unknown, not a refusal: the server still
-  // refuses the mint itself.
   let apps;
   try { ({ apps } = await session.harnessApps()); } catch { return null; }
   const app = (apps ?? []).find((a) => (a.slug ?? a.name) === appSlug);
-  if (!app?.owner) return null;
-  return app.owner.toLowerCase() === repoOwner.toLowerCase() ? null : { appSlug, appOwner: app.owner, repo };
+  if (!app) return null;
+  const target = repoOwner.toLowerCase();
+  const rawInstallations = Array.isArray(app.installed_owners)
+    ? app.installed_owners
+    : Array.isArray(app.installations)
+      ? app.installations
+      : null;
+  if (rawInstallations) {
+    const installed = rawInstallations
+      .map((entry) => (typeof entry === 'string' ? entry : entry?.account?.login ?? entry?.owner ?? entry?.login ?? ''))
+      .map((s) => String(s).trim().toLowerCase())
+      .filter(Boolean);
+    return installed.includes(target) ? null : { appSlug, appOwner: app.owner ?? null, repo };
+  }
+  if (!app.owner) return null;
+  if (app.owner.toLowerCase() === target) return null;
+  const shared = Array.isArray(app.shared_with)
+    ? app.shared_with.map((s) => String(s).trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (shared.includes(target)) return null;
+  const explicitlyPrivate = app.private === true || app.visibility === 'private' || shared.length > 0;
+  if (!explicitlyPrivate) return null;
+  return { appSlug, appOwner: app.owner, repo };
 }
 
 // Server mode only: refuse before a soul's App is recorded for a checkout the

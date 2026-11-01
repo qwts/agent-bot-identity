@@ -419,8 +419,11 @@ test('server-enrolled Apps verify through /api/daemon/harness-apps and cache bot
     onVerified: (_slug, grant) => verifiedTokens.push(grant.token),
   });
   assert.equal(reconciled[0].local.status, 'ready');
-  assert.equal(reconciled[0].live.status, 'ready');
-  assert.equal(reconciled[0].live.installationId, 5502500);
+  assert.equal(reconciled[0].live.status, 'server-registered');
+  assert.equal(reconciled[0].live.code, 'server-registered');
+  assert.equal(reconciled[0].live.appId, 5502500);
+  assert.equal(reconciled[0].live.botUserId, 349048923);
+  assert.equal(reconciled[0].live.installationId, undefined);
   assert.deepEqual(verifiedTokens, [], 'server verification does not pass a dummy token to onVerified');
   assert.equal(srv.minted ?? 0, 0, 'no installation token was minted');
 
@@ -434,5 +437,6 @@ test('server-enrolled Apps verify through /api/daemon/harness-apps and cache bot
     env,
     fetchImpl: srv.fetch,
   });
-  assert.equal(inspected[0].live.status, 'ready');
+  assert.equal(inspected[0].live.status, 'server-registered');
+  assert.equal(inspected[0].live.code, 'server-registered');
 });

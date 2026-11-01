@@ -213,10 +213,9 @@ async function defaultVerifyApp(slug, { env = process.env, home = homedir(), con
       } catch { /* best-effort cache */ }
     }
     return {
-      token: 'server-verified',
-      installation_id: Number(app.app_id ?? 0),
-      expires_at: 'server-enrolled',
       serverVerified: true,
+      appId: Number(app.app_id ?? 0),
+      botUserId: Number(app.bot_user_id ?? 0),
     };
   }
   return mint({ slug, ...(env ? { env } : {}), ...(config ? { config } : {}), ...(fetchImpl ? { fetchImpl } : {}) });
@@ -253,14 +252,16 @@ export async function inspectAppCredentials({
   for (const result of results) {
     try {
       const grant = await verify(result.slug);
-      if (!grant || typeof grant.token !== 'string' || grant.token.length === 0) {
+      if (!grant || (!grant.serverVerified && (typeof grant.token !== 'string' || grant.token.length === 0))) {
         throw new Error('live verification returned no token');
       }
-      result.live = {
-        status: 'ready',
-        installationId: Number(grant.installation_id),
-        expiresAt: grant.expires_at,
-      };
+      result.live = grant.serverVerified
+        ? { status: 'server-registered', code: 'server-registered', appId: grant.appId, botUserId: grant.botUserId }
+        : {
+          status: 'ready',
+          installationId: Number(grant.installation_id),
+          expiresAt: grant.expires_at,
+        };
     } catch (error) {
       result.live = liveFailure(error, { env, home });
     }
@@ -342,15 +343,17 @@ export async function reconcileAppCredentials({
   for (const result of results) {
     try {
       const grant = await verify(result.slug);
-      if (!grant || typeof grant.token !== 'string' || grant.token.length === 0) {
+      if (!grant || (!grant.serverVerified && (typeof grant.token !== 'string' || grant.token.length === 0))) {
         throw new Error('live verification returned no token');
       }
       if (!grant.serverVerified) onVerified(result.slug, grant);
-      result.live = {
-        status: 'ready',
-        installationId: Number(grant.installation_id),
-        expiresAt: grant.expires_at,
-      };
+      result.live = grant.serverVerified
+        ? { status: 'server-registered', code: 'server-registered', appId: grant.appId, botUserId: grant.botUserId }
+        : {
+          status: 'ready',
+          installationId: Number(grant.installation_id),
+          expiresAt: grant.expires_at,
+        };
     } catch (error) {
       result.live = liveFailure(error, { env, home });
     }
