@@ -32,6 +32,7 @@ import {
   harnessForSlug,
   isGateEnabled,
   isOrgHarnessAppSlug,
+  isRegisteredAppSlug,
   loadConfig,
   originOwnerFromRemote,
   slugForHarness,
@@ -113,7 +114,7 @@ function readOriginOwner(cwd, { git = defaultGitRunner, config = null } = {}) {
 
 function requireActiveProfileApp(appSlug, config) {
   if (appLifecycleStatus(appSlug, config) === 'retired') {
-    throw new Error('selected App is retired by the installed organization profile');
+    throw new Error('selected App is retired by the installed organization profile; switch with: agent-bot identity app assign <slug> --soul <agent-id> (or --harness <harness>)');
   }
   return appSlug;
 }
@@ -161,8 +162,8 @@ export function resolveAgentSlug({
         const originApp = originOwner && identityHarness
           ? slugForOriginOwner(originOwner, identityHarness, cfg, { env })
           : null;
-        const resolvedApp = (originApp && (!app || isOrgHarnessAppSlug(app, identityHarness, cfg))) ? originApp : app;
-        if (resolvedApp && (cfg.identityApps?.[resolvedApp] || resolvedApp === originApp)) {
+        const resolvedApp = (originApp && (!app || isOrgHarnessAppSlug(app, identityHarness, cfg, { env }))) ? originApp : app;
+        if (resolvedApp && (cfg.identityApps?.[resolvedApp] || resolvedApp === originApp || isRegisteredAppSlug(resolvedApp, cfg, identityHarness, { env }) || appLifecycleStatus(resolvedApp, cfg) === 'retired')) {
           return requireActiveProfileApp(resolvedApp, cfg);
         }
       }

@@ -15,7 +15,7 @@ import { assignAgentApp, readAgentIdentity } from './agent-identity.mjs';
 import { credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem, validateAgentId } from './identity-format.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { credentialStores, defaultCredentialStore, resolveAppCredential } from './soul-credentials.mjs';
-import { createProtonPassCredentialProvider, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
+import { createProtonPassCredentialProvider, isServerEnrolledApp, validateIssuer, validatePrivateKey } from './ensure-private-key.mjs';
 import { assertLegacyLocalCustody, buildAppJwt, pickInstallation } from './mint-token.mjs';
 import { KEYD_METHOD_NOT_FOUND, appKeydAvailability, importAppIntoKeyd, removeAppFromKeyd } from './keyd-client.mjs';
 import { MINT_CODES, appStoreTarget, forgetAppDoctorRow, readAppDoctorCache, readAppMetadata, readManagedAppCredential, updateAppConfig, validAppSlug, withAppOperationLock } from './identity-app-store.mjs';
@@ -522,7 +522,9 @@ function assignLocked(app, body, options) {
   // Re-read under the operation lock: a finished removal dropped the record.
   options = { ...options, config: loadConfig({ env: options.env, home: options.home }) };
   active(app, options.config);
-  if (!options.config.identityApps?.[app]?.store) fail('identity-app-not-found', `App ${app} is not managed; connect it first.`, 404);
+  if (!options.config.identityApps?.[app]?.store && !isServerEnrolledApp(app, { env: options.env, home: options.home, config: options.config })) {
+    fail('identity-app-not-found', `App ${app} is not managed; connect it first.`, 404);
+  }
   if (Boolean(body.harness) === Boolean(body.soul)) fail('identity-app-invalid', 'Supply exactly one harness or soul.', 400);
   if (body.harness) {
     if (!PROFILE_HARNESSES.includes(body.harness)) fail('identity-app-invalid', 'Unknown harness.', 400);
@@ -534,7 +536,7 @@ function assignLocked(app, body, options) {
   const stateDir = stateDirectory(options);
   const soul = options.souls.show(id, options);
   if (soul.status === 'retired') fail('identity-app-retired', 'Cannot assign a retired soul.');
-  readAgentIdentity(id, { stateDir });
+  const previousApp = readAgentIdentity(id, { stateDir }).github?.appSlug ?? null;
   let directory;
   try { directory = options.souls.directory(id, options); } catch { /* census-only soul */ }
   if (directory && options.souls.declaration(directory)?.store === 'keyd') fail('identity-app-keyd-held', 'This soul uses keyd; change its identity through the keyd owner workflow.');

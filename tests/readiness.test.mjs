@@ -3026,7 +3026,7 @@ test('worktree.app_owner flags bound checkouts whose private App belongs to anot
   const population = join(root, 'population.json');
   writeFileSync(population, JSON.stringify({ schemaVersion: 1, souls: { 'agent_11111111-1111-4111-8111-111111111111': { id: 'agent_11111111-1111-4111-8111-111111111111', name: 'a1', status: 'active', parentId: null, appSlug: 'trueline-mcode-agent', worktrees: [repo], soulDir: join(root, 'souls', 'a1'), spacePath: join(root, 'space'), transcriptLocator: null, lastSeen: '2026-08-16T00:00:00.000Z' } } }));
   const env = { AGENT_BOT_POPULATION_PATH: population, AGENT_BOT_SERVER: 'https://agents.example.invalid' };
-  const session = { harnessApps: async () => ({ apps: [{ slug: 'trueline-mcode-agent', owner: 'true-line' }] }) };
+  const session = { harnessApps: async () => ({ apps: [{ slug: 'trueline-mcode-agent', owner: 'true-line', private: true }] }) };
 
   const failed = await appOwnerCheck({ home: root, env, config: {}, session });
   assert.equal(failed.id, 'worktree.app_owner');

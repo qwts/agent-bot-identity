@@ -635,18 +635,29 @@ test('serverHarnessForSlug: an unresolved slug never falls back to a default fam
   );
 });
 
-test('app-owner mismatch: refused on another owner; match, unknown and case pass', async (t) => {
+test('app-owner mismatch: checks installations when present, allows public Apps across owners, and refuses unshared private Apps', async (t) => {
   const { appOwnerMismatch, refuseAppOwnerMismatch, ServerSession } = await import('../identity/server-client.mjs');
   const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
   const srv = fakeServer();
   srv.harnessApps = [
     { slug: 'trueline-mcode-agent', owner: 'true-line' },
+    { slug: 'installed-byo-app', owner: 'byo-owner', installed_owners: ['true-line', 'qwts'] },
+    { slug: 'uninstalled-byo-app', owner: 'byo-owner', installations: [{ account: { login: 'true-line' } }] },
+    { slug: 'private-mcode-agent', owner: 'true-line', private: true },
+    { slug: 'shared-mcode-agent', owner: 'true-line', shared_with: ['qwts'] },
     { slug: 'qwts-devin-agent', owner: 'QWTS' },
   ];
   await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
   const session = new ServerSession({ base: BASE, env, fetchImpl: srv.fetch });
-  assert.deepEqual(await appOwnerMismatch({ appSlug: 'trueline-mcode-agent', repo: 'qwts/qwts-agent-ci', session }),
-    { appSlug: 'trueline-mcode-agent', appOwner: 'true-line', repo: 'qwts/qwts-agent-ci' });
+  assert.equal(await appOwnerMismatch({ appSlug: 'trueline-mcode-agent', repo: 'qwts/qwts-agent-ci', session }), null, 'public Apps pass across owners');
+  assert.equal(await appOwnerMismatch({ appSlug: 'installed-byo-app', repo: 'qwts/qwts-agent-ci', session }), null, 'an App installed in the repo org passes regardless of owner');
+  assert.deepEqual(await appOwnerMismatch({ appSlug: 'uninstalled-byo-app', repo: 'qwts/qwts-agent-ci', session }),
+    { appSlug: 'uninstalled-byo-app', appOwner: 'byo-owner', repo: 'qwts/qwts-agent-ci' });
+  assert.equal(await appOwnerMismatch({ appSlug: 'shared-mcode-agent', repo: 'qwts/qwts-agent-ci', session }), null, 'shared_with passes when repo owner is listed');
+  assert.deepEqual(await appOwnerMismatch({ appSlug: 'shared-mcode-agent', repo: 'other-org/repo', session }),
+    { appSlug: 'shared-mcode-agent', appOwner: 'true-line', repo: 'other-org/repo' });
+  assert.deepEqual(await appOwnerMismatch({ appSlug: 'private-mcode-agent', repo: 'qwts/qwts-agent-ci', session }),
+    { appSlug: 'private-mcode-agent', appOwner: 'true-line', repo: 'qwts/qwts-agent-ci' });
   assert.equal(await appOwnerMismatch({ appSlug: 'qwts-devin-agent', repo: 'QwTs/foo', session }), null, 'owners compare case-insensitively');
   assert.equal(await appOwnerMismatch({ appSlug: 'ghost-agent', repo: 'qwts/foo', session }), null, 'an App absent from the roster is not blocked');
 
@@ -654,13 +665,14 @@ test('app-owner mismatch: refused on another owner; match, unknown and case pass
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   execFileSync('git', ['-C', dir, 'init', '-q']);
   execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/qwts/qwts-agent-ci.git']);
+  await refuseAppOwnerMismatch({ appSlug: 'trueline-mcode-agent', env, config: {}, cwd: dir, fetchImpl: srv.fetch });
   await assert.rejects(
-    refuseAppOwnerMismatch({ appSlug: 'trueline-mcode-agent', env, config: {}, cwd: dir, fetchImpl: srv.fetch }),
+    refuseAppOwnerMismatch({ appSlug: 'private-mcode-agent', env, config: {}, cwd: dir, fetchImpl: srv.fetch }),
     (error) => error.code === 'app-owner-mismatch' && error.statusCode === 409 && /qwts/.test(error.message),
   );
   // No server configured: skipped without any network call.
   await refuseAppOwnerMismatch({
-    appSlug: 'trueline-mcode-agent', env: { ...sandbox(), AGENT_BOT_CONFIG: '/nonexistent' }, config: {},
+    appSlug: 'private-mcode-agent', env: { ...sandbox(), AGENT_BOT_CONFIG: '/nonexistent' }, config: {},
     cwd: dir, fetchImpl: () => { throw new Error('the check must not fetch off-server'); },
   });
 });

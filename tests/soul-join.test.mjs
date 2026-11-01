@@ -112,7 +112,7 @@ test('join refuses a private App whose owner differs from the checkout origin', 
   git(repo, 'init', '-q');
   git(repo, 'remote', 'add', 'origin', 'https://github.com/qwts/qwts-agent-ci.git');
   const srv = fakeServer();
-  srv.harnessApps = [{ slug: 'trueline-mcode-agent', owner: 'true-line' }];
+  srv.harnessApps = [{ slug: 'trueline-mcode-agent', owner: 'true-line', private: true }];
   const config = { apps: { grokbot: 'trueline-mcode-agent' }, features: { 'github-identity': true } };
   const { enroll } = await import('../identity/server-client.mjs');
   const env = { ...a.env, AGENT_BOT_SERVER: BASE };

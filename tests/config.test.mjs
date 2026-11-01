@@ -346,4 +346,44 @@ test('originOwnerFromRemote, slugForOriginOwner, and soulOwnsAppSlug resolve mul
   const scopedConfig = { ...config, scope: { apps: ['qwts-muse-agent'] } };
   assert.equal(slugForOriginOwner('true-line', 'muse', scopedConfig), null);
   assert.equal(soulOwnsAppSlug(museSoul, 'trueline-muse-agent', scopedConfig), false);
+
+  // Data-driven App-to-harness mapping: BYO App names (e.g. acme-review-bot) and
+  // profile-mapped Apps (e.g. *-grokbot-agent mapped to harness "grok") resolve
+  // without hardcoded harness tables or regex-only slug checks (#1334).
+  const byoAndProfileConfig = {
+    profile: {
+      schemaVersion: 1,
+      organization: 'qwts-engineering',
+      accountOwner: 'qwts',
+      minimumRuntimeInterfaceVersion: 1,
+      identities: [
+        { slug: 'qwts-grokbot-agent', harness: 'grok', status: 'active', models: [] },
+        { slug: 'trueline-grokbot-agent', harness: 'grok', status: 'active', models: [] },
+        { slug: 'trueline-codex-agent', harness: 'codex', status: 'active', models: [] },
+        { slug: 'acme-review-bot', harness: 'codex', status: 'active', models: [] },
+      ],
+    },
+    owner: 'qwts',
+    apps: {
+      grok: 'trueline-grokbot-agent',
+      codex: 'trueline-codex-agent',
+    },
+    identityApps: {
+      'acme-review-bot': { harness: 'codex', owner: 'acme', store: 'pass-cli' },
+    },
+  };
+  assert.equal(isOrgHarnessAppSlug('trueline-grokbot-agent', 'grok', byoAndProfileConfig), true);
+  assert.equal(isOrgHarnessAppSlug('qwts-grokbot-agent', 'grok', byoAndProfileConfig), true);
+  assert.equal(isOrgHarnessAppSlug('trueline-grokbot-agent', 'claude', byoAndProfileConfig), false);
+  assert.equal(isOrgHarnessAppSlug('acme-review-bot', 'codex', byoAndProfileConfig), true);
+  assert.equal(isOrgHarnessAppSlug('acme-review-bot', 'claude', byoAndProfileConfig), false);
+  assert.equal(slugForOriginOwner('true-line', 'grok', byoAndProfileConfig), 'trueline-grokbot-agent');
+  assert.equal(slugForOriginOwner('qwts', 'grok', byoAndProfileConfig), 'qwts-grokbot-agent');
+  assert.equal(slugForOriginOwner('acme', 'codex', byoAndProfileConfig), 'acme-review-bot');
+
+  const grokSoul = { harness: 'grok', github: { appSlug: 'qwts-grokbot-agent' } };
+  assert.equal(soulOwnsAppSlug(grokSoul, 'trueline-grokbot-agent', byoAndProfileConfig), true);
+  const byoCodexSoul = { harness: 'codex', github: { appSlug: 'acme-review-bot' } };
+  assert.equal(soulOwnsAppSlug(byoCodexSoul, 'trueline-codex-agent', byoAndProfileConfig), true);
+  assert.equal(soulOwnsAppSlug({ harness: 'codex', github: { appSlug: 'trueline-codex-agent' } }, 'acme-review-bot', byoAndProfileConfig), true);
 });

@@ -1,7 +1,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -427,6 +427,52 @@ test('origin owner refines App resolution across organizations for both detectio
   assert.equal(
     resolveAgentSlug({ env: { ...env, AGENT_BOT_ID: soul.id }, cwd: qwtsRepo, config: multiOrgConfig, account: OWNER, detect: false }),
     'qwts-muse-agent',
+  );
+
+  // Server-mode enrolled App resolves only for its matching harness (never handed
+  // to another harness), and a retired App fails closed with the owner-gated
+  // `agent-bot identity app assign` command instead of silently repointing (#1334).
+  const serverStateDir = join(home, 'server-state');
+  mkdirSync(serverStateDir, { recursive: true });
+  writeFileSync(join(serverStateDir, 'device.json'), JSON.stringify({
+    server: 'https://agents.example.invalid',
+    device_id: 'dev_test',
+    harnesses: ['trueline-grokbot-agent'],
+    app_harnesses: { 'trueline-grokbot-agent': 'grok' },
+  }));
+  const serverEnv = { ...env, AGENT_BOT_SERVER: 'https://agents.example.invalid', AGENT_BOT_SERVER_STATE: serverStateDir };
+  assert.equal(
+    resolveAgentSlug({ env: serverEnv, cwd: qwtsRepo, config: {}, account: OWNER, detect: false, harness: 'grok' }),
+    'trueline-grokbot-agent',
+    'enrolled App resolves for its matching harness across any org repo',
+  );
+  assert.equal(
+    resolveAgentSlug({ env: serverEnv, cwd: qwtsRepo, config: {}, account: OWNER, detect: false, harness: 'claude' }),
+    null,
+    'enrolled grokbot App is never handed to a claude/codex/qwen soul',
+  );
+
+  const profileWithRetired = organizationProfileToConfig({
+    schema_version: 1,
+    organization: 'qwts-engineering',
+    account_owner: 'qwts',
+    minimum_runtime_interface_version: 1,
+    defaults: { grok: 'trueline-grokbot-agent' },
+    identities: [
+      { slug: 'qwts-grokbot-agent', harness: 'grok', status: 'retired' },
+      { slug: 'trueline-grokbot-agent', harness: 'grok', status: 'active' },
+    ],
+  });
+  const retiredAppSoul = mintAgentIdentity({
+    stateDir,
+    appSlug: 'qwts-grokbot-agent',
+    harness: 'grok',
+    useGithub: true,
+  });
+  assert.throws(
+    () => resolveAgentSlug({ env: { ...serverEnv, AGENT_BOT_ID: retiredAppSoul.id }, cwd: qwtsRepo, config: profileWithRetired, account: OWNER, detect: false }),
+    /selected App is retired.*agent-bot identity app assign/,
+    'a soul with a retired App fails closed and names agent-bot identity app assign instead of silently repointing',
   );
 });
 
