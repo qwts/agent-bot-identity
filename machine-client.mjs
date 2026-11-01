@@ -25,9 +25,31 @@ const SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 30000;
 const SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,127}$/;
 
-export const AGENT_MACHINE_DIR = (home = homedir()) => path.join(home, '.config', 'agent-machine');
-export const machineSocketPath = ({ home = homedir(), platform = process.platform } = {}) =>
-  platform === 'win32' ? '\\\\.\\pipe\\agent-machine' : path.join(AGENT_MACHINE_DIR(home), 'daemon.sock');
+const SHARED_PREFIX_DIRS = [
+  '/opt/homebrew/var/agent-machine',
+  '/usr/local/var/agent-machine',
+  '/home/linuxbrew/.linuxbrew/var/agent-machine',
+];
+
+// When home is the current user's real home directory and a shared prefix
+// agent-machine directory exists on disk (e.g. /opt/homebrew/var/agent-machine
+// when agent-machine runs as the Homebrew owner `admin` and agent-daemon runs
+// as `user`), prefer that shared directory; otherwise use <home>/.config/agent-machine.
+export function AGENT_MACHINE_DIR(home = homedir(), { env = process.env, platform = process.platform, realHome = homedir(), exists = existsSync } = {}) {
+  const override = typeof env?.AGENT_MACHINE_DIR === 'string' && env.AGENT_MACHINE_DIR.trim() !== ''
+    ? env.AGENT_MACHINE_DIR.trim()
+    : null;
+  if (override) return override;
+  if (platform !== 'win32' && path.resolve(home) === path.resolve(realHome)) {
+    for (const candidate of SHARED_PREFIX_DIRS) {
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return path.join(home, '.config', 'agent-machine');
+}
+
+export const machineSocketPath = ({ home = homedir(), env = process.env, platform = process.platform, realHome = homedir(), exists = existsSync } = {}) =>
+  platform === 'win32' ? '\\\\.\\pipe\\agent-machine' : path.join(AGENT_MACHINE_DIR(home, { env, platform, realHome, exists }), 'daemon.sock');
 
 function mcError(code, message) {
   return Object.assign(new Error(`${message} [${code}]`), { code });
@@ -305,8 +327,22 @@ export function writeAgentDaemonPeer({ home = homedir(), publicKeyRaw }) {
   assertPairingLayout(dir);
   const peers = path.join(dir, 'peers');
   mkdirSync(peers, { recursive: true, mode: 0o700 });
-  atomicWrite0600(path.join(peers, 'agent-daemon.next'), publicKeyRaw, { tempDir: dir });
-  atomicWrite0600(path.join(peers, 'agent-daemon.confirm'), createHash('sha256').update(publicKeyRaw).digest('hex'), { tempDir: dir });
+  // On a shared prefix dir (0750 admin:staff), peers/ is 1770 admin:staff and
+  // dir itself is not writable by `user`, so stage the temp files inside
+  // `peers/` with an allowed name or write directly inside `peers/` after
+  // removing any prior file we own.
+  const writePeerFile = (name, content) => {
+    const target = path.join(peers, name);
+    try {
+      atomicWrite0600(target, content, { tempDir: dir });
+    } catch (error) {
+      if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error;
+      rmSync(target, { force: true });
+      writeFileSync(target, content, { mode: 0o640 });
+    }
+  };
+  writePeerFile('agent-daemon.next', publicKeyRaw);
+  writePeerFile('agent-daemon.confirm', createHash('sha256').update(publicKeyRaw).digest('hex'));
 }
 
 export function unpairAgentDaemon({ env = process.env, home = homedir() } = {}) {
@@ -314,7 +350,14 @@ export function unpairAgentDaemon({ env = process.env, home = homedir() } = {}) 
   assertPairingLayout(dir);
   const peers = path.join(dir, 'peers');
   mkdirSync(peers, { recursive: true, mode: 0o700 });
-  atomicWrite0600(path.join(peers, 'agent-daemon.revoked'), Buffer.alloc(0), { tempDir: dir });
+  const revoked = path.join(peers, 'agent-daemon.revoked');
+  try {
+    atomicWrite0600(revoked, Buffer.alloc(0), { tempDir: dir });
+  } catch (error) {
+    if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error;
+    rmSync(revoked, { force: true });
+    writeFileSync(revoked, Buffer.alloc(0), { mode: 0o640 });
+  }
   rmSync(pinPath({ env, home }), { force: true });
 }
 
