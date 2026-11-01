@@ -573,12 +573,11 @@ test('the Codex desktop mint receipts the App with no prompt and no token (#107)
   }
 });
 
-test('an owner-approval refusal receipts the explicit App as denied and mints nothing (#107)', async () => {
+test('an unbound explicit --app refusal receipts the explicit App as denied and mints nothing without prompting (#107, #1336)', async () => {
   const github = await installationServer([ORG]);
   try {
-    // An explicit --app in the owner's account with no other identity marker
-    // needs owner approval. No keyd can ask in the child process, so the
-    // approval refuses (#1172) — never an administrator dialog.
+    // An explicit --app in the owner's account with no live daemon binding
+    // is refused flatly without raising Touch ID (#1336).
     const env = operatorEnv(github.apiBase, github.routeEnv);
     delete env.GH_AGENT_APP;
     const cwd = mkdtempSync(join(tmpdir(), 'agent-bot-owner-'));
@@ -587,7 +586,7 @@ test('an owner-approval refusal receipts the explicit App as denied and mints no
       nodeArgs: ['--import', 'data:text/javascript,Object.defineProperty(process,"platform",{value:"linux"})'],
     });
     assert.notEqual(refused.code, 0);
-    assert.match(refused.stderr, /agent-bot never asks for administrator credentials/);
+    assert.match(refused.stderr, /without a live daemon binding/);
     assert.equal(refused.stdout, '');
     assert.equal(github.requests.length, 0);
     const receipts = mintReceipts(env);

@@ -227,9 +227,14 @@ export function daemonClient({
       return request('DELETE', '/v0/binding', undefined, { 'x-agent-binding': secret });
     },
     // Tier-1 (#90): the bound identity's own App installation token. The
-    // caller is that identity — nothing is being borrowed.
-    async credential(secret) {
-      return request('POST', '/v0/credential', {}, { 'x-agent-binding': secret }, CREDENTIAL_TIMEOUT_MS);
+    // Tier-1 credential brokering (#90): an App installation token for the
+    // bound soul. With no options, the App is the soul's own; when options
+    // name a cross-App request (`app`, `permissions`, `reason`), the daemon
+    // runs the owner presence gate before minting (#1336).
+    async credential(secret, options = null) {
+      const body = options && Object.keys(options).length > 0 ? options : {};
+      const timeout = body.app || body.permissions ? OWNER_DECISION_TIMEOUT_MS : CREDENTIAL_TIMEOUT_MS;
+      return request('POST', '/v0/credential', body, { 'x-agent-binding': secret }, timeout);
     },
     // The agent-machine control route (#1254): the daemon fills soul,
     // harness and session_id from this binding; the caller names only the

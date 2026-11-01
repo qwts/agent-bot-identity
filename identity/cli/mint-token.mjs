@@ -11,7 +11,6 @@ import { appendAuditReceipt } from '../identity-format.mjs';
 import { isSoulBound, mintForCaller } from '../git-credential-bot.mjs';
 import { MINT_USAGE, parseMintArgs, selectionReason } from '../mint-token.mjs';
 import { ambientSlug, explicitAppArg, ownerApprovalRequired } from '../owner-approval.mjs';
-import { requireOwnerPresence } from '../owner-presence.mjs';
 import { formatMemberReference, formatMintGrant } from './mint-output.mjs';
 
 async function main() {
@@ -20,24 +19,30 @@ async function main() {
     process.stdout.write(MINT_USAGE);
     return;
   }
-  // An unmarked explicit mint in the owner's account is a credential release
-  // with no stated identity — it carries the owner-approval ceremony. Stated
-  // identities (pin, GH_AGENT_APP, harness markers, agent account) mint as
-  // before. A bound checkout is mintForCaller's to decide (#775): the soul's
-  // own App through the daemon, anything else through the owner gate.
+  // Identity comes only from a verified daemon binding (AGENT_BOT_BINDING
+  // checked by the daemon), never from env vars or harness markers (#1336).
+  // An unbound explicit --app in the owner's account is refused flatly with no
+  // Touch ID prompt; Touch ID is reserved for cross-App requests from a bound
+  // checkout via mintForCaller.
   let bound;
   try { bound = readBinding() !== null; } catch { bound = true; }
+  if (!bound) {
+    const { serverUrl } = await import('../server-client.mjs');
+    if (serverUrl()) {
+      const slug = options.app ?? explicitAppArg(process.argv);
+      operatorReceipt({ decision: 'denied', appSlug: slug, reason: 'no-live-binding' });
+      throw new Error(
+        'cannot mint a GitHub token without a live daemon binding in server mode — run `agent-bot join --name NAME --harness HARNESS` and `agent-bot setup-worktree` in a bound checkout',
+      );
+    }
+  }
   const approvalRequired = !bound && ownerApprovalRequired({ argv: process.argv });
   if (approvalRequired) {
     const slug = explicitAppArg(process.argv);
-    try {
-      await requireOwnerPresence(
-        `mint a GitHub App installation token for ${slug}[bot], requested from the owner's account with no stated agent identity`,
-      );
-    } catch (error) {
-      operatorReceipt({ decision: 'denied', appSlug: slug, reason: 'owner-approval-refused' });
-      throw error;
-    }
+    operatorReceipt({ decision: 'denied', appSlug: slug, reason: 'owner-approval-refused' });
+    throw new Error(
+      `cannot mint a GitHub token for ${slug}[bot] without a live daemon binding — Touch ID is only for cross-App requests from a bound checkout`,
+    );
   }
   let selection = null;
   let grant;

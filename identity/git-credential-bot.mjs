@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { mint } from './mint-token.mjs';
 import { isGateEnabled, loadConfig, githubHost, soulOwnsAppSlug } from '../config.mjs';
+import { boundRepository } from './inbox-take.mjs';
 import { presenceOrConsent, soulMarkers } from './owner-gate.mjs';
 import { readBinding } from './agent-binding.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
@@ -37,6 +38,8 @@ export function isSoulBound({ env = process.env, cwd = process.cwd() } = {}) {
 // authority to the daemon.
 export async function mintCredential({
   slug,
+  permissions = null,
+  operation = null,
   env = process.env,
   cwd = process.cwd(),
   soulBound = isSoulBound({ env, cwd }),
@@ -54,7 +57,12 @@ export async function mintCredential({
   let grant;
   try {
     const client = await clientFactory({ env, home: env.HOME, cwd });
-    grant = await client.credential(binding.secret);
+    const crossAppOptions = (operation && (slug || permissions))
+      ? { ...(slug ? { app: slug } : {}), ...(permissions ? { permissions } : {}), reason: operation }
+      : null;
+    grant = crossAppOptions
+      ? await client.credential(binding.secret, crossAppOptions)
+      : await client.credential(binding.secret);
   } catch (error) {
     // The daemon's own refusal (a soul without an App, the add-on off) is
     // worth repeating. Transport and parse errors are not: they may carry
@@ -133,7 +141,7 @@ export async function mintForCaller({
           config: cfg,
           detect: false,
         });
-        if (checkoutOwn && soulOwnsAppSlug(identityRecord, checkoutOwn, cfg)) {
+        if (checkoutOwn && soulOwnsAppSlug(identityRecord, checkoutOwn, cfg, { env })) {
           own = checkoutOwn;
         }
       } catch { /* keep identityRecord's appSlug */ }
@@ -163,21 +171,40 @@ export async function mintForCaller({
 
   const wanted = slug ?? env.GH_AGENT_APP ?? own;
   if (!wanted) throw new Error('this soul has no GitHub App; name one with --app to ask the owner for its token');
-  const isOwnApp = wanted === own || Boolean(identityRecord && soulOwnsAppSlug(identityRecord, wanted, cfg));
+  const isOwnApp = wanted === own || Boolean(identityRecord && soulOwnsAppSlug(identityRecord, wanted, cfg, { env }));
   if (isOwnApp && !permissions && (!env.GH_AGENT_APP || env.GH_AGENT_APP === wanted)) {
-    const localSlug = slug ?? (wanted !== (identityRecord?.github?.appSlug ?? own) ? wanted : null);
-    if (!binding) return mintImpl({ slug: localSlug, env, selected });
+    if (!binding) {
+      if (soul) {
+        throw new Error(
+          "a soul-bound caller needs a live daemon binding to obtain GitHub credentials — run 'agent-bot join --name NAME --harness HARNESS [--soul AGENT_ID]' from the soul's workspace or a linked worktree, bind with the local 'agent-bot mcp' bind tool, then 'agent-bot setup-worktree'; see docs/joining.md",
+        );
+      }
+      const localSlug = slug ?? (wanted !== (identityRecord?.github?.appSlug ?? own) ? wanted : null);
+      return mintImpl({ slug: localSlug, env, selected });
+    }
     if (selected) selected({ appSlug: wanted, reason: 'bound-soul-own-app' });
     return mintCredential({
       slug: wanted, env, cwd, soulBound: true, readBindingImpl: () => binding,
       ...(clientFactory ? { clientFactory } : {}),
     });
   }
+  if (!binding && soul) {
+    throw new Error(
+      "a soul-bound caller needs a live daemon binding to obtain GitHub credentials — run 'agent-bot join --name NAME --harness HARNESS [--soul AGENT_ID]' from the soul's workspace or a linked worktree, bind with the local 'agent-bot mcp' bind tool, then 'agent-bot setup-worktree'; see docs/joining.md",
+    );
+  }
 
   const scope = permissions
     ? ` limited to ${Object.entries(permissions).map(([name, level]) => `${name}=${level}`).join(', ')}`
     : '';
-  const action = `mint a GitHub App token for ${wanted}[bot]${scope} from a checkout stated as ${soul ?? own ?? 'an unreadable soul'}`;
+  let repoLabel = env.AGENT_BOT_SERVER_REPO ?? 'this checkout';
+  try {
+    repoLabel = boundRepository(cwd);
+  } catch { /* keep fallback */ }
+  const caller = soul
+    ? `${soul}${own ? ` (own App: ${own}[bot])` : ''}`
+    : (own ?? 'an unreadable soul');
+  const action = `mint a GitHub App token for another application (${wanted}[bot]${scope}) in ${repoLabel} for ${operation}, requested from a checkout stated as ${caller}`;
   const record = (decision, reason) => receipt({
     event: 'credential-mint', agentId: soul, operation, decision, appSlug: wanted, reason,
   });
@@ -187,6 +214,12 @@ export async function mintForCaller({
     throw error;
   }
   record('approved', `owner-${proof?.method ?? 'approved'}`);
+  if (binding && !clientFactory) {
+    if (selected) selected({ appSlug: wanted, reason: 'owner-approved' });
+    return mintCredential({
+      slug: wanted, permissions, operation, env, cwd, soulBound: true, readBindingImpl: () => binding,
+    });
+  }
   return mintImpl({
     slug: wanted, env, permissions,
     selected: selected ? (chosen) => selected({ ...chosen, reason: 'owner-approved' }) : null,

@@ -317,6 +317,11 @@ export async function mint({ slug, env = process.env, agentId = null, viaKeyd = 
 
 async function mintThroughServer({ server, slug, env, config, permissions, selected, taskId = null, operationId = null, fetchImpl, repo, sessionId = null }) {
   if (permissions) throw new Error('--permissions is not available in server mode; the server mints the App\'s installation grant');
+  if (!taskId || !operationId) {
+    throw Object.assign(new Error(
+      'server mode refuses standalone mints; bind the checkout to a soul conversation (`agent-bot join` and `agent-bot setup-worktree`) so the daemon mints per operation',
+    ), { code: 'server-standalone-mint-refused' });
+  }
   const { mintViaServer, repoFromCheckout, serverHarnessForSlug } = await import('./server-client.mjs');
   const explicit = slug ?? (process.argv.includes('--app') ? process.argv[process.argv.indexOf('--app') + 1] : null);
   // The same identity order as a local mint (ENG-0079), mapped to the

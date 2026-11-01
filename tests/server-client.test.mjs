@@ -123,7 +123,7 @@ test('a slug the device scope names is asked for as itself, and server error des
   globalThis.fetch = srv.fetch;
   try {
     const { mint } = await import('../identity/mint-token.mjs');
-    const grant = await mint({ slug: 'trueline-grokbot-agent', env });
+    const grant = await mint({ slug: 'trueline-grokbot-agent', env, taskId: 'task.scope', operationId: 'op_scope' });
     assert.equal(srv.lastCredential.harness, 'trueline-grokbot-agent', 'the slug in the device scope is sent as-is');
     assert.equal(grant.issuance_id, 'iss_1');
   } finally { globalThis.fetch = realFetch; }
@@ -421,11 +421,12 @@ test('CLI: enroll, status --json, logout', async () => {
   assert.match(err.pop(), /server mode is off/);
 });
 
-test('mint() in server mode never reads a local App key and refuses --permissions', async () => {
+test('mint() in server mode never reads a local App key, refuses standalone calls, and refuses --permissions', async () => {
   const { mint } = await import('../mint-token.mjs');
   const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_HARNESS: 'grok', AGENT_BOT_SERVER_REPO: 'a/b' };
   await assert.rejects(mint({ env, permissions: { contents: 'read' } }), /not available in server mode/);
-  await assert.rejects(mint({ env }), /not enrolled/);
+  await assert.rejects(mint({ env }), /server mode refuses standalone mints/);
+  await assert.rejects(mint({ env, taskId: 't1', operationId: 'op_1' }), /not enrolled/);
 });
 
 test('AGENT_BOT_SERVER_HARNESS is normalized like --harness', async () => {

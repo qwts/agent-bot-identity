@@ -141,15 +141,25 @@ export function createIdentityRoutes({
       // Delegated human authority (tier 2) is deliberately NOT this route —
       // it must never return a credential at all.
       case 'POST /v0/credential': {
-        // Drain the (unused) request body so keep-alive connections are left
-        // clean; readBody enforces MAX_BODY_BYTES like every other route.
-        await readBody(req);
+        const rawBody = await readBody(req);
+        const body = rawBody.trim() ? parseJsonBody(rawBody) : {};
+        const requestedApp = body.app !== undefined && body.app !== null ? body.app : null;
+        if (requestedApp !== null && !validAppSlug(requestedApp)) {
+          throw Object.assign(new Error('app must be a GitHub App slug'), { statusCode: 400 });
+        }
+        const permissions = body.permissions !== undefined && body.permissions !== null ? body.permissions : null;
+        if (permissions !== null && (typeof permissions !== 'object' || Array.isArray(permissions))) {
+          throw Object.assign(new Error('permissions must be an object'), { statusCode: 400 });
+        }
+        const requestedReason = typeof body.reason === 'string' && /^[a-z0-9._:-]{1,64}$/i.test(body.reason)
+          ? body.reason
+          : 'tier1-app-token';
         let binding;
         try {
           binding = requireBinding(req, bindings);
         } catch (error) {
           appendAuditReceipt(
-            { event: 'credential-mint', operation: 'tier1-app-token', decision: 'denied', sessionId: null, reason: 'no-live-binding' },
+            { event: 'credential-mint', operation: requestedReason, decision: 'denied', sessionId: null, reason: 'no-live-binding' },
             { env, home, now },
           );
           // Stable codes for diagnostics (#983); the response is unchanged.
@@ -167,7 +177,7 @@ export function createIdentityRoutes({
             event: 'credential-mint',
             agentId: binding.agentId,
             sessionId: binding.sessionId ?? null,
-            operation: 'tier1-app-token',
+            operation: requestedReason,
             decision: 'failed',
             reason: 'identity-unreadable',
           }, { env, home, now });
@@ -180,7 +190,7 @@ export function createIdentityRoutes({
             event: 'credential-mint',
             agentId: binding.agentId,
             sessionId: binding.sessionId ?? null,
-            operation: 'tier1-app-token',
+            operation: requestedReason,
             decision: 'denied',
             ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
             reason: 'soul-retired',
@@ -195,7 +205,7 @@ export function createIdentityRoutes({
             event: 'credential-mint',
             agentId: binding.agentId,
             sessionId: binding.sessionId ?? null,
-            operation: 'tier1-app-token',
+            operation: requestedReason,
             decision: 'denied',
             ...(identity.github?.appSlug ? { appSlug: identity.github.appSlug } : {}),
             reason: 'no-transcript-locator',
@@ -205,18 +215,60 @@ export function createIdentityRoutes({
         // The add-on gate decides, not the record: a soul that carries a
         // github field gets no App token while github-identity is off.
         const githubOn = isGateEnabled('github-identity', { env, home, config });
-        const appSlug = boundAppSlug(binding, identity, { env, home, config });
+        const ownSlug = boundAppSlug(binding, identity, { env, home, config });
+        const appSlug = requestedApp ?? ownSlug;
         if (!githubOn || !appSlug) {
           appendAuditReceipt({
             event: 'credential-mint',
             agentId: binding.agentId,
             sessionId: binding.sessionId ?? null,
-            operation: 'tier1-app-token',
+            operation: requestedReason,
             decision: 'denied',
             ...(appSlug ? { appSlug } : {}),
             reason: githubOn ? 'no-github-app' : 'github-identity-off',
           }, { env, home, now });
           throw Object.assign(new Error(githubOn ? 'this soul has no GitHub App' : 'the github-identity add-on is off'), { statusCode: 409, code: githubOn ? 'credential-no-app' : 'credential-github-off' });
+        }
+        let worktreeRepo = null;
+        try { worktreeRepo = boundRepository(binding.worktree); } catch { /* local checkout without GitHub origin */ }
+        let safeCfg = config ?? {};
+        if (!config && requestedApp) {
+          try { safeCfg = loadConfig({ env, home }); } catch { safeCfg = {}; }
+        }
+        const isOwnApp = !requestedApp || requestedApp === ownSlug || Boolean(identity && soulOwnsAppSlug(identity, requestedApp, safeCfg, { env }));
+        const needsOwnerApproval = !isOwnApp || Boolean(permissions);
+        let approvalMethod = null;
+        if (needsOwnerApproval) {
+          const scope = permissions
+            ? ` limited to ${Object.entries(permissions).map(([name, level]) => `${name}=${level}`).join(', ')}`
+            : '';
+          const caller = `${binding.agentId}${ownSlug ? ` (own App: ${ownSlug}[bot])` : ''}`;
+          const repoLabel = worktreeRepo ?? 'this checkout';
+          const action = `mint a GitHub App token for another application (${appSlug}[bot]${scope}) in ${repoLabel} for ${requestedReason}, requested from a checkout stated as ${caller}`;
+          try {
+            const proof = await ownerGate(action);
+            approvalMethod = `owner-${proof?.method ?? 'approved'}`;
+          } catch (error) {
+            appendAuditReceipt({
+              event: 'credential-mint',
+              agentId: binding.agentId,
+              sessionId: binding.sessionId ?? null,
+              operation: requestedReason,
+              decision: 'denied',
+              appSlug,
+              reason: 'owner-gate-refused',
+            }, { env, home, now });
+            throw Object.assign(error, { statusCode: 403, code: 'owner-gate-refused' });
+          }
+          appendAuditReceipt({
+            event: 'credential-mint',
+            agentId: binding.agentId,
+            sessionId: binding.sessionId ?? null,
+            operation: requestedReason,
+            decision: 'approved',
+            appSlug,
+            reason: approvalMethod,
+          }, { env, home, now });
         }
         // One credential per request: a fresh operation, for the task this
         // soul's conversation is (0.4 §7). Nothing is cached for reuse.
@@ -232,15 +284,14 @@ export function createIdentityRoutes({
             // agentBotServer must not silently read as local custody.
             const cfg = loadConfig({ env, home });
             if (serverUrl({ env, config: cfg })) {
-              try {
-                repo = boundRepository(binding.worktree);
-              } catch {
+              if (!worktreeRepo) {
                 throw Object.assign(new Error('the bound worktree has no GitHub origin remote, so server mode cannot pick a repository; check it with `agent-bot doctor`'), { statusCode: 409, code: 'credential-no-repo' });
               }
+              repo = worktreeRepo;
             }
           }
           grant = await mintImpl({
-            slug: appSlug, env, agentId: binding.agentId, taskId, operationId, repo, sessionId: binding.sessionId ?? null,
+            slug: appSlug, env, agentId: binding.agentId, permissions, taskId, operationId, repo, sessionId: binding.sessionId ?? null,
             fetchImpl: serverFetch,
             viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
           });
@@ -254,7 +305,7 @@ export function createIdentityRoutes({
             event: 'credential-mint',
             agentId: binding.agentId,
             sessionId: binding.sessionId ?? null,
-            operation: 'tier1-app-token',
+            operation: requestedReason,
             decision: 'failed',
             appSlug,
             reason: coded ?? 'mint-failed',
@@ -268,15 +319,16 @@ export function createIdentityRoutes({
           }
           throw error;
         }
-        // The App comes from the bound soul's own record, never the request.
+        // The App comes from the bound soul's own record, or from the
+        // owner-approved cross-App request (#1336).
         appendAuditReceipt({
           event: 'credential-mint',
           agentId: binding.agentId,
           sessionId: binding.sessionId ?? null,
-          operation: 'tier1-app-token',
+          operation: requestedReason,
           decision: 'granted',
           appSlug,
-          reason: 'bound-soul-own-app',
+          reason: needsOwnerApproval ? 'owner-approved' : 'bound-soul-own-app',
           ...(grant.issuance_id ? { issuanceId: grant.issuance_id } : {}),
           taskId,
           operationId,
