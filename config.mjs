@@ -529,7 +529,8 @@ export function isOrgHarnessAppSlug(slug, harness, config = loadConfig()) {
   if (typeof slug !== 'string' || typeof harness !== 'string' || !slug || !/^[a-z0-9-]+$/.test(harness)) return false;
   const key = harness === 'claude-code' ? 'claude' : harness;
   if (slug === slugForHarness(harness, config)) return true;
-  const escaped = [...new Set([key, harness])].map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const variants = key === 'grok' || key === 'grokbot' ? ['grok', 'grokbot'] : [key, harness];
+  const escaped = [...new Set(variants)].map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   return new RegExp(`^[a-z0-9-]+-(?:${escaped.join('|')})-agent$`).test(slug);
 }
 
@@ -542,7 +543,8 @@ export function soulOwnsAppSlug(identity, candidateSlug, config = loadConfig(), 
   const key = harness === 'claude-code' ? 'claude' : harness;
   const recordedHarness = harnessForSlug(recorded, config);
   const recordedKey = recordedHarness === 'claude-code' ? 'claude' : recordedHarness;
-  if (recordedKey && recordedKey !== key) return false;
+  const sameFamily = recordedKey === key || (['grok', 'grokbot'].includes(key) && ['grok', 'grokbot'].includes(recordedKey));
+  if (recordedKey && !sameFamily) return false;
   if (!isOrgHarnessAppSlug(recorded, harness, config)) return false;
   if (!isOrgHarnessAppSlug(candidateSlug, harness, config)) return false;
   if (!isRegisteredAppSlug(recorded, config, key, { env, home })) return false;
@@ -555,7 +557,8 @@ export function slugForOriginOwner(originOwner, harness, config = loadConfig(), 
   if (!owner) return null;
   const key = harness === 'claude-code' ? 'claude' : harness;
   const prefixes = [...new Set([owner, owner.replaceAll('-', '')].filter(Boolean))];
-  const harnessKeys = [...new Set([key, harness].filter(Boolean))];
+  const variants = key === 'grok' || key === 'grokbot' ? [key, harness, 'grokbot', 'grok'] : [key, harness];
+  const harnessKeys = [...new Set(variants.filter(Boolean))];
   for (const prefix of prefixes) {
     for (const h of harnessKeys) {
       const candidate = `${prefix}-${h}-agent`;
@@ -575,6 +578,12 @@ export function slugForHarness(harness, config = loadConfig(), { originOwner = n
   if (config.apps?.[harness]) return config.apps[harness];
   if (config.apps?.[key]) return config.apps[key];
   if (config.prefix) return `${config.prefix}-${key}-agent`;
+  const enrolled = enrolledServerHarnesses({ env, home, config });
+  const variants = key === 'grok' || key === 'grokbot' ? [key, harness, 'grokbot', 'grok'] : [key, harness];
+  for (const h of [...new Set(variants.filter(Boolean))]) {
+    const match = enrolled.find((slug) => new RegExp(`^[a-z0-9-]+-${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-agent$`).test(slug));
+    if (match) return match;
+  }
   return null;
 }
 

@@ -39,6 +39,7 @@ agent_bot_agent_context() {
   [ "$DROID_AGENT" = "1" ] && return 0
   [ "$GOOSE_AGENT" = "1" ] && return 0
   [ "$GROK_AGENT" = "1" ] && return 0
+  [ "$GROKBOT_AGENT" = "1" ] && return 0
   [ "$HERMES_AGENT" = "1" ] && return 0
   [ "$JUNIE_AGENT" = "1" ] && return 0
   [ "$KILOCODE_AGENT" = "1" ] && return 0

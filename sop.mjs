@@ -313,9 +313,11 @@ export function assertSopGitCommand(args) {
     const doc = pinned?.[2];
     const fetched = /^FETCH_HEAD:(.*)$/.exec(spec ?? '')?.[1];
     // A JSON file beside org.json at the fetched commit is the organization
-    // profile org.json names (organization.profile, #190).
+    // profile org.json names (organization.profile, #190). A Markdown file at
+    // the fetched commit is the catalog or skill SKILL.md read by skill.mjs.
     const profile = fetched !== undefined && isRelativePath(fetched) && !/[\u0000-\u001f\u007f]/.test(fetched) && fetched.endsWith('.json');
-    const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}` || spec === `FETCH_HEAD:${POLICY_FILE}` || profile))
+    const fetchedMarkdown = fetched !== undefined && isRelativePath(fetched) && !/[\u0000-\u001f\u007f]/.test(fetched) && fetched.endsWith('.md');
+    const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}` || spec === `FETCH_HEAD:${POLICY_FILE}` || profile || fetchedMarkdown))
       || (mode === '-p' && pinned && !doc)
       || (mode === 'blob' && pinned && doc && isRelativePath(doc) && !/[\u0000-\u001f\u007f]/.test(doc) && doc.endsWith('.md'));
     if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml, policy-hooks.json, the organization profile JSON or pinned SOP Markdown/trees');
@@ -569,7 +571,7 @@ export function parseOrgPins(text) {
 
 // One file at a pinned commit, through a temporary blobless read: org.json
 // (which must exist) or persona.toml (null when the commit has none).
-function readRepoFile(repo, commit, file, { runGit, remoteUrl, makeTemp, required = true }) {
+export function readRepoFile(repo, commit, file, { runGit = defaultRunGit, remoteUrl = githubRemote, makeTemp, required = true } = {}) {
   if (!COMMIT_SHA.test(commit)) fail('org-json-unreadable', `${file} is read at a resolved commit`);
   const dir = (makeTemp ?? (() => mkdtempSync(join(tmpdir(), 'agent-bot-sop-'))))();
   const url = remoteUrl(repo);

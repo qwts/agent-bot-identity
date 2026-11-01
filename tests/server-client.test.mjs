@@ -623,6 +623,16 @@ test('serverHarnessForSlug: an unresolved slug never falls back to a default fam
   assert.equal(serverHarnessForSlug({ slug: null, env: {}, scope: ['codex'], config }), null);
   assert.equal(serverHarnessForSlug({ slug: '', env: {}, scope: ['codex'], config }), null);
   assert.equal(serverHarnessForSlug({ slug: null, env: { AGENT_BOT_SERVER_HARNESS: 'claude' }, scope: ['codex'], config }), 'claude', 'the ambient override still wins');
+  assert.equal(
+    serverHarnessForSlug({ slug: 'qwts-grokbot-agent', env: { GROK_AGENT: '1' }, scope: ['qwts-grokbot-agent', 'trueline-grokbot-agent'], config: {} }),
+    'qwts-grokbot-agent',
+    'a resolved slug in the enrolled device scope wins over GROK_AGENT=1 (#1331)',
+  );
+  assert.equal(
+    serverHarnessForSlug({ slug: 'qwts-grokbot-agent', env: { GROK_AGENT: '1', AGENT_BOT_SERVER_HARNESS: 'grok' }, scope: ['qwts-grokbot-agent'], config: {} }),
+    'grok',
+    'explicit AGENT_BOT_SERVER_HARNESS still overrides slug scope',
+  );
 });
 
 test('app-owner mismatch: refused on another owner; match, unknown and case pass', async (t) => {

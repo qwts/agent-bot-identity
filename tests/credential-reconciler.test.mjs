@@ -388,3 +388,51 @@ test('server-enrolled Apps without local key files are ready in ensurePrivateKey
   });
   assert.equal(inspected.status, 'ready');
 });
+
+test('server-enrolled Apps verify through /api/daemon/harness-apps and cache botUid without minting (#1331)', async () => {
+  const { BASE, fakeServer, sleep } = await import('./helpers/fake-identity-server.mjs');
+  const { enroll } = await import('../identity/server-client.mjs');
+  const { readAppMetadata } = await import('../identity/identity-app-store.mjs');
+  const home = tempHome();
+  const stateDir = join(home, 'server-state');
+  const env = {
+    HOME: home,
+    AGENT_BOT_SERVER: BASE,
+    AGENT_BOT_SERVER_STATE: stateDir,
+    AGENT_BOT_CONFIG: join(home, 'config.json'),
+  };
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({
+    settings: { agentBotServer: BASE },
+  }));
+  const srv = fakeServer();
+  srv.harnessApps = [
+    { slug: 'qwts-grokbot-agent', app_id: 5502500, bot_user_id: 349048923, owner: 'qwts' },
+  ];
+  await enroll({ base: BASE, env, harnesses: ['qwts-grokbot-agent'], fetchImpl: srv.fetch, sleep });
+
+  const verifiedTokens = [];
+  const reconciled = await reconcileAppCredentials({
+    slugs: ['qwts-grokbot-agent'],
+    home,
+    env,
+    fetchImpl: srv.fetch,
+    onVerified: (_slug, grant) => verifiedTokens.push(grant.token),
+  });
+  assert.equal(reconciled[0].local.status, 'ready');
+  assert.equal(reconciled[0].live.status, 'ready');
+  assert.equal(reconciled[0].live.installationId, 5502500);
+  assert.deepEqual(verifiedTokens, [], 'server verification does not pass a dummy token to onVerified');
+  assert.equal(srv.minted ?? 0, 0, 'no installation token was minted');
+
+  const meta = readAppMetadata('qwts-grokbot-agent', { home, env });
+  assert.equal(meta.botUid, '349048923');
+  assert.equal(meta.botAvatarUrl, 'https://avatars.githubusercontent.com/in/5502500?v=4');
+
+  const inspected = await inspectAppCredentials({
+    slugs: ['qwts-grokbot-agent'],
+    home,
+    env,
+    fetchImpl: srv.fetch,
+  });
+  assert.equal(inspected[0].live.status, 'ready');
+});

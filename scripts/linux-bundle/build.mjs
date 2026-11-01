@@ -383,10 +383,14 @@ function scriptLauncher(relativeScript, comment) {
 
 function readReleaseCommit() {
   try {
-    return readFileSync(join(ROOT, 'RELEASE_COMMIT'), 'utf8').trim();
-  } catch {
-    return null;
-  }
+    const stamped = readFileSync(join(ROOT, 'RELEASE_COMMIT'), 'utf8').trim();
+    if (/^[0-9a-f]{40}$/u.test(stamped)) return stamped;
+  } catch { /* fall back to git */ }
+  try {
+    const sha = run('git', ['-C', ROOT, 'rev-parse', 'HEAD']).trim();
+    if (/^[0-9a-f]{40}$/u.test(sha)) return sha;
+  } catch { /* no git checkout */ }
+  return null;
 }
 
 export async function buildPlatform(platform, options = {}) {
@@ -441,11 +445,15 @@ export async function buildPlatform(platform, options = {}) {
     if (EXCLUDED_FROM_BUNDLE.includes(name) || name.startsWith('.')) continue;
     cpSync(join(ROOT, name), join(agentBot, name), { recursive: true, dereference: false });
   }
+  const releaseCommit = readReleaseCommit();
+  if (releaseCommit) {
+    writeFileSync(join(agentBot, 'RELEASE_COMMIT'), `${releaseCommit}\n`);
+  }
   writeFileSync(join(binDir, 'agent-bot'), selfLocatingBody({
     comment: 'Bundled agent-bot. Its own launcher resolves Node from AGENT_BOT_NODE.',
     execLine: 'exec "$AGENT_BOT_BUNDLE_ROOT/lib/agent-bot/agent-bot" "$@"',
   }));
-  report.agentBot = { version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version, releaseCommit: readReleaseCommit() };
+  report.agentBot = { version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version, releaseCommit };
 
   // ---- install.sh, uninstall.sh, units, provenance
   cpSync(join(HERE, 'install.sh'), join(stage, 'install.sh'));
