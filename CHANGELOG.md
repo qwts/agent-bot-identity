@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.15
+
+- Prefer the shared prefix `var/agent-machine` directory (`/opt/homebrew/var/agent-machine`, `/usr/local/var/agent-machine`, `/home/linuxbrew/.linuxbrew/var/agent-machine`) in `AGENT_MACHINE_DIR`, `machineSocketPath`, and status-digest uploads when `agent-machine` runs in the `admin` Homebrew owner account and `agent-daemon` runs in `user` (#1327).
+
 ## 0.15.14
 
 - Surface catalog `publisher` and read-only pending `drafts` summaries from `GET /api/daemon/catalog` in `fetchCatalog` and the `/ui` Catalog tab (#1295).
