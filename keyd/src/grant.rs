@@ -17,7 +17,13 @@ use std::collections::HashMap;
 use crate::ids::{is_agent_id, is_app_slug};
 
 pub const AUDIENCE: &str = "agent-bot-keyd";
-pub const TOOLS: [&str; 2] = ["credential", "git_credential"];
+pub const TOOLS: [&str; 5] = [
+    "credential",
+    "git_credential",
+    "token_cache_get",
+    "token_cache_put",
+    "token_cache_evict",
+];
 /// A grant is for one call: the daemon signs it moments before the call.
 const MAX_LIFETIME_SECONDS: u64 = 120;
 const CLOCK_SKEW_SECONDS: u64 = 30;
@@ -147,7 +153,9 @@ pub fn verify(
     }
     // The App JWT goes only to GitHub's own API, by the owner's #1062
     // decision; an owner-approved enterprise host is #1099, not yet built.
-    if grant.api_base.trim_end_matches('/') != GITHUB_API {
+    if matches!(grant.tool.as_str(), "credential" | "git_credential")
+        && grant.api_base.trim_end_matches('/') != GITHUB_API
+    {
         return Err(GITHUB_API_ONLY);
     }
     if grant.tool == "git_credential" && grant.host.as_deref().is_none_or(str::is_empty) {

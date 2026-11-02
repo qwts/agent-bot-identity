@@ -32,8 +32,8 @@
 //
 // Without keyd (Homebrew, Linux) keys stay in the #395 stores.
 
-import { randomBytes, sign } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { createHash, randomBytes, sign } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import net from 'node:net';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -43,6 +43,7 @@ import { loadOrCreateVouchKey, vouchStateDir } from './vouch.mjs';
 
 export const KEYD_SERVER_NAME = 'agent-bot-keyd';
 export const KEYD_TOOL_NAMES = Object.freeze(['credential', 'git_credential']);
+export const KEYD_CACHE_TOOL_NAMES = Object.freeze(['token_cache_get', 'token_cache_put', 'token_cache_evict']);
 export const KEYD_AUDIENCE = 'agent-bot-keyd';
 export const KEYD_GRANT_META = 'agent-bot/grant';
 export const KEYD_LABEL = 'dev.qwts.agent-bot.keyd';
@@ -129,7 +130,7 @@ const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 // `app` instead of the soul's own. A soul grant leaves the field out, so its
 // 12 payload keys are what every keyd, old or new, accepts.
 export function signKeydGrant({ agentId, app, tool, apiBase, installationId = null, owner = null, host = null, keyScope = null }, privateKey, now = () => new Date()) {
-  if (!KEYD_TOOL_NAMES.includes(tool)) throw new Error(`unknown keyd tool: ${tool}`);
+  if (!KEYD_TOOL_NAMES.includes(tool) && !KEYD_CACHE_TOOL_NAMES.includes(tool)) throw new Error(`unknown keyd tool: ${tool}`);
   if (keyScope !== null && keyScope !== 'soul' && keyScope !== 'app') throw new Error(`unknown keyd key scope: ${keyScope}`);
   const iat = Math.floor(now().getTime() / 1000);
   const payload = {
@@ -167,8 +168,83 @@ export async function mintViaKeyd({ agentId, app, keyScope = null, env = process
     const reason = result?.content?.[0]?.text ?? 'agent-bot-keyd gave no token';
     throw new Error(`agent-bot-keyd: ${reason}`);
   }
-  const { token, expires_at: expiresAt, installation_id: installationId } = result.structuredContent;
-  return { token, expires_at: expiresAt, installation_id: installationId };
+  const { token, expires_at: expiresAt, installation_id: installationId, cached } = result.structuredContent;
+  return { token, expires_at: expiresAt, installation_id: installationId, ...(cached ? { cached: true } : {}) };
+}
+
+// Canonical scope key for a cached installation token (#1340): 'default' when
+// unscoped, or a 64-character lowercase SHA-256 hex digest of (repo, permissions).
+export function keydTokenCacheScope({ repo = null, permissions = null } = {}) {
+  const permEntries = permissions && typeof permissions === 'object'
+    ? Object.keys(permissions).sort().map((k) => `${k}=${permissions[k]}`).join(',')
+    : '';
+  if (!repo && !permEntries) return 'default';
+  return createHash('sha256').update(`repo:${repo ?? ''}|perms:${permEntries}`).digest('hex');
+}
+
+export async function getKeydCachedToken({ agentId, app, repo = null, permissions = null, env = process.env, home = homedir(), now = () => new Date(), request = keydRequest } = {}) {
+  if (!agentId || !app) return null;
+  const socket = keydPaths({ env, home }).socket;
+  if (request === keydRequest && !existsSync(socket)) return null;
+  const scope = keydTokenCacheScope({ repo, permissions });
+  try {
+    const grant = signKeydGrant({ agentId, app, tool: 'token_cache_get', apiBase: 'https://api.github.com' }, vouchKey({ env, home }).privateKey, now);
+    const result = await request(socket, 'tools/call', {
+      name: 'token_cache_get', arguments: { scope }, _meta: { [KEYD_GRANT_META]: grant },
+    }, { timeoutMs: 3_000 });
+    if (result?.isError || !result?.structuredContent?.hit || typeof result.structuredContent.token !== 'string') return null;
+    const { token, expires_at: expiresAt, installation_id: installationId, issuance_id: issuanceId } = result.structuredContent;
+    return {
+      token,
+      expires_at: expiresAt,
+      installation_id: Number.isSafeInteger(installationId) ? installationId : null,
+      ...(issuanceId ? { issuance_id: issuanceId } : {}),
+      cached: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function putKeydCachedToken({ agentId, app, repo = null, permissions = null, grant: minted, env = process.env, home = homedir(), now = () => new Date(), request = keydRequest } = {}) {
+  if (!agentId || !app || !minted?.token || !minted?.expires_at) return false;
+  const socket = keydPaths({ env, home }).socket;
+  if (request === keydRequest && !existsSync(socket)) return false;
+  const scope = keydTokenCacheScope({ repo, permissions });
+  try {
+    const signed = signKeydGrant({ agentId, app, tool: 'token_cache_put', apiBase: 'https://api.github.com' }, vouchKey({ env, home }).privateKey, now);
+    const result = await request(socket, 'tools/call', {
+      name: 'token_cache_put',
+      arguments: {
+        scope,
+        token: minted.token,
+        expires_at: minted.expires_at,
+        ...(Number.isSafeInteger(minted.installation_id) ? { installation_id: minted.installation_id } : {}),
+        ...(typeof minted.issuance_id === 'string' && minted.issuance_id ? { issuance_id: minted.issuance_id } : {}),
+      },
+      _meta: { [KEYD_GRANT_META]: signed },
+    }, { timeoutMs: 3_000 });
+    return Boolean(!result?.isError && result?.structuredContent?.stored);
+  } catch {
+    return false;
+  }
+}
+
+export async function evictKeydCachedTokens({ agentId, app, scope = null, env = process.env, home = homedir(), now = () => new Date(), request = keydRequest } = {}) {
+  if (!agentId || !app) return false;
+  const socket = keydPaths({ env, home }).socket;
+  if (request === keydRequest && !existsSync(socket)) return false;
+  try {
+    const signed = signKeydGrant({ agentId, app, tool: 'token_cache_evict', apiBase: 'https://api.github.com' }, vouchKey({ env, home }).privateKey, now);
+    const result = await request(socket, 'tools/call', {
+      name: 'token_cache_evict',
+      arguments: scope ? { scope } : {},
+      _meta: { [KEYD_GRANT_META]: signed },
+    }, { timeoutMs: 3_000 });
+    return Boolean(!result?.isError && result?.structuredContent?.evicted);
+  } catch {
+    return false;
+  }
 }
 
 // Outside the daemon (a soul's git credential helper, `mint-token`), a keyd
