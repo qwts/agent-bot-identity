@@ -59,8 +59,9 @@ export async function runMachineCli(argv = process.argv.slice(2), {
     const pin = pinDaemonPub({ env, home, repin });
     if (pin.replaced) stdout.write(`daemon.pub changed: ${pin.replaced} -> ${pin.fingerprint}\n`);
     stdout.write(`agent-machine pinned: sha256 ${pin.fingerprint}\n`);
+    stdout.write(`public: ${peer.publicHex}\n`);
+    stdout.write(`fingerprint: ${peer.fingerprint}\n`);
     if (!peer.staged) {
-      stdout.write(`dropped: ${peer.drop}\n`);
       stdout.write(`As the prefix owner run:\n${peer.enroll}\n`);
       return 0;
     }
@@ -76,8 +77,12 @@ export async function runMachineCli(argv = process.argv.slice(2), {
       return 1;
     }
     await gate('machine-unpair', { env });
-    unpairAgentDaemon({ env, home });
-    stdout.write('unpaired: agent-daemon enroll drop and daemon.pub pin removed\n');
+    const result = unpairAgentDaemon({ env, home });
+    if (result.revoked) {
+      stdout.write('unpaired: peers/agent-daemon.revoked written and the daemon.pub pin removed\n');
+    } else {
+      stdout.write('unpaired: daemon.pub pin removed; the daemon still trusts this key until the prefix owner revokes peers/agent-daemon\n');
+    }
     return 0;
   }
   if (command === 'status') {

@@ -326,20 +326,22 @@ function isHomeStateDir(dir, home) {
   return path.resolve(dir) === path.resolve(path.join(home, '.config', 'agent-machine'));
 }
 
-export const ENROLL_AGENT_DAEMON = 'managed-machine daemon pair --enroll --client agent-daemon';
+export function enrollAgentDaemonCommand(publicKeyRaw) {
+  const hex = Buffer.from(publicKeyRaw).toString('hex');
+  return `managed-machine daemon pair --enroll ${hex} --fingerprint ${daemonFingerprint(publicKeyRaw)} --client agent-daemon`;
+}
 
-// Cross-account: peers live in the prefix owner's ~/.config/agent-machine,
-// which the user cannot write. Drop agent-daemon.pub on the channel enroll
-// dir so `managed-machine daemon pair --enroll --client agent-daemon` can
-// install it. Same-account (dir is <home>/.config/agent-machine) still
-// stages peers/agent-daemon.next as before.
+// Cross-account: peers live in the prefix owner's ~/.config/agent-machine.
+// The user prints the public key and fingerprint; the prefix owner enrolls
+// them. Same-account (dir is <home>/.config/agent-machine) still stages
+// peers/agent-daemon.next as before. Nothing is written into the channel.
 export function writeAgentDaemonPeer({ home = homedir(), publicKeyRaw, env = process.env } = {}) {
+  const enroll = enrollAgentDaemonCommand(publicKeyRaw);
+  const publicHex = Buffer.from(publicKeyRaw).toString('hex');
+  const fingerprint = daemonFingerprint(publicKeyRaw);
   const dir = AGENT_MACHINE_DIR(home, { env });
-  const drop = path.join(dir, 'enroll', 'agent-daemon.pub');
-  mkdirSync(path.dirname(drop), { recursive: true, mode: 0o733 });
-  writeFileSync(drop, publicKeyRaw, { mode: 0o644 });
   if (!isHomeStateDir(dir, home)) {
-    return { drop, staged: false, enroll: ENROLL_AGENT_DAEMON };
+    return { staged: false, enroll, publicHex, fingerprint };
   }
   assertPairingLayout(dir);
   const peers = path.join(dir, 'peers');
@@ -356,14 +358,13 @@ export function writeAgentDaemonPeer({ home = homedir(), publicKeyRaw, env = pro
   };
   writePeerFile('agent-daemon.next', publicKeyRaw);
   writePeerFile('agent-daemon.confirm', createHash('sha256').update(publicKeyRaw).digest('hex'));
-  return { drop, staged: true, enroll: ENROLL_AGENT_DAEMON };
+  return { staged: true, enroll, publicHex, fingerprint };
 }
 
 export function unpairAgentDaemon({ env = process.env, home = homedir() } = {}) {
   const dir = AGENT_MACHINE_DIR(home, { env });
-  rmSync(path.join(dir, 'enroll', 'agent-daemon.pub'), { force: true });
   rmSync(pinPath({ env, home }), { force: true });
-  if (!isHomeStateDir(dir, home)) return;
+  if (!isHomeStateDir(dir, home)) return { revoked: false };
   assertPairingLayout(dir);
   const peers = path.join(dir, 'peers');
   mkdirSync(peers, { recursive: true, mode: 0o700 });
@@ -375,6 +376,7 @@ export function unpairAgentDaemon({ env = process.env, home = homedir() } = {}) 
     rmSync(revoked, { force: true });
     writeFileSync(revoked, Buffer.alloc(0), { mode: 0o640 });
   }
+  return { revoked: true };
 }
 
 export function pairedPublicKey({ env = process.env, home = homedir() } = {}) {

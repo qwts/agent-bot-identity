@@ -1,1 +1,1 @@
-- Pair agent-daemon with a cross-account agent-machine by dropping `enroll/agent-daemon.pub` on the shared channel and printing `managed-machine daemon pair --enroll --client agent-daemon` for the prefix owner, instead of writing `peers/` into the channel directory the user cannot own (#1342).
+- Pair agent-daemon with a cross-account agent-machine by printing the public key and fingerprint for `managed-machine daemon pair --enroll HEX --fingerprint HEX --client agent-daemon`, instead of writing a shared enroll drop the daemon would have to trust (#1342).

@@ -5,7 +5,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { AGENT_MACHINE_DIR, ENROLL_AGENT_DAEMON, buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
+import { AGENT_MACHINE_DIR, enrollAgentDaemonCommand, buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
   loadMachinePublicKey, machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
   writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, machineStateDir } from '../machine-client.mjs';
 import { loadOrCreateVouchKey } from '../identity-host.mjs';
@@ -183,11 +183,10 @@ test('pairing file rules: legacy peer.* refuses, unknown peers/ entry refuses, t
   assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.next')).length, 32);
   assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.confirm'), 'utf8').length, 64);
   assert.deepEqual(readdirSync(path.join(dir, 'peers')).sort(), ['agent-daemon.confirm', 'agent-daemon.next', 'terminal.pub']);
-  assert.equal(readFileSync(path.join(dir, 'enroll', 'agent-daemon.pub')).length, 32);
+  assert.equal(existsSync(path.join(dir, 'enroll')), false);
   unpairAgentDaemon({ home: root });
   assert.ok(readFileSync(path.join(dir, 'peers', 'terminal.pub')).equals(before));
   assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.revoked')).length, 0);
-  assert.equal(existsSync(path.join(dir, 'enroll', 'agent-daemon.pub')), false);
 });
 
 test('pin mismatch refuses send; no pin refuses with machine-not-paired', () => {
@@ -321,7 +320,7 @@ test('runMachineCli: pair, pair --repin, unpair, status and --help run through t
   assert.doesNotMatch(paired.out, /As the prefix owner run/);
   assert.ok(existsSync(path.join(amDir, 'peers', 'agent-daemon.next')));
   assert.ok(existsSync(path.join(amDir, 'peers', 'agent-daemon.confirm')));
-  assert.ok(existsSync(path.join(amDir, 'enroll', 'agent-daemon.pub')));
+  assert.equal(existsSync(path.join(amDir, 'enroll')), false);
 
   // Rotate daemon.pub: pair without --repin refuses; pair --repin succeeds.
   const rotated = generateKeyPairSync('ed25519');
@@ -357,7 +356,7 @@ test('runMachineCli: pair, pair --repin, unpair, status and --help run through t
   const unpaired = await run(['unpair']);
   assert.equal(unpaired.code, 0);
   assert.equal(actions.at(-1), 'machine-unpair');
-  assert.match(unpaired.out, /unpaired: agent-daemon enroll drop and daemon\.pub pin removed/);
+  assert.match(unpaired.out, /unpaired: peers\/agent-daemon\.revoked written/);
 });
 
 test('AGENT_MACHINE_DIR prefers a shared prefix directory on realHome and honours AGENT_MACHINE_DIR env', () => {
@@ -378,7 +377,7 @@ test('AGENT_MACHINE_DIR prefers a shared prefix directory on realHome and honour
   );
 });
 
-test('writeAgentDaemonPeer on a shared channel dir drops enroll/agent-daemon.pub and does not create peers/', async () => {
+test('writeAgentDaemonPeer on a shared channel dir prints enroll hex and does not write the channel', async () => {
   const root = scratch();
   const channel = path.join(root, 'opt', 'homebrew', 'var', 'agent-machine');
   mkdirSync(channel, { recursive: true });
@@ -386,12 +385,12 @@ test('writeAgentDaemonPeer on a shared channel dir drops enroll/agent-daemon.pub
   const pub = Buffer.alloc(32, 9);
   const peer = writeAgentDaemonPeer({ home: root, publicKeyRaw: pub, env });
   assert.equal(peer.staged, false);
-  assert.equal(peer.enroll, ENROLL_AGENT_DAEMON);
-  assert.equal(peer.drop, path.join(channel, 'enroll', 'agent-daemon.pub'));
-  assert.deepEqual(readFileSync(peer.drop), pub);
+  assert.equal(peer.enroll, enrollAgentDaemonCommand(pub));
+  assert.match(peer.enroll, /--enroll [0-9a-f]{64} --fingerprint [0-9a-f]{64} --client agent-daemon/);
+  assert.equal(existsSync(path.join(channel, 'enroll')), false);
   assert.equal(existsSync(path.join(channel, 'peers')), false);
-  unpairAgentDaemon({ home: root, env });
-  assert.equal(existsSync(peer.drop), false);
+  const result = unpairAgentDaemon({ home: root, env });
+  assert.equal(result.revoked, false);
 });
 
 test('runMachineCli pair on a shared channel prints the prefix-owner enroll command and skips status', async () => {
@@ -412,8 +411,8 @@ test('runMachineCli pair on a shared channel prints the prefix-owner enroll comm
     stderr: { write: () => {} },
   });
   assert.equal(code, 0);
-  assert.match(out, /dropped: .*enroll\/agent-daemon\.pub/);
-  assert.match(out, /As the prefix owner run:\nmanaged-machine daemon pair --enroll --client agent-daemon/);
+  assert.doesNotMatch(out, /dropped:/);
+  assert.match(out, /As the prefix owner run:\nmanaged-machine daemon pair --enroll [0-9a-f]{64} --fingerprint [0-9a-f]{64} --client agent-daemon/);
   assert.doesNotMatch(out, /paired: agent-machine accepted/);
   assert.equal(existsSync(path.join(channel, 'peers')), false);
 });
