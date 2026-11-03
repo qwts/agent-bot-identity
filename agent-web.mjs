@@ -499,7 +499,7 @@ const enrollChildren = new Set();
       // Pairing is a file view only: the client key is probed load-only,
       // peers/agent-daemon.* is enumerated by name, terminal files are
       // never opened, and nothing here creates state.
-      const machineDir = AGENT_MACHINE_DIR(home);
+      const machineDir = AGENT_MACHINE_DIR(home, { env });
       const peers = path.join(machineDir, 'peers');
       const suffixes = existsSync(peers)
         ? ['.pub', '.next', '.confirm', '.revoked'].filter((sfx) => existsSync(path.join(peers, `agent-daemon${sfx}`)))
@@ -594,12 +594,21 @@ const enrollChildren = new Set();
               unpairAgentDaemon({ env, home });
               return { unpaired: true };
             }
-            if (!existsSync(AGENT_MACHINE_DIR(home))) {
-              throw Object.assign(new Error(`${AGENT_MACHINE_DIR(home)} does not exist — install and start agent-machine first (managed-machine daemon install) [machine-not-running]`), { code: 'machine-not-running' });
+            if (!existsSync(AGENT_MACHINE_DIR(home, { env }))) {
+              throw Object.assign(new Error(`${AGENT_MACHINE_DIR(home, { env })} does not exist — install and start agent-machine first (managed-machine daemon install) [machine-not-running]`), { code: 'machine-not-running' });
             }
             const key = loadOrCreateMachineKey({ env, home });
-            writeAgentDaemonPeer({ home, publicKeyRaw: key.publicKeyRaw });
+            const peer = writeAgentDaemonPeer({ home, publicKeyRaw: key.publicKeyRaw, env });
             const pin = pinDaemonPub({ env, home, repin });
+            if (!peer.staged) {
+              return {
+                paired: false,
+                dropped: peer.drop,
+                enroll: peer.enroll,
+                pin_fingerprint: pin.fingerprint,
+                replaced_fingerprint: pin.replaced,
+              };
+            }
             const request = buildRequest({ verb: 'status' }, key);
             const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
             const reply = verifyResponse(line, pin.publicKeyRaw, { expectedNonce: request.nonce });

@@ -5,7 +5,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { AGENT_MACHINE_DIR, buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
+import { AGENT_MACHINE_DIR, ENROLL_AGENT_DAEMON, buildRequest, requestCanonical, responseCanonical, bodySpan, verifyResponse,
   loadMachinePublicKey, machineCall, loadOrCreateMachineKey, pairedPublicKey, pinDaemonPub,
   writeAgentDaemonPeer, unpairAgentDaemon, assertPairingLayout, machineSocketPath, loadMachineSigner, machineStateDir } from '../machine-client.mjs';
 import { loadOrCreateVouchKey } from '../identity-host.mjs';
@@ -183,9 +183,11 @@ test('pairing file rules: legacy peer.* refuses, unknown peers/ entry refuses, t
   assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.next')).length, 32);
   assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.confirm'), 'utf8').length, 64);
   assert.deepEqual(readdirSync(path.join(dir, 'peers')).sort(), ['agent-daemon.confirm', 'agent-daemon.next', 'terminal.pub']);
+  assert.equal(readFileSync(path.join(dir, 'enroll', 'agent-daemon.pub')).length, 32);
   unpairAgentDaemon({ home: root });
   assert.ok(readFileSync(path.join(dir, 'peers', 'terminal.pub')).equals(before));
   assert.equal(readFileSync(path.join(dir, 'peers', 'agent-daemon.revoked')).length, 0);
+  assert.equal(existsSync(path.join(dir, 'enroll', 'agent-daemon.pub')), false);
 });
 
 test('pin mismatch refuses send; no pin refuses with machine-not-paired', () => {
@@ -316,8 +318,10 @@ test('runMachineCli: pair, pair --repin, unpair, status and --help run through t
   assert.deepEqual(actions, ['machine-pair']);
   assert.match(paired.out, /agent-machine pinned: sha256 [0-9a-f]{64}/);
   assert.match(paired.out, /paired: agent-machine accepted the agent-daemon key \(ready\)/);
+  assert.doesNotMatch(paired.out, /As the prefix owner run/);
   assert.ok(existsSync(path.join(amDir, 'peers', 'agent-daemon.next')));
   assert.ok(existsSync(path.join(amDir, 'peers', 'agent-daemon.confirm')));
+  assert.ok(existsSync(path.join(amDir, 'enroll', 'agent-daemon.pub')));
 
   // Rotate daemon.pub: pair without --repin refuses; pair --repin succeeds.
   const rotated = generateKeyPairSync('ed25519');
@@ -353,7 +357,7 @@ test('runMachineCli: pair, pair --repin, unpair, status and --help run through t
   const unpaired = await run(['unpair']);
   assert.equal(unpaired.code, 0);
   assert.equal(actions.at(-1), 'machine-unpair');
-  assert.match(unpaired.out, /unpaired: peers\/agent-daemon\.revoked written/);
+  assert.match(unpaired.out, /unpaired: agent-daemon enroll drop and daemon\.pub pin removed/);
 });
 
 test('AGENT_MACHINE_DIR prefers a shared prefix directory on realHome and honours AGENT_MACHINE_DIR env', () => {
@@ -372,4 +376,44 @@ test('AGENT_MACHINE_DIR prefers a shared prefix directory on realHome and honour
     AGENT_MACHINE_DIR(root, { env: { AGENT_MACHINE_DIR: '/custom/am' }, platform: 'darwin', realHome: '/Users/someone-else', exists: () => false }),
     '/custom/am',
   );
+});
+
+test('writeAgentDaemonPeer on a shared channel dir drops enroll/agent-daemon.pub and does not create peers/', async () => {
+  const root = scratch();
+  const channel = path.join(root, 'opt', 'homebrew', 'var', 'agent-machine');
+  mkdirSync(channel, { recursive: true });
+  const env = { AGENT_MACHINE_DIR: channel };
+  const pub = Buffer.alloc(32, 9);
+  const peer = writeAgentDaemonPeer({ home: root, publicKeyRaw: pub, env });
+  assert.equal(peer.staged, false);
+  assert.equal(peer.enroll, ENROLL_AGENT_DAEMON);
+  assert.equal(peer.drop, path.join(channel, 'enroll', 'agent-daemon.pub'));
+  assert.deepEqual(readFileSync(peer.drop), pub);
+  assert.equal(existsSync(path.join(channel, 'peers')), false);
+  unpairAgentDaemon({ home: root, env });
+  assert.equal(existsSync(peer.drop), false);
+});
+
+test('runMachineCli pair on a shared channel prints the prefix-owner enroll command and skips status', async () => {
+  const { runMachineCli } = await import('../cli/machine.mjs');
+  const root = scratch();
+  const channel = path.join(root, 'opt', 'homebrew', 'var', 'agent-machine');
+  mkdirSync(channel, { recursive: true });
+  writeFileSync(path.join(channel, 'daemon.pub'), Buffer.alloc(32, 3));
+  const home = path.join(root, 'home');
+  mkdirSync(home, { recursive: true });
+  const env = { AGENT_BOT_SERVER_STATE: path.join(home, 'bot-state'), AGENT_MACHINE_DIR: channel };
+  let out = '';
+  const code = await runMachineCli(['pair'], {
+    env,
+    home,
+    gate: async () => {},
+    stdout: { write: (s) => { out += s; } },
+    stderr: { write: () => {} },
+  });
+  assert.equal(code, 0);
+  assert.match(out, /dropped: .*enroll\/agent-daemon\.pub/);
+  assert.match(out, /As the prefix owner run:\nmanaged-machine daemon pair --enroll --client agent-daemon/);
+  assert.doesNotMatch(out, /paired: agent-machine accepted/);
+  assert.equal(existsSync(path.join(channel, 'peers')), false);
 });
