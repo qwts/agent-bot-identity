@@ -276,7 +276,7 @@ const enrollChildren = new Set();
     const signer = loadMachineSigner({ env, home });
     if (!signer) throw Object.assign(new Error('client key absent'), { code: 'machine-not-paired' });
     const request = buildRequest({ verb, ...fields }, signer);
-    const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
+    const line = await machineCall({ socketPath: machineSocketPath({ home, env }), request });
     const res = verifyResponse(line, pinned, { expectedNonce: request.nonce });
     return { ok: res.ok, state: res.state, diagnostic: res.diagnostic, message: res.message, records: res.body };
   }
@@ -499,7 +499,7 @@ const enrollChildren = new Set();
       // Pairing is a file view only: the client key is probed load-only,
       // peers/agent-daemon.* is enumerated by name, terminal files are
       // never opened, and nothing here creates state.
-      const machineDir = AGENT_MACHINE_DIR(home);
+      const machineDir = AGENT_MACHINE_DIR(home, { env });
       const peers = path.join(machineDir, 'peers');
       const suffixes = existsSync(peers)
         ? ['.pub', '.next', '.confirm', '.revoked'].filter((sfx) => existsSync(path.join(peers, `agent-daemon${sfx}`)))
@@ -594,14 +594,24 @@ const enrollChildren = new Set();
               unpairAgentDaemon({ env, home });
               return { unpaired: true };
             }
-            if (!existsSync(AGENT_MACHINE_DIR(home))) {
-              throw Object.assign(new Error(`${AGENT_MACHINE_DIR(home)} does not exist — install and start agent-machine first (managed-machine daemon install) [machine-not-running]`), { code: 'machine-not-running' });
+            if (!existsSync(AGENT_MACHINE_DIR(home, { env }))) {
+              throw Object.assign(new Error(`${AGENT_MACHINE_DIR(home, { env })} does not exist — install and start agent-machine first (managed-machine daemon install) [machine-not-running]`), { code: 'machine-not-running' });
             }
             const key = loadOrCreateMachineKey({ env, home });
-            writeAgentDaemonPeer({ home, publicKeyRaw: key.publicKeyRaw });
+            const peer = writeAgentDaemonPeer({ home, publicKeyRaw: key.publicKeyRaw, env });
             const pin = pinDaemonPub({ env, home, repin });
+            if (!peer.staged) {
+              return {
+                paired: false,
+                enroll: peer.enroll,
+                public: peer.publicHex,
+                fingerprint: peer.fingerprint,
+                pin_fingerprint: pin.fingerprint,
+                replaced_fingerprint: pin.replaced,
+              };
+            }
             const request = buildRequest({ verb: 'status' }, key);
-            const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
+            const line = await machineCall({ socketPath: machineSocketPath({ home, env }), request });
             const reply = verifyResponse(line, pin.publicKeyRaw, { expectedNonce: request.nonce });
             if (!reply.ok) {
               throw new Error(`pairing staged but agent-machine refused the status check: ${reply.diagnostic ?? ''} ${reply.message ?? ''}`.trim());

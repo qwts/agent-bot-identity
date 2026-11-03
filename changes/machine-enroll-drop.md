@@ -1,0 +1,1 @@
+- Pair agent-daemon with a cross-account agent-machine by printing the public key and fingerprint for `managed-machine daemon pair --enroll HEX --fingerprint HEX --client agent-daemon`, instead of writing a shared enroll drop the daemon would have to trust (#1342).

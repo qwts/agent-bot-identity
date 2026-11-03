@@ -306,7 +306,7 @@ export function atomicWrite0600(file, content, { tempDir = path.dirname(file) } 
 }
 
 export function pinDaemonPub({ env = process.env, home = homedir(), repin = false, now } = {}) {
-  const dir = AGENT_MACHINE_DIR(home);
+  const dir = AGENT_MACHINE_DIR(home, { env });
   const pubFile = path.join(dir, 'daemon.pub');
   if (!existsSync(pubFile)) throw mcError('machine-not-running', `${pubFile} does not exist — start agent-machine first (managed-machine daemon install)`);
   const pub = readFileSync(pubFile);
@@ -322,15 +322,30 @@ export function pinDaemonPub({ env = process.env, home = homedir(), repin = fals
   return { publicKeyRaw: pub, fingerprint: daemonFingerprint(pub), replaced: oldFp };
 }
 
-export function writeAgentDaemonPeer({ home = homedir(), publicKeyRaw }) {
-  const dir = AGENT_MACHINE_DIR(home);
+function isHomeStateDir(dir, home) {
+  return path.resolve(dir) === path.resolve(path.join(home, '.config', 'agent-machine'));
+}
+
+export function enrollAgentDaemonCommand(publicKeyRaw) {
+  const hex = Buffer.from(publicKeyRaw).toString('hex');
+  return `managed-machine daemon pair --enroll ${hex} --fingerprint ${daemonFingerprint(publicKeyRaw)} --client agent-daemon`;
+}
+
+// Cross-account: peers live in the prefix owner's ~/.config/agent-machine.
+// The user prints the public key and fingerprint; the prefix owner enrolls
+// them. Same-account (dir is <home>/.config/agent-machine) still stages
+// peers/agent-daemon.next as before. Nothing is written into the channel.
+export function writeAgentDaemonPeer({ home = homedir(), publicKeyRaw, env = process.env } = {}) {
+  const enroll = enrollAgentDaemonCommand(publicKeyRaw);
+  const publicHex = Buffer.from(publicKeyRaw).toString('hex');
+  const fingerprint = daemonFingerprint(publicKeyRaw);
+  const dir = AGENT_MACHINE_DIR(home, { env });
+  if (!isHomeStateDir(dir, home)) {
+    return { staged: false, enroll, publicHex, fingerprint };
+  }
   assertPairingLayout(dir);
   const peers = path.join(dir, 'peers');
   mkdirSync(peers, { recursive: true, mode: 0o700 });
-  // On a shared prefix dir (0750 admin:staff), peers/ is 1770 admin:staff and
-  // dir itself is not writable by `user`, so stage the temp files inside
-  // `peers/` with an allowed name or write directly inside `peers/` after
-  // removing any prior file we own.
   const writePeerFile = (name, content) => {
     const target = path.join(peers, name);
     try {
@@ -343,10 +358,13 @@ export function writeAgentDaemonPeer({ home = homedir(), publicKeyRaw }) {
   };
   writePeerFile('agent-daemon.next', publicKeyRaw);
   writePeerFile('agent-daemon.confirm', createHash('sha256').update(publicKeyRaw).digest('hex'));
+  return { staged: true, enroll, publicHex, fingerprint };
 }
 
 export function unpairAgentDaemon({ env = process.env, home = homedir() } = {}) {
-  const dir = AGENT_MACHINE_DIR(home);
+  const dir = AGENT_MACHINE_DIR(home, { env });
+  rmSync(pinPath({ env, home }), { force: true });
+  if (!isHomeStateDir(dir, home)) return { revoked: false };
   assertPairingLayout(dir);
   const peers = path.join(dir, 'peers');
   mkdirSync(peers, { recursive: true, mode: 0o700 });
@@ -358,14 +376,14 @@ export function unpairAgentDaemon({ env = process.env, home = homedir() } = {}) 
     rmSync(revoked, { force: true });
     writeFileSync(revoked, Buffer.alloc(0), { mode: 0o640 });
   }
-  rmSync(pinPath({ env, home }), { force: true });
+  return { revoked: true };
 }
 
 export function pairedPublicKey({ env = process.env, home = homedir() } = {}) {
   const pin = pinPath({ env, home });
   if (!existsSync(pin)) throw mcError('machine-not-paired', 'agent-machine is not paired — run agent-bot machine pair');
   const pub = readFileSync(pin);
-  const live = path.join(AGENT_MACHINE_DIR(home), 'daemon.pub');
+  const live = path.join(AGENT_MACHINE_DIR(home, { env }), 'daemon.pub');
   if (existsSync(live) && !readFileSync(live).equals(pub)) {
     throw mcError('machine-pin-mismatch', 'agent-machine daemon.pub differs from the pinned key — re-pair with --repin');
   }

@@ -790,7 +790,7 @@ export function createDaemonServer({
           machineKey({ env, home }),
         );
         const pinned = pairedPublicKey({ env, home });
-        const line = await machineCall({ socketPath: machineSocketPath({ home }), request });
+        const line = await machineCall({ socketPath: machineSocketPath({ home, env }), request });
         if ((body.verb === 'apply' || body.verb === 'update') && line.ok === true) void uploadMachineDigest();
         sendJson(res, 200, verifyResponse(line, pinned, { expectedNonce: request.nonce }));
         return;

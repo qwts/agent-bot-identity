@@ -21,7 +21,7 @@ const USAGE = `usage: agent-bot machine <command> | agent-bot pair [--repin] | a
   unpair                       revoke the agent-daemon peer and drop the daemon.pub pin
   status                       show pairing state, then a signed agent-machine status round trip when paired`;
 
-async function statusRoundTrip({ home, env, socketPath = machineSocketPath({ home }), connectImpl }) {
+async function statusRoundTrip({ home, env, socketPath = machineSocketPath({ home, env }), connectImpl }) {
   const pinned = pairedPublicKey({ env, home });
   const signer = loadOrCreateMachineKey({ env, home });
   const request = buildRequest({ verb: 'status' }, signer);
@@ -51,14 +51,20 @@ export async function runMachineCli(argv = process.argv.slice(2), {
       return 1;
     }
     await gate('machine-pair', { env });
-    if (!existsSync(AGENT_MACHINE_DIR(home))) {
-      throw new Error(`${AGENT_MACHINE_DIR(home)} does not exist — install and start agent-machine first (managed-machine daemon install) [machine-not-running]`);
+    if (!existsSync(AGENT_MACHINE_DIR(home, { env }))) {
+      throw new Error(`${AGENT_MACHINE_DIR(home, { env })} does not exist — install and start agent-machine first (managed-machine daemon install) [machine-not-running]`);
     }
     const key = loadOrCreateMachineKey({ env, home });
-    writeAgentDaemonPeer({ home, publicKeyRaw: key.publicKeyRaw });
+    const peer = writeAgentDaemonPeer({ home, publicKeyRaw: key.publicKeyRaw, env });
     const pin = pinDaemonPub({ env, home, repin });
     if (pin.replaced) stdout.write(`daemon.pub changed: ${pin.replaced} -> ${pin.fingerprint}\n`);
     stdout.write(`agent-machine pinned: sha256 ${pin.fingerprint}\n`);
+    stdout.write(`public: ${peer.publicHex}\n`);
+    stdout.write(`fingerprint: ${peer.fingerprint}\n`);
+    if (!peer.staged) {
+      stdout.write(`As the prefix owner run:\n${peer.enroll}\n`);
+      return 0;
+    }
     const reply = await statusRoundTrip({ home, env, ...(socketPath ? { socketPath } : {}), ...(connectImpl ? { connectImpl } : {}) });
     if (!reply.ok) throw new Error(`pairing staged but agent-machine refused the status check: ${reply.diagnostic ?? ''} ${reply.message ?? ''}`.trim());
     stdout.write(`paired: agent-machine accepted the agent-daemon key (${reply.state ?? reply.message ?? 'ok'})\n`);
@@ -71,12 +77,16 @@ export async function runMachineCli(argv = process.argv.slice(2), {
       return 1;
     }
     await gate('machine-unpair', { env });
-    unpairAgentDaemon({ env, home });
-    stdout.write('unpaired: peers/agent-daemon.revoked written and the daemon.pub pin removed\n');
+    const result = unpairAgentDaemon({ env, home });
+    if (result.revoked) {
+      stdout.write('unpaired: peers/agent-daemon.revoked written and the daemon.pub pin removed\n');
+    } else {
+      stdout.write('unpaired: daemon.pub pin removed; the daemon still trusts this key until the prefix owner revokes peers/agent-daemon\n');
+    }
     return 0;
   }
   if (command === 'status') {
-    const dir = AGENT_MACHINE_DIR(home);
+    const dir = AGENT_MACHINE_DIR(home, { env });
     const peers = join(dir, 'peers');
     const pin = join(machineStateDir({ env, home }), 'daemon.pub.pin');
     const pairedFiles = existsSync(peers)
