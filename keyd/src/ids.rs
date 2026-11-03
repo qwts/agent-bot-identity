@@ -38,6 +38,16 @@ pub fn is_app_slug(value: &str) -> bool {
             .all(|&b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
+/// A cached installation token's scope key (#1340), e.g. `default` or a
+/// 64-character lowercase SHA-256 hex digest of `(repo, permissions)`.
+pub fn is_cache_scope(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

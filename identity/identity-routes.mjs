@@ -21,9 +21,9 @@ import { validAppSlug } from './identity-app-store.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
 import { boundRepository, inboxError } from './inbox-take.mjs';
 import { harnessForApp } from './server-notices.mjs';
-import { grantTarget, KEYD_TOOL_NAMES, mintViaKeyd, signKeydGrant } from './keyd-client.mjs';
+import { evictKeydCachedTokens, getKeydCachedToken, grantTarget, KEYD_TOOL_NAMES, mintViaKeyd, putKeydCachedToken, signKeydGrant } from './keyd-client.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { newOperationId, taskIdFor, ServerSession, serverUrl } from './server-client.mjs';
+import { newOperationId, onDeviceRevoked, taskIdFor, ServerSession, serverUrl } from './server-client.mjs';
 import { armCursor, commitCursor, cursorKey, loadCursor, nextEvents, CURSOR_RE, ID_RE } from './relay-events.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 
@@ -89,6 +89,17 @@ export function createIdentityRoutes({
   grantLedger, grantActor, grantView, grantFailure,
   soulCredentialsDeclaration, soulDirectory, populationFile,
 }) {
+  // Track (agentId, appSlug) pairs stored in keyd's token cache so a device
+  // revocation can evict them at once (#1340).
+  const keydCachedPairs = new Set();
+  onDeviceRevoked(() => {
+    for (const pair of keydCachedPairs) {
+      const [agentId, app] = pair.split('\0');
+      void evictKeydCachedTokens({ agentId, app, env, home, now, request: keydCall });
+    }
+    keydCachedPairs.clear();
+  });
+
   return async function handleIdentityRoute(route, req, res) {
     switch (route) {
       case 'POST /v0/bind': {
@@ -124,11 +135,32 @@ export function createIdentityRoutes({
       // Explicit revocation invalidates the secret and removes its file.
       case 'DELETE /v0/binding': {
         const presented = presentedCredential(req);
+        const existing = typeof presented === 'string'
+          ? bindings.resolve(presented)
+          : bindings.resolveProof(presented.proof, presented.request);
         const released = typeof presented === 'string'
           ? bindings.release(presented)
           : bindings.releaseProof(presented.proof, presented.request);
         if (!released) {
           throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
+        }
+        if (existing?.agentId && !bindings.findAgent(existing.agentId)) {
+          const appsToEvict = new Set();
+          if (existing.app) appsToEvict.add(existing.app);
+          for (const pair of [...keydCachedPairs]) {
+            const [aid, app] = pair.split('\0');
+            if (aid === existing.agentId) {
+              appsToEvict.add(app);
+              keydCachedPairs.delete(pair);
+            }
+          }
+          try {
+            const identity = readAgentIdentity(existing.agentId, { stateDir: stateDirectory({ env, home }) });
+            if (identity?.github?.appSlug) appsToEvict.add(identity.github.appSlug);
+          } catch { /* best-effort eviction */ }
+          for (const app of appsToEvict) {
+            await evictKeydCachedTokens({ agentId: existing.agentId, app, env, home, now, request: keydCall });
+          }
         }
         sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, released: true });
         return true;
@@ -270,8 +302,11 @@ export function createIdentityRoutes({
             reason: approvalMethod,
           }, { env, home, now });
         }
-        // One credential per request: a fresh operation, for the task this
-        // soul's conversation is (0.4 §7). Nothing is cached for reuse.
+        // One operation ID per request for the soul's conversation task;
+        // an active installation token cached in keyd's Keychain for this
+        // exact (agentId, appSlug, repo, permissions) scope is reused until
+        // 5 minutes before expiry to limit live-token blast radius and
+        // GitHub API churn (#1340).
         const operationId = newOperationId();
         const taskId = taskIdFor({ env, agentId: binding.agentId, transcript: binding.transcript ?? identity.transcript ?? null, operationId });
         try {
@@ -279,22 +314,44 @@ export function createIdentityRoutes({
           // daemon's working directory (/ under launchd) and never the
           // caller's say. Local custody still mints without one.
           let repo = null;
+          let isServerMode = false;
           {
             // A config that cannot be read fails closed: a config-only
             // agentBotServer must not silently read as local custody.
             const cfg = loadConfig({ env, home });
             if (serverUrl({ env, config: cfg })) {
+              isServerMode = true;
               if (!worktreeRepo) {
                 throw Object.assign(new Error('the bound worktree has no GitHub origin remote, so server mode cannot pick a repository; check it with `agent-bot doctor`'), { statusCode: 409, code: 'credential-no-repo' });
               }
               repo = worktreeRepo;
             }
           }
-          grant = await mintImpl({
-            slug: appSlug, env, agentId: binding.agentId, permissions, taskId, operationId, repo, sessionId: binding.sessionId ?? null,
-            fetchImpl: serverFetch,
-            viaKeyd: (soul) => mintViaKeyd({ ...soul, env, home, now, request: keydCall }),
-          });
+          const pairKey = `${binding.agentId}\0${appSlug}`;
+          if (!isServerMode && keydCachedPairs.has(pairKey)) {
+            grant = await getKeydCachedToken({
+              agentId: binding.agentId, app: appSlug, repo, permissions, env, home, now, request: keydCall,
+            });
+          }
+          if (!grant) {
+            let mintedViaKeyd = false;
+            grant = await mintImpl({
+              slug: appSlug, env, agentId: binding.agentId, permissions, taskId, operationId, repo, sessionId: binding.sessionId ?? null,
+              fetchImpl: serverFetch,
+              viaKeyd: (soul) => {
+                mintedViaKeyd = true;
+                return mintViaKeyd({ ...soul, env, home, now, request: keydCall });
+              },
+            });
+            if (!isServerMode && !mintedViaKeyd) {
+              const stored = await putKeydCachedToken({
+                agentId: binding.agentId, app: appSlug, repo, permissions, grant, env, home, now, request: keydCall,
+              });
+              if (stored) keydCachedPairs.add(pairKey);
+            } else if (mintedViaKeyd) {
+              keydCachedPairs.add(pairKey);
+            }
+          }
         } catch (error) {
           // A verified binding whose mint fails must still leave a receipt —
           // the audit stream has to account for every attempt, not only the

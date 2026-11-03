@@ -557,3 +557,73 @@ test('the daemon grant key is the Ed25519 key\'s raw bytes, and only an Ed25519 
     assert.throws(() => daemonGrantPublicKey({ key: other }), /the vouch key is not an Ed25519 key/);
   }
 });
+
+test('/v0/credential caches minted tokens in keyd Keychain, reuses them across calls, and evicts on unbind (#1340)', async (t) => {
+  const { env, home } = fixture(t, { store: 'file' });
+  const worktree = path.join(home, 'worktree');
+  mkdirSync(worktree, { recursive: true });
+  execFileSync('git', ['init', '-q', worktree]);
+  const gitDir = path.join(worktree, '.git');
+  ensureAgentIdentity({
+    gate: () => true, appSlug: SLUG, botUid: '308462948', harness: 'codex',
+    transcript: { provider: 'codex', id: 'thread-keyd-cache' }, stateDir: stateDirectory({ env, home }),
+    idFactory: () => AGENT, now: () => new Date('2026-10-03T08:00:00.000Z'),
+  });
+  const record = mintBindToken({ gitDir, worktree, agentId: AGENT });
+  let mintCount = 0;
+  const cachedByScope = new Map();
+  const keydTools = [];
+  const server = createDaemonServer({
+    env, home, config: { features: { 'github-identity': true }, apiBase: 'https://api.github.com' },
+    mintImpl: async () => {
+      mintCount += 1;
+      return { token: `ghs_fresh_${mintCount}`, expires_at: '2026-10-03T09:00:00Z', installation_id: 9 };
+    },
+    keydCall: async (_socket, _method, params) => {
+      const payload = assertDaemonSigned(params._meta[KEYD_GRANT_META], env, home);
+      keydTools.push(payload.tool);
+      const scope = params.arguments?.scope ?? 'default';
+      if (params.name === 'token_cache_get') {
+        const entry = cachedByScope.get(scope);
+        return { structuredContent: entry ? { hit: true, app: SLUG, ...entry } : { hit: false } };
+      }
+      if (params.name === 'token_cache_put') {
+        cachedByScope.set(scope, {
+          token: params.arguments.token,
+          expires_at: params.arguments.expires_at,
+          installation_id: params.arguments.installation_id ?? null,
+        });
+        return { structuredContent: { stored: true } };
+      }
+      if (params.name === 'token_cache_evict') {
+        cachedByScope.clear();
+        return { structuredContent: { evicted: true } };
+      }
+      throw new Error(`unexpected keyd tool ${params.name}`);
+    },
+  });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve) => { server.close(resolve); }));
+  const port = server.address().port;
+  const call = (pathname, { method = 'POST', body, headers = {}, bearer = true } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method,
+    headers: { ...(bearer ? { authorization: `Bearer ${server.token}` } : {}), 'content-type': 'application/json', ...headers },
+    ...(method === 'DELETE' ? {} : { body: JSON.stringify(body ?? {}) }),
+  });
+  const bound = await (await call('/v0/bind', { body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-keyd-cache' } } })).json();
+  const asSoul = { 'x-agent-binding': bound.secret };
+
+  const first = await (await call('/v0/credential', { headers: asSoul, bearer: false })).json();
+  assert.equal(first.token, 'ghs_fresh_1');
+  assert.equal(mintCount, 1);
+
+  const second = await (await call('/v0/credential', { headers: asSoul, bearer: false })).json();
+  assert.equal(second.token, 'ghs_fresh_1', 'second request reuses the token from keyd Keychain cache');
+  assert.equal(mintCount, 1, 'mintImpl was not called a second time');
+  assert.notEqual(second.operation_id, first.operation_id, 'each request still gets a fresh operation_id');
+
+  const released = await call('/v0/binding', { method: 'DELETE', headers: asSoul, bearer: false });
+  assert.equal(released.status, 200);
+  assert.equal(cachedByScope.size, 0, 'releasing the binding evicts the cached token from keyd');
+  assert.deepEqual(keydTools, ['token_cache_put', 'token_cache_get', 'token_cache_evict']);
+});

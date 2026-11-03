@@ -37,7 +37,65 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{is_agent_id, is_app_slug};
+use crate::ids::{is_agent_id, is_app_slug, is_cache_scope};
+
+/// Minimum remaining lifetime (in seconds) required to reuse a cached
+/// installation token (#1340): 5 minutes before `expires_at`.
+pub const TOKEN_CACHE_MARGIN_SECONDS: u64 = 300;
+const MAX_TOKEN_CACHE_SCOPES: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CachedToken {
+    pub token: String,
+    pub expires_at: String,
+    pub exp: u64,
+    #[serde(default)]
+    pub installation_id: Option<u64>,
+    #[serde(default)]
+    pub issuance_id: Option<String>,
+}
+
+impl Drop for CachedToken {
+    fn drop(&mut self) {
+        // Best effort: zero the secret token when dropped.
+        // SAFETY: zero bytes are valid UTF-8.
+        unsafe { self.token.as_bytes_mut().fill(0) };
+    }
+}
+
+/// Parses an ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SS[.fff]Z`) into Unix
+/// seconds (Howard Hinnant's `days_from_civil`), returning `None` if malformed.
+pub fn parse_iso8601_utc(text: &str) -> Option<u64> {
+    let body = text.strip_suffix('Z')?;
+    let (date, time) = body.split_once('T')?;
+    let mut d = date.split('-');
+    let year: i64 = d.next()?.parse().ok()?;
+    let month: u32 = d.next()?.parse().ok()?;
+    let day: u32 = d.next()?.parse().ok()?;
+    if d.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let time_hms = time.split('.').next()?;
+    let mut t = time_hms.split(':');
+    let hour: u64 = t.next()?.parse().ok()?;
+    let minute: u64 = t.next()?.parse().ok()?;
+    let second: u64 = t.next()?.parse().ok()?;
+    if t.next().is_some() || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = if month > 2 { month - 3 } else { month + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days)
+        .ok()?
+        .checked_mul(86_400)?
+        .checked_add(hour * 3600 + minute * 60 + second)
+}
 
 pub struct Credential {
     pub app_id: String,
@@ -341,6 +399,146 @@ impl Store {
     pub fn put_owner_pins(&self, record: &OwnerPins) -> Result<(), String> {
         let value = serde_json::to_vec(record).map_err(|e| e.to_string())?;
         self.items.write(PIN_SERVICE, OWNER_PINS_ACCOUNT, &value)
+    }
+
+    fn token_cache_item(agent_id: &str, app: &str) -> Result<(String, String), &'static str> {
+        if !is_agent_id(agent_id) || !is_app_slug(app) {
+            return Err("invalid soul or App");
+        }
+        Ok((
+            format!("agent-bot.keyd.{agent_id}"),
+            format!("github-token-cache/{app}"),
+        ))
+    }
+
+    fn read_token_cache_map(
+        &self,
+        service: &str,
+        account: &str,
+        now: u64,
+    ) -> Result<std::collections::HashMap<String, CachedToken>, String> {
+        let raw = match self.items.read(service, account) {
+            Ok(Some(raw)) => raw,
+            Ok(None) | Err(StoreError::Untrusted { .. }) => {
+                return Ok(std::collections::HashMap::new());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut raw = raw;
+        let decoded = STANDARD
+            .decode(raw.trim_ascii())
+            .ok()
+            .and_then(|mut bytes| {
+                let parsed =
+                    serde_json::from_slice::<std::collections::HashMap<String, CachedToken>>(
+                        &bytes,
+                    )
+                    .ok();
+                bytes.fill(0);
+                parsed
+            });
+        raw.fill(0);
+        let mut map = decoded.unwrap_or_default();
+        map.retain(|scope, entry| {
+            is_cache_scope(scope)
+                && !entry.token.is_empty()
+                && entry.exp > now.saturating_add(TOKEN_CACHE_MARGIN_SECONDS)
+        });
+        Ok(map)
+    }
+
+    fn write_token_cache_map(
+        &self,
+        service: &str,
+        account: &str,
+        map: &std::collections::HashMap<String, CachedToken>,
+    ) -> Result<(), String> {
+        if map.is_empty() {
+            let _ = self.items.remove(service, account)?;
+            return Ok(());
+        }
+        let mut json = serde_json::to_vec(map).map_err(|e| e.to_string())?;
+        let mut encoded = STANDARD.encode(&json).into_bytes();
+        json.fill(0);
+        let result = self.items.write(service, account, &encoded);
+        encoded.fill(0);
+        result
+    }
+
+    /// Reads a cached installation token for `(agent_id, app, scope)` if one is
+    /// present in the Keychain and has more than `TOKEN_CACHE_MARGIN_SECONDS`
+    /// of lifetime left (#1340). Expired entries are swept on read.
+    pub fn cached_token(
+        &self,
+        agent_id: &str,
+        app: &str,
+        scope: &str,
+        now: u64,
+    ) -> Result<Option<CachedToken>, String> {
+        if !is_cache_scope(scope) {
+            return Err("invalid token cache scope".into());
+        }
+        let (service, account) = Self::token_cache_item(agent_id, app)?;
+        let map = self.read_token_cache_map(&service, &account, now)?;
+        Ok(map.get(scope).cloned())
+    }
+
+    /// Stores a minted installation token in the Keychain under
+    /// `(agent_id, app, scope)` if its `expires_at` is more than
+    /// `TOKEN_CACHE_MARGIN_SECONDS` in the future (#1340).
+    pub fn put_cached_token(
+        &self,
+        agent_id: &str,
+        app: &str,
+        scope: &str,
+        entry: CachedToken,
+        now: u64,
+    ) -> Result<bool, String> {
+        if !is_cache_scope(scope) {
+            return Err("invalid token cache scope".into());
+        }
+        if entry.token.is_empty() || entry.exp <= now.saturating_add(TOKEN_CACHE_MARGIN_SECONDS) {
+            return Ok(false);
+        }
+        let (service, account) = Self::token_cache_item(agent_id, app)?;
+        let mut map = self.read_token_cache_map(&service, &account, now)?;
+        if map.len() >= MAX_TOKEN_CACHE_SCOPES && !map.contains_key(scope) {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, v)| v.exp)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(scope.to_owned(), entry);
+        self.write_token_cache_map(&service, &account, &map)?;
+        Ok(true)
+    }
+
+    /// Evicts cached installation tokens for `(agent_id, app)` — either a
+    /// single `scope` or every scope for that `(agent_id, app)` when `scope` is
+    /// `None` (#1340).
+    pub fn evict_cached_tokens(
+        &self,
+        agent_id: &str,
+        app: &str,
+        scope: Option<&str>,
+        now: u64,
+    ) -> Result<bool, String> {
+        let (service, account) = Self::token_cache_item(agent_id, app)?;
+        match scope {
+            None => self.items.remove(&service, &account),
+            Some(s) => {
+                if !is_cache_scope(s) {
+                    return Err("invalid token cache scope".into());
+                }
+                let mut map = self.read_token_cache_map(&service, &account, now)?;
+                let removed = map.remove(s).is_some();
+                self.write_token_cache_map(&service, &account, &map)?;
+                Ok(removed)
+            }
+        }
     }
 }
 

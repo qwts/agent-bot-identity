@@ -43,7 +43,7 @@ use crate::paths::Paths;
 use crate::pins;
 use crate::presence;
 use crate::statement;
-use crate::store::{Credential, OwnerPins, Store, StoreError};
+use crate::store::{parse_iso8601_utc, CachedToken, Credential, OwnerPins, Store, StoreError};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const GRANT_META: &str = "agent-bot/grant";
@@ -202,6 +202,13 @@ impl Keyd {
             );
         };
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+        if matches!(
+            name,
+            "token_cache_get" | "token_cache_put" | "token_cache_evict"
+        ) {
+            return self.call_token_cache_tool(name, &grant, &arguments, now, &receipt);
+        }
+        let cache_scope = Self::grant_cache_scope(&grant);
         if name == "git_credential" {
             let protocol = arguments.get("protocol").and_then(Value::as_str);
             let host = arguments.get("host").and_then(Value::as_str);
@@ -211,6 +218,28 @@ impl Keyd {
                 receipt("declined", Some("not this soul's GitHub host"));
                 return tool_text(String::new(), false);
             }
+        }
+        if let Ok(Some(cached)) =
+            self.store
+                .cached_token(&grant.agent_id, &grant.app, &cache_scope, now)
+        {
+            receipt("granted", Some("cached"));
+            if name == "git_credential" {
+                return tool_text(
+                    format!("username=x-access-token\npassword={}\n", cached.token),
+                    false,
+                );
+            }
+            let grant_json = json!({
+                "app": grant.app,
+                "token": cached.token,
+                "expires_at": cached.expires_at,
+                "installation_id": cached.installation_id,
+                "cached": true,
+            });
+            let mut result = tool_text(grant_json.to_string(), false);
+            result["structuredContent"] = grant_json;
+            return result;
         }
         // The grant says which item; keyd never falls back to the other.
         let scope = grant.scope();
@@ -245,6 +274,21 @@ impl Keyd {
         };
         match github::mint(self.http.as_ref(), &credential, &grant, now) {
             Ok(minted) => {
+                if let Some(exp) = parse_iso8601_utc(&minted.expires_at) {
+                    let _ = self.store.put_cached_token(
+                        &grant.agent_id,
+                        &grant.app,
+                        &cache_scope,
+                        CachedToken {
+                            token: minted.token.clone(),
+                            expires_at: minted.expires_at.clone(),
+                            exp,
+                            installation_id: Some(minted.installation_id),
+                            issuance_id: None,
+                        },
+                        now,
+                    );
+                }
                 receipt("granted", granted);
                 if name == "git_credential" {
                     return tool_text(
@@ -265,6 +309,139 @@ impl Keyd {
             Err(error) => {
                 receipt("failed", Some(&error));
                 tool_text(error, true)
+            }
+        }
+    }
+
+    fn grant_cache_scope(grant: &grant::Grant) -> String {
+        match (grant.installation_id, grant.owner.as_deref()) {
+            (None, None) => "default".to_owned(),
+            (id, owner) => presence::digest(&format!(
+                "inst:{}|owner:{}",
+                id.map_or_else(String::new, |v| v.to_string()),
+                owner.unwrap_or("").to_ascii_lowercase()
+            )),
+        }
+    }
+
+    fn call_token_cache_tool(
+        &self,
+        name: &str,
+        grant: &grant::Grant,
+        arguments: &Value,
+        now: u64,
+        receipt: &impl Fn(&str, Option<&str>),
+    ) -> Value {
+        let scope = arguments
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or("default");
+        match name {
+            "token_cache_get" => {
+                match self
+                    .store
+                    .cached_token(&grant.agent_id, &grant.app, scope, now)
+                {
+                    Ok(Some(cached)) => {
+                        receipt("granted", Some("cache-hit"));
+                        let body = json!({
+                            "hit": true,
+                            "app": grant.app,
+                            "token": cached.token,
+                            "expires_at": cached.expires_at,
+                            "installation_id": cached.installation_id,
+                            "issuance_id": cached.issuance_id,
+                        });
+                        let mut result = tool_text(body.to_string(), false);
+                        result["structuredContent"] = body;
+                        result
+                    }
+                    Ok(None) => {
+                        receipt("granted", Some("cache-miss"));
+                        let body = json!({ "hit": false });
+                        let mut result = tool_text(body.to_string(), false);
+                        result["structuredContent"] = body;
+                        result
+                    }
+                    Err(error) => {
+                        receipt("failed", Some(&error));
+                        tool_text(error, true)
+                    }
+                }
+            }
+            "token_cache_put" => {
+                let token = arguments
+                    .get("token")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty());
+                let expires_at = arguments.get("expires_at").and_then(Value::as_str);
+                let exp = expires_at.and_then(parse_iso8601_utc);
+                let (Some(token), Some(expires_at), Some(exp)) = (token, expires_at, exp) else {
+                    receipt("failed", Some("malformed token or expires_at"));
+                    return tool_text(
+                        "token and a valid ISO-8601 UTC expires_at are required".into(),
+                        true,
+                    );
+                };
+                let installation_id = arguments.get("installation_id").and_then(Value::as_u64);
+                let issuance_id = arguments
+                    .get("issuance_id")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty() && v.len() <= 128 && !v.chars().any(char::is_control))
+                    .map(str::to_owned);
+                match self.store.put_cached_token(
+                    &grant.agent_id,
+                    &grant.app,
+                    scope,
+                    CachedToken {
+                        token: token.to_owned(),
+                        expires_at: expires_at.to_owned(),
+                        exp,
+                        installation_id,
+                        issuance_id,
+                    },
+                    now,
+                ) {
+                    Ok(stored) => {
+                        receipt(
+                            "granted",
+                            Some(if stored {
+                                "stored"
+                            } else {
+                                "skipped-short-ttl"
+                            }),
+                        );
+                        let body = json!({ "stored": stored });
+                        let mut result = tool_text(body.to_string(), false);
+                        result["structuredContent"] = body;
+                        result
+                    }
+                    Err(error) => {
+                        receipt("failed", Some(&error));
+                        tool_text(error, true)
+                    }
+                }
+            }
+            _ => {
+                let explicit_scope = arguments.get("scope").and_then(Value::as_str);
+                match self.store.evict_cached_tokens(
+                    &grant.agent_id,
+                    &grant.app,
+                    explicit_scope,
+                    now,
+                ) {
+                    Ok(evicted) => {
+                        receipt("granted", Some(if evicted { "evicted" } else { "absent" }));
+                        let body = json!({ "evicted": evicted });
+                        let mut result = tool_text(body.to_string(), false);
+                        result["structuredContent"] = body;
+                        result
+                    }
+                    Err(error) => {
+                        receipt("failed", Some(&error));
+                        tool_text(error, true)
+                    }
+                }
             }
         }
     }
@@ -851,6 +1028,9 @@ impl Keyd {
         self.consent.ask(&format!(
             "delete the {app} GitHub App key for soul {agent} from agent-bot-keyd"
         ))?;
+        let _ = self
+            .store
+            .evict_cached_tokens(&agent, &app, None, (self.now)());
         Ok(json!({ "removed": self.store.remove_credential(&agent, &app)? }))
     }
 
@@ -2768,5 +2948,142 @@ mod tests {
                 &fresh.store.statement_seed().unwrap()
             ))
         );
+    }
+
+    #[test]
+    fn caches_minted_tokens_in_the_store_and_evicts_near_expiry_or_on_demand() {
+        struct CountingHttp {
+            mints: std::sync::atomic::AtomicU32,
+            expires_at: String,
+        }
+        impl Http for CountingHttp {
+            fn request(
+                &self,
+                method: &str,
+                _url: &str,
+                _bearer: &str,
+            ) -> Result<(u16, Value), String> {
+                if method == "GET" {
+                    return Ok((200, json!([{ "id": 7, "account": { "login": "qwts" } }])));
+                }
+                let n = self.mints.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok((
+                    201,
+                    json!({ "token": format!("ghs_cached_{n}"), "expires_at": self.expires_at }),
+                ))
+            }
+        }
+
+        let http = Arc::new(CountingHttp {
+            mints: std::sync::atomic::AtomicU32::new(0),
+            // NOW = 1_800_000_000 is 2027-01-15T08:00:00Z; +1 hour is 09:00:00Z.
+            expires_at: "2027-01-15T09:00:00Z".into(),
+        });
+        struct SharedHttp(Arc<CountingHttp>);
+        impl Http for SharedHttp {
+            fn request(
+                &self,
+                method: &str,
+                url: &str,
+                bearer: &str,
+            ) -> Result<(u16, Value), String> {
+                self.0.request(method, url, bearer)
+            }
+        }
+
+        let mut keyd = keyd(true);
+        keyd.http = Box::new(SharedHttp(Arc::clone(&http)));
+        let (pem, _) = test_key_pem();
+        import(&keyd, &pem);
+
+        let grant1 = sign(&signing_key(), &payload("credential", NOW));
+        let first = call(&keyd, "credential", json!({}), Some(grant1));
+        assert_eq!(first["isError"], false);
+        assert_eq!(first["structuredContent"]["token"], "ghs_cached_1");
+        assert_eq!(http.mints.load(Ordering::SeqCst), 1);
+
+        // Second credential call with a fresh grant hits the Keychain token cache without calling GitHub.
+        let mut p2 = payload("credential", NOW);
+        p2["nonce"] = json!("second-call-nonce-0123456789");
+        let second = call(
+            &keyd,
+            "credential",
+            json!({}),
+            Some(sign(&signing_key(), &p2)),
+        );
+        assert_eq!(second["isError"], false);
+        assert_eq!(second["structuredContent"]["token"], "ghs_cached_1");
+        assert_eq!(second["structuredContent"]["cached"], true);
+        assert_eq!(
+            http.mints.load(Ordering::SeqCst),
+            1,
+            "GitHub was not called a second time"
+        );
+
+        // git_credential also reuses the cached token.
+        let mut p3 = payload("git_credential", NOW);
+        p3["nonce"] = json!("third-call-nonce-0123456789");
+        let git_cred = call(
+            &keyd,
+            "git_credential",
+            json!({ "protocol": "https", "host": "github.com" }),
+            Some(sign(&signing_key(), &p3)),
+        );
+        assert_eq!(
+            git_cred["content"][0]["text"],
+            "username=x-access-token\npassword=ghs_cached_1\n"
+        );
+        assert_eq!(http.mints.load(Ordering::SeqCst), 1);
+
+        // Explicit token_cache_put / token_cache_get / token_cache_evict round-trip.
+        let mut put_p = payload("token_cache_put", NOW);
+        put_p["nonce"] = json!("cache-put-nonce-0123456789");
+        let stored = call(
+            &keyd,
+            "token_cache_put",
+            json!({
+                "scope": "repo_scope_1",
+                "token": "ghs_server_99",
+                "expires_at": "2027-01-15T09:00:00Z",
+                "installation_id": 42,
+                "issuance_id": "iss_99",
+            }),
+            Some(sign(&signing_key(), &put_p)),
+        );
+        assert_eq!(stored["structuredContent"]["stored"], true);
+
+        let mut get_p = payload("token_cache_get", NOW);
+        get_p["nonce"] = json!("cache-get-nonce-0123456789");
+        let fetched = call(
+            &keyd,
+            "token_cache_get",
+            json!({ "scope": "repo_scope_1" }),
+            Some(sign(&signing_key(), &get_p)),
+        );
+        assert_eq!(fetched["structuredContent"]["hit"], true);
+        assert_eq!(fetched["structuredContent"]["token"], "ghs_server_99");
+        assert_eq!(fetched["structuredContent"]["issuance_id"], "iss_99");
+
+        // Evict clears the cached token, so the next credential call mints fresh.
+        let mut evict_p = payload("token_cache_evict", NOW);
+        evict_p["nonce"] = json!("cache-evict-nonce-0123456789");
+        let evicted = call(
+            &keyd,
+            "token_cache_evict",
+            json!({}),
+            Some(sign(&signing_key(), &evict_p)),
+        );
+        assert_eq!(evicted["structuredContent"]["evicted"], true);
+
+        let mut p4 = payload("credential", NOW);
+        p4["nonce"] = json!("fourth-call-nonce-0123456789");
+        let fourth = call(
+            &keyd,
+            "credential",
+            json!({}),
+            Some(sign(&signing_key(), &p4)),
+        );
+        assert_eq!(fourth["structuredContent"]["token"], "ghs_cached_2");
+        assert_eq!(http.mints.load(Ordering::SeqCst), 2);
     }
 }
