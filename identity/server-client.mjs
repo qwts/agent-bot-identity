@@ -187,11 +187,27 @@ export async function refuseAppOwnerMismatch({ appSlug, env = process.env, confi
   }
 }
 
+// True when `slug` is covered by the enrolled `harnesses` scope: either the
+// scope names `slug` directly, or the scope names its harness family (`claude`,
+// `antigravity`, …) without already restricting that family to a different
+// `*-agent` App slug (#1346).
+export function isSlugInServerScope(slug, harnesses = [], config) {
+  if (!slug || !Array.isArray(harnesses) || harnesses.length === 0) return false;
+  if (harnesses.includes(slug)) return true;
+  const rawFamily = harnessForSlug(slug, config);
+  const family = serverHarness(rawFamily);
+  if (!family || (!harnesses.includes(family) && !harnesses.includes(rawFamily))) return false;
+  const hasOtherSlugInFamily = harnesses.some(
+    (entry) => entry !== slug && typeof entry === 'string' && entry.endsWith('-agent') && serverHarness(harnessForSlug(entry, config)) === family,
+  );
+  return !hasOtherSlugInFamily;
+}
+
 // The server's harness name for a resolved App slug — shared by minting and
 // notices so the two never drift: an explicit AGENT_BOT_SERVER_HARNESS
 // override wins; a device whose enrolled scope names the slug itself (the
 // server keys Apps by slug, e.g. qwts-devin-agent) uses it; otherwise
-// GROK_AGENT=1 or the slug's harness family.
+// GROK_AGENT=1 or the slug's harness family when covered by the device scope.
 export function serverHarnessForSlug({ slug, env = process.env, config, scope } = {}) {
   if (env.AGENT_BOT_SERVER_HARNESS) return serverHarness(env.AGENT_BOT_SERVER_HARNESS);
   const hs = scope ?? loadDevice({ env })?.harnesses ?? [];
@@ -199,7 +215,9 @@ export function serverHarnessForSlug({ slug, env = process.env, config, scope } 
   const ambient = ambientHarness(env);
   if (ambient) return ambient;
   if (!slug) return null; // no App slug resolves: never fall back to a default family
-  return harnessForSlug(slug, config);
+  const rawFamily = harnessForSlug(slug, config);
+  if (hs.length > 0 && !isSlugInServerScope(slug, hs, config)) return null;
+  return serverHarness(rawFamily);
 }
 
 // ---- JOSE helpers ----
@@ -403,18 +421,22 @@ export function defaultPlatform(env = process.env) {
 
 // Enroll this machine. Returns the stored device record.
 export async function enroll({
-  base, env = process.env, home, harnesses = [], deviceName = hostname(), platform = defaultPlatform(env),
+  base, env = process.env, home, harnesses = [], addHarnesses = [], replaceHarnesses = false,
+  deviceName = hostname(), platform = defaultPlatform(env),
   tags = [], enrollToken = env.AGENT_BOT_ENROLL_TOKEN, force = false,
   fetchImpl: rawFetch = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onPrompt = () => {},
 } = {}) {
   const fetchImpl = noRedirect(rawFetch);
   const opts = { env, home };
   const prior = loadDevice(opts);
-  if (!force && prior) throw new Error('already enrolled; run `agent-bot server logout` first (or pass --force)');
+  const effectiveForce = force || addHarnesses.length > 0;
+  if (!effectiveForce && prior) throw new Error('already enrolled; run `agent-bot server logout` first (or pass --force)');
+  const priorHarnesses = (!replaceHarnesses && prior?.server === base && Array.isArray(prior?.harnesses)) ? prior.harnesses : [];
+  const effectiveHarnesses = [...new Set([...priorHarnesses, ...harnesses, ...addHarnesses].map(serverHarness).filter(Boolean))];
   // --force stages the new enrollment under <state>/enroll-staging/: the grant
   // runs against a fresh key and device record while the live enrollment, the
   // action ledger and event cursors stay untouched until approval (#1243).
-  const stagedDir = force ? path.join(serverStateDir(opts), 'enroll-staging') : null;
+  const stagedDir = effectiveForce ? path.join(serverStateDir(opts), 'enroll-staging') : null;
   const sopts = stagedDir ? { env: { ...env, AGENT_BOT_SERVER_STATE: stagedDir }, home } : opts;
   let result;
   try {
@@ -432,9 +454,9 @@ export async function enroll({
       if (!res.ok || !result.device_id) throw oauthError('enrollment failed', result);
     } else {
       method = 'device_code';
-      if (harnesses.length === 0) throw new Error('enroll needs at least one --harness');
+      if (effectiveHarnesses.length === 0) throw new Error('enroll needs at least one --harness');
       const aud = `${base}/oauth/device_authorization`;
-      const res = await fetchImpl(aud, form({ ...meta, harnesses: harnesses.join(' '), proof: enrollProof(deviceKey, aud) }));
+      const res = await fetchImpl(aud, form({ ...meta, harnesses: effectiveHarnesses.join(' '), proof: enrollProof(deviceKey, aud) }));
       const auth = await readJson(res);
       if (!res.ok || !auth.user_code) throw oauthError('device authorization failed', auth);
       onPrompt({ ...auth, jkt });
@@ -452,7 +474,7 @@ export async function enroll({
     }
     const record = {
       server: base, device_id: result.device_id, jkt, method, platform, device_name: deviceName,
-      harnesses: result.harnesses ?? harnesses, read_only: Boolean(result.read_only),
+      harnesses: result.harnesses ?? (enrollToken ? harnesses : effectiveHarnesses), read_only: Boolean(result.read_only),
       ephemeral: Boolean(result.ephemeral), expires_at: result.expires_at ?? null,
       management: 'managed', server_key_id: serverKey.kid ?? null, enrolled_at: new Date().toISOString(),
     };
@@ -939,26 +961,29 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
 
 // ---- CLI ----
 
-export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
+export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--replace-harnesses] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
        agent-bot server status [--json]
        agent-bot server logout
        agent-bot server reconcile [--json]
 
 Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
 enroll uses the device grant (approve in the browser), or AGENT_BOT_ENROLL_TOKEN
-when set (cloud VMs). logout deletes this machine's device key and pins; revoke
-the device on <server>/devices as well.
+when set (cloud VMs). Re-enrolling with --force or --add-harness preserves
+existing device harnesses unless --replace-harnesses is passed. logout deletes
+this machine's device key and pins; revoke the device on <server>/devices as well.
 `;
 
 export function parseServerArgs(argv) {
   const [sub, ...rest] = argv;
-  const out = { sub, harnesses: [], tags: [], json: false, force: false };
+  const out = { sub, harnesses: [], addHarnesses: [], replaceHarnesses: false, tags: [], json: false, force: false };
   for (let i = 0; i < rest.length; i += 1) {
     const a = rest[i];
     const val = () => { const v = rest[++i]; if (!v || v.startsWith('--')) throw new Error(`${a} requires a value`); return v; };
     if (a === '--json') out.json = true;
     else if (a === '--force') out.force = true;
+    else if (a === '--replace-harnesses') out.replaceHarnesses = true;
     else if (a === '--harness') out.harnesses.push(serverHarness(val()));
+    else if (a === '--add-harness') { out.addHarnesses.push(serverHarness(val())); out.force = true; }
     else if (a === '--tag') out.tags.push(val());
     else if (a === '--name') out.name = val();
     else if (a === '--platform') out.platform = val();
@@ -996,9 +1021,10 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
       out.write(a.json ? `${JSON.stringify(status)}\n` : formatStatus(status));
       return status.enrolled && status.ok === false ? 1 : 0;
     }
-    const harnesses = a.harnesses.length ? a.harnesses : [ambientHarness(env)].filter(Boolean);
+    const harnesses = (a.harnesses.length || a.addHarnesses.length) ? a.harnesses : [ambientHarness(env)].filter(Boolean);
     const record = await enroll({
-      base, env, harnesses, tags: a.tags, force: a.force, fetchImpl, ...(sleep ? { sleep } : {}),
+      base, env, harnesses, addHarnesses: a.addHarnesses, replaceHarnesses: a.replaceHarnesses,
+      tags: a.tags, force: a.force, fetchImpl, ...(sleep ? { sleep } : {}),
       ...(a.name ? { deviceName: a.name } : {}), ...(a.platform ? { platform: a.platform } : {}),
       // --json also streams the approval prompt as a machine-readable line on
       // stdout so a supervising process (the web approvals flow) can surface

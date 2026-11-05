@@ -440,3 +440,81 @@ test('server-enrolled Apps verify through /api/daemon/harness-apps and cache bot
   assert.equal(inspected[0].live.status, 'server-registered');
   assert.equal(inspected[0].live.code, 'server-registered');
 });
+
+test('server mode without device enrollment or missing slug scope never falls back to pass-cli (#1346)', async () => {
+  const home = tempHome();
+  const stateDir = join(home, 'server-state');
+  mkdirSync(stateDir, { recursive: true });
+  const env = {
+    HOME: home,
+    AGENT_BOT_SERVER: 'https://agents.true-line.ai',
+    AGENT_BOT_SERVER_STATE: stateDir,
+    AGENT_BOT_CONFIG: join(home, 'config.json'),
+  };
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({
+    settings: { agentBotServer: 'https://agents.true-line.ai' },
+  }));
+
+  assert.throws(
+    () => ensurePrivateKey({
+      slug: 'trueline-antigravity-agent',
+      home,
+      env,
+      run: () => assert.fail('pass-cli must not be contacted in server mode'),
+    }),
+    (error) => error.code === 'server-device-not-enrolled' && /agent-bot server enroll --add-harness trueline-antigravity-agent/.test(error.message),
+  );
+
+  const unenrolledInspect = await inspectAppCredentials({
+    slugs: ['trueline-antigravity-agent'],
+    home,
+    env,
+    inspectSession: () => assert.fail('pass-cli session must not be inspected for server enrollment gaps'),
+  });
+  assert.equal(unenrolledInspect[0].local.status, 'failed');
+  assert.equal(unenrolledInspect[0].local.code, 'server-device-not-enrolled');
+  assert.match(unenrolledInspect[0].local.action, /agent-bot server enroll --add-harness trueline-antigravity-agent/);
+
+  writeFileSync(join(stateDir, 'device.json'), JSON.stringify({
+    device_id: 'dev_test',
+    harnesses: ['qwts-antigravity-agent'],
+  }));
+
+  assert.throws(
+    () => ensurePrivateKey({
+      slug: 'trueline-antigravity-agent',
+      home,
+      env,
+      run: () => assert.fail('pass-cli must not be contacted when slug is missing from device scope'),
+    }),
+    (error) => error.code === 'server-harness-not-enrolled' && /agent-bot server enroll --add-harness trueline-antigravity-agent/.test(error.message),
+  );
+
+  await assert.rejects(
+    reconcileAppCredentials({
+      slugs: ['trueline-antigravity-agent'],
+      home,
+      env,
+    }),
+    (error) => error instanceof CredentialReconciliationError
+      && /server-harness-not-enrolled/.test(error.message)
+      && /agent-bot server enroll --add-harness trueline-antigravity-agent/.test(error.message)
+      && !/pass-cli/.test(error.message),
+  );
+
+  // Family-scoped device (e.g. harnesses: ['claude'] with no conflicting *-claude-agent slug)
+  // remains enrolled for qwts-claude-agent (#1346).
+  writeFileSync(join(stateDir, 'device.json'), JSON.stringify({
+    device_id: 'dev_test',
+    harnesses: ['claude', 'qwts-antigravity-agent'],
+  }));
+  const familyPrepared = ensurePrivateKey({
+    slug: 'qwts-claude-agent',
+    home,
+    env,
+    run: () => assert.fail('pass-cli must not be contacted for family-enrolled App'),
+  });
+  assert.equal(familyPrepared.localStatus, 'ready');
+  assert.equal(inspectLocalAppCredential({ slug: 'qwts-claude-agent', home, env }).status, 'ready');
+  assert.equal(inspectLocalAppCredential({ slug: 'trueline-antigravity-agent', home, env }).code, 'server-harness-not-enrolled');
+});

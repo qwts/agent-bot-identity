@@ -16,9 +16,9 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
-import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './identity-format.mjs';
+import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, legacyLocalCustody, managedAppItem } from './identity-format.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { loadDevice, serverUrl } from './server-client.mjs';
+import { isSlugInServerScope, loadDevice, serverUrl } from './server-client.mjs';
 import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 
@@ -30,7 +30,37 @@ export function isServerEnrolledApp(slug, { env = process.env, home = homedir(),
   let device;
   try { device = loadDevice({ env, home }); } catch { return null; }
   const harnesses = Array.isArray(device?.harnesses) ? device.harnesses : [];
-  return harnesses.includes(slug) ? server : null;
+  return isSlugInServerScope(slug, harnesses, cfg) ? server : null;
+}
+
+export function serverEnrollmentGap(slug, { env = process.env, home = homedir(), config } = {}) {
+  try {
+    if (legacyLocalCustody({ env, home }).enabled) return null;
+  } catch { /* ignore custody check errors */ }
+  const cfg = config ?? loadConfig({ env, home });
+  let server;
+  try { server = serverUrl({ env, config: cfg }); } catch { return null; }
+  if (!server) return null;
+  let device;
+  try { device = loadDevice({ env, home }); } catch { return null; }
+  if (!device) {
+    return {
+      code: 'server-device-not-enrolled',
+      server,
+      action: `run: agent-bot server enroll --add-harness ${slug}`,
+      message: `this machine is not enrolled with ${server}; run: agent-bot server enroll --add-harness ${slug}`,
+    };
+  }
+  const harnesses = Array.isArray(device?.harnesses) ? device.harnesses : [];
+  if (!isSlugInServerScope(slug, harnesses, cfg)) {
+    return {
+      code: 'server-harness-not-enrolled',
+      server,
+      action: `run: agent-bot server enroll --add-harness ${slug}`,
+      message: `this device is not enrolled for ${slug} on ${server}; run: agent-bot server enroll --add-harness ${slug}`,
+    };
+  }
+  return null;
 }
 
 export const AGENT_IDENTITIES_VAULT = CREDENTIAL_VAULT;
@@ -427,6 +457,10 @@ export function ensurePrivateKey({
   const server = !force ? isServerEnrolledApp(slug, { env, home, config }) : null;
   if (server) return { path: `server:${server}/${slug}`, idPath,
     downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
+  if (!force && !provider) {
+    const gap = serverEnrollmentGap(slug, { env, home, config });
+    if (gap) throw preparationError(gap.code, slug, gap.message);
+  }
 
   const staging = mkdtempSync(join(home, '.agent-bot-credential-'));
   const directory = join(staging, '.soul-state', 'credentials');

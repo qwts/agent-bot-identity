@@ -634,6 +634,21 @@ test('serverHarnessForSlug: an unresolved slug never falls back to a default fam
     'grok',
     'explicit AGENT_BOT_SERVER_HARNESS still overrides slug scope',
   );
+  assert.equal(
+    serverHarnessForSlug({ slug: 'trueline-antigravity-agent', env: {}, scope: ['qwts-antigravity-agent'], config: {} }),
+    null,
+    'a slug absent from a non-empty device scope never falls back to an un-enrolled harness family (#1346)',
+  );
+  assert.equal(
+    serverHarnessForSlug({ slug: 'trueline-antigravity-agent', env: {}, scope: ['antigravity', 'qwts-antigravity-agent'], config: {} }),
+    null,
+    'a family entry already scoped to another *-agent slug does not cover a different slug in that family (#1346)',
+  );
+  assert.equal(
+    serverHarnessForSlug({ slug: 'qwts-claude-agent', env: {}, scope: ['claude'], config: {} }),
+    'claude',
+    'a pure family-scoped device still resolves its harness family (#1346)',
+  );
 });
 
 test('app-owner mismatch: checks installations when present, allows public Apps across owners, and refuses unshared private Apps', async (t) => {
@@ -770,4 +785,42 @@ test('enroll --force with an approved grant swaps the enrollment and keeps the l
   assert.equal(readFileSync(join(dir, `event-cursors.${prior.device_id}.json`), 'utf8'), '{"x":1}');
   assert.ok(!existsSync(join(dir, 'event-cursors.json')));
   assert.ok(!existsSync(join(dir, 'enroll-staging')));
+});
+
+test('enroll --add-harness and --force preserve existing device harnesses unless --replace-harnesses is passed, and mint() surfaces missing slug scope (#1346)', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_REPO: 'true-line/agent-bot' };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['qwts-antigravity-agent'], fetchImpl: srv.fetch, sleep });
+  assert.deepEqual(loadDevice({ env }).harnesses, ['qwts-antigravity-agent']);
+
+  await assert.rejects(
+    mint({ slug: 'trueline-antigravity-agent', env, fetchImpl: srv.fetch, taskId: 'task.scope', operationId: 'op_unscoped' }),
+    (error) => error.code === 'server-harness-not-enrolled'
+      && /trueline-antigravity-agent/.test(error.message)
+      && /agent-bot server enroll --add-harness trueline-antigravity-agent/.test(error.message),
+  );
+
+  // --add-harness unions with existing harnesses and implies --force.
+  const out = [];
+  const err = [];
+  const io = { env, fetchImpl: srv.fetch, sleep, out: { write: (s) => out.push(s) }, err: { write: (s) => err.push(s) } };
+  assert.equal(await main(['enroll', '--add-harness', 'trueline-antigravity-agent', '--json'], io), 0, err.join(''));
+  assert.deepEqual(loadDevice({ env }).harnesses, ['qwts-antigravity-agent', 'trueline-antigravity-agent']);
+
+  // --force with --harness also preserves existing harnesses unless --replace-harnesses is passed.
+  assert.equal(await main(['enroll', '--force', '--harness', 'qwts-claude-agent', '--json'], io), 0, err.join(''));
+  assert.deepEqual(loadDevice({ env }).harnesses, ['qwts-antigravity-agent', 'trueline-antigravity-agent', 'qwts-claude-agent']);
+
+  // --replace-harnesses replaces the scope explicitly.
+  assert.equal(await main(['enroll', '--force', '--replace-harnesses', '--harness', 'trueline-antigravity-agent', '--json'], io), 0, err.join(''));
+  assert.deepEqual(loadDevice({ env }).harnesses, ['trueline-antigravity-agent']);
+
+  // A prior enrollment for a different server origin never leaks its harnesses.
+  writeFileSync(statePaths({ env }).device, JSON.stringify({
+    ...loadDevice({ env }),
+    server: 'https://other-server.test',
+    harnesses: ['foreign-harness-agent'],
+  }));
+  assert.equal(await main(['enroll', '--force', '--harness', 'qwts-codex-agent', '--json'], io), 0, err.join(''));
+  assert.deepEqual(loadDevice({ env }).harnesses, ['qwts-codex-agent']);
 });

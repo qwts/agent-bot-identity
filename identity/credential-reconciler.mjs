@@ -7,6 +7,7 @@ import {
   inspectProtonPassSession,
   isServerEnrolledApp,
   privateKeyPath,
+  serverEnrollmentGap,
   STORE_UNAVAILABLE_CODES,
   validateIssuer,
   validatePrivateKey,
@@ -54,6 +55,12 @@ function localFailure(error) {
     'credential-transaction-invalid': 'inspect the App credential directory and repair its transaction marker',
     'credential-transaction-pending': 'ask the owner to inspect the interrupted legacy publication; files are retained',
     'credential-transaction-recovery-failed': 'repair App credential file permissions and retry recovery',
+    'server-device-not-enrolled': error?.slug
+      ? `enroll this machine with the identity service: agent-bot server enroll --add-harness ${error.slug}`
+      : 'enroll this machine with the identity service: agent-bot server enroll --add-harness <slug>',
+    'server-harness-not-enrolled': error?.slug
+      ? `add ${error.slug} to this device's server enrollment: agent-bot server enroll --add-harness ${error.slug}`
+      : 'add the App slug to this device\'s server enrollment: agent-bot server enroll --add-harness <slug>',
   };
   const code = error?.code ?? 'credential-restore-failed';
   return {
@@ -183,6 +190,15 @@ export function inspectLocalAppCredential({
     if (isServerEnrolledApp(slug, { env, home, config })) {
       return { status: 'ready', restored: [], evidence: { components: [] } };
     }
+    const gap = serverEnrollmentGap(slug, { env, home, config });
+    if (gap) {
+      return {
+        status: 'failed',
+        code: gap.code,
+        action: gap.action,
+        evidence: { components: [] },
+      };
+    }
     return {
       ...componentFailure(deficiency),
       evidence: { components },
@@ -239,7 +255,9 @@ export async function inspectAppCredentials({
     live: { status: 'skipped', code: 'local-roster-incomplete' },
   }));
   if (results.some((result) => result.local.status === 'failed')) {
-    applyStoreGateToLocalFailures(results, inspectSession());
+    if (results.some((result) => result.local.status === 'failed' && LOCAL_CODES_REPAIRED_BY_STORE.has(result.local.code))) {
+      applyStoreGateToLocalFailures(results, inspectSession());
+    }
     return results;
   }
   if (verify === null) {
