@@ -10,7 +10,7 @@ import {
   ServerSession, agentBotServerSetting, enroll, fetchSoulTokenIssuer, jwkThumbprint, loadDevice, logout, main, mintViaServer, onDeviceRevoked, reconcilePendingCredentials, taskIdFor,
   parseServerArgs, serverHarness, serverUrl, signatureMessage, statePaths, validateServerUrl,
 } from '../identity/server-client.mjs';
-import { parseConfig } from '../config.mjs';
+import { parseConfig, isGateEnabled } from '../config.mjs';
 import { mint } from '../mint-token.mjs';
 import { readAction } from '../identity/action-ledger.mjs';
 
@@ -892,4 +892,59 @@ test('enroll --add-harness and --force preserve existing device harnesses unless
     enroll({ base: BASE, env: { ...env, AGENT_BOT_ENROLL_TOKEN: 'abe_good' }, addHarnesses: ['trueline-antigravity-agent'], fetchImpl: srv.fetch, sleep }),
     /--add-harness and --replace-harnesses cannot be used with AGENT_BOT_ENROLL_TOKEN/,
   );
+});
+
+test('server enroll --features and AGENT_BOT_ENABLE_FEATURES persist github-identity to config.json and install gh shim headlessly (#1350)', async () => {
+  assert.deepEqual(
+    parseServerArgs(['enroll', '--features', 'github-identity,persona-accounts']).features,
+    ['github-identity', 'persona-accounts'],
+  );
+  assert.deepEqual(
+    parseServerArgs(['enroll', '--features=github-identity']).features,
+    ['github-identity'],
+  );
+  assert.throws(() => parseServerArgs(['enroll', '--features']), /--features requires a value/);
+  assert.throws(() => parseServerArgs(['enroll', '--features=']), /--features requires a value/);
+  assert.throws(() => parseServerArgs(['enroll', '--features', 'unknown-gate']), /unknown feature gate: unknown-gate/);
+
+  // Feature config and shim install run before enrollment side effects, so a failure leaves the device unenrolled.
+  const failEnv = {
+    ...sandbox(),
+    AGENT_BOT_SERVER: BASE,
+    AGENT_BOT_ENROLL_TOKEN: 'abe_good',
+  };
+  const failSrv = fakeServer();
+  await assert.rejects(
+    enroll({
+      base: BASE,
+      env: failEnv,
+      features: ['github-identity'],
+      fetchImpl: failSrv.fetch,
+      sleep,
+      installShim: () => { throw new Error('simulated shim failure'); },
+    }),
+    /simulated shim failure/,
+  );
+  assert.equal(loadDevice({ env: failEnv }), null);
+  assert.equal(failSrv.calls.length, 0);
+
+  const env = {
+    ...sandbox(),
+    AGENT_BOT_SERVER: BASE,
+    AGENT_BOT_ENROLL_TOKEN: 'abe_good',
+    AGENT_BOT_ENABLE_FEATURES: 'github-identity',
+  };
+  const srv = fakeServer();
+  const out = [];
+  const err = [];
+  const rc = await main(['enroll', '--json'], {
+    env,
+    fetchImpl: srv.fetch,
+    sleep,
+    out: { write: (s) => out.push(s) },
+    err: { write: (s) => err.push(s) },
+  });
+  assert.equal(rc, 0, err.join(''));
+  assert.equal(isGateEnabled('github-identity', { home: env.HOME, env }), true);
+  assert.equal(existsSync(join(env.HOME, '.config', 'agent-bot', 'bin', 'gh')), true);
 });

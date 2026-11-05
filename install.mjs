@@ -25,10 +25,12 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
+import { enabledFeaturesFromEnv, parseFeatureList, writeEnabledFeaturesToConfig } from './config.mjs';
 import { GIT_HOOK_NAMES } from './identity-format.mjs';
 import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
 import { ensureClaudeWorktreeAdapter, syncHooks } from './sync-hooks.mjs';
+import { installGhShim } from './identity-cli.mjs';
 import { personaBlockNotice } from './sandbox.mjs';
 import { installWindowsLauncher, readWindowsLauncher } from './windows-cli-launcher.mjs';
 
@@ -415,9 +417,31 @@ export function isAgentBotHooksPath(path, home = homedir()) {
   );
 }
 
+export function parseInstallArgs(argv = process.argv.slice(2)) {
+  const options = { withGhShim: false, features: [] };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--with-gh-shim') {
+      options.withGhShim = true;
+    } else if (arg === '--features') {
+      const val = argv[++i];
+      if (!val || val.startsWith('--')) throw new Error('--features requires a value');
+      options.features = parseFeatureList([...options.features, ...parseFeatureList(val)]);
+    } else if (arg.startsWith('--features=')) {
+      const val = arg.slice('--features='.length);
+      if (!val) throw new Error('--features requires a value');
+      options.features = parseFeatureList([...options.features, ...parseFeatureList(val)]);
+    } else {
+      throw new Error(`unknown option: ${arg}`);
+    }
+  }
+  return options;
+}
+
 export async function installAgentBot({
   home = homedir(),
   env = process.env,
+  features = [],
   run = (args) => execFileSync('git', args, { encoding: 'utf8' }).trim(),
   installCli = installExecutable,
   installAgentHooks = installAgentHook,
@@ -427,8 +451,13 @@ export async function installAgentBot({
   ensureCutover = ensureSpacesCutover,
   installTranscriptAdapter = ensureClaudeWorktreeAdapter,
   installUserHooks = syncHooks,
+  installShim = installGhShim,
   embeddingApp = embeddingAppBundle(ROOT),
 } = {}) {
+  const requestedFeatures = parseFeatureList([...enabledFeaturesFromEnv(env), ...parseFeatureList(features)]);
+  const featureConfig = requestedFeatures.length > 0
+    ? writeEnabledFeaturesToConfig({ features: requestedFeatures, home, env })
+    : null;
   const executable = installCli({ home, embeddingApp });
   const agentHook = installAgentHooks({ home });
   const pathRegistration = installPath({ home });
@@ -463,15 +492,33 @@ export async function installAgentBot({
   const cutover = ensureCutover({ home, env });
   const transcriptAdapter = installTranscriptAdapter({ home, env });
   const userHooks = installUserHooks({ home, env });
-  return { executable, agentHook, hooksPath, previous, chainedHooksPath, pathRegistration, supervisor, cutover, transcriptAdapter, userHooks };
+  const ghShim = requestedFeatures.includes('github-identity') && typeof installShim === 'function'
+    ? installShim({ home, env })
+    : null;
+  return {
+    executable,
+    agentHook,
+    hooksPath,
+    previous,
+    chainedHooksPath,
+    pathRegistration,
+    supervisor,
+    cutover,
+    transcriptAdapter,
+    userHooks,
+    ...(featureConfig ? { featureConfig } : {}),
+    ...(ghShim ? { ghShim } : {}),
+  };
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const unknown = argv.filter((arg) => arg !== '--with-gh-shim');
-  if (unknown.length) throw new Error(`unknown option: ${unknown[0]}`);
-  const result = await installAgentBot();
+  const options = parseInstallArgs(argv);
+  const result = await installAgentBot({ features: options.features });
   process.stdout.write(`agent-bot -> ${result.executable}\n`);
   process.stdout.write(`core.hooksPath -> ${result.hooksPath}\n`);
+  if (result.featureConfig?.enabled?.length) {
+    process.stdout.write(`features enabled -> ${result.featureConfig.enabled.join(', ')}\n`);
+  }
   if (result.pathRegistration.updated) {
     process.stdout.write(`PATH line appended to ${result.pathRegistration.path}\n`);
   }
@@ -493,7 +540,7 @@ export async function main(argv = process.argv.slice(2)) {
       `spaces cutover -> ${result.cutover.from} -> ${result.cutover.to} (${result.cutover.moved} spaces)\n`,
     );
   }
-  if (argv.includes('--with-gh-shim')) {
+  if (options.withGhShim && !result.ghShim) {
     execFileSync(result.executable, ['install-gh-shim'], { stdio: 'inherit' });
   }
   // An upgrade can be the first release that refuses on an unrecorded SOP

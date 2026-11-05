@@ -9,8 +9,9 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   agentHookFastPath, ensureExecutableMode, ensureExecutablePath, homebrewRuntimeRoot, homebrewStableEntrypoint,
   installAgentBot, installAgentHook, installExecutable, installHookWrappers, installationPaths,
-  isHomebrewAgentBotPath, isHostAppCliTool, isManagedExecutable,
+  isHomebrewAgentBotPath, isHostAppCliTool, isManagedExecutable, parseInstallArgs,
 } from '../install.mjs';
+import { isGateEnabled } from '../config.mjs';
 import { installGhShim } from '../install-gh-shim.mjs';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
 import { DIALECTS } from '../hook-dialects.mjs';
@@ -878,4 +879,42 @@ test('install runs the spaces cutover through the injected helper', async () => 
   });
   assert.deepEqual(result.cutover, { applied: true, from: '/legacy', to: '/dest', moved: 2 });
   assert.deepEqual(calls, [{ home, envHome: home }]);
+});
+
+test('install --features and AGENT_BOT_ENABLE_FEATURES enable github-identity and install gh shim headlessly (#1350)', async () => {
+  assert.deepEqual(parseInstallArgs(['--features', 'github-identity,persona-accounts']), {
+    features: ['github-identity', 'persona-accounts'],
+    withGhShim: false,
+  });
+  assert.deepEqual(parseInstallArgs(['--features=github-identity', '--with-gh-shim']), {
+    features: ['github-identity'],
+    withGhShim: true,
+  });
+  assert.throws(() => parseInstallArgs(['--features']), /--features requires a value/);
+  assert.throws(() => parseInstallArgs(['--features=']), /--features requires a value/);
+  assert.throws(() => parseInstallArgs(['--features', 'unknown-gate']), /unknown feature gate: unknown-gate/);
+  assert.throws(() => parseInstallArgs(['--unknown']), /unknown option/);
+
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-features-install-'));
+  let shimCalls = 0;
+  const result = await installAgentBot({
+    home,
+    env: { HOME: home, AGENT_BOT_ENABLE_FEATURES: 'github-identity' },
+    run: (args) => {
+      if (args.includes('--get')) throw Object.assign(new Error('unset'), { status: 1 });
+      return '';
+    },
+    installCli: () => installationPaths(home).executable,
+    installHooks: () => installationPaths(home).hooksDir,
+    ensureSupervisor: async () => ({ applied: false }),
+    ensureCutover: () => ({ applied: false }),
+    installShim: ({ home: shimHome }) => {
+      shimCalls += 1;
+      assert.equal(shimHome, home);
+      return { shimPath: join(home, '.config', 'agent-bot', 'bin', 'gh') };
+    },
+  });
+  assert.equal(shimCalls, 1);
+  assert.equal(isGateEnabled('github-identity', { home, env: {} }), true);
+  assert.equal(result.ghShim?.shimPath, join(home, '.config', 'agent-bot', 'bin', 'gh'));
 });

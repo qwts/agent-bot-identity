@@ -85,6 +85,7 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
     {
       apps: ['two-agent', 'one-agent'],
       configPath: '/tmp/config.json',
+      features: [],
       profilePath: null,
       help: false,
       json: false,
@@ -94,6 +95,30 @@ test('bootstrap CLI parses explicit phases and rejects ignored machine options',
       scopeApps: [],
       withGhShim: true,
     },
+  );
+  assert.deepEqual(
+    parseBootstrapArgs(['--features', 'github-identity,persona-accounts']).features,
+    ['github-identity', 'persona-accounts'],
+  );
+  assert.deepEqual(
+    parseBootstrapArgs(['--features=github-identity']).features,
+    ['github-identity'],
+  );
+  assert.throws(
+    () => parseBootstrapArgs(['--features']),
+    /--features requires a value/,
+  );
+  assert.throws(
+    () => parseBootstrapArgs(['--features=']),
+    /--features requires a value/,
+  );
+  assert.throws(
+    () => parseBootstrapArgs(['--features', 'unknown-gate']),
+    /unknown feature gate: unknown-gate/,
+  );
+  assert.throws(
+    () => parseBootstrapArgs(['--worktree-only', '--features', 'github-identity']),
+    /does not accept machine setup options/,
   );
   assert.equal(parseBootstrapArgs(['--json', '--require-schema-version', '1']).json, true);
   assert.equal(
@@ -1265,4 +1290,77 @@ test('differing config keys are names only, with odd names folded (#980)', () =>
   assert.deepEqual(differingConfigKeys({ a: 1, b: { x: 1 }, c: 1 }, { a: 1, b: { x: 2 }, d: 1 }), ['b', 'c', 'd']);
   assert.deepEqual(differingConfigKeys({ 'ghs_secret value': 1, '../x': 2 }, {}), ['(other)']);
   assert.deepEqual(differingConfigKeys({ a: 1 }, { a: 1 }), []);
+});
+
+test('bootstrap --features and AGENT_BOT_ENABLE_FEATURES persist feature gates to config.json and install gh shim headlessly (#1350)', async () => {
+  const home = tempHome();
+  let shimCalls = 0;
+  let runtimeCalls = 0;
+  const report = await bootstrap(parseBootstrapArgs(['--features', 'github-identity', '--machine-only']), {
+    home,
+    env: { HOME: home },
+    installRuntime: () => {
+      runtimeCalls += 1;
+      return { executable: join(home, '.local', 'bin', 'agent-bot') };
+    },
+    installShim: () => { shimCalls += 1; },
+    collect: ({ scope }) => readyReport(scope),
+  });
+  assert.equal(report.ready, true);
+  assert.equal(runtimeCalls, 1);
+  assert.equal(shimCalls, 1);
+  assert.equal(loadConfig({ home, env: {} }).features?.['github-identity'], true);
+
+  // AGENT_BOT_ENABLE_FEATURES works without --features and merges into --profile installation.
+  const profileHome = tempHome();
+  let envShimCalls = 0;
+  await bootstrap(parseBootstrapArgs(['--profile', '-', '--machine-only']), {
+    home: profileHome,
+    env: { HOME: profileHome, AGENT_BOT_ENABLE_FEATURES: 'github-identity' },
+    installProfile: (options) => installBootstrapProfile({
+      ...options,
+      read: () => JSON.stringify(organizationProfile()),
+    }),
+    installRuntime: () => ({ executable: join(profileHome, '.local', 'bin', 'agent-bot') }),
+    reconcileCredentials: async ({ slugs }) => slugs.map((slug) => ({
+      slug,
+      local: { status: 'ready' },
+      live: { status: 'ready' },
+    })),
+    installShim: () => { envShimCalls += 1; },
+    collect: ({ scope }) => readyReport(scope),
+  });
+  assert.equal(envShimCalls, 1);
+  const loaded = loadConfig({ home: profileHome, env: {} });
+  assert.equal(loaded.features?.['github-identity'], true);
+  assert.equal(loaded.apps?.codex, 'example-codex-agent');
+
+  // When AGENT_BOT_CONFIG points to a custom file, --features writes to that file.
+  const customHome = tempHome();
+  const customConfig = join(customHome, 'custom-config.json');
+  writeFileSync(customConfig, JSON.stringify({ owner: 'custom-owner' }));
+  await bootstrap(parseBootstrapArgs(['--features', 'github-identity', '--machine-only']), {
+    home: customHome,
+    env: { HOME: customHome, AGENT_BOT_CONFIG: customConfig },
+    installRuntime: () => ({ executable: join(customHome, '.local', 'bin', 'agent-bot') }),
+    installShim: () => {},
+    collect: ({ scope }) => readyReport(scope),
+  });
+  assert.deepEqual(loadConfig({ home: customHome, env: { AGENT_BOT_CONFIG: customConfig } }), {
+    owner: 'custom-owner',
+    features: { 'github-identity': true },
+  });
+  assert.equal(existsSync(bootstrapConfigPath(customHome)), false);
+
+  // --worktree-only ignores AGENT_BOT_ENABLE_FEATURES and performs zero machine config or shim mutations.
+  const wtHome = tempHome();
+  await bootstrap(parseBootstrapArgs(['--worktree-only']), {
+    home: wtHome,
+    env: { HOME: wtHome, AGENT_BOT_ENABLE_FEATURES: 'github-identity' },
+    verifyInstalled: () => {},
+    run: () => {},
+    installShim: () => assert.fail('worktree-only must not install shim'),
+    collect: ({ scope }) => readyReport(scope),
+  });
+  assert.equal(existsSync(bootstrapConfigPath(wtHome)), false);
 });

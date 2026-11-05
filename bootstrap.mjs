@@ -14,7 +14,15 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { isGateEnabled, loadConfig, scopeConfigToApps } from './config.mjs';
+import {
+  applyEnabledFeatures,
+  enabledFeaturesFromEnv,
+  isGateEnabled,
+  loadConfig,
+  parseFeatureList,
+  scopeConfigToApps,
+  writeEnabledFeaturesToConfig,
+} from './config.mjs';
 import { installGhShim, reconcileAppCredentials } from './identity-cli.mjs';
 import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
@@ -54,9 +62,12 @@ Options:
                     Scope this account's roster to the App (repeatable; with --profile or --repair)
   --repair          Restore a deleted runtime config from the selected organization
                     (~/.config/agent-sop/config.toml), then repair machine state
+  --features <list> Enable comma-separated add-on feature gates (e.g. github-identity;
+                    also reads AGENT_BOT_ENABLE_FEATURES; ignored with --worktree-only)
   --with-gh-shim    Install the managed fail-closed gh shim
   --machine-only    Install and verify machine state; do not bind this worktree
   --worktree-only   Bind and verify this linked worktree; do not mutate machine setup
+                    (ignores AGENT_BOT_ENABLE_FEATURES)
   --json            Emit readiness schema JSON only
   --require-schema-version <n>
                     Require at least readiness schema version n
@@ -102,6 +113,7 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
   const options = {
     apps: [],
     configPath: null,
+    features: [],
     profilePath: null,
     help: false,
     json: false,
@@ -119,6 +131,7 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
       || arg === '--config'
       || arg === '--app'
       || arg === '--scope-app'
+      || arg === '--features'
       || arg === '--require-schema-version'
     ) {
       const value = argv[index + 1];
@@ -133,6 +146,8 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
         options.apps.push(value);
       } else if (arg === '--scope-app') {
         options.scopeApps.push(value);
+      } else if (arg === '--features') {
+        options.features = parseFeatureList([...options.features, ...parseFeatureList(value)]);
       } else {
         if (options.requireSchemaVersion !== null) {
           throw new Error('--require-schema-version may be passed only once');
@@ -140,6 +155,10 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
         options.requireSchemaVersion = Number(value);
       }
       index += 1;
+    } else if (arg.startsWith('--features=')) {
+      const value = arg.slice('--features='.length);
+      if (!value) throw new Error('--features requires a value');
+      options.features = parseFeatureList([...options.features, ...parseFeatureList(value)]);
     } else if (arg === '--with-gh-shim') {
       options.withGhShim = true;
     } else if (arg === '--json') {
@@ -173,7 +192,7 @@ export function parseBootstrapArgs(argv = process.argv.slice(2)) {
   if (options.repair) options.phase = 'machine';
   if (
     options.phase === 'worktree'
-    && (options.profilePath || options.configPath || options.apps.length > 0 || options.withGhShim)
+    && (options.profilePath || options.configPath || options.apps.length > 0 || options.features.length > 0 || options.withGhShim)
   ) {
     throw new Error('--worktree-only does not accept machine setup options');
   }
@@ -317,16 +336,29 @@ function publishBootstrapConfig({
 
 export function installBootstrapConfig({
   sourcePath,
+  features = [],
   home = homedir(),
   env = process.env,
   ...dependencies
 } = {}) {
-  const destination = bootstrapConfigPath(home);
+  const destination = env.AGENT_BOT_CONFIG ?? bootstrapConfigPath(home);
+  const requestedFeatures = parseFeatureList([...enabledFeaturesFromEnv(env), ...parseFeatureList(features)]);
   if (!sourcePath) {
+    if (requestedFeatures.length > 0) {
+      return writeEnabledFeaturesToConfig({
+        features: requestedFeatures,
+        home,
+        env,
+        ...dependencies,
+      });
+    }
     return { config: loadConfig({ home, env }), path: destination, updated: false };
   }
   const source = resolve(sourcePath);
-  const config = loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: source } });
+  const config = applyEnabledFeatures(
+    loadConfig({ home, env: { ...env, AGENT_BOT_CONFIG: source } }),
+    requestedFeatures,
+  );
   return publishBootstrapConfig({
     config,
     sourceDescription: source,
@@ -339,6 +371,7 @@ export function installBootstrapConfig({
 export function installBootstrapProfile({
   sourcePath,
   scopeApps = [],
+  features = [],
   home = homedir(),
   env = process.env,
   read,
@@ -346,7 +379,11 @@ export function installBootstrapProfile({
   ...dependencies
 } = {}) {
   const profile = readOrganizationProfile({ sourcePath, read, stdin });
-  const config = scopeConfigToApps(organizationProfileToConfig(profile), scopeApps);
+  const requestedFeatures = parseFeatureList([...enabledFeaturesFromEnv(env), ...parseFeatureList(features)]);
+  const config = applyEnabledFeatures(
+    scopeConfigToApps(organizationProfileToConfig(profile), scopeApps),
+    requestedFeatures,
+  );
   const result = publishBootstrapConfig({
     config,
     sourceDescription: 'organization profile',
@@ -368,6 +405,7 @@ export function installBootstrapProfile({
 // or an account that resolves no active App is a named refusal.
 export function repairBootstrapProfile({
   scopeApps = [],
+  features = [],
   home = homedir(),
   env = process.env,
   readSelected = readSelectedOrganizationProfile,
@@ -378,7 +416,7 @@ export function repairBootstrapProfile({
   // The same file loadConfig reads, so a surviving config is never shadowed.
   const destination = env.AGENT_BOT_CONFIG ?? bootstrapConfigPath(home);
   if (optionalLstat(destination, lstat)) {
-    return { ...installConfig({ home, env }), repair: { source: 'installed' } };
+    return { ...installConfig({ features, home, env }), repair: { source: 'installed' } };
   }
   // A profile is only ever published to the default path, so restoring it
   // while AGENT_BOT_CONFIG names a missing file would leave the runtime
@@ -414,6 +452,7 @@ export function repairBootstrapProfile({
     sourcePath: `${selected.repository}@${selected.commit}:${selected.path}`,
     read: () => selected.text,
     scopeApps: scope,
+    features,
     home,
     env,
   });
@@ -566,6 +605,7 @@ export async function bootstrap(options, {
   let operationFailure = null;
   let reachedCredentialPhase = false;
   let githubIdentityEnabled = false;
+  let requestedFeatures = [];
   let repaired = null;
 
   const fail = (failureScope, id, code, message, action, evidence = {}) => {
@@ -577,12 +617,13 @@ export async function bootstrap(options, {
 
   if (options.phase !== 'worktree') {
     try {
+      requestedFeatures = parseFeatureList([...enabledFeaturesFromEnv(env), ...(options.features ?? [])]);
       const configResult = options.profilePath
-        ? installProfile({ sourcePath: options.profilePath, scopeApps: options.scopeApps, home, env })
+        ? installProfile({ sourcePath: options.profilePath, scopeApps: options.scopeApps, features: requestedFeatures, home, env })
         : options.repair
-          ? repairProfile({ scopeApps: options.scopeApps, home, env, installConfig, installProfile })
-          : installConfig({ sourcePath: options.configPath, home, env });
-      config = configResult.config;
+          ? repairProfile({ scopeApps: options.scopeApps, features: requestedFeatures, home, env, installConfig, installProfile })
+          : installConfig({ sourcePath: options.configPath, features: requestedFeatures, home, env });
+      config = applyEnabledFeatures(configResult.config, requestedFeatures);
       if (configResult.repair) repaired = repairCheck(configResult.repair, configResult.updated);
     } catch (error) {
       if (options.profilePath || options.repair) {
@@ -706,7 +747,8 @@ export async function bootstrap(options, {
 
     const credentialsFailed = credentialResults?.some((result) =>
       result.local.status === 'failed' || result.live.status === 'failed');
-    if (!operationFailure && !credentialsFailed && githubIdentityEnabled && options.withGhShim) {
+    const shouldInstallGhShim = options.withGhShim || requestedFeatures.includes('github-identity');
+    if (!operationFailure && !credentialsFailed && githubIdentityEnabled && shouldInstallGhShim) {
       try {
         installShim({ home, env });
       } catch {
@@ -756,7 +798,7 @@ export async function bootstrap(options, {
       explicitApps: options.apps,
       home,
       env,
-      expectedGhShim: githubIdentityEnabled && options.withGhShim,
+      expectedGhShim: githubIdentityEnabled && (options.withGhShim || requestedFeatures.includes('github-identity')),
       appResults: credentialResults,
       operationFailure,
       verifyApps: options.phase === 'worktree'
