@@ -16,16 +16,13 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
-import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, legacyLocalCustody, managedAppItem } from './identity-format.mjs';
+import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './identity-format.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
 import { isSlugInServerScope, loadDevice, serverUrl } from './server-client.mjs';
 import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 
 export function isServerEnrolledApp(slug, { env = process.env, home = homedir(), config } = {}) {
-  try {
-    if (legacyLocalCustody({ env, home }).enabled) return null;
-  } catch { /* ignore custody check errors */ }
   const cfg = config ?? loadConfig({ env, home });
   let server;
   try { server = serverUrl({ env, config: cfg }); } catch { return null; }
@@ -38,9 +35,6 @@ export function isServerEnrolledApp(slug, { env = process.env, home = homedir(),
 }
 
 export function serverEnrollmentGap(slug, { env = process.env, home = homedir(), config } = {}) {
-  try {
-    if (legacyLocalCustody({ env, home }).enabled) return null;
-  } catch { /* ignore custody check errors */ }
   const cfg = config ?? loadConfig({ env, home });
   let server;
   try { server = serverUrl({ env, config: cfg }); } catch { return null; }
@@ -430,8 +424,9 @@ export function ensurePrivateKey({
   recoverCredentialTransaction({ slug, directory: dirname(legacyPath), exists });
   // In server mode (#1316, #1346), check device enrollment and App scope before
   // touching local managed/soul credential stores so server-enrolled souls
-  // (including souls declaring store: "pass-cli") never trigger pass-cli or
-  // owner-only local credential reads unless legacy local custody is enabled.
+  // (including souls declaring store: "pass-cli" or hosts retaining an old
+  // settings.legacyLocalCustody flag alongside agentBotServer) never trigger
+  // pass-cli or owner-only local credential reads.
   const server = isServerEnrolledApp(slug, { env, home, config });
   if (server) return { path: `server:${server}/${slug}`, idPath,
     downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };

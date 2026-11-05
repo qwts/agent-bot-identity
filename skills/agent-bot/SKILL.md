@@ -243,8 +243,8 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 
 | Class | Commands | Retry |
 |---|---|---|
-| read-only | `--help`, `doctor`, `sop`, `skill`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get`, `owner verify`, `owner keys` | Safe to repeat. |
-| local-write | `bootstrap`, `setup-worktree`, `install`, `install-gh-shim`, `daemon install`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
+| read-only | `--help`, `doctor`, `sop`, `workflow`, `workflow list`, `workflow show`, `skill`, `skill path`, `population list`, `space path`, `signed-commit --dry-run`, `secret get`, `owner verify`, `owner keys` | Safe to repeat. |
+| local-write | `bootstrap`, `setup-worktree`, `workflow sync`, `install`, `install-gh-shim`, `daemon install`, `daemon disable`, `ensure-private-key`, `space ensure` | Converge on rerun; confirm with `doctor`. |
 | read-only | `soul show`, `soul profile`, `soul env`, `soul runtimes`, `soul secret ID status`, `soul locate`, `soul templates`, `soul asides`, `soul cold-wake ID show`, `soul model ID show`, `soul mode ID show`, `soul computer-use ID show`, `soul comms ID show`, `soul confinement-report`, `soul pack validate`, `soul build --check`, `approvals list`, `telegram status` | Safe to repeat. |
 | read-only | `soul skill list`, `soul skill show`, `soul skill verify`, `soul skill learn` without an outcome, `soul skill dream --status` / `--history` | Inspect existing library, guidance or daemon state; no adoption or scheduling. |
 | local-write | `soul skill import`, `soul skill check`, `soul skill update`, `soul skill learn` with an outcome, `soul skill install`, `soul skill uninstall`, dream control actions | Imports/checks can read remote sources. Updates and learning require reviewed inputs; install/uninstall are owner edits or soul proposals, `--trash` owner only; dream controls are owner-gated. Inspect UUIDs, candidates, proposals and run status before retrying. |

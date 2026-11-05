@@ -1,0 +1,28 @@
+schema_version = 1
+name = "release"
+summary = "Assemble changelog, bump version, tag merged release commit, and update Homebrew formula"
+sop = [
+  "docs/sop/release-and-versioning.md",
+  "docs/sop/branch-pr-review.md"
+]
+
+[[steps]]
+id = "assemble-release"
+mode = "local-write"
+description = "Assemble changes/ fragments into CHANGELOG.md, bump package.json and skill qwts-validated version"
+
+[[steps]]
+id = "publish-release-pr"
+mode = "remote-write"
+description = "Run full test suite, sign commit, open release PR, and merge after CI and review pass"
+gate = "require-green-ci"
+
+[[steps]]
+id = "tag-release"
+mode = "remote-write"
+description = "Tag the exact merged release commit on main (vX.Y.Z) and push the tag to origin"
+
+[[steps]]
+id = "update-formula"
+mode = "remote-write"
+description = "Compute tarball sha256 for vX.Y.Z, update Formula/agent-bot.rb in a skip-changelog PR, and merge"
