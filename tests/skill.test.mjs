@@ -257,3 +257,19 @@ test('skill and docs document the recommended soul operating model (#1128) and G
   assert.match(main, /qwts\/qwts-agent-org/u);
 });
 
+test('README and skill surface the headless / CI enrollment and startup quickstart (#1352)', () => {
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const main = readFileSync(join(SKILL, 'SKILL.md'), 'utf8');
+  const operations = readFileSync(join(SKILL, 'references', 'operations.md'), 'utf8');
+  for (const text of [readme, main, operations]) {
+    assert.match(text, /AGENT_BOT_ENROLL_TOKEN/u);
+    assert.match(text, /AGENT_BOT_ENABLE_FEATURES=github-identity/u);
+    assert.match(text, /agent-bot server enroll/u);
+  }
+  for (const text of [readme, main]) {
+    assert.match(text, /Headless \/ CI enrollment & startup quickstart/u);
+    assert.match(text, /agent-bot daemon start --daemonize/u);
+    assert.match(text, /agent-comms broker run --single-account/u);
+  }
+});
+

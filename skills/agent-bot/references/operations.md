@@ -20,6 +20,8 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Supervise an embedded host's own runtime (re-run after update or move) | `AGENT_BOT_SERVICE_LABEL=<label> agent-bot daemon install [--json]` |
 | Install only the fail-closed `gh` shim | `agent-bot install-gh-shim` |
 | Authenticate GitHub in server mode (the default) | Run `agent-bot start [--branch <branch>]`, `cd` into the bound worktree, and use plain `git`/`gh` directly (do **not** run `agent-bot mint-token` in a soul-bound checkout) |
+| Enroll a headless VM or CI runner with the identity server (no browser; server token fixes harnesses and lifetime) | `AGENT_BOT_SERVER=https://agents.true-line.ai AGENT_BOT_ENROLL_TOKEN=<token> agent-bot server enroll --harness <slug>` |
+| Enable the `github-identity` add-on headlessly during bootstrap or install | `AGENT_BOT_ENABLE_FEATURES=github-identity agent-bot bootstrap --profile <path> --with-gh-shim --machine-only` (or `--features github-identity`) |
 | Restore an App key and issuer from pass-cli (legacy local custody only) | `agent-bot ensure-private-key --app <slug> [--force]` |
 | Read an authorized password/API key | `agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>` |
 
