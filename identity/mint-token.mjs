@@ -331,10 +331,25 @@ async function mintThroughServer({ server, slug, env, config, permissions, selec
   // way (e.g. trueline-grokbot-agent): when this device's scope names the
   // resolved slug itself, ask for it rather than its harness family.
   const { loadDevice } = await import('./server-client.mjs');
-  const scope = loadDevice({ env })?.harnesses ?? [];
+  const device = loadDevice({ env });
+  const scope = Array.isArray(device?.harnesses) ? device.harnesses : [];
   const harness = serverHarnessForSlug({ slug: resolvedSlug, env, config, scope });
   if (selected) selected({ appSlug: resolvedSlug, reason: 'agent-bot-server' });
-  return mintViaServer({ base: server, harness, repo: repo === undefined ? repoFromCheckout(process.cwd(), env) : repo, env, taskId, operationId, fetchImpl, sessionId });
+  if (!harness && resolvedSlug && device) {
+    throw Object.assign(
+      new Error(`this device is not enrolled for ${resolvedSlug} (enrolled: ${scope.join(', ') || 'none'}); run \`agent-bot server enroll --add-harness ${resolvedSlug}\``),
+      { code: 'server-harness-not-enrolled' },
+    );
+  }
+  try {
+    return await mintViaServer({ base: server, harness, repo: repo === undefined ? repoFromCheckout(process.cwd(), env) : repo, env, taskId, operationId, fetchImpl, sessionId });
+  } catch (error) {
+    if (resolvedSlug && resolvedSlug !== harness && !scope.includes(resolvedSlug)
+        && (error?.status === 403 || /not scoped to harness|no app for harness/i.test(error?.message ?? ''))) {
+      error.message += ` (resolved App "${resolvedSlug}" is not in this device's enrolled harnesses; run \`agent-bot server enroll --add-harness ${resolvedSlug}\`)`;
+    }
+    throw error;
+  }
 }
 
 // The command line lives in cli/mint-token.mjs, with its output format in

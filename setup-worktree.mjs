@@ -4,7 +4,7 @@
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { pinnedSlug, readAppMetadata, readBinding, reconcileAppCredentials, resolveAgentSlug, writeAppMetadata } from './identity-soul.mjs';
@@ -75,16 +75,24 @@ function sessionIdentity(options = {}) {
   }
   // #1288: when run directly (not from a git hook) inside an installed soul's
   // own <soulDir>/worktrees/<repo> and AGENT_BOT_ID was not explicitly cleared,
-  // resolve the owning soul from its .agent-soul.json marker.
+  // resolve the owning soul from its .soul-state/agent-id marker.
   if (!identity && !options.hook && process.env.AGENT_BOT_ID === undefined && process.env.QWTS_AGENT_ID === undefined) {
     try {
-      const located = locateSoulDir(process.cwd());
-      if (located?.status === 'installed' && located.agentId && located.path) {
-        const worktreesDir = realpathSync(join(located.path, 'worktrees'));
-        const here = realpathSync(process.cwd());
-        if (here.startsWith(`${worktreesDir}/`)) {
-          identity = identityOp('read', { id: located.agentId });
+      const here = realpathSync(process.cwd());
+      for (let cur = here; ; ) {
+        const parent = dirname(cur);
+        if (parent === cur) break;
+        if (basename(cur) === 'worktrees') {
+          const located = locateSoulDir(parent);
+          if (located?.status === 'installed' && located.agentId && located.path) {
+            const worktreesDir = realpathSync(join(located.path, 'worktrees'));
+            if (here.startsWith(`${worktreesDir}/`)) {
+              identity = identityOp('read', { id: located.agentId });
+              break;
+            }
+          }
         }
+        cur = parent;
       }
     } catch { /* not inside an installed soul's worktrees dir */ }
   }

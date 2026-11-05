@@ -16,21 +16,55 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { appStoreTarget, readAppMetadata, readManagedAppCredential, updateAppConfig } from './identity-app-store.mjs';
 import { credentialStores, passCliItem, resolveAppCredential } from './soul-credentials.mjs';
-import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, managedAppItem } from './identity-format.mjs';
+import { CREDENTIAL_VAULT, credentialNamespace, credentialVault, legacyLocalCustody, managedAppItem } from './identity-format.mjs';
 import { resolveAgentSlug } from './resolve-agent.mjs';
-import { loadDevice, serverUrl } from './server-client.mjs';
+import { isSlugInServerScope, loadDevice, serverUrl } from './server-client.mjs';
 import { runPass, classifyPassCliFailure, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 export { classifyPassCliFailure, PROVIDER_SESSION_REQUIRED, PROVIDER_LOCKED, PROVIDER_UNAVAILABLE, STORE_UNAVAILABLE_CODES } from './secret-providers/pass-cli.mjs';
 
 export function isServerEnrolledApp(slug, { env = process.env, home = homedir(), config } = {}) {
+  try {
+    if (legacyLocalCustody({ env, home }).enabled) return null;
+  } catch { /* ignore custody check errors */ }
   const cfg = config ?? loadConfig({ env, home });
   let server;
   try { server = serverUrl({ env, config: cfg }); } catch { return null; }
   if (!server) return null;
   let device;
   try { device = loadDevice({ env, home }); } catch { return null; }
+  if (!device || typeof device !== 'object' || Array.isArray(device) || (device.server && device.server !== server)) return null;
   const harnesses = Array.isArray(device?.harnesses) ? device.harnesses : [];
-  return harnesses.includes(slug) ? server : null;
+  return isSlugInServerScope(slug, harnesses, cfg) ? server : null;
+}
+
+export function serverEnrollmentGap(slug, { env = process.env, home = homedir(), config } = {}) {
+  try {
+    if (legacyLocalCustody({ env, home }).enabled) return null;
+  } catch { /* ignore custody check errors */ }
+  const cfg = config ?? loadConfig({ env, home });
+  let server;
+  try { server = serverUrl({ env, config: cfg }); } catch { return null; }
+  if (!server) return null;
+  let device = null;
+  try { device = loadDevice({ env, home }); } catch { device = null; }
+  if (!device || typeof device !== 'object' || Array.isArray(device) || (device.server && device.server !== server)) {
+    return {
+      code: 'server-device-not-enrolled',
+      server,
+      action: `run: agent-bot server enroll --add-harness ${slug}`,
+      message: `this machine is not enrolled with ${server}; run: agent-bot server enroll --add-harness ${slug}`,
+    };
+  }
+  const harnesses = Array.isArray(device?.harnesses) ? device.harnesses : [];
+  if (!isSlugInServerScope(slug, harnesses, cfg)) {
+    return {
+      code: 'server-harness-not-enrolled',
+      server,
+      action: `run: agent-bot server enroll --add-harness ${slug}`,
+      message: `this device is not enrolled for ${slug} on ${server}; run: agent-bot server enroll --add-harness ${slug}`,
+    };
+  }
+  return null;
 }
 
 export const AGENT_IDENTITIES_VAULT = CREDENTIAL_VAULT;
@@ -394,6 +428,15 @@ export function ensurePrivateKey({
   const idPath = env.AGENT_BOT_CONFIG ?? join(home, '.config', 'agent-bot', 'config.json');
   const legacyPath = privateKeyPath(slug, home);
   recoverCredentialTransaction({ slug, directory: dirname(legacyPath), exists });
+  // In server mode (#1316, #1346), check device enrollment and App scope before
+  // touching local managed/soul credential stores so server-enrolled souls
+  // (including souls declaring store: "pass-cli") never trigger pass-cli or
+  // owner-only local credential reads unless legacy local custody is enabled.
+  const server = isServerEnrolledApp(slug, { env, home, config });
+  if (server) return { path: `server:${server}/${slug}`, idPath,
+    downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
+  const gap = serverEnrollmentGap(slug, { env, home, config });
+  if (gap) throw preparationError(gap.code, slug, gap.message);
   // An App-level keyd key (#110) has nothing to prepare here.
   if (config.identityApps?.[slug]?.store === 'keyd') throw preparationError('keyd-held', slug, 'this App key is held by keyd');
   let stored = readManagedAppCredential(slug, { env, home, config, stores });
@@ -421,11 +464,6 @@ export function ensurePrivateKey({
   const storedPath = stored?.source === 'pass-cli' ? `pass-cli:${credentialVault(env)}/${passCliItem(stored.agentId, slug, names)}`
     : kind === 'file' ? join(target.soulDir, '.soul-state', 'credentials', `github-app-${slug}.json`) : `keychain:${managedAppItem(slug, names).service}`;
   if (!needKey && !needId) return { path: stored ? storedPath : legacyPath, idPath,
-    downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
-  // In server mode (#1316), an App in the enrolled device's scope has its key
-  // held on the identity service and needs no local key file or pass-cli restore.
-  const server = !force ? isServerEnrolledApp(slug, { env, home, config }) : null;
-  if (server) return { path: `server:${server}/${slug}`, idPath,
     downloaded: false, appIdWritten: false, localStatus: 'ready', restored: [] };
 
   const staging = mkdtempSync(join(home, '.agent-bot-credential-'));

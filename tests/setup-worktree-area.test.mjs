@@ -294,3 +294,19 @@ test('post-checkout in an existing worktree never strips a pin, and --new-worktr
   assert.match(direct.stderr, /only for the post-checkout hook/);
   assert.deepEqual(worktreeValues(f, checkout, 'agentBot.agentId'), [other]);
 });
+
+test('setup-worktree inside <soulDir>/worktrees/<repo> resolves the owning soul when AGENT_BOT_ID is unset (#1346)', (t) => {
+  const f = fixture(t);
+  const destination = placeWorktree(f.identity.id, 'direct-soul-wt', { ...f.options, repoCommonDir: join(f.repo, '.git') }).path;
+  f.add(destination);
+  const envWithoutId = { ...f.env };
+  delete envWithoutId.AGENT_BOT_ID;
+  delete envWithoutId.QWTS_AGENT_ID;
+  const result = spawnSync(process.execPath, [join(root, 'setup-worktree.mjs')], {
+    cwd: destination,
+    env: envWithoutId,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(worktreeValues(f, destination, 'agentBot.agentId'), [f.identity.id]);
+});
