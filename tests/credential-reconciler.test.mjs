@@ -512,9 +512,42 @@ test('server mode without device enrollment or missing slug scope never falls ba
     slug: 'qwts-claude-agent',
     home,
     env,
+    force: true,
     run: () => assert.fail('pass-cli must not be contacted for family-enrolled App'),
   });
   assert.equal(familyPrepared.localStatus, 'ready');
   assert.equal(inspectLocalAppCredential({ slug: 'qwts-claude-agent', home, env }).status, 'ready');
   assert.equal(inspectLocalAppCredential({ slug: 'trueline-antigravity-agent', home, env }).code, 'server-harness-not-enrolled');
+
+  // Even when config declares a local managed store (e.g. store: 'pass-cli'),
+  // server mode short-circuits before reading local stores.
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({
+    settings: { agentBotServer: 'https://agents.true-line.ai' },
+    identityApps: {
+      'qwts-claude-agent': { store: 'pass-cli', id: '12345' },
+      'trueline-antigravity-agent': { store: 'pass-cli', id: '67890' },
+    },
+  }));
+  assert.equal(ensurePrivateKey({ slug: 'qwts-claude-agent', home, env }).localStatus, 'ready');
+  assert.equal(inspectLocalAppCredential({ slug: 'qwts-claude-agent', home, env }).status, 'ready');
+  assert.equal(inspectLocalAppCredential({ slug: 'trueline-antigravity-agent', home, env }).code, 'server-harness-not-enrolled');
+  assert.throws(
+    () => ensurePrivateKey({ slug: 'trueline-antigravity-agent', home, env }),
+    (error) => error.code === 'server-harness-not-enrolled',
+  );
+
+  // Corrupt device.json or mismatched server origin fails closed with server-device-not-enrolled.
+  writeFileSync(join(stateDir, 'device.json'), '{not-valid-json');
+  assert.equal(inspectLocalAppCredential({ slug: 'qwts-claude-agent', home, env }).code, 'server-device-not-enrolled');
+  assert.throws(
+    () => ensurePrivateKey({ slug: 'qwts-claude-agent', home, env }),
+    (error) => error.code === 'server-device-not-enrolled',
+  );
+
+  writeFileSync(join(stateDir, 'device.json'), JSON.stringify({
+    server: 'https://other-server.test',
+    device_id: 'dev_test',
+    harnesses: ['claude'],
+  }));
+  assert.equal(inspectLocalAppCredential({ slug: 'qwts-claude-agent', home, env }).code, 'server-device-not-enrolled');
 });

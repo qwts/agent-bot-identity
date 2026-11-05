@@ -23,15 +23,15 @@ The environment wins over config. The URL must be `https` (plain `http` is accep
 ## Commands
 
 ```sh
-agent-bot server enroll --harness grok [--harness claude] [--name "Chris MBP"] [--platform macos] [--tag laptop] [--force] [--json]
+agent-bot server enroll --harness grok [--harness claude] [--add-harness <name>] [--replace-harnesses] [--name "Chris MBP"] [--platform macos] [--tag laptop] [--force] [--json]
 agent-bot server status [--json]
 agent-bot server logout
 agent-bot server reconcile [--json]
 ```
 
 - **enroll**, interactive: uses the device grant (RFC 8628). It prints a link, a user code and the device key thumbprint. Approve it on the server's `/device` page, after checking the thumbprint matches.
-- **enroll**, headless: when `AGENT_BOT_ENROLL_TOKEN` is set (cloud VMs, CI), it calls `/oauth/device_enroll` with the token instead. No browser is involved. The server sets the harnesses and lifetime.
-- **`--force`** replaces the device key and `device.json` for an already-enrolled machine. The new enrollment is staged until the grant is approved — an expired or denied code leaves the existing enrollment, the `actions/` ledger and `event-cursors.json` untouched. When the device id changes, the old id's cursors are moved to `event-cursors.<old-id>.json`, never deleted.
+- **enroll**, headless: when `AGENT_BOT_ENROLL_TOKEN` is set (cloud VMs, CI), it calls `/oauth/device_enroll` with the token instead. No browser is involved. The server sets the harnesses and lifetime (`--add-harness` and `--replace-harnesses` cannot be used with `AGENT_BOT_ENROLL_TOKEN`).
+- **`--force`** replaces the device key and `device.json` for an already-enrolled machine. On the same server origin, existing enrolled harnesses are preserved and unioned with any new `--harness` / `--add-harness` entries unless `--replace-harnesses` is passed; `--add-harness <name>` implies `--force`. The new enrollment is staged until the grant is approved — an expired or denied code leaves the existing enrollment, the `actions/` ledger and `event-cursors.json` untouched. When the device id changes, the old id's cursors are moved to `event-cursors.<old-id>.json`, never deleted.
 - `--harness` defaults to `AGENT_BOT_SERVER_HARNESS`, or to `grok` when `GROK_AGENT=1`.
 - **status** shows the local enrollment, then makes a signed `whoami` round trip. It exits 1 when the round trip fails.
 - **logout** deletes the local device key, the device record and the pinned key. Also revoke the device on the server's `/devices` page.

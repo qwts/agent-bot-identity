@@ -149,6 +149,21 @@ export function inspectLocalAppCredential({
   validateKey = validatePrivateKey,
   env = process.env, config = loadConfig({ env, home }), stores,
 } = {}) {
+  // In server mode (#1316, #1346), short-circuit from device enrollment and
+  // App scope before reading local managed/soul credential stores so doctor
+  // and setup diagnostics never fall through to local pass-cli preparation.
+  if (isServerEnrolledApp(slug, { env, home, config })) {
+    return { status: 'ready', restored: [], evidence: { components: [] } };
+  }
+  const gap = serverEnrollmentGap(slug, { env, home, config });
+  if (gap) {
+    return {
+      status: 'failed',
+      code: gap.code,
+      action: gap.action,
+      evidence: { components: [] },
+    };
+  }
   // A keyd-held App (#110) has no readable key; resolveAppCredential below
   // answers for it, as for a keyd soul.
   if (config?.identityApps?.[slug]?.store && config.identityApps[slug].store !== 'keyd') {
@@ -187,18 +202,6 @@ export function inspectLocalAppCredential({
   ];
   const deficiency = components.find((component) => component.status !== 'ready');
   if (deficiency) {
-    if (isServerEnrolledApp(slug, { env, home, config })) {
-      return { status: 'ready', restored: [], evidence: { components: [] } };
-    }
-    const gap = serverEnrollmentGap(slug, { env, home, config });
-    if (gap) {
-      return {
-        status: 'failed',
-        code: gap.code,
-        action: gap.action,
-        evidence: { components: [] },
-      };
-    }
     return {
       ...componentFailure(deficiency),
       evidence: { components },

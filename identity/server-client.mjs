@@ -206,18 +206,20 @@ export function isSlugInServerScope(slug, harnesses = [], config) {
 // The server's harness name for a resolved App slug — shared by minting and
 // notices so the two never drift: an explicit AGENT_BOT_SERVER_HARNESS
 // override wins; a device whose enrolled scope names the slug itself (the
-// server keys Apps by slug, e.g. qwts-devin-agent) uses it; otherwise
-// GROK_AGENT=1 or the slug's harness family when covered by the device scope.
+// server keys Apps by slug, e.g. qwts-devin-agent) uses it; otherwise the
+// slug's harness family (or GROK_AGENT=1 when no slug resolved) when covered
+// by the enrolled device scope (#1346).
 export function serverHarnessForSlug({ slug, env = process.env, config, scope } = {}) {
   if (env.AGENT_BOT_SERVER_HARNESS) return serverHarness(env.AGENT_BOT_SERVER_HARNESS);
-  const hs = scope ?? loadDevice({ env })?.harnesses ?? [];
-  if (slug && hs.includes(slug)) return slug;
+  const hs = Array.isArray(scope) ? scope : (loadDevice({ env })?.harnesses ?? []);
+  if (slug) {
+    if (hs.includes(slug)) return slug;
+    if (!isSlugInServerScope(slug, hs, config)) return null;
+    return serverHarness(harnessForSlug(slug, config));
+  }
   const ambient = ambientHarness(env);
-  if (ambient) return ambient;
-  if (!slug) return null; // no App slug resolves: never fall back to a default family
-  const rawFamily = harnessForSlug(slug, config);
-  if (hs.length > 0 && !isSlugInServerScope(slug, hs, config)) return null;
-  return serverHarness(rawFamily);
+  if (ambient && hs.includes(ambient)) return ambient;
+  return null;
 }
 
 // ---- JOSE helpers ----
@@ -427,6 +429,9 @@ export async function enroll({
   fetchImpl: rawFetch = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onPrompt = () => {},
 } = {}) {
   const fetchImpl = noRedirect(rawFetch);
+  if (enrollToken && (addHarnesses.length > 0 || replaceHarnesses)) {
+    throw new Error('--add-harness and --replace-harnesses cannot be used with AGENT_BOT_ENROLL_TOKEN (enrollment token scope is fixed on the server)');
+  }
   const opts = { env, home };
   const prior = loadDevice(opts);
   const effectiveForce = force || addHarnesses.length > 0;

@@ -332,12 +332,12 @@ async function mintThroughServer({ server, slug, env, config, permissions, selec
   // resolved slug itself, ask for it rather than its harness family.
   const { loadDevice } = await import('./server-client.mjs');
   const device = loadDevice({ env });
-  const scope = device?.harnesses ?? [];
+  const scope = Array.isArray(device?.harnesses) ? device.harnesses : [];
   const harness = serverHarnessForSlug({ slug: resolvedSlug, env, config, scope });
   if (selected) selected({ appSlug: resolvedSlug, reason: 'agent-bot-server' });
-  if (!harness && resolvedSlug && device && scope.length > 0) {
+  if (!harness && resolvedSlug && device) {
     throw Object.assign(
-      new Error(`this device is not enrolled for ${resolvedSlug} (enrolled: ${scope.join(', ')}); run \`agent-bot server enroll --add-harness ${resolvedSlug}\``),
+      new Error(`this device is not enrolled for ${resolvedSlug} (enrolled: ${scope.join(', ') || 'none'}); run \`agent-bot server enroll --add-harness ${resolvedSlug}\``),
       { code: 'server-harness-not-enrolled' },
     );
   }
