@@ -35,8 +35,9 @@ function buildHarnessAgentShellChecks(action = 'return 0', indent = '  ') {
     ...HARNESS_AGENT_ENV_VARS.map((envVar) => `${indent}[ "$${envVar}" = "1" ] && ${action}`),
     `${indent}[ "$QWEN_CODE" = "1" ] && ${action}`,
     `${indent}[ "$OPENCODE" = "1" ] && ${action}`,
-    `${indent}[ -n "$OPENCODE_CLIENT" ] && ${action}`,
-    `${indent}[ -n "$OPENCODE_SESSION_ID" ] && ${action}`,
+    `${indent}case "$OPENCODE_CLIENT" in *[![:space:]]*) ${action} ;; esac`,
+    `${indent}case "$OPENCODE_SESSION_ID" in *[![:space:]]*) ${action} ;; esac`,
+    `${indent}if [ -x /usr/bin/awk ] && /usr/bin/awk 'BEGIN { for (k in ENVIRON) if (k ~ /^OPENCODE_EXPERIMENTAL_[A-Za-z0-9_]+$/ && ENVIRON[k] ~ /[^[:space:]]/) exit 0; exit 1 }'; then ${action}; fi`,
   ].join('\n');
 }
 
@@ -265,13 +266,23 @@ function hasHarnessToken(text, harness) {
   return HARNESS_TOKEN_RES.get(harness)?.test(text) ?? false;
 }
 
-export function isOpencodeAgentEnv(e) {
+export function isOpencodeDirectEnv(e) {
   return (
     e?.OPENCODE === '1' ||
     e?.OPENCODE_AGENT === '1' ||
     (typeof e?.OPENCODE_CLIENT === 'string' && e.OPENCODE_CLIENT.trim() !== '') ||
     (typeof e?.OPENCODE_SESSION_ID === 'string' && e.OPENCODE_SESSION_ID.trim() !== '')
   );
+}
+
+export function hasOpencodeExperimentalEnv(e) {
+  return Object.keys(e ?? {}).some(
+    (k) => /^OPENCODE_EXPERIMENTAL_[A-Za-z0-9_]+$/.test(k) && typeof e[k] === 'string' && e[k].trim() !== '',
+  );
+}
+
+export function isOpencodeAgentEnv(e) {
+  return isOpencodeDirectEnv(e) || hasOpencodeExperimentalEnv(e);
 }
 
 const HARNESSES = [
@@ -496,17 +507,21 @@ export function detectHarness(env = process.env, options = {}) {
       return 'qwen';
     }
     if (
-      isOpencodeAgentEnv(env) ||
+      isOpencodeDirectEnv(env) ||
       hasHarnessToken(aiAgent, 'opencode')
     ) {
       return 'opencode';
     }
 
     // Explicit <HARNESS>_AGENT=1 outranks ambient editor markers (CURSOR_*,
-    // WINDSURF_*, MUSE_*, VSCODE_*), avoiding split attribution between
-    // detectHarness and detectAgentHarness.
+    // WINDSURF_*, MUSE_*, VSCODE_*) and OPENCODE_EXPERIMENTAL_* flags,
+    // avoiding split attribution between detectHarness and detectAgentHarness.
     const explicitHarness = detectExplicitHarnessAgent(env);
     if (explicitHarness) return explicitHarness;
+
+    if (hasOpencodeExperimentalEnv(env)) {
+      return 'opencode';
+    }
 
     // AI_AGENT naming any harness (except vscode, which stays with editor fallback).
     const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
@@ -579,7 +594,7 @@ export function detectAgentHarness(
   ) {
     key = 'qwen';
   } else if (
-    isOpencodeAgentEnv(env) ||
+    isOpencodeDirectEnv(env) ||
     hasHarnessToken(aiAgent, 'opencode')
   ) {
     key = 'opencode';
@@ -587,6 +602,8 @@ export function detectAgentHarness(
     const explicitHarness = detectExplicitHarnessAgent(env);
     if (explicitHarness) {
       key = explicitHarness;
+    } else if (hasOpencodeExperimentalEnv(env)) {
+      key = 'opencode';
     } else {
       const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
       if (aiHarness && aiHarness !== 'vscode') {

@@ -365,6 +365,20 @@ test('OpenCode is detected from OPENCODE=1, OPENCODE_CLIENT, OPENCODE_SESSION_ID
   assert.equal(detectAgentHarness({ OPENCODE_CLIENT: 'desktop' }, cfg), 'you-opencode-agent');
   assert.equal(detectHarness({ OPENCODE_SESSION_ID: 'ses_123' }), 'opencode');
   assert.equal(detectAgentHarness({ OPENCODE_SESSION_ID: 'ses_123' }, cfg), 'you-opencode-agent');
+  assert.equal(detectHarness({ OPENCODE_EXPERIMENTAL_LSP: '1' }), 'opencode');
+  assert.equal(detectAgentHarness({ OPENCODE_EXPERIMENTAL_LSP: '1' }, cfg), 'you-opencode-agent');
+  // Whitespace-only values must not trigger OpenCode detection.
+  assert.equal(detectHarness({ OPENCODE_CLIENT: '   ' }), null);
+  assert.equal(detectAgentHarness({ OPENCODE_CLIENT: '   ' }, cfg), null);
+  assert.equal(detectHarness({ OPENCODE_SESSION_ID: ' \t ' }), null);
+  assert.equal(detectAgentHarness({ OPENCODE_SESSION_ID: ' \t ' }, cfg), null);
+  assert.equal(detectHarness({ OPENCODE_EXPERIMENTAL_LSP: '   ' }), null);
+  assert.equal(detectAgentHarness({ OPENCODE_EXPERIMENTAL_LSP: '   ' }, cfg), null);
+  // Explicit <HARNESS>_AGENT=1 outranks OPENCODE_EXPERIMENTAL_* flags, while direct OpenCode markers still win.
+  assert.equal(detectHarness({ CURSOR_AGENT: '1', OPENCODE_EXPERIMENTAL_LSP: '1' }), 'cursor');
+  assert.equal(detectAgentHarness({ CURSOR_AGENT: '1', OPENCODE_EXPERIMENTAL_LSP: '1' }, cfg), 'you-cursor-agent');
+  assert.equal(detectHarness({ CURSOR_AGENT: '1', OPENCODE_SESSION_ID: 'ses_123' }), 'opencode');
+  assert.equal(detectAgentHarness({ CURSOR_AGENT: '1', OPENCODE_SESSION_ID: 'ses_123' }, cfg), 'you-opencode-agent');
   assert.equal(detectHarness({ __CFBundleIdentifier: 'ai.opencode.desktop' }), 'opencode');
   // Ambient bundle identifier without OPENCODE=1 / OPENCODE_CLIENT / process ancestry is editor-ambient only.
   assert.equal(detectAgentHarness({ __CFBundleIdentifier: 'ai.opencode.desktop' }, cfg), null);

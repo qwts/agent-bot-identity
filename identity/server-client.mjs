@@ -26,7 +26,8 @@ import { homedir, hostname, platform as osPlatform } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { harnessForSlug, loadConfig } from '../config.mjs';
+import { appLifecycleStatus, harnessForSlug, loadConfig, rosterScope } from '../config.mjs';
+import { profileAppSlugs } from '../organization-profile-schema.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
 import { enforcementProfile } from './identity-format.mjs';
 import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
@@ -1031,9 +1032,14 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
     let addHarnesses = [...a.addHarnesses];
     if (a.allConfigured) {
       const cfg = loadConfig({ env });
+      const candidates = rosterScope(cfg) ?? [
+        ...profileAppSlugs(cfg),
+        ...Object.keys(cfg?.identityApps ?? {}),
+        ...Object.values(cfg?.apps ?? {}),
+      ];
       const configuredSlugs = [...new Set(
-        Object.values(cfg?.apps ?? {})
-          .filter((slug) => typeof slug === 'string' && slug && cfg?.identityApps?.[slug]?.status !== 'retired')
+        candidates
+          .filter((slug) => typeof slug === 'string' && slug && cfg?.identityApps?.[slug]?.status !== 'retired' && appLifecycleStatus(slug, cfg) !== 'retired')
           .map(serverHarness)
           .filter(Boolean),
       )];

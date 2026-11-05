@@ -11,7 +11,6 @@ import { helpText } from '../cli/output.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { discoverAntigravityTranscript, discoverOpencodeTranscript, findTranscript } from '../session-bind.mjs';
 import { START_USAGE, formatStartReceipt, parseStartArgs, startTask } from '../start.mjs';
-import { createRequire } from 'node:module';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import { worktreeSoul } from './helpers/worktree-soul.mjs';
 
@@ -179,73 +178,186 @@ test('parseStartArgs validates flags and worktree names', () => {
   assert.equal(parseStartArgs(['--help', '--unknown']).help, true);
 });
 
-test('discoverOpencodeTranscript picks the fresh active OpenCode SQLite session, matches cwd across multiple sessions, and refuses stale sessions', async (t) => {
-  let DatabaseSync;
-  try {
-    ({ DatabaseSync } = createRequire(import.meta.url)('node:sqlite'));
-  } catch {
-    t.skip('node:sqlite is not available on this Node runtime');
-    return;
-  }
+function buildTestOpencodeSqliteBuffer({ sessions = [], messages = [], worktrees = [] } = {}) {
+  const encodeVarint = (n) => {
+    let v = BigInt(n);
+    if (v >= 0n && v <= 127n) return Buffer.from([Number(v)]);
+    const bytes = [];
+    for (let i = 0; i < 8 && v > 0n; i += 1) {
+      bytes.unshift(Number(v & 0x7fn) | (bytes.length ? 0x80 : 0));
+      v >>= 7n;
+    }
+    return Buffer.from(bytes);
+  };
+  const encodeRecord = (values) => {
+    const serials = [];
+    const bodies = [];
+    for (const val of values) {
+      if (val === null || val === undefined) {
+        serials.push(encodeVarint(0));
+      } else if (typeof val === 'number') {
+        const b = Buffer.alloc(8);
+        b.writeBigInt64BE(BigInt(Math.trunc(val)), 0);
+        serials.push(encodeVarint(6));
+        bodies.push(b);
+      } else {
+        const b = Buffer.from(String(val), 'utf8');
+        serials.push(encodeVarint(b.length * 2 + 13));
+        bodies.push(b);
+      }
+    }
+    const serialBuf = Buffer.concat(serials);
+    const hdrLen = encodeVarint(serialBuf.length + 1);
+    return Buffer.concat([hdrLen, serialBuf, ...bodies]);
+  };
+  const buildLeafTablePage = (records, isPage1 = false) => {
+    const page = Buffer.alloc(4096);
+    const hdrOff = isPage1 ? 100 : 0;
+    page[hdrOff] = 0x0d;
+    page.writeUInt16BE(records.length, hdrOff + 3);
+    let contentOff = 4096;
+    records.forEach((rec, idx) => {
+      const payload = encodeRecord(rec);
+      const cell = Buffer.concat([encodeVarint(payload.length), encodeVarint(idx + 1), payload]);
+      contentOff -= cell.length;
+      cell.copy(page, contentOff);
+      page.writeUInt16BE(contentOff, hdrOff + 8 + idx * 2);
+    });
+    page.writeUInt16BE(contentOff, hdrOff + 5);
+    return page;
+  };
+  const masterRows = [
+    ['table', 'session_v2', 'session_v2', 2, 'CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER, time_busy INTEGER, time_idle INTEGER, time_archived INTEGER)'],
+    ['table', 'session_message', 'session_message', 3, 'CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)'],
+    ['table', 'worktree', 'worktree', 4, 'CREATE TABLE worktree (name TEXT, project_id TEXT, directory TEXT PRIMARY KEY)'],
+  ];
+  const p1 = buildLeafTablePage(masterRows, true);
+  Buffer.from('SQLite format 3\0', 'utf8').copy(p1, 0);
+  p1.writeUInt16BE(4096, 16);
+  p1[18] = 1; p1[19] = 1; p1[20] = 0; p1[21] = 64; p1[22] = 32; p1[23] = 32;
+  p1.writeUInt32BE(1, 24);
+  p1.writeUInt32BE(4, 28);
+  p1.writeUInt32BE(1, 40);
+  p1.writeUInt32BE(4, 44);
+  p1.writeUInt32BE(1, 56);
+  p1.writeUInt32BE(1, 92);
+  p1.writeUInt32BE(3054000, 96);
+  const p2 = buildLeafTablePage(sessions);
+  const p3 = buildLeafTablePage(messages);
+  const p4 = buildLeafTablePage(worktrees);
+  return Buffer.concat([p1, p2, p3, p4]);
+}
+
+test('discoverOpencodeTranscript picks the fresh active OpenCode SQLite session (via node:sqlite and Node-20 pure-JS B-tree fallback), falls back to storage/session JSON, matches cwd across multiple sessions, and refuses stale sessions', async (t) => {
   const home = mkdtempSync(path.join(tmpdir(), 'opencode-db-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const dbPath = path.join(home, '.local', 'share', 'opencode', 'opencode.db');
   mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  db.exec(`
-    CREATE TABLE session_v2 (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL,
-      parent_id TEXT,
-      directory TEXT NOT NULL,
-      time_created INTEGER NOT NULL,
-      time_updated INTEGER NOT NULL,
-      time_busy INTEGER,
-      time_idle INTEGER,
-      time_archived INTEGER
-    );
-    CREATE TABLE session_message (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      time_created INTEGER NOT NULL,
-      time_updated INTEGER NOT NULL,
-      data TEXT NOT NULL
-    );
-    CREATE TABLE worktree (
-      name TEXT NOT NULL,
-      project_id TEXT NOT NULL,
-      directory TEXT NOT NULL PRIMARY KEY
-    );
-  `);
   const nowMs = Date.now();
-  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-    'ses_home', 'proj_home', null, home, nowMs - 5_000, nowMs - 5_000, nowMs - 5_000, null, null,
-  );
-  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-    'ses_older', 'proj_1', null, '/workspace/other', nowMs - 120_000, nowMs - 120_000, null, nowMs - 120_000, null,
-  );
-  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-    'ses_newer', 'proj_2', null, '/workspace/target', nowMs - 10_000, nowMs - 5_000, nowMs - 5_000, null, null,
-  );
-  db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?)').run(
-    'msg_1', 'ses_newer', nowMs - 5_000, nowMs - 5_000, '{"path":{"cwd":"/workspace/target","root":"/workspace/target"}}',
-  );
-  db.close();
+  writeFileSync(dbPath, buildTestOpencodeSqliteBuffer({
+    sessions: [
+      ['ses_home', 'proj_home', null, home, nowMs - 5_000, nowMs - 5_000, nowMs - 5_000, null, null],
+      ['ses_older', 'proj_1', null, '/workspace/other', nowMs - 120_000, nowMs - 120_000, null, nowMs - 120_000, null],
+      ['ses_newer', 'proj_2', null, '/workspace/target', nowMs - 10_000, nowMs - 5_000, nowMs - 5_000, null, null],
+    ],
+    messages: [
+      ['msg_1', 'ses_newer', nowMs - 5_000, nowMs - 5_000, '{"path":{"cwd":"/workspace/target","root":"/workspace/target"}}'],
+    ],
+  }));
 
   // An unrelated session opened in $HOME does not match a child directory under $HOME.
   assert.equal(discoverOpencodeTranscript(home, { cwd: path.join(home, 'unmatched-project') }), null);
   assert.deepEqual(discoverOpencodeTranscript(home, { cwd: '/workspace/target' }), { provider: 'opencode', id: 'ses_newer' });
+  // Explicitly verify the Node-20 pure-JS SQLite B-tree reader returns the exact same result even when node:sqlite is bypassed.
+  assert.deepEqual(discoverOpencodeTranscript(home, { cwd: '/workspace/target', forceBufferReader: true }), { provider: 'opencode', id: 'ses_newer' });
   assert.deepEqual(
     await findTranscript({ env: { OPENCODE: '1', HOME: home }, cwd: '/workspace/target' }),
     { provider: 'opencode', id: 'ses_newer' },
   );
 
-  // When all sessions are stale (> 60s old), returns null so an idle session never steals another's id.
-  const db2 = new DatabaseSync(dbPath);
-  db2.prepare('UPDATE session_v2 SET time_updated = ?, time_busy = NULL, time_idle = ?').run(nowMs - 180_000, nowMs - 180_000);
-  db2.prepare('UPDATE session_message SET time_updated = ?').run(nowMs - 180_000);
-  db2.close();
+  // An unrelated session in another directory whose prose merely mentions /workspace/target does NOT match /workspace/target.
+  writeFileSync(dbPath, buildTestOpencodeSqliteBuffer({
+    sessions: [
+      ['ses_prose_only', 'proj_other', null, '/workspace/unrelated', nowMs - 5_000, nowMs - 5_000, nowMs - 5_000, null, null],
+    ],
+    messages: [
+      ['msg_prose', 'ses_prose_only', nowMs - 5_000, nowMs - 5_000, '{"text":"Let us discuss /workspace/target in prose"}'],
+    ],
+  }));
   assert.equal(discoverOpencodeTranscript(home, { cwd: '/workspace/target' }), null);
+  assert.equal(discoverOpencodeTranscript(home, { cwd: '/workspace/target', forceBufferReader: true }), null);
+
+  // When all SQLite sessions are stale (> 60s old), returns null so an idle session never steals another's id.
+  writeFileSync(dbPath, buildTestOpencodeSqliteBuffer({
+    sessions: [
+      ['ses_newer', 'proj_2', null, '/workspace/target', nowMs - 180_000, nowMs - 180_000, null, nowMs - 180_000, null],
+    ],
+    messages: [
+      ['msg_1', 'ses_newer', nowMs - 180_000, nowMs - 180_000, '{"path":{"cwd":"/workspace/target","root":"/workspace/target"}}'],
+    ],
+  }));
+  assert.equal(discoverOpencodeTranscript(home, { cwd: '/workspace/target' }), null);
+  assert.equal(discoverOpencodeTranscript(home, { cwd: '/workspace/target', forceBufferReader: true }), null);
+
+  // When opencode.db is absent or stale, falls back to ~/.local/share/opencode/storage/session/<projectId>/*.json.
+  rmSync(dbPath, { force: true });
+  const storageSessDir = path.join(home, '.local', 'share', 'opencode', 'storage', 'session', 'proj_storage');
+  mkdirSync(storageSessDir, { recursive: true });
+  writeFileSync(path.join(storageSessDir, 'ses_json_1.json'), JSON.stringify({
+    id: 'ses_json_1',
+    projectID: 'proj_storage',
+    directory: '/workspace/storage-target',
+    time: { created: nowMs - 10_000, updated: nowMs - 3_000 },
+  }));
+  assert.deepEqual(
+    discoverOpencodeTranscript(home, { cwd: '/workspace/storage-target' }),
+    { provider: 'opencode', id: 'ses_json_1' },
+  );
+
+  // When node:sqlite is available (Node 22.5+), also verify both readers against a real WAL-mode SQLite database.
+  let DatabaseSync = null;
+  try {
+    ({ DatabaseSync } = await import('node:sqlite'));
+  } catch { /* Node 20 without node:sqlite */ }
+  if (DatabaseSync) {
+    const walHome = mkdtempSync(path.join(tmpdir(), 'opencode-wal-'));
+    t.after(() => rmSync(walHome, { recursive: true, force: true }));
+    const walDbPath = path.join(walHome, '.local', 'share', 'opencode', 'opencode.db');
+    mkdirSync(path.dirname(walDbPath), { recursive: true });
+    const db = new DatabaseSync(walDbPath);
+    db.exec(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE session_v2 (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        parent_id TEXT,
+        directory TEXT,
+        time_created INTEGER,
+        time_updated INTEGER,
+        time_busy INTEGER,
+        time_idle INTEGER,
+        time_archived INTEGER
+      );
+      CREATE TABLE session_message (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        time_created INTEGER,
+        time_updated INTEGER,
+        data TEXT
+      );
+      CREATE TABLE worktree (
+        name TEXT,
+        project_id TEXT,
+        directory TEXT PRIMARY KEY
+      );
+    `);
+    db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      'ses_wal_live', 'proj_wal', null, '/workspace/wal-target', nowMs - 4_000, nowMs - 2_000, nowMs - 2_000, null, null,
+    );
+    assert.deepEqual(discoverOpencodeTranscript(walHome, { cwd: '/workspace/wal-target' }), { provider: 'opencode', id: 'ses_wal_live' });
+    assert.deepEqual(discoverOpencodeTranscript(walHome, { cwd: '/workspace/wal-target', forceBufferReader: true }), { provider: 'opencode', id: 'ses_wal_live' });
+    db.close();
+  }
 });
 
 test('discoverAntigravityTranscript picks the fresh active brain transcript, matches cwd across multiple brains, refuses stale or ambiguous sessions, and stays hermetic without HOME', async (t) => {

@@ -14,7 +14,7 @@ import { pathToFileURL } from 'node:url';
 import { listSouls, locateSoulDir, populationFile, setSoulAppThen, showSoul } from './agent-population.mjs';
 import { isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
-import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness, isOpencodeAgentEnv } from './detect-harness.mjs';
+import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness, hasOpencodeExperimentalEnv, isOpencodeDirectEnv } from './detect-harness.mjs';
 import { enroll, readBinding, reconcileAppCredentials, repoFromCheckout, resolveAgentSlug, serverUrl } from './identity-cli.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
 import { findTranscript, sessionBind } from './session-bind.mjs';
@@ -166,13 +166,14 @@ function detectAgentHarnessKey(env = process.env, config = null) {
     return 'qwen';
   }
   if (
-    isOpencodeAgentEnv(env)
+    isOpencodeDirectEnv(env)
     || /(?:^|[^a-z0-9])opencode(?:[^a-z0-9]|$)/i.test(aiAgent)
   ) {
     return 'opencode';
   }
   const explicit = detectExplicitHarnessAgent(env);
   if (explicit) return explicit;
+  if (hasOpencodeExperimentalEnv(env)) return 'opencode';
   const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
   if (aiHarness && aiHarness !== 'vscode') return aiHarness;
   return detectProcessTreeHarness({ env }) ?? aiHarness ?? null;
