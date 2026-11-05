@@ -17,6 +17,7 @@ import {
   hostServiceLabel,
   inspectSupervisor,
   isInactiveSupervisorError,
+  isSystemdUnavailableError,
   kickstartScheduledTask,
   renderLaunchdPlist,
   renderScheduledTask,
@@ -965,4 +966,107 @@ test('Windows ensure rejects pre-restart daemon health until a different PID is 
     probe: async () => ({ running: true, pid: ++probes < 3 ? 123 : 456, port: 1 }),
   });
   assert.equal(result.pid, 456); assert.equal(probes, 3);
+});
+
+test('headless Linux without user systemd falls back to detached daemon startup (#1349)', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-bot-supervisor-headless-linux-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  assert.equal(isSystemdUnavailableError({ stderr: 'Failed to connect to bus: No medium found\n' }), true);
+  assert.equal(isSystemdUnavailableError({ stderr: 'System has not been booted with systemd as init system (PID 1). Can\'t operate.\n' }), true);
+  assert.equal(isSystemdUnavailableError({ code: 'ENOENT' }), true);
+  assert.equal(isSystemdUnavailableError({ stderr: 'disabled\n' }), false);
+  assert.equal(isSystemdUnavailableError({ stderr: 'Failed to connect to bus: Permission denied\n' }), false);
+  assert.equal(isSystemdUnavailableError({ stderr: 'Failed to connect to bus: Connection refused\n' }), false);
+
+  const started = [];
+  const stops = [];
+  const execCalls = [];
+  const noBusExec = (cmd, args) => {
+    execCalls.push([cmd, ...args]);
+    throw Object.assign(new Error('Failed to connect to bus: No medium found'), {
+      stderr: 'Failed to connect to bus: No medium found\n',
+      status: 1,
+    });
+  };
+  // Even before the unit is applied, inspectSupervisor detects systemd --user unavailability.
+  const unapplied = inspectSupervisor({ home, platform: 'linux', env: {}, exec: noBusExec });
+  assert.equal(unapplied.applied, false);
+  assert.equal(unapplied.systemdUnavailable, true);
+  assert.deepEqual(execCalls, [['systemctl', '--user', 'is-enabled', 'agent-bot-daemon.service']]);
+
+  // A real permission/bus error fails closed and never starts a detached daemon.
+  await assert.rejects(
+    () => ensureDaemonSupervisor({
+      home,
+      platform: 'linux',
+      env: {},
+      executable: '/opt/agent-bot/bin/agent-bot',
+      probe: async () => ({ running: false }),
+      stopDetached: async () => {},
+      startDetached: async () => { throw new Error('must not start detached on permission denied'); },
+      exec: () => {
+        throw Object.assign(new Error('Failed to connect to bus: Permission denied'), {
+          stderr: 'Failed to connect to bus: Permission denied\n',
+          status: 1,
+        });
+      },
+    }),
+    /Permission denied/,
+  );
+
+  execCalls.length = 0;
+  const result = await ensureDaemonSupervisor({
+    home,
+    platform: 'linux',
+    env: {},
+    executable: '/opt/agent-bot/bin/agent-bot',
+    probe: async () => ({ running: false }),
+    stopDetached: async () => { stops.push('stopped'); },
+    startDetached: async () => {
+      started.push('started');
+      return { running: true, pid: 777, port: 51111, alreadyRunning: false };
+    },
+    exec: noBusExec,
+  });
+  assert.equal(result.applied, true);
+  assert.equal(result.loaded, false);
+  assert.equal(result.systemdUnavailable, true);
+  assert.equal(result.reason, 'systemd-unavailable');
+  assert.equal(result.pid, 777);
+  assert.equal(result.port, 51111);
+  assert.deepEqual(started, ['started']);
+  assert.deepEqual(stops, []);
+  assert.ok(readFileSync(result.unitPath, 'utf8').includes('ExecStart=/opt/agent-bot/bin/agent-bot daemon run'));
+
+  const inspected = inspectSupervisor({
+    home,
+    platform: 'linux',
+    env: {},
+    exec: noBusExec,
+  });
+  assert.equal(inspected.applied, true);
+  assert.equal(inspected.loaded, false);
+  assert.equal(inspected.systemdUnavailable, true);
+
+  // When a detached daemon is already running and systemd --user is unavailable,
+  // ensureDaemonSupervisor stops and restarts the detached daemon so it runs the new version/config.
+  const rerun = await ensureDaemonSupervisor({
+    home,
+    platform: 'linux',
+    env: {},
+    executable: '/opt/agent-bot/bin/agent-bot-v2',
+    probe: async () => ({ running: true, pid: 777, port: 51111 }),
+    stopDetached: async () => { stops.push('stopped-old'); },
+    startDetached: async () => {
+      started.push('started-new');
+      return { running: true, pid: 888, port: 52222, alreadyRunning: false };
+    },
+    exec: noBusExec,
+  });
+  assert.equal(rerun.systemdUnavailable, true);
+  assert.equal(rerun.alreadyRunning, false);
+  assert.equal(rerun.pid, 888);
+  assert.equal(rerun.port, 52222);
+  assert.deepEqual(stops, ['stopped-old']);
+  assert.deepEqual(started, ['started', 'started-new']);
 });

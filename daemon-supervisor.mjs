@@ -33,7 +33,7 @@ import { windowsTaskJobArguments, windowsTaskJobCommandLine } from './windows-ta
 import { windowsInstallDirectory } from './windows-install-path.mjs';
 import process from 'node:process';
 
-import { daemonStateFile, daemonStatus, stopDaemon } from './agent-daemon.mjs';
+import { daemonStateFile, daemonStatus, startDaemon, stopDaemon } from './agent-daemon.mjs';
 import { keydSignerEnvironment } from './config.mjs';
 import { daemonLogMaxBytes, daemonLogPath } from './daemon-log.mjs';
 import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './identity-format.mjs';
@@ -41,6 +41,8 @@ import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVaul
 export const LAUNCHD_LABEL = 'dev.qwts.agent-bot.daemon';
 export const SYSTEMD_UNIT = 'agent-bot-daemon.service';
 export const SERVICE_LABEL_VARIABLE = 'AGENT_BOT_SERVICE_LABEL';
+export const NON_SYSTEMD_DAEMON_START = 'agent-bot daemon start --daemonize';
+export const NON_SYSTEMD_BROKER_START = 'AGENT_COMMS_SHARED_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agent-comms" nohup agent-comms broker run --single-account >/dev/null 2>&1 &';
 
 /**
  * The host-supplied service label, or null for the defaults. It names a
@@ -536,6 +538,7 @@ export function inspectSupervisor({
   }
   const applied = exists(paths.unitPath);
   let loaded = false;
+  let systemdUnavailable = false;
   if (supervisorSkipLoad(env) && applied) {
     loaded = true;
   } else if (applied) {
@@ -549,8 +552,19 @@ export function inspectSupervisor({
         const state = exec('systemctl', ['--user', 'is-enabled', paths.label], { env }).trim();
         loaded = state === 'enabled' || state === 'static' || state === 'linked';
       }
-    } catch {
+    } catch (error) {
       loaded = false;
+      if (paths.kind === 'systemd' && isSystemdUnavailableError(error)) {
+        systemdUnavailable = true;
+      }
+    }
+  } else if (paths.kind === 'systemd' && !supervisorSkipLoad(env)) {
+    try {
+      exec('systemctl', ['--user', 'is-enabled', paths.label], { env });
+    } catch (error) {
+      if (isSystemdUnavailableError(error)) {
+        systemdUnavailable = true;
+      }
     }
   }
   return {
@@ -561,11 +575,20 @@ export function inspectSupervisor({
     kind: paths.kind,
     unitPath: paths.unitPath,
     label: paths.label,
+    ...(systemdUnavailable ? { systemdUnavailable: true } : {}),
   };
 }
 
 function commandErrorText(error) {
   return `${error?.stderr ?? ''} ${error?.stdout ?? ''} ${error?.message ?? ''}`;
+}
+
+export function isSystemdUnavailableError(error) {
+  if (error?.code === 'ENOENT') return true;
+  const text = commandErrorText(error);
+  if (/permission denied|connection refused|access denied/i.test(text)) return false;
+  return /failed to connect to (?:user scope )?bus.*(?:no medium found|no such file or directory|\bdbus_session_bus_address\b)|failed to connect to user scope bus|system has not been booted with systemd|no medium found|failed to get d-bus connection|dbus_session_bus_address/i
+    .test(text);
 }
 
 export function isInactiveSupervisorError(error) {
@@ -738,6 +761,7 @@ export async function ensureDaemonSupervisor({
   reloadUnchanged = true,
   probe = daemonStatus,
   stopDetached = stopDaemon,
+  startDetached = startDaemon,
   exists = existsSync,
   read = readFileSync,
   write = writeFileSync,
@@ -799,13 +823,39 @@ export async function ensureDaemonSupervisor({
   write(paths.unitPath, task ? scheduledTaskBytes(body) : body, { mode: 0o644 });
   const inspection = inspectSupervisor({ home, env, platform, exists, exec });
   const current = await probe({ env: supervisorEnv, home });
-  if (current.running && !inspection.loaded && !skipLoad) {
+  if (current.running && !inspection.loaded && !inspection.systemdUnavailable && !skipLoad) {
     await stopDetached({ env: supervisorEnv, home });
   }
   // Always reload/restart. The installed symlink path is stable, so an
   // unchanged unit body still means the checkout behind it may have moved.
   const oldPid = task && current.running && Number.isSafeInteger(current.pid) && current.pid > 0 ? current.pid : null;
-  await loadSupervisor(paths, { env, exec, skipLoad, oldPid, processAlive, restartOptions });
+  try {
+    await loadSupervisor(paths, { env, exec, skipLoad, oldPid, processAlive, restartOptions });
+  } catch (error) {
+    if (paths.kind === 'systemd' && isSystemdUnavailableError(error)) {
+      if (current.running) {
+        await stopDetached({ env: supervisorEnv, home });
+      }
+      const fallback = await startDetached({ env: supervisorEnv, home });
+      return {
+        applied: true,
+        loaded: false,
+        systemdUnavailable: true,
+        reason: 'systemd-unavailable',
+        skippedLoad: false,
+        refreshed: previous !== body,
+        alreadyRunning: false,
+        pid: fallback?.pid ?? null,
+        port: fallback?.port ?? null,
+        platform,
+        kind: paths.kind,
+        label: paths.label,
+        unitPath: paths.unitPath,
+        statePath: environment.AGENT_BOT_DAEMON_STATE_PATH,
+      };
+    }
+    throw error;
+  }
   if (skipLoad) {
     return {
       applied: true,

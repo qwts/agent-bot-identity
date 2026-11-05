@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureBlock, zshStartupDir } from './shell-path.mjs';
 import { enabledFeaturesFromEnv, parseFeatureList, writeEnabledFeaturesToConfig } from './config.mjs';
 import { GIT_HOOK_NAMES } from './identity-format.mjs';
-import { ensureDaemonSupervisor } from './daemon-supervisor.mjs';
+import { ensureDaemonSupervisor, NON_SYSTEMD_BROKER_START, NON_SYSTEMD_DAEMON_START } from './daemon-supervisor.mjs';
 import { ensureSpacesCutover } from './spaces-cutover.mjs';
 import { ensureClaudeWorktreeAdapter, syncHooks } from './sync-hooks.mjs';
 import { installGhShim } from './identity-cli.mjs';
@@ -528,7 +528,13 @@ export async function main(argv = process.argv.slice(2)) {
   if (result.transcriptAdapter?.updated) {
     process.stdout.write(`Claude WorktreeCreate adapter -> ${result.transcriptAdapter.evidence.path}\n`);
   }
-  if (result.supervisor?.applied) {
+  if (result.supervisor?.systemdUnavailable) {
+    process.stdout.write(
+      `daemon supervisor -> ${result.supervisor.unitPath} (systemd --user unavailable; started detached daemon${result.supervisor.pid ? ` pid ${result.supervisor.pid}` : ''})\n`,
+    );
+    process.stdout.write(`headless fallback -> ${NON_SYSTEMD_DAEMON_START}\n`);
+    process.stdout.write(`broker fallback   -> ${NON_SYSTEMD_BROKER_START}\n`);
+  } else if (result.supervisor?.applied) {
     process.stdout.write(`daemon supervisor -> ${result.supervisor.unitPath}\n`);
   } else if (result.supervisor?.reason === 'unsupported-platform') {
     process.stdout.write(`daemon supervisor skipped (${result.supervisor.platform})\n`);

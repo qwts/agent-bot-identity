@@ -74,6 +74,23 @@ try_systemctl() {
   "$(systemctl_cmd)" "$@" > /dev/null 2>&1
 }
 
+# True when a daemon-reload diagnostic means there is no user systemd / D-Bus
+# session in this environment (CI runner, container, disposable VM), rather than
+# a real systemd unit or permission failure (#1349).
+is_systemd_unavailable_output() {
+  case "$1" in
+    *"Permission denied"*|*"Connection refused"*|*"Access denied"*)
+      return 1
+      ;;
+    *"No medium found"*|*"No such file or directory"*|*"System has not been booted with systemd"*|*"Failed to get D-Bus connection"*|*"DBUS_SESSION_BUS_ADDRESS"*|*"Failed to connect to user scope bus"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 run_systemctl_capture() {
   "$(systemctl_cmd)" "$@" 2>/dev/null | tr -d '[:space:]'
 }
@@ -126,6 +143,17 @@ assert_safe_path() {
 # path character can end the replacement or add a command of its own.
 unit_value() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/%/%%/g' -e 's/[\\&|]/\\&/g'
+}
+
+shell_quote() {
+  case "$1" in
+    *[!A-Za-z0-9_./:-]*|'')
+      printf "'%s'\n" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
 }
 
 is_marked_wrapper() {

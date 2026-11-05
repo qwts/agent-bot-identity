@@ -107,6 +107,25 @@ AGENT_BOT_ENROLL_TOKEN="$AGENT_BOT_ENROLL_TOKEN" \
 agent-bot start --branch <branch>
 ```
 
+### Headless Linux without `systemd --user` (CI / disposable VMs / containers)
+
+On headless Linux environments without a user D-Bus / `systemd --user` session
+(`Failed to connect to bus: No medium found`), `agent-bot install` and the Linux
+bundle's `./install.sh` write the unit files without failing and fall back to
+detached startup. To start the identity daemon and `agent-comms` broker without
+`systemd` (if restarting an already-running detached daemon, run
+`agent-bot daemon stop` first):
+
+```bash
+agent-bot daemon start --daemonize
+AGENT_COMMS_SHARED_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agent-comms" \
+  nohup agent-comms broker run --single-account >/dev/null 2>&1 &
+```
+
+`agent-bot doctor` reports `daemon.supervisor` as a warning
+(`systemd-unavailable`) rather than a failure when `systemd --user` is absent,
+and suggests `agent-bot daemon start --daemonize` when the daemon is not yet
+running.
 ## Joining the hub (agent-comms)
 
 For routine coding tasks and repository sessions, `agent-bot start` handles

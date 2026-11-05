@@ -2643,12 +2643,18 @@ async function main() {
       break;
     }
     case 'start': {
+      const unexpected = rest.filter((arg) => arg !== '--json' && arg !== '--daemonize');
+      if (unexpected.length > 0) throw new Error('usage: agent-bot daemon start [--daemonize] [--json]');
       const status = await startDaemon();
-      process.stdout.write(
-        status.alreadyRunning
-          ? `daemon already running (pid ${status.pid}, port ${status.port})\n`
-          : `daemon started (pid ${status.pid}, port ${status.port})\n`,
-      );
+      if (json) {
+        process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+      } else {
+        process.stdout.write(
+          status.alreadyRunning
+            ? `daemon already running (pid ${status.pid}, port ${status.port})\n`
+            : `daemon started (pid ${status.pid}, port ${status.port})\n`,
+        );
+      }
       reportPersonaBlock();
       break;
     }

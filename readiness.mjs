@@ -39,7 +39,13 @@ import { daemonStatus } from './agent-daemon.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { readSopPolicyState } from './sop.mjs';
-import { inspectSupervisor, supervisorSkipLoad, supervisorUnitCredentialNames } from './daemon-supervisor.mjs';
+import {
+  inspectSupervisor,
+  NON_SYSTEMD_BROKER_START,
+  NON_SYSTEMD_DAEMON_START,
+  supervisorSkipLoad,
+  supervisorUnitCredentialNames,
+} from './daemon-supervisor.mjs';
 import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
 import { readWindowsLauncher } from './windows-cli-launcher.mjs';
 import {
@@ -328,6 +334,22 @@ function supervisorCheck({ home, env, inspect }) {
       evidence: { platform: info.platform, supported: false },
     });
   }
+  if (info.systemdUnavailable) {
+    return readinessCheck({
+      id: 'daemon.supervisor',
+      status: 'warning',
+      code: 'systemd-unavailable',
+      message: 'systemd --user is unavailable in this environment (no user D-Bus/systemd session); using detached daemon fallback',
+      action: `start the daemon and broker without systemd: ${NON_SYSTEMD_DAEMON_START}; ${NON_SYSTEMD_BROKER_START}`,
+      evidence: {
+        platform: info.platform,
+        kind: info.kind,
+        applied: info.applied,
+        loaded: false,
+        systemd_unavailable: true,
+      },
+    });
+  }
   if (!info.applied || !info.loaded) {
     return readinessCheck({
       id: 'daemon.supervisor',
@@ -406,7 +428,7 @@ function credentialNamesCheck({ home, env, serviceEnv, read }) {
   });
 }
 
-async function daemonHealthCheck({ home, env, probe, skipLoad, expectedVersion = null }) {
+async function daemonHealthCheck({ home, env, probe, skipLoad, systemdUnavailable = false, expectedVersion = null }) {
   const status = await probe({ home, env });
   if (status.running) {
     const evidence = {
@@ -443,6 +465,16 @@ async function daemonHealthCheck({ home, env, probe, skipLoad, expectedVersion =
       code: 'daemon-load-skipped',
       message: 'supervisor unit written; OS load skipped in this environment',
       evidence: { running: false },
+    });
+  }
+  if (systemdUnavailable) {
+    return readinessCheck({
+      id: 'daemon.health',
+      status: 'failed',
+      code: 'daemon-not-running-systemd-unavailable',
+      message: 'identity daemon is not running (systemd --user is unavailable)',
+      action: `run: ${NON_SYSTEMD_DAEMON_START}`,
+      evidence: { running: false, systemd_unavailable: true },
     });
   }
   return readinessCheck({
@@ -3054,6 +3086,7 @@ export async function collectReadiness({
       env: serviceEnv,
       probe: probeDaemon,
       skipLoad: supervisorSkipLoad(serviceEnv),
+      systemdUnavailable: Boolean(supervisor.evidence?.systemd_unavailable),
       expectedVersion: readPackageVersion(join(ROOT, 'package.json')),
     });
     machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
