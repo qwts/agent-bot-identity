@@ -180,7 +180,13 @@ test('parseStartArgs validates flags and worktree names', () => {
 });
 
 test('discoverOpencodeTranscript picks the fresh active OpenCode SQLite session, matches cwd across multiple sessions, and refuses stale sessions', async (t) => {
-  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = createRequire(import.meta.url)('node:sqlite'));
+  } catch {
+    t.skip('node:sqlite is not available on this Node runtime');
+    return;
+  }
   const home = mkdtempSync(path.join(tmpdir(), 'opencode-db-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const dbPath = path.join(home, '.local', 'share', 'opencode', 'opencode.db');

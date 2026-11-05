@@ -7,7 +7,7 @@
 // the private git dir (written by the daemon) and is never printed.
 
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, openSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -137,20 +137,29 @@ function realOrResolve(dir) {
   }
 }
 
-function primaryRepoRootFor(cwd, env = process.env) {
+function primaryRepoRootFor(cwd) {
   if (!cwd) return null;
-  try {
-    const commonDir = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
-      env,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 5_000,
-    }).trim();
-    const realCommon = realOrResolve(commonDir);
-    if (realCommon && path.basename(realCommon) === '.git') {
-      return realOrResolve(path.dirname(realCommon));
-    }
-  } catch { /* not a git checkout */ }
+  let dir = realOrResolve(cwd);
+  for (let depth = 0; depth < 32 && dir; depth += 1) {
+    const dotGit = path.join(dir, '.git');
+    try {
+      const st = statSync(dotGit);
+      if (st.isDirectory()) return dir;
+      if (st.isFile()) {
+        const text = readFileSync(dotGit, 'utf8');
+        const m = /^gitdir:\s*(.+)$/m.exec(text);
+        if (m) {
+          const gitDir = realOrResolve(path.resolve(dir, m[1].trim()));
+          const marker = `${path.sep}.git${path.sep}worktrees${path.sep}`;
+          const idx = gitDir.indexOf(marker);
+          if (idx > 0) return realOrResolve(gitDir.slice(0, idx));
+        }
+      }
+    } catch { /* keep walking up */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
   return null;
 }
 
