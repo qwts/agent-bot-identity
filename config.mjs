@@ -37,9 +37,10 @@
 
 import process from 'node:process';
 import { createHash, randomBytes } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { withLock } from './file-lock.mjs';
 import {
   OrganizationProfileError,
   PROFILE_HARNESSES,
@@ -84,11 +85,57 @@ export function applyEnabledFeatures(config = {}, features = []) {
   return { ...config, features: nextFeatures };
 }
 
+function ensureSecureConfigDir(destination, {
+  home = homedir(),
+  lstat = lstatSync,
+  mkdir = mkdirSync,
+  chmod = chmodSync,
+} = {}) {
+  const dir = dirname(destination);
+  const resolvedHome = home ? resolve(home) : null;
+  const resolvedDir = resolve(dir);
+  const dirsToCheck = [];
+  if (resolvedHome) {
+    const rel = relative(resolvedHome, resolvedDir);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+      let current = resolvedHome;
+      for (const part of rel.split(sep).filter(Boolean)) {
+        current = join(current, part);
+        dirsToCheck.push(current);
+      }
+    }
+  }
+  if (!dirsToCheck.includes(dir)) dirsToCheck.push(dir);
+
+  const inspectDir = (candidate) => {
+    try {
+      const stat = lstat(candidate);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error(`${candidate} exists and is not a regular directory`);
+      }
+      return stat;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      return null;
+    }
+  };
+
+  for (const candidate of dirsToCheck) inspectDir(candidate);
+  mkdir(dir, { recursive: true, mode: 0o700 });
+  for (const candidate of dirsToCheck) {
+    const stat = inspectDir(candidate);
+    if (stat && process.platform !== 'win32' && typeof stat.mode === 'number' && (stat.mode & 0o077) !== 0) {
+      chmod(candidate, 0o700);
+    }
+  }
+}
+
 export function writeEnabledFeaturesToConfig({
   features = [],
   env = process.env,
   home = homedir(),
   lstat = lstatSync,
+  chmod = chmodSync,
   mkdir = mkdirSync,
   write = writeFileSync,
   rename = renameSync,
@@ -96,35 +143,45 @@ export function writeEnabledFeaturesToConfig({
 } = {}) {
   const requested = parseFeatureList([...enabledFeaturesFromEnv(env), ...parseFeatureList(features)]);
   const destination = configPath({ home, env });
-  // loadConfig reads only the JSON file on disk (never ambient env overrides),
-  // so writing `next` back preserves only durable file-backed settings.
-  const current = loadConfig({ home, env });
   if (requested.length === 0) {
-    return { config: current, path: destination, updated: false, enabled: [] };
+    return { config: loadConfig({ home, env }), path: destination, updated: false, enabled: [] };
   }
-  try {
-    const stat = lstat(destination);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error(`${destination} exists and is not a regular agent-bot config file`);
+  ensureSecureConfigDir(destination, { home, lstat, mkdir, chmod });
+  const runWrite = () => {
+    try {
+      const stat = lstat(destination);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error(`${destination} exists and is not a regular agent-bot config file`);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
     }
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  const alreadyEnabled = requested.every((name) => current.features?.[name] === true);
-  if (alreadyEnabled) {
-    return { config: current, path: destination, updated: false, enabled: requested };
-  }
-  const next = validateConfig(applyEnabledFeatures(current, requested));
-  mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-  const temporary = `${destination}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    // loadConfig reads only the JSON file on disk (never ambient env overrides),
+    // so writing `next` back under the config lock preserves concurrent updates
+    // and only durable file-backed settings.
+    const current = loadConfig({ home, env });
+    const alreadyEnabled = requested.every((name) => current.features?.[name] === true);
+    if (alreadyEnabled) {
+      return { config: current, path: destination, updated: false, enabled: requested };
+    }
+    const next = validateConfig(applyEnabledFeatures(current, requested));
+    const temporary = `${destination}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      write(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+      rename(temporary, destination);
+    } catch (error) {
+      remove(temporary, { force: true });
+      throw error;
+    }
+    return { config: next, path: destination, updated: true, enabled: requested };
+  };
+  let canLock = false;
   try {
-    write(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-    rename(temporary, destination);
-  } catch (error) {
-    remove(temporary, { force: true });
-    throw error;
+    canLock = lstatSync(dirname(destination)).isDirectory();
+  } catch {
+    canLock = false;
   }
-  return { config: next, path: destination, updated: true, enabled: requested };
+  return canLock ? withLock(`${destination}.lock`, 'agent-bot configuration', runWrite) : runWrite();
 }
 
 // Add-ons use this single gate seam. Gates are config-only and default off;

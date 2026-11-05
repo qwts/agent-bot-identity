@@ -1335,6 +1335,34 @@ test('bootstrap --features and AGENT_BOT_ENABLE_FEATURES persist feature gates t
   assert.equal(loaded.features?.['github-identity'], true);
   assert.equal(loaded.apps?.codex, 'example-codex-agent');
 
+  // Rerunning --profile over an already-projected config with AGENT_BOT_ENABLE_FEATURES/--features
+  // merges and persists the new feature gate on disk rather than returning the old disabled config.
+  const idempotentProfileHome = tempHome();
+  installBootstrapProfile({
+    sourcePath: '-',
+    home: idempotentProfileHome,
+    env: { HOME: idempotentProfileHome },
+    read: () => JSON.stringify(organizationProfile()),
+  });
+  assert.equal(loadConfig({ home: idempotentProfileHome, env: {} }).features, undefined);
+  const rerunProfile = installBootstrapProfile({
+    sourcePath: '-',
+    features: ['github-identity'],
+    home: idempotentProfileHome,
+    env: { HOME: idempotentProfileHome },
+    read: () => JSON.stringify(organizationProfile()),
+  });
+  assert.equal(rerunProfile.updated, true);
+  assert.deepEqual(loadConfig({ home: idempotentProfileHome, env: {} }).features, { 'github-identity': true });
+  const thirdRunProfile = installBootstrapProfile({
+    sourcePath: '-',
+    features: ['github-identity'],
+    home: idempotentProfileHome,
+    env: { HOME: idempotentProfileHome },
+    read: () => JSON.stringify(organizationProfile()),
+  });
+  assert.equal(thirdRunProfile.updated, false);
+
   // When AGENT_BOT_CONFIG points to a custom file, --features writes to that file.
   const customHome = tempHome();
   const customConfig = join(customHome, 'custom-config.json');

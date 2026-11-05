@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -113,4 +113,25 @@ test('parseFeatureList, enabledFeaturesFromEnv, and writeEnabledFeaturesToConfig
     /simulated rename failure/,
   );
   assert.deepEqual(readdirSync(join(renameFailHome, '.config', 'agent-bot')), []);
+
+  // Rejects symlinked parent directory and tightens an existing 0o755 config directory to 0o700.
+  const symlinkDirHome = mkdtempSync(join(tmpdir(), 'agent-bot-gates-symdir-'));
+  mkdirSync(join(symlinkDirHome, '.config'), { recursive: true });
+  const realTargetDir = join(symlinkDirHome, 'real-dir');
+  mkdirSync(realTargetDir, { recursive: true });
+  symlinkSync(realTargetDir, join(symlinkDirHome, '.config', 'agent-bot'));
+  assert.throws(
+    () => writeEnabledFeaturesToConfig({ features: ['github-identity'], home: symlinkDirHome, env: {} }),
+    /not a regular directory/,
+  );
+
+  if (process.platform !== 'win32') {
+    const looseDirHome = mkdtempSync(join(tmpdir(), 'agent-bot-gates-loosedir-'));
+    const looseDir = join(looseDirHome, '.config', 'agent-bot');
+    mkdirSync(looseDir, { recursive: true, mode: 0o755 });
+    chmodSync(looseDir, 0o755);
+    assert.equal(statSync(looseDir).mode & 0o777, 0o755);
+    writeEnabledFeaturesToConfig({ features: ['github-identity'], home: looseDirHome, env: {} });
+    assert.equal(statSync(looseDir).mode & 0o777, 0o700);
+  }
 });

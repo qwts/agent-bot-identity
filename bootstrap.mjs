@@ -290,36 +290,61 @@ function publishBootstrapConfig({
     const preserveApps = config.identityApps === undefined && installed.identityApps !== undefined;
     const { identityApps, ...policy } = installed;
     const current = preserveApps ? policy : installed;
-    if (isDeepStrictEqual(current, config) || (preserveLocalFeatures && isProjectedRuntimeConfig(current) && sameProfileProjection(current, config))) {
+    const mergeLocalRuntimeKeys = (base, incoming) => {
+      let merged = { ...incoming };
+      for (const key of LOCAL_RUNTIME_CONFIG_KEYS) {
+        if (key === 'features') {
+          if (base.features !== undefined || incoming.features !== undefined) {
+            merged = {
+              ...merged,
+              features: {
+                ...(base.features ?? {}),
+                ...(incoming.features ?? {}),
+              },
+            };
+          }
+        } else if (base[key] !== undefined && incoming[key] === undefined) {
+          merged = { ...merged, [key]: base[key] };
+        }
+      }
+      return merged;
+    };
+    if (isDeepStrictEqual(current, config)) {
       return { config: installed, path: destination, updated: false };
     }
-    // Adding a roster scope to an unscoped config projected from the same
-    // profile only narrows what this account serves, and a config that is
-    // purely the projection of an older profile advances to the published
-    // one; both are rewritten in place. Removing or changing a scope, or any
-    // difference in a config that carries local edits, stays a conflict
-    // that needs explicit reconciliation.
-    const advancingProfile = advancesProjectedProfile(current, config);
-    if (!narrowsRosterScope(current, config) && !advancingProfile) {
-      if (conflictCode) {
-        throw configConflict(conflictCode, differingConfigKeys(
-          preserveLocalFeatures ? withoutLocalKeys(current) : current,
-          preserveLocalFeatures ? withoutLocalKeys(config) : config,
-        ));
+    if (preserveLocalFeatures && isProjectedRuntimeConfig(current) && sameProfileProjection(current, config)) {
+      const mergedCandidate = mergeLocalRuntimeKeys(current, config);
+      if (isDeepStrictEqual(current, mergedCandidate)) {
+        return { config: installed, path: destination, updated: false };
       }
-      throw new Error(
-        `${destination} conflicts with ${sourceDescription}; move it aside or reconcile it explicitly`,
-      );
-    }
-    // Feature gates and the executor policy are local add-on choices, not
-    // organization-profile edits. Preserve them while advancing the profile
-    // projection; an explicit --config source carries its own choices.
-    if (preserveLocalFeatures && advancingProfile) {
-      for (const key of LOCAL_RUNTIME_CONFIG_KEYS) {
-        if (current[key] !== undefined) config = { ...config, [key]: current[key] };
+      config = preserveApps ? { ...mergedCandidate, identityApps } : mergedCandidate;
+    } else {
+      // Adding a roster scope to an unscoped config projected from the same
+      // profile only narrows what this account serves, and a config that is
+      // purely the projection of an older profile advances to the published
+      // one; both are rewritten in place. Removing or changing a scope, or any
+      // difference in a config that carries local edits, stays a conflict
+      // that needs explicit reconciliation.
+      const advancingProfile = advancesProjectedProfile(current, config);
+      if (!narrowsRosterScope(current, config) && !advancingProfile) {
+        if (conflictCode) {
+          throw configConflict(conflictCode, differingConfigKeys(
+            preserveLocalFeatures ? withoutLocalKeys(current) : current,
+            preserveLocalFeatures ? withoutLocalKeys(config) : config,
+          ));
+        }
+        throw new Error(
+          `${destination} conflicts with ${sourceDescription}; move it aside or reconcile it explicitly`,
+        );
       }
+      // Feature gates and the executor policy are local add-on choices, not
+      // organization-profile edits. Preserve them while advancing the profile
+      // projection; an explicit --config source carries its own choices.
+      if (preserveLocalFeatures && (advancingProfile || narrowsRosterScope(current, config))) {
+        config = mergeLocalRuntimeKeys(current, config);
+      }
+      if (preserveApps) config = { ...config, identityApps };
     }
-    if (preserveApps) config = { ...config, identityApps };
   }
 
   mkdir(dirname(destination), { recursive: true });
