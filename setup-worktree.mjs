@@ -12,12 +12,13 @@ import { AGENT_ID_KEYS } from './identity-format.mjs';
 import { loadConfig, isGateEnabled, isOrgHarnessAppSlug, soulOwnsAppSlug, apiBase, daemonPreference, githubHost } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
 import { ensureSoulSpace } from './soul-memory.mjs';
-import { listSouls, locateSoulDir, showSoul, upsertIdentitySoul } from './agent-population.mjs';
+import { listSouls, locateSoulDir, populationFile, showSoul, upsertIdentitySoul } from './agent-population.mjs';
 import { refuseAppOwnerMismatch } from './identity-soul.mjs';
 import { assertWorktreeArea, placeWorktree, soulWorktreePath } from './soul-worktrees.mjs';
 
 const USAGE = `usage: agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
 
+Note: [deprecated] Prefer \`agent-bot start [--branch <branch>]\` for routine task and worktree startup.
 Check in first with agent-bot join --name NAME --harness HARNESS.
 Configure an existing checkout in the session soul's worktrees/<name>, or a
 checkout already linked from that soul. --name creates a linked git worktree
@@ -249,7 +250,7 @@ export async function bindSoul({ agentId, policy, client, ensureLocal, worktree 
 }
 
 // Register the already-resolved soul; setup must never mint or rotate identity.
-async function bindExecutionIdentity({ config, daemon, executionIdentity }) {
+async function bindExecutionIdentity({ config, daemon, executionIdentity, env = process.env, home = homedir(), stateDir }) {
   // The census row records the checkout it is pinned to, so doctor can name
   // an active soul no checkout references (#192). Null in a bare repository.
   let worktree = null;
@@ -260,13 +261,18 @@ async function bindExecutionIdentity({ config, daemon, executionIdentity }) {
   }
   const space = await bindSoul({
     agentId: executionIdentity.id,
-    policy: daemonPreference({ config }),
-    client: daemon ?? daemonClient(),
+    policy: daemonPreference({ env, config }),
+    client: daemon ?? daemonClient({ env, home }),
     worktree,
     sighted: true,
     ensureLocal: () => {
-      const local = ensureSoulSpace(executionIdentity.id);
-      upsertIdentitySoul(executionIdentity.id, local.path, { worktree, sighted: true });
+      const local = ensureSoulSpace(executionIdentity.id, { env, home, config });
+      upsertIdentitySoul(executionIdentity.id, local.path, {
+        worktree,
+        sighted: true,
+        ...(stateDir ? { stateDir } : {}),
+        file: populationFile({ env, home, config }),
+      });
       return local;
     },
   });
@@ -274,12 +280,13 @@ async function bindExecutionIdentity({ config, daemon, executionIdentity }) {
   return { executionIdentity, space, worktree };
 }
 
-function bindTokenState({ gitDir, worktree, agentId }) {
+function bindTokenState({ gitDir, worktree, agentId, stateDir }) {
   try {
     return prepareWorktreeBinding({
       gitDir,
       worktree: worktree ?? git('rev-parse', '--show-toplevel'),
       agentId,
+      stateDir,
     });
   } catch {
     return 'bind token unavailable';
@@ -369,32 +376,42 @@ function clearInheritedPinQuietly(sessionId) {
   try { return clearInheritedPin(sessionId); } catch { return false; }
 }
 
-async function configureSoulWithoutApp({ gitDir, config, daemon, identity }) {
+async function configureSoulWithoutApp({ gitDir, config, daemon, identity, env = process.env, home = homedir(), stateDir, quiet = false }) {
   const { executionIdentity, space, worktree } = await bindExecutionIdentity({
     config,
     daemon,
     executionIdentity: identity,
+    env,
+    home,
+    stateDir,
   });
   clearAppAttribution();
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
-  const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id });
+  const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id, stateDir });
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
   const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;
-  process.stdout.write(
-    `worktree configured as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`
-    + `${bindingStatusLines({ worktreeBindingPresent: bindState === 'binding reused' }).join('\n')}\n`,
-  );
+  if (!quiet) {
+    process.stdout.write(
+      `worktree configured as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`
+      + `${bindingStatusLines({ worktreeBindingPresent: bindState === 'binding reused' }).join('\n')}\n`,
+    );
+  }
+  return { appSlug: null, bindState, spaceState };
 }
 
-async function configure({ identity, options, config,
+export async function configureWorktree({ identity, options = {}, config,
   reconcileCredentials = reconcileAppCredentials,
   rewriteOrigins = rewriteOriginUrls,
   resolveBotUid = botUid,
   daemon = null,
   gate: isEnabled = isGateEnabled,
+  env = process.env,
+  home = homedir(),
+  stateDir,
+  quiet = false,
 } = {}) {
   const gitDir = git('rev-parse', '--absolute-git-dir');
-  assertWorktreeArea(identity.id, git('rev-parse', '--show-toplevel'));
+  assertWorktreeArea(identity.id, git('rev-parse', '--show-toplevel'), { env, home, config });
   for (const key of AGENT_ID_KEYS) {
     let pin;
     try { pin = git('config', '--worktree', '--get', key); } catch { continue; }
@@ -402,9 +419,8 @@ async function configure({ identity, options, config,
   }
   const binding = readBinding({ env: {}, gitDir });
   if (binding && binding.agentId !== identity.id) throw new Error('checkout binding belongs to another soul');
-  if (!isEnabled('github-identity', { env: process.env, home: homedir(), config })) {
-    await configureSoulWithoutApp({ gitDir, config, daemon, identity });
-    return;
+  if (!isEnabled('github-identity', { env, home, config })) {
+    return configureSoulWithoutApp({ gitDir, config, daemon, identity, env, home, stateDir, quiet });
   }
   const currentPin = pinnedSlug();
   const unpinnedGit = (args) => {
@@ -416,9 +432,9 @@ async function configure({ identity, options, config,
   const checkoutHarness = identity.harness && isOrgHarnessAppSlug(identity.github?.appSlug, identity.harness, config)
     ? identity.harness
     : null;
-  const checkoutGit = (!currentPin || soulOwnsAppSlug(identity, currentPin, config)) ? unpinnedGit : undefined;
+  const checkoutGit = (!currentPin || soulOwnsAppSlug(identity, currentPin, config, { env, home })) ? unpinnedGit : undefined;
   const checkoutSlug = options.slug ? null : resolveAgentSlug({
-    env: { ...process.env, AGENT_BOT_ID: identity.id, GH_AGENT_APP: '' },
+    env: { ...env, AGENT_BOT_ID: identity.id, GH_AGENT_APP: '' },
     config,
     git: checkoutGit,
     detect: false,
@@ -427,18 +443,20 @@ async function configure({ identity, options, config,
   const resolvedSlug = resolveAgentSlug({ explicit: options.slug ?? checkoutSlug ?? identity.github?.appSlug, config, detect: false });
   if (!identity.github?.appSlug || !resolvedSlug) throw new Error('session soul has no GitHub App; re-run agent-bot join in this checkout to resolve its configured harness mapping');
   const slug = validateAppSlug(resolvedSlug);
-  if ((slug !== identity.github?.appSlug && !soulOwnsAppSlug(identity, slug, config))
-      || (currentPin && currentPin !== slug && !soulOwnsAppSlug(identity, currentPin, config))) {
+  if ((slug !== identity.github?.appSlug && !soulOwnsAppSlug(identity, slug, config, { env, home }))
+      || (currentPin && currentPin !== slug && !soulOwnsAppSlug(identity, currentPin, config, { env, home }))) {
     throw new Error('GitHub App does not match the session soul; use a new worktree');
   }
   let verifiedToken = null;
   const [credential] = await reconcileCredentials({
     slugs: [slug],
+    home,
+    env,
     onVerified: (_verifiedSlug, grant) => {
       verifiedToken = grant.token;
     },
   });
-  if (credential.local.status === 'restored') {
+  if (credential.local.status === 'restored' && !quiet) {
     process.stdout.write(`credential restored for ${slug}\n`);
   }
   // Eliminate every SSH push path only after the App credential is locally
@@ -446,9 +464,9 @@ async function configure({ identity, options, config,
   // untouched.
   rewriteOrigins();
   const base = apiBase(config);
-  const uid = await resolveBotUid(slug, base, verifiedToken);
+  const uid = await resolveBotUid(slug, base, verifiedToken, { home, env, ...(options?.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) });
   const host = githubHost(config);
-  const installedRoot = join(homedir(), '.local');
+  const installedRoot = join(home, '.local');
   const helper = join(installedRoot, 'bin', 'agent-bot');
   const hooks = normalizeGitBashPath(join(installedRoot, 'share', 'agent-bot', 'hooks'));
   let previousHooks = null;
@@ -465,8 +483,11 @@ async function configure({ identity, options, config,
     executionIdentity: identity,
     config,
     daemon,
+    env,
+    home,
+    stateDir,
   });
-  await refuseAppOwnerMismatch({ appSlug: slug, config, cwd: process.cwd(), fetchImpl: options?.fetchImpl });
+  await refuseAppOwnerMismatch({ appSlug: slug, config, cwd: process.cwd(), env, home, fetchImpl: options?.fetchImpl });
   git('config', '--worktree', 'agentBot.app', slug);
   git('config', '--worktree', 'agentBot.agentId', executionIdentity.id);
   git('config', '--worktree', 'user.name', `${slug}[bot]`);
@@ -495,15 +516,20 @@ async function configure({ identity, options, config,
   // no-op for identity. Best-effort like the token cache above: a sandboxed
   // harness that cannot write the (shared) private git dir still gets a fully
   // configured worktree — it simply cannot bind until a mint succeeds.
-  const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id });
+  const bindState = bindTokenState({ gitDir, worktree, agentId: executionIdentity.id, stateDir });
 
   const transcriptState = executionIdentity.transcript ? 'transcript bound' : 'transcript pending';
   const spaceState = `${space.created ? 'space created' : 'space ready'}${space.via === 'daemon' ? ' via daemon' : ''}`;
-  process.stdout.write(
-    `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`
-    + `${bindingStatusLines({ worktreeBindingPresent: bindState === 'binding reused' }).join('\n')}\n`,
-  );
+  if (!quiet) {
+    process.stdout.write(
+      `worktree configured for ${slug}[bot] as ${executionIdentity.id} (${transcriptState}, ${spaceState}, ${bindState})\n`
+      + `${bindingStatusLines({ worktreeBindingPresent: bindState === 'binding reused' }).join('\n')}\n`,
+    );
+  }
+  return { appSlug: slug, bindState, spaceState };
 }
+
+const configure = configureWorktree;
 
 export async function main(dependencies = {}) {
   const argv = process.argv.slice(2);

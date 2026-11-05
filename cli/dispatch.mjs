@@ -7,6 +7,7 @@ import { windowsGitShell, gitShellEnvironment } from '../windows-git-shell.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const MODULES = new Map([
+  ['start', 'start.mjs'],
   ['bootstrap', 'bootstrap.mjs'],
   ['setup-worktree', 'setup-worktree.mjs'],
   ['join', 'soul-join.mjs'],

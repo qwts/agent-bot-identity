@@ -7,6 +7,9 @@
 // the private git dir (written by the daemon) and is never printed.
 
 import { execFileSync } from 'node:child_process';
+import { readdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
@@ -17,12 +20,13 @@ import { detectAgentHarness, detectHarness } from './detect-harness.mjs';
 export const SESSION_BIND_USAGE = `usage: agent-bot session bind [--transcript-id ID] [--provider NAME] [--parent-agent-id ID] [--json]
 
 Establish (or verify) this worktree's live session binding without MCP.
+Note: [deprecated] Prefer \`agent-bot start [--branch <branch>]\` for routine task and worktree startup.
 With an existing binding this validates it at the daemon and needs no
 transcript id. Without one, the conversation is named by --transcript-id,
 else by the harness: CODEX_THREAD_ID, CLAUDE_SESSION_ID,
 CURSOR_CONVERSATION_ID, QWEN_CODE_SESSION_ID, a lifecycle hook's session
-id, or Devin's session list when it names exactly one session for this
-worktree.
+id, Antigravity's active brain transcript, or Devin's session list when it
+names exactly one session for this worktree.
 `;
 
 const NO_TRANSCRIPT = '--transcript-id is required: no session id was found for this conversation '
@@ -45,11 +49,46 @@ async function listDevinSessions(cwd, env) {
   }
 }
 
+export function discoverAntigravityTranscript(home) {
+  if (!home) return null;
+  const brainDir = path.join(home, '.gemini', 'antigravity', 'brain');
+  let entries;
+  try {
+    entries = readdirSync(brainDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const logPath = path.join(brainDir, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
+    try {
+      const st = statSync(logPath);
+      candidates.push({ id: entry.name, mtimeMs: st.mtimeMs });
+    } catch {
+      /* ignore entries without transcript.jsonl */
+    }
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  // Two concurrent Antigravity conversations active within 60s of each other
+  // are ambiguous; return null so --transcript-id is required.
+  if (candidates.length > 1 && candidates[0].mtimeMs - candidates[1].mtimeMs < 60_000) {
+    return null;
+  }
+  return { provider: 'antigravity', id: candidates[0].id };
+}
+
 // Where this conversation's id comes from when no flag names it (#1275):
 // the harness's own environment, then the lifecycle hook payload's session
 // id, then (Devin only) a session list naming exactly one session for this
-// worktree. More than one listed session is ambiguous and finds nothing.
-export async function findTranscript({ env = process.env, cwd = process.cwd(), listDevinSessionsImpl = listDevinSessions } = {}) {
+// worktree, or Antigravity's most recently updated brain transcript.
+export async function findTranscript({
+  env = process.env,
+  cwd = process.cwd(),
+  home = env.HOME ?? (env === process.env ? homedir() : null),
+  listDevinSessionsImpl = listDevinSessions,
+} = {}) {
   const native = discoverTranscript(env);
   if (native) return native;
   const harness = detectHarness(env);
@@ -59,6 +98,10 @@ export async function findTranscript({ env = process.env, cwd = process.cwd(), l
   if (harness === 'devin') {
     const ids = await listDevinSessionsImpl(cwd, env);
     if (Array.isArray(ids) && ids.length === 1) return { provider: 'devin', id: ids[0] };
+  }
+  if (harness === 'antigravity') {
+    const found = discoverAntigravityTranscript(home);
+    if (found) return found;
   }
   return null;
 }

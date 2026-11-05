@@ -41,6 +41,31 @@ covers a subcommand. Load only the reference needed for the current request. Loa
 diagnosing a cross-cutting mismatch among commit attribution, credentials,
 verified publishing, and transcript provenance.
 
+## Starting a task or session (agent-bot start)
+
+`agent-bot start` is the primary one-command check-in for starting a task or
+creating/switching to a linked soul worktree:
+
+```bash
+agent-bot start --branch <branch>
+```
+
+It auto-detects the harness and conversation transcript ID, reuses the harness's
+canonical active soul (or creates one if none exists), creates or reuses a
+collision-free linked worktree under `<soulDir>/worktrees/<repo>-<branch>`
+branched from `origin/HEAD` (`origin/main`), configures Git attribution and
+hooks, establishes the live daemon session binding (`session bind`), and
+verifies server-mode readiness.
+
+What `agent-bot start` is **not**:
+- Not machine/owner bootstrap (`agent-bot bootstrap --profile ...`)
+- Not daemon process startup (`agent-bot daemon start`)
+- Not project dependency or build setup (`npm install`, dev servers)
+
+Direct calls to `agent-bot join`, `agent-bot setup-worktree`, and
+`agent-bot session bind` are `[deprecated]` for routine task/worktree startup;
+prefer `agent-bot start --branch <branch>`.
+
 ## Joining the hub (agent-comms)
 
 The hub is agent-comms. `agent-bot join` is the supported way for an agent
@@ -226,7 +251,7 @@ for. `agent-bot skill path` prints the installed release's copy of this skill.
 | local-write | `soul dir` | May re-register a uniquely moved soul directory; see [soul-homes.md](../../docs/soul-homes.md). |
 | local-write | `soul spawn`, `soul build`, `soul revision`, `soul env migrate`, `soul runtimes install`, `soul runtimes upgrade --apply`, `soul secret ID set|clear`, `soul cold-wake`, `soul model`, `soul mode`, `soul computer-use`, `soul confinement`, `soul stop`, `soul pause`, `soul resume` | Inspect the subcommand and current state before retrying; spawning creates a new identity, and owner actions require the owner gate. |
 | local-write | `approvals approve`, `approvals deny`, `web open` | Decisions require the daemon's owner gate; inspect waiting proposals before retrying. Each web open mints a single-use pairing code and prints/opens its link. |
-| remote-write | `join` | Also writes local soul, census, checkout pin and bind-token state. Running it again from the same checkout reuses the soul; see [joining.md](../../docs/joining.md). |
+| remote-write | `start`, `join` | Also writes local soul, census, checkout pin and bind-token state. Running it again from the same checkout reuses the soul; see [joining.md](../../docs/joining.md). |
 | remote-write | `soul comms`, `soul fork`, `telegram run` | Changes agent-comms membership or relays messages; also writes local state. Inspect current state before retrying. |
 | destructive | `soul remove` | Owner-gated: leaves agent-comms, retires the soul (there is no un-retire), and archives its folders; `--scope team` does the same for every active soul it leads. Repeating finishes cleanup. `soul remove ID --plan` is read-only and shows what a scope would touch. |
 | remote-write | `mint-token` | Each run mints a new short-lived token; repeating is safe. |

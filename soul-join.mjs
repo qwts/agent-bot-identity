@@ -53,6 +53,7 @@ const USAGE = 'usage: agent-bot join --name NAME --harness H [--template PATH] [
 // Wording from docs/joining.md and docs/soul-homes.md.
 const HELP = `${USAGE}
 
+Note: [deprecated] Prefer \`agent-bot start [--branch <branch>]\` for routine task and worktree startup.
 Become a soul and join agent-comms. It needs no GitHub App.
 When github-identity is enabled, the configured harness markers resolve its
 App automatically. Rejoining fills a missing App on an active soul; an

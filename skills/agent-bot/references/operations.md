@@ -6,9 +6,10 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 
 | Intent | Command |
 |---|---|
+| Start a task or create/reuse a bound soul worktree | `agent-bot start [--branch <branch>] [--repo <path\|owner/name>] [--json]` |
 | Bootstrap from a fresh source checkout | `./agent-bot bootstrap --repair --machine-only [--with-gh-shim] [--json]` (profile from the selected organization), or `--profile <path\|->` |
 | Inspect available commands | `agent-bot --help` |
-| Configure this checkout's bot identity | `agent-bot setup-worktree [app-slug]` |
+| Configure this checkout's bot identity (`[deprecated]` for routine startup; prefer `agent-bot start`) | `agent-bot setup-worktree [app-slug]` |
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
 | Diagnose the installation and mapped identities | `agent-bot doctor [--json]` |
 | Repair and verify an installed setup | `agent-bot bootstrap [--machine-only\|--worktree-only] [--json]` |

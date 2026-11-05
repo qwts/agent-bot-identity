@@ -1,0 +1,391 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { parseAgentBotArgs } from '../cli/parse.mjs';
+import { helpText } from '../cli/output.mjs';
+import { createDaemonServer } from '../agent-daemon.mjs';
+import { discoverAntigravityTranscript, findTranscript } from '../session-bind.mjs';
+import { START_USAGE, formatStartReceipt, parseStartArgs, startTask } from '../start.mjs';
+import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
+import { worktreeSoul } from './helpers/worktree-soul.mjs';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const CLI = path.join(ROOT, 'agent-bot.mjs');
+
+function makeFixture(t, { harness = 'codex', serverMode = false, deviceHarnesses = null, createSoul = true, appSlug = undefined } = {}) {
+  const home = realpathSync(mkdtempSync(path.join(tmpdir(), 'start-test-')));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const stateDir = path.join(home, 'state');
+  const serverStateDir = path.join(home, 'server-state');
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(serverStateDir, { recursive: true });
+
+  const env = hermeticGitEnv({}, {
+    HOME: home,
+    PATH: process.env.PATH,
+    AGENT_BOT_ACCOUNT: 'owner',
+    AGENT_BOT_CONFIG: path.join(home, 'config.json'),
+    AGENT_BOT_STATE_HOME: stateDir,
+    AGENT_BOT_SERVER_STATE: serverStateDir,
+    AGENT_BOT_POPULATION_PATH: path.join(home, 'population.json'),
+    AGENT_BOT_SOULS_HOME: path.join(home, 'souls'),
+    AGENT_BOT_SPACES_HOME: path.join(home, 'spaces'),
+    ...(serverMode ? { AGENT_BOT_SERVER: 'https://agents.true-line.ai' } : {}),
+  });
+
+  const config = {
+    prefix: 'test',
+    apps: { [harness]: `test-${harness}-agent` },
+    features: { 'github-identity': true },
+    settings: {
+      daemonPreference: 'off',
+      ...(serverMode ? { agentBotServer: 'https://agents.true-line.ai' } : { legacyLocalCustody: true }),
+    },
+    identityApps: {
+      [`test-${harness}-agent`]: {
+        id: '123456',
+        botUid: '999001',
+        botAvatarUrl: 'https://avatars.githubusercontent.com/u/999001?v=4',
+      },
+    },
+  };
+  writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify(config));
+
+  if (deviceHarnesses !== null) {
+    writeFileSync(path.join(serverStateDir, 'device.json'), JSON.stringify({
+      server: 'https://agents.true-line.ai',
+      device_id: 'dev_test',
+      harnesses: deviceHarnesses,
+    }));
+  }
+
+  const originBare = path.join(home, 'test-org', 'my-repo.git');
+  const repo = path.join(home, 'my-repo');
+  mkdirSync(originBare, { recursive: true });
+  mkdirSync(repo, { recursive: true });
+  const git = (cwd, ...args) => execFileSync('git', args, {
+    cwd,
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+
+  git(originBare, 'init', '--bare', '-q', '-b', 'main');
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'config', 'user.name', 'Human Owner');
+  git(repo, 'config', 'user.email', 'human@example.com');
+  git(repo, 'config', 'core.hooksPath', '/dev/null');
+  git(repo, 'remote', 'add', 'origin', originBare);
+  writeFileSync(path.join(repo, 'README.md'), '# test\n');
+  git(repo, 'add', 'README.md');
+  git(repo, 'commit', '-q', '-m', 'initial main commit');
+  git(repo, 'push', '-q', '-u', 'origin', 'main');
+
+  const resolvedAppSlug = appSlug === undefined ? `test-${harness}-agent` : appSlug;
+  const { identity, options } = createSoul
+    ? worktreeSoul(env, null, { harness, appSlug: resolvedAppSlug })
+    : { identity: null, options: null };
+  return { home, env, config, repo, originBare, git, identity, options };
+}
+
+async function startTestDaemon(t, f) {
+  const server = createDaemonServer({ env: f.env, home: f.home, config: f.config });
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve) => { server.closeAllConnections?.(); server.close(resolve); }));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const headers = { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' };
+  const clientFactory = async () => ({
+    available: async () => true,
+    ensureSpace: async (agentId) => {
+      const res = await fetch(`${url}/v0/space/ensure`, { method: 'POST', headers, body: JSON.stringify({ agentId }) });
+      return res.json();
+    },
+    registerSoul: async (agentId, spacePath, opts) => {
+      const res = await fetch(`${url}/v0/population/register`, { method: 'POST', headers, body: JSON.stringify({ agentId, spacePath, ...opts }) });
+      return res.json();
+    },
+    bind: async (body) => {
+      const res = await fetch(`${url}/v0/bind`, { method: 'POST', headers, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw Object.assign(new Error(data?.error ?? `HTTP ${res.status}`), { statusCode: res.status });
+      return data;
+    },
+    binding: async (secret) => {
+      const res = await fetch(`${url}/v0/binding`, { method: 'GET', headers: { ...headers, 'x-agent-binding': secret } });
+      const data = await res.json();
+      if (!res.ok) throw Object.assign(new Error(data?.error ?? `HTTP ${res.status}`), { statusCode: res.status });
+      return data;
+    },
+  });
+  return { server, clientFactory };
+}
+
+test('start is a public CLI command and --help explains what it is and is not without reading config', (t) => {
+  assert.equal(parseAgentBotArgs(['start', '--branch', 'feat/x']).command, 'start');
+  assert.match(helpText(), /^ {2}start +Check in this session/m);
+  assert.match(helpText(), /setup-worktree .*\[deprecated: prefer 'agent-bot start'/);
+  assert.match(helpText(), /join .*\[deprecated: prefer 'agent-bot start'/);
+  assert.match(helpText(), /session .*\[deprecated: prefer 'agent-bot start'/);
+  assert.match(START_USAGE, /What `agent-bot start` is NOT:/);
+  assert.match(START_USAGE, /Not machine\/owner bootstrap/);
+  assert.match(START_USAGE, /Not daemon process startup/);
+  assert.match(START_USAGE, /Not project dependency or build setup/);
+
+  const dir = mkdtempSync(path.join(tmpdir(), 'start-help-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const badConfig = path.join(dir, 'bad-config.json');
+  writeFileSync(badConfig, '{not valid json');
+  const res = spawnSync(process.execPath, [CLI, 'start', '--help'], {
+    cwd: dir,
+    env: { ...process.env, AGENT_BOT_CONFIG: badConfig },
+    encoding: 'utf8',
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /usage: agent-bot start/);
+});
+
+test('parseStartArgs validates flags and worktree names', () => {
+  assert.deepEqual(
+    parseStartArgs(['-b', 'feat/a', '--base', 'origin/main', '--repo', 'qwts/repo', '--name', 'wt-1', '--harness', 'claude', '--soul', 's1', '--transcript-id', 't1', '--provider', 'claude', '--json']),
+    {
+      help: false,
+      json: true,
+      branch: 'feat/a',
+      base: 'origin/main',
+      repo: 'qwts/repo',
+      name: 'wt-1',
+      harness: 'claude',
+      soul: 's1',
+      transcriptId: 't1',
+      provider: 'claude',
+    },
+  );
+  assert.throws(() => parseStartArgs(['--branch']), /--branch requires a value/);
+  assert.throws(() => parseStartArgs(['--branch', 'a', '-b', 'b']), /may be passed only once/);
+  assert.throws(() => parseStartArgs(['--unknown']), /unknown option: --unknown/);
+  assert.throws(() => parseStartArgs(['--name', '../escape']), /invalid worktree name/);
+  assert.equal(parseStartArgs(['--help', '--unknown']).help, true);
+});
+
+test('discoverAntigravityTranscript picks the most recently updated brain transcript, refuses ambiguous concurrent sessions, and stays hermetic without HOME', async (t) => {
+  const home = mkdtempSync(path.join(tmpdir(), 'agy-brain-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const olderLog = path.join(home, '.gemini', 'antigravity', 'brain', 'conv-older', '.system_generated', 'logs', 'transcript.jsonl');
+  const newerLog = path.join(home, '.gemini', 'antigravity', 'brain', 'conv-newer', '.system_generated', 'logs', 'transcript.jsonl');
+  mkdirSync(path.dirname(olderLog), { recursive: true });
+  mkdirSync(path.dirname(newerLog), { recursive: true });
+  writeFileSync(olderLog, '{}\n');
+  writeFileSync(newerLog, '{}\n');
+  utimesSync(olderLog, 1_700_000_000, 1_700_000_000);
+  utimesSync(newerLog, 1_700_000_100, 1_700_000_100);
+
+  assert.deepEqual(discoverAntigravityTranscript(home), { provider: 'antigravity', id: 'conv-newer' });
+  assert.deepEqual(
+    await findTranscript({ env: { ANTIGRAVITY_AGENT: '1', HOME: home } }),
+    { provider: 'antigravity', id: 'conv-newer' },
+  );
+  // Two concurrent transcripts modified within 60s of each other are ambiguous.
+  utimesSync(olderLog, 1_700_000_080, 1_700_000_080);
+  assert.equal(discoverAntigravityTranscript(home), null);
+  // Without HOME in a synthetic env object, findTranscript never leaks the host HOME.
+  assert.equal(await findTranscript({ env: { ANTIGRAVITY_AGENT: '1' } }), null);
+});
+
+test('startTask from a primary checkout auto-resolves soul, branches from origin/main, binds session, and leaves primary checkout untouched', async (t) => {
+  const f = makeFixture(t, { harness: 'codex', serverMode: true, deviceHarnesses: ['test-codex-agent'] });
+  const { clientFactory } = await startTestDaemon(t, f);
+
+  // Advance local primary checkout onto a dirty local branch so we prove
+  // `start --branch` branches from origin/main rather than the dirty primary HEAD.
+  f.git(f.repo, 'checkout', '-q', '-b', 'local-wip');
+  writeFileSync(path.join(f.repo, 'wip.txt'), 'uncommitted\n');
+  f.git(f.repo, 'add', 'wip.txt');
+  f.git(f.repo, 'commit', '-q', '-m', 'local wip commit not on origin/main');
+  const originMainSha = f.git(f.repo, 'rev-parse', 'origin/main');
+
+  const startEnv = {
+    ...f.env,
+    AGENT_BOT_ID: '',
+    QWTS_AGENT_ID: '',
+    CODEX_SANDBOX: 'seatbelt',
+    CODEX_THREAD_ID: 'thread-1345',
+  };
+
+  const receipt = await startTask({
+    branch: 'feat/issue-1345',
+    cwd: f.repo,
+    env: startEnv,
+    home: f.home,
+    config: f.config,
+    clientFactory,
+  });
+
+  assert.equal(receipt.soul.id, f.identity.id);
+  assert.equal(receipt.soul.resolution, 'auto-resolved: codex');
+  assert.deepEqual(receipt.session, { provider: 'codex', id: 'thread-1345', source: 'auto-detected' });
+  assert.equal(receipt.worktree.branch, 'feat/issue-1345');
+  assert.equal(receipt.worktree.created, true);
+  assert.ok(receipt.worktree.path.endsWith('my-repo-feat-issue-1345'));
+  assert.equal(f.git(receipt.worktree.path, 'rev-parse', 'HEAD'), originMainSha);
+  assert.equal(f.git(receipt.worktree.path, 'config', '--worktree', '--get', 'user.name'), 'test-codex-agent[bot]');
+  assert.equal(f.git(receipt.worktree.path, 'config', '--worktree', '--get', 'agentBot.agentId'), f.identity.id);
+  assert.equal(receipt.binding.status, 'live');
+  assert.equal(receipt.binding.alreadyBound, false);
+  assert.match(receipt.next, /cd /);
+  assert.match(formatStartReceipt(receipt), /soul: .*auto-resolved: codex/);
+
+  // Primary checkout remains human-attributed and does not track origin/main on the feature branch.
+  assert.equal(f.git(f.repo, 'config', '--get', 'user.name'), 'Human Owner');
+  assert.equal(existsSync(path.join(f.repo, '.git', 'config.worktree')), false);
+  assert.doesNotMatch(readFileSync(path.join(f.repo, '.git', 'config'), 'utf8'), /\[branch "feat\/issue-1345"\]/);
+
+  // Re-running inside the created soul worktree is a fast idempotent no-op.
+  const rerun = await startTask({
+    branch: 'feat/issue-1345',
+    cwd: receipt.worktree.path,
+    env: startEnv,
+    home: f.home,
+    config: f.config,
+    clientFactory,
+  });
+  assert.equal(rerun.worktree.path, receipt.worktree.path);
+  assert.equal(rerun.worktree.created, false);
+  assert.equal(rerun.binding.alreadyBound, true);
+  assert.equal(rerun.next, null);
+
+  // Starting a second branch from inside the first branch's worktree branches
+  // cleanly from origin/main into a sibling soul worktree and reuses the
+  // session transcript even if CODEX_THREAD_ID is omitted.
+  f.git(receipt.worktree.path, 'commit', '--allow-empty', '-q', '-m', 'work on first branch');
+  const second = await startTask({
+    branch: 'feat/second-task',
+    cwd: receipt.worktree.path,
+    env: { ...startEnv, CODEX_THREAD_ID: '' },
+    home: f.home,
+    config: f.config,
+    clientFactory,
+  });
+  assert.equal(second.worktree.created, true);
+  assert.ok(second.worktree.path.endsWith('my-repo-feat-second-task'));
+  assert.equal(f.git(second.worktree.path, 'rev-parse', 'HEAD'), originMainSha);
+  assert.equal(second.session.id, 'thread-1345');
+  assert.equal(second.session.source, 'reused-session');
+});
+
+test('startTask in server mode fails closed with server enroll guidance when device or harness scope is missing', async (t) => {
+  const unenrolled = makeFixture(t, { harness: 'codex', serverMode: true, deviceHarnesses: null });
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/unenrolled',
+      transcriptId: 't-1',
+      cwd: unenrolled.repo,
+      env: { ...unenrolled.env, CODEX_SANDBOX: 'seatbelt' },
+      home: unenrolled.home,
+      config: unenrolled.config,
+    }),
+    (err) => err.code === 'server-device-not-enrolled' && /agent-bot server enroll --add-harness test-codex-agent/.test(err.message),
+  );
+
+  const wrongScope = makeFixture(t, { harness: 'codex', serverMode: true, deviceHarnesses: ['claude'] });
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/wrong-scope',
+      transcriptId: 't-1',
+      cwd: wrongScope.repo,
+      env: { ...wrongScope.env, CODEX_SANDBOX: 'seatbelt' },
+      home: wrongScope.home,
+      config: wrongScope.config,
+    }),
+    (err) => err.code === 'server-harness-not-enrolled' && /this device is not enrolled for test-codex-agent \(enrolled: claude\); run: agent-bot server enroll --add-harness test-codex-agent/.test(err.message),
+  );
+});
+
+test('startTask fails closed before creating soul or worktree when transcript is missing, branch is occupied, or --repo mismatches origin', async (t) => {
+  const f = makeFixture(t, { harness: 'codex', serverMode: true, deviceHarnesses: ['codex'], createSoul: false });
+  f.git(f.repo, 'checkout', '-q', '-b', 'occupied-branch');
+
+  const assertNoMutations = () => {
+    assert.equal(existsSync(f.env.AGENT_BOT_POPULATION_PATH), false);
+    assert.equal(existsSync(f.env.AGENT_BOT_SOULS_HOME), false);
+    assert.equal(f.git(f.repo, 'worktree', 'list', '--porcelain').split('\n\n').filter(Boolean).length, 1);
+  };
+
+  // 1. Missing transcript when no soul exists yet must not auto-join a soul or create a worktree.
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/no-transcript',
+      cwd: f.repo,
+      env: { ...f.env, CODEX_SANDBOX: 'seatbelt', CODEX_THREAD_ID: '' },
+      home: f.home,
+      config: f.config,
+    }),
+    (err) => err.code === 'start-transcript-required',
+  );
+  assertNoMutations();
+
+  // 2. Branch already checked out in the primary worktree fails closed with start-branch-in-use.
+  await assert.rejects(
+    () => startTask({
+      branch: 'occupied-branch',
+      transcriptId: 't-1',
+      cwd: f.repo,
+      env: { ...f.env, CODEX_SANDBOX: 'seatbelt' },
+      home: f.home,
+      config: f.config,
+    }),
+    (err) => err.code === 'start-branch-in-use' && /already checked out at/.test(err.message),
+  );
+  assertNoMutations();
+
+  // 3. Passing --base for an existing local branch fails closed with start-base-on-existing-branch.
+  f.git(f.repo, 'branch', 'existing-local', 'origin/main');
+  await assert.rejects(
+    () => startTask({
+      branch: 'existing-local',
+      base: 'origin/main',
+      transcriptId: 't-1',
+      cwd: f.repo,
+      env: { ...f.env, CODEX_SANDBOX: 'seatbelt' },
+      home: f.home,
+      config: f.config,
+    }),
+    (err) => err.code === 'start-base-on-existing-branch',
+  );
+  assertNoMutations();
+
+  // 4. Passing --repo with a mismatched owner/name refuses the current checkout even if basename matches.
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/wrong-owner',
+      repo: 'other-org/my-repo',
+      transcriptId: 't-1',
+      cwd: f.repo,
+      env: { ...f.env, CODEX_SANDBOX: 'seatbelt' },
+      home: f.home,
+      config: f.config,
+    }),
+    (err) => err.code === 'start-repo-not-found',
+  );
+  assertNoMutations();
+
+  // 5. Existing soul initially minted without an appSlug gets backfilled before configuring the worktree.
+  const noApp = makeFixture(t, { harness: 'codex', serverMode: true, deviceHarnesses: ['codex'], appSlug: null });
+  const { clientFactory } = await startTestDaemon(t, noApp);
+  const backfilled = await startTask({
+    branch: 'feat/backfill-app',
+    transcriptId: 't-backfill',
+    cwd: noApp.repo,
+    env: { ...noApp.env, CODEX_SANDBOX: 'seatbelt' },
+    home: noApp.home,
+    config: noApp.config,
+    clientFactory,
+  });
+  assert.equal(backfilled.identity.appSlug, 'test-codex-agent');
+  assert.equal(noApp.git(backfilled.worktree.path, 'config', '--worktree', '--get', 'user.name'), 'test-codex-agent[bot]');
+});
+

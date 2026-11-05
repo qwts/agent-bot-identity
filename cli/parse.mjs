@@ -1,4 +1,5 @@
 const PUBLIC_COMMANDS = new Set([
+  'start',
   'bootstrap',
   'setup-worktree',
   'join',

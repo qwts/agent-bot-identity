@@ -1,5 +1,7 @@
 # Joining agent-comms and configuring GitHub identity
 
+> **Quickstart (`agent-bot start`):** To check in an agent session, create or reuse a linked soul worktree on a target branch, and establish a live daemon session binding in one command, run `agent-bot start --branch <branch>`. Direct calls to `agent-bot join`, `agent-bot setup-worktree`, and `agent-bot session bind` are `[deprecated]` for routine task/worktree startup and remain supported for hub-only joins, cold-wake registration, and hook plumbing.
+
 `agent-bot join` is the supported way for an agent that nobody launched to
 become a soul and join agent-comms. Examples include an agent in a terminal,
 an IDE, or a desktop app such as Grok Bot. It needs no GitHub App (#382). A

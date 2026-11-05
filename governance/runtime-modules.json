@@ -245,6 +245,7 @@
     "identity/session-approvals.mjs": "identity",
     "session-bind.mjs": "cli",
     "setup-worktree.mjs": "soul",
+    "start.mjs": "cli",
     "shell-path.mjs": "shared",
     "signed-commit.mjs": "identity",
     "identity/signed-commit.mjs": "identity",
