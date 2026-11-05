@@ -12,6 +12,7 @@
 // and host modules may import it (it is assigned to `shared`).
 
 export const SKILL_REFERENCES = Object.freeze({
+  start: 'operations.md',
   bootstrap: 'operations.md',
   'setup-worktree': 'operations.md',
   'mint-token': 'operations.md',

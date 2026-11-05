@@ -6,9 +6,10 @@ Usage:
   agent-bot --version
 
 Commands:
+  start              Check in this session, create or reuse a linked soul worktree on the target branch, and bind this conversation: [--branch <branch>] [--repo <path|owner/name>] [--json]
   bootstrap          Bootstrap from source or repair installed machine setup
-  setup-worktree     Create or configure a soul worktree
-  join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json]
+  setup-worktree     Create or configure a soul worktree [deprecated: prefer 'agent-bot start' for task/worktree startup]
+  join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json] [deprecated: prefer 'agent-bot start' for task/worktree startup]
   mint-token         Mint a GitHub App installation token (through the agent-bot server when AGENT_BOT_SERVER is set)
   server             Connect to an agent-bot server: server enroll [--harness H]... | status [--json] | logout
   events             Wait on, peek at, or ack relay messages from the agent-bot server: events wait|peek|ack [--ide] [--harness H] [--cursor C] [--timeout S]
@@ -18,7 +19,7 @@ Commands:
   population         List this account's census of souls
   principal          Enroll and authorize messaging principals (owner ceremony)
   binding            Revoke this worktree's soul binding
-  session            Bind this worktree to the current session without MCP: session bind [--transcript-id ID] [--provider NAME] [--json]
+  session            Bind this worktree to the current session without MCP: session bind [--transcript-id ID] [--provider NAME] [--json] [deprecated: prefer 'agent-bot start' for task/worktree startup]
   soul               Turn cold wake on or off (owner only); build [PATH] [--check] [--json]; pack validate PATH; skill import PATH|list|show UUID|verify UUID|check UUID [--json]; skill install UUID|NAME --soul ID, skill uninstall NAME --soul ID [--trash] (trash owner only); skill status --soul ID [--json]; skill search --soul ID QUERY [--json] (settings.skillSearchAdapter; none: reports so); revision <command>; model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin]; mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin]; computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin]; tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin] (owner, or the soul itself; global asks the owner); stop <agentId|name> [--json]; pause|resume <agentId|name> [--json]; show <agentId|name> [--json]; profile <agentId|name> [--json] [--file RELATIVE_PATH]; env <agentId|name> [--json]; env history <agentId|name> [--json] [--limit N]; runtimes <agentId|name> [--json]; runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] (owner only); secret <agentId|name> set|clear <name> [--json] [--principal-stdin] (owner only, value on stdin); secret <agentId|name> status [--json]; revision prepare <agentId|name> [--json] [--dest PATH]; comms <soul> [show|on|off] [--json]; remove <soul> [--json] archives a soul (owner only); dir AGENT_ID; locate PATH; templates [--json]; spawn TEMPLATE_PATH --name NAME [--harness H]; template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin] (owner only); env migrate <agentId|name> --adopt-host-signin|--space-into-soul|--template-name|--harnesses-into-runtimes|--complete [--plan] [--json] [--principal-stdin] (owner only)
                      confinement AGENT_ID off|warn|deny (owner only); confinement-report AGENT_ID [--json]
   daemon             Run, supervise, or disable the loopback daemon; vouch-key prints the soul public key
