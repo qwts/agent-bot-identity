@@ -112,7 +112,7 @@ export function configuredAppSlugs(config, explicit = []) {
   return [...slugs].sort();
 }
 
-function featureGatesCheck({ home, env, config }) {
+export function featureGatesCheck({ home, env, config, app = null }) {
   let preGate = { needed: false };
   try { preGate = preGateConfigStatus({ home, env }); } catch { /* the gate report still stands */ }
   if (preGate.needed) {
@@ -125,11 +125,17 @@ function featureGatesCheck({ home, env, config }) {
       evidence: { gates: gateStatus(config) },
     });
   }
+  const gates = gateStatus(config);
+  const ghGate = gates['github-identity'];
+  const personaGate = gates['persona-accounts'];
   return readinessCheck({
     id: 'config.feature_gates',
     status: 'ready',
-    message: 'feature gates resolved from user config or default off',
-    evidence: { gates: gateStatus(config) },
+    message: `feature gates resolved: github-identity ${ghGate.enabled ? 'enabled' : 'disabled'} (${ghGate.source}), persona-accounts ${personaGate.enabled ? 'enabled' : 'disabled'} (${personaGate.source})`,
+    action: ghGate.enabled || app
+      ? null
+      : 'to enable GitHub App identity headlessly, run agent-bot bootstrap --features github-identity (or set AGENT_BOT_ENABLE_FEATURES=github-identity during install / bootstrap / server enroll), or set "features": { "github-identity": true } in ~/.config/agent-bot/config.json',
+    evidence: { gates },
   });
 }
 
@@ -2993,7 +2999,7 @@ export async function collectReadiness({
       if (Object.keys(config).length > 0) {
         machineChecks.push(organizationProfileCheck(config));
       }
-      machineChecks.push(featureGatesCheck({ home, env, config }));
+      machineChecks.push(featureGatesCheck({ home, env, config, app }));
     } catch (error) {
       configValid = false;
       machineChecks.push(error?.code === 'profile-app-retired'

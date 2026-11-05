@@ -23,6 +23,7 @@ import {
   appOwnerCheck,
   READINESS_SCHEMA_VERSION,
   collectReadiness,
+  featureGatesCheck,
   harnessMcpWiring,
   readinessCheck,
   credentialHelperSequenceReady,
@@ -3097,4 +3098,21 @@ test('comms.shared_dir reports resolved broker sharedDir and source across platf
   const envOverride = commsSharedDirCheck({ env: { AGENT_COMMS_SHARED_DIR: '/tmp/custom-comms' }, home: '/home/devin', platform: 'linux' });
   assert.equal(envOverride.evidence.shared_dir, '/tmp/custom-comms');
   assert.equal(envOverride.evidence.source, 'env');
+});
+
+test('featureGatesCheck reports github-identity enabled or disabled explicitly with headless guidance (#1350)', () => {
+  const home = tempRoot();
+  const disabled = featureGatesCheck({ home, config: {} });
+  assert.equal(disabled.status, 'ready');
+  assert.match(disabled.message, /github-identity disabled \(default\)/);
+  assert.match(disabled.action, /AGENT_BOT_ENABLE_FEATURES=github-identity/);
+  assert.match(disabled.action, /agent-bot bootstrap --features github-identity/);
+
+  const enabled = featureGatesCheck({
+    home,
+    config: { features: { 'github-identity': true } },
+  });
+  assert.equal(enabled.status, 'ready');
+  assert.match(enabled.message, /github-identity enabled \(user-config\)/);
+  assert.equal(enabled.action, null);
 });

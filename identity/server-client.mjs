@@ -26,10 +26,19 @@ import { homedir, hostname, platform as osPlatform } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { appLifecycleStatus, harnessForSlug, loadConfig, rosterScope } from '../config.mjs';
+import {
+  appLifecycleStatus,
+  enabledFeaturesFromEnv,
+  harnessForSlug,
+  loadConfig,
+  parseFeatureList,
+  rosterScope,
+  writeEnabledFeaturesToConfig,
+} from '../config.mjs';
 import { profileAppSlugs } from '../organization-profile-schema.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
 import { enforcementProfile } from './identity-format.mjs';
+import { installGhShim } from './install-gh-shim.mjs';
 import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
 
 export const GRANT_DEVICE_CODE = 'urn:ietf:params:oauth:grant-type:device_code';
@@ -426,9 +435,11 @@ export function defaultPlatform(env = process.env) {
 export async function enroll({
   base, env = process.env, home, harnesses = [], addHarnesses = [], replaceHarnesses = false,
   deviceName = hostname(), platform = defaultPlatform(env),
-  tags = [], enrollToken = env.AGENT_BOT_ENROLL_TOKEN, force = false,
+  tags = [], features = [], enrollToken = env.AGENT_BOT_ENROLL_TOKEN, force = false,
+  installShim = installGhShim,
   fetchImpl: rawFetch = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onPrompt = () => {},
 } = {}) {
+  const requestedFeatures = parseFeatureList([...enabledFeaturesFromEnv(env), ...parseFeatureList(features)]);
   const fetchImpl = noRedirect(rawFetch);
   if (enrollToken && (addHarnesses.length > 0 || replaceHarnesses)) {
     throw new Error('--add-harness and --replace-harnesses cannot be used with AGENT_BOT_ENROLL_TOKEN (enrollment token scope is fixed on the server)');
@@ -437,6 +448,13 @@ export async function enroll({
   const prior = loadDevice(opts);
   const effectiveForce = force || addHarnesses.length > 0;
   if (!effectiveForce && prior) throw new Error('already enrolled; run `agent-bot server logout` first (or pass --force)');
+  if (requestedFeatures.length > 0) {
+    const resolvedHome = home ?? env.HOME ?? homedir();
+    writeEnabledFeaturesToConfig({ features: requestedFeatures, env, home: resolvedHome });
+    if (requestedFeatures.includes('github-identity')) {
+      installShim({ home: resolvedHome, env });
+    }
+  }
   const priorHarnesses = (!replaceHarnesses && prior?.server === base && Array.isArray(prior?.harnesses)) ? prior.harnesses : [];
   const effectiveHarnesses = [...new Set([...priorHarnesses, ...harnesses, ...addHarnesses].map(serverHarness).filter(Boolean))];
   // --force stages the new enrollment under <state>/enroll-staging/: the grant
@@ -967,14 +985,16 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
 
 // ---- CLI ----
 
-export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
+export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--features LIST] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
        agent-bot server status [--json]
        agent-bot server logout
        agent-bot server reconcile [--json]
 
 Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
 enroll uses the device grant (approve in the browser), or AGENT_BOT_ENROLL_TOKEN
-when set (cloud VMs). Re-enrolling with --force, --add-harness, or
+when set (cloud VMs). Pass --features github-identity (or set
+AGENT_BOT_ENABLE_FEATURES=github-identity) to enable the github-identity add-on
+and install the managed gh shim headlessly (#1350). Re-enrolling with --force, --add-harness, or
 --all-configured preserves existing device harnesses unless --replace-harnesses
 is passed. logout deletes
 this machine's device key and pins; revoke the device on <server>/devices as well.
@@ -982,7 +1002,7 @@ this machine's device key and pins; revoke the device on <server>/devices as wel
 
 export function parseServerArgs(argv) {
   const [sub, ...rest] = argv;
-  const out = { sub, harnesses: [], addHarnesses: [], allConfigured: false, replaceHarnesses: false, tags: [], json: false, force: false };
+  const out = { sub, harnesses: [], addHarnesses: [], allConfigured: false, replaceHarnesses: false, tags: [], features: [], json: false, force: false };
   for (let i = 0; i < rest.length; i += 1) {
     const a = rest[i];
     const val = () => { const v = rest[++i]; if (!v || v.startsWith('--')) throw new Error(`${a} requires a value`); return v; };
@@ -992,6 +1012,12 @@ export function parseServerArgs(argv) {
     else if (a === '--all-configured') { out.allConfigured = true; out.force = true; }
     else if (a === '--harness') out.harnesses.push(serverHarness(val()));
     else if (a === '--add-harness') { out.addHarnesses.push(serverHarness(val())); out.force = true; }
+    else if (a === '--features') out.features = parseFeatureList([...out.features, ...parseFeatureList(val())]);
+    else if (a.startsWith('--features=')) {
+      const v = a.slice('--features='.length);
+      if (!v) throw new Error('--features requires a value');
+      out.features = parseFeatureList([...out.features, ...parseFeatureList(v)]);
+    }
     else if (a === '--tag') out.tags.push(val());
     else if (a === '--name') out.name = val();
     else if (a === '--platform') out.platform = val();
@@ -1068,7 +1094,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
     const harnesses = (a.harnesses.length || addHarnesses.length) ? a.harnesses : [ambientHarness(env)].filter(Boolean);
     const record = await enroll({
       base, env, harnesses, addHarnesses, replaceHarnesses: a.replaceHarnesses,
-      tags: a.tags, force: a.force, fetchImpl, ...(sleep ? { sleep } : {}),
+      tags: a.tags, features: a.features, force: a.force, fetchImpl, ...(sleep ? { sleep } : {}),
       ...(a.name ? { deviceName: a.name } : {}), ...(a.platform ? { platform: a.platform } : {}),
       // --json also streams the approval prompt as a machine-readable line on
       // stdout so a supervising process (the web approvals flow) can surface

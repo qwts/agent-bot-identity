@@ -26,6 +26,7 @@
 //       "skillSearchAdapter": "local-text", // soul skill search adapter (#902)
 //       "diagnosticsOtlpEndpoint": "https://collector.example:4318" // opt-in OTLP export (ADR-0983)
 //     },
+//     "features": { "github-identity": true }, // add-on gates (#1350)
 //     "scope": { "apps": ["you-claude-agent"] } // this account serves only these Apps
 //   }
 //
@@ -35,10 +36,11 @@
 // not incomplete. It is written by `bootstrap --profile ... --scope-app`.
 
 import process from 'node:process';
-import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { withLock } from './file-lock.mjs';
 import {
   OrganizationProfileError,
   PROFILE_HARNESSES,
@@ -52,8 +54,140 @@ const DAEMON_PREFERENCES = new Set(['off', 'prefer', 'required']);
 const SCOPE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 export const FEATURE_GATES = Object.freeze(['github-identity', 'persona-accounts']);
 
+// Parse a comma-separated string or array of feature gate names (#1350).
+// Every requested feature must be a known FEATURE_GATES entry; unknown names
+// fail closed.
+export function parseFeatureList(raw) {
+  if (raw === undefined || raw === null || raw === '') return [];
+  const items = Array.isArray(raw)
+    ? raw.flatMap((entry) => String(entry).split(','))
+    : String(raw).split(',');
+  const names = items.map((part) => part.trim()).filter(Boolean);
+  for (const name of names) {
+    if (!FEATURE_GATES.includes(name)) throw new Error(`unknown feature gate: ${name}`);
+  }
+  return [...new Set(names)].sort();
+}
+
+export function enabledFeaturesFromEnv(env = process.env) {
+  const raw = env?.AGENT_BOT_ENABLE_FEATURES;
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  return parseFeatureList(raw);
+}
+
+export function applyEnabledFeatures(config = {}, features = []) {
+  const names = parseFeatureList(features);
+  if (names.length === 0) return config;
+  const nextFeatures = {
+    ...(config.features ?? {}),
+    ...Object.fromEntries(names.map((name) => [name, true])),
+  };
+  return { ...config, features: nextFeatures };
+}
+
+function ensureSecureConfigDir(destination, {
+  home = homedir(),
+  lstat = lstatSync,
+  mkdir = mkdirSync,
+  chmod = chmodSync,
+} = {}) {
+  const dir = dirname(destination);
+  const resolvedHome = home ? resolve(home) : null;
+  const resolvedDir = resolve(dir);
+  const dirsToCheck = [];
+  if (resolvedHome) {
+    const rel = relative(resolvedHome, resolvedDir);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+      let current = resolvedHome;
+      for (const part of rel.split(sep).filter(Boolean)) {
+        current = join(current, part);
+        dirsToCheck.push(current);
+      }
+    }
+  }
+  if (!dirsToCheck.includes(dir)) dirsToCheck.push(dir);
+
+  const inspectDir = (candidate) => {
+    try {
+      const stat = lstat(candidate);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error(`${candidate} exists and is not a regular directory`);
+      }
+      return stat;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      return null;
+    }
+  };
+
+  for (const candidate of dirsToCheck) inspectDir(candidate);
+  mkdir(dir, { recursive: true, mode: 0o700 });
+  for (const candidate of dirsToCheck) {
+    const stat = inspectDir(candidate);
+    if (stat && process.platform !== 'win32' && typeof stat.mode === 'number' && (stat.mode & 0o077) !== 0) {
+      chmod(candidate, 0o700);
+    }
+  }
+}
+
+export function writeEnabledFeaturesToConfig({
+  features = [],
+  env = process.env,
+  home = homedir(),
+  lstat = lstatSync,
+  chmod = chmodSync,
+  mkdir = mkdirSync,
+  write = writeFileSync,
+  rename = renameSync,
+  remove = rmSync,
+} = {}) {
+  const requested = parseFeatureList([...enabledFeaturesFromEnv(env), ...parseFeatureList(features)]);
+  const destination = configPath({ home, env });
+  if (requested.length === 0) {
+    return { config: loadConfig({ home, env }), path: destination, updated: false, enabled: [] };
+  }
+  ensureSecureConfigDir(destination, { home, lstat, mkdir, chmod });
+  const runWrite = () => {
+    try {
+      const stat = lstat(destination);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error(`${destination} exists and is not a regular agent-bot config file`);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    // loadConfig reads only the JSON file on disk (never ambient env overrides),
+    // so writing `next` back under the config lock preserves concurrent updates
+    // and only durable file-backed settings.
+    const current = loadConfig({ home, env });
+    const alreadyEnabled = requested.every((name) => current.features?.[name] === true);
+    if (alreadyEnabled) {
+      return { config: current, path: destination, updated: false, enabled: requested };
+    }
+    const next = validateConfig(applyEnabledFeatures(current, requested));
+    const temporary = `${destination}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      write(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+      rename(temporary, destination);
+    } catch (error) {
+      remove(temporary, { force: true });
+      throw error;
+    }
+    return { config: next, path: destination, updated: true, enabled: requested };
+  };
+  let canLock = false;
+  try {
+    canLock = lstatSync(dirname(destination)).isDirectory();
+  } catch {
+    canLock = false;
+  }
+  return canLock ? withLock(`${destination}.lock`, 'agent-bot configuration', runWrite) : runWrite();
+}
+
 // Add-ons use this single gate seam. Gates are config-only and default off;
-// environment variables never implicitly enable them.
+// environment variables never implicitly enable them at runtime. Headless
+// setup commands (`bootstrap`, `install`, `server enroll`) persist
+// `--features` / `AGENT_BOT_ENABLE_FEATURES` into config.json (#1350).
 export function isGateEnabled(name, { env = process.env, home = homedir(), config } = {}) {
   void env;
   if (!FEATURE_GATES.includes(name)) throw new Error(`unknown feature gate: ${name}`);
