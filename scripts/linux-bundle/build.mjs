@@ -272,6 +272,30 @@ function fetchCommsTree(pin, { cacheDir, offline }) {
   }
 }
 
+export function patchCommsSharedDirDefault(commsRoot) {
+  const hostConfigFile = join(commsRoot, 'lib', 'host-config.mjs');
+  if (!existsSync(hostConfigFile)) {
+    throw new Error('staged agent-comms is missing lib/host-config.mjs');
+  }
+  const rawHostConfig = readFileSync(hostConfigFile, 'utf8');
+  if (!rawHostConfig.includes("'/Users/Shared/Public/agent-comms'")
+    || rawHostConfig.includes("process.platform === 'darwin' ? '/Users/Shared/Public/agent-comms'")) {
+    return false;
+  }
+  if (!/\bstateHome\b/u.test(rawHostConfig) || !/\bpath\.join\b/u.test(rawHostConfig)) {
+    throw new Error('staged agent-comms lib/host-config.mjs is missing stateHome or path.join needed for #1348 patch');
+  }
+  const patchedHostConfig = rawHostConfig.replace(
+    "sharedDir: '/Users/Shared/Public/agent-comms',",
+    "sharedDir: process.platform === 'darwin' ? '/Users/Shared/Public/agent-comms' : path.join(stateHome, 'agent-comms'),",
+  );
+  if (patchedHostConfig === rawHostConfig) {
+    throw new Error('staged agent-comms lib/host-config.mjs still hardcodes /Users/Shared/Public/agent-comms after #1348 patch');
+  }
+  writeFileSync(hostConfigFile, patchedHostConfig);
+  return true;
+}
+
 function stageComms(components, { bundle, cacheDir, skipComms, offline }) {
   const commsRoot = join(bundle, 'lib', 'agent-comms');
   mkdirSync(commsRoot, { recursive: true });
@@ -296,6 +320,7 @@ function stageComms(components, { bundle, cacheDir, skipComms, offline }) {
   }
   const entry = join(commsRoot, pin.bin);
   chmodSync(entry, 0o755);
+  patchCommsSharedDirDefault(commsRoot);
   return {
     pinned: { repo: pin.repo, tag: pin.tag, ref: pin.ref },
     entry,
@@ -363,6 +388,10 @@ PATH="$AGENT_BOT_BUNDLE_ROOT/bin:$PATH"
 export PATH
 AGENT_BOT_NODE="$AGENT_BOT_BUNDLE_ROOT/node/bin/node"
 export AGENT_BOT_NODE
+if [ -z "\${AGENT_COMMS_SHARED_DIR:-}" ] && [ -n "\${HOME:-}" ]; then
+  AGENT_COMMS_SHARED_DIR="\${XDG_STATE_HOME:-\$HOME/.local/state}/agent-comms"
+  export AGENT_COMMS_SHARED_DIR
+fi
 ${execLine}
 `;
 }
@@ -374,7 +403,7 @@ function nodeLauncher(comment) {
   });
 }
 
-function scriptLauncher(relativeScript, comment) {
+export function scriptLauncher(relativeScript, comment) {
   return selfLocatingBody({
     comment,
     execLine: `exec "$AGENT_BOT_BUNDLE_ROOT/node/bin/node" "$AGENT_BOT_BUNDLE_ROOT/${relativeScript}" "$@"`,

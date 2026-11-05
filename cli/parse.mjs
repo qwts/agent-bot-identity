@@ -15,6 +15,7 @@ const PUBLIC_COMMANDS = new Set([
   'soul',
   'harness',
   'daemon',
+  'broker',
   'keyd',
   'owner',
   'approvals',

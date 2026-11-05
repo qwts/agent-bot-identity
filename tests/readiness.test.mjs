@@ -3079,3 +3079,22 @@ test('only the operation check outranks earlier actionable failures; a -failed c
   assert.equal(firstActionableFailure(report).check_id, 'machine.x', 'without an operation failure the original order is unchanged');
   assert.equal(firstActionableFailure(report, op).check_id, 'worktree.op', 'the operation failure ranks first');
 });
+
+test('comms.shared_dir reports resolved broker sharedDir and source across platforms (#1348)', async () => {
+  const { commsSharedDirCheck } = await import('../readiness.mjs');
+  const linuxDefault = commsSharedDirCheck({ env: {}, home: '/home/devin', platform: 'linux' });
+  assert.equal(linuxDefault.id, 'comms.shared_dir');
+  assert.equal(linuxDefault.status, 'ready');
+  assert.equal(linuxDefault.code, null);
+  assert.equal(linuxDefault.evidence.shared_dir, '/home/devin/.local/state/agent-comms');
+  assert.equal(linuxDefault.evidence.source, 'default');
+  assert.equal(linuxDefault.evidence.platform, 'linux');
+
+  const linuxXdg = commsSharedDirCheck({ env: { XDG_STATE_HOME: '/var/lib/devin/state' }, home: '/home/devin', platform: 'linux' });
+  assert.equal(linuxXdg.evidence.shared_dir, '/var/lib/devin/state/agent-comms');
+  assert.equal(linuxXdg.evidence.source, 'default');
+
+  const envOverride = commsSharedDirCheck({ env: { AGENT_COMMS_SHARED_DIR: '/tmp/custom-comms' }, home: '/home/devin', platform: 'linux' });
+  assert.equal(envOverride.evidence.shared_dir, '/tmp/custom-comms');
+  assert.equal(envOverride.evidence.source, 'env');
+});

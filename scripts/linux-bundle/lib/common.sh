@@ -176,11 +176,17 @@ write_wrapper() {
     printf '%s\n' '#!/bin/sh' "$WRAPPER_MARKER" \
       '# Written by the agent-bot Linux bundle install. uninstall.sh removes this file.'
     printf 'AGENT_BOT_BUNDLE_ROOT=%s\n' "$BUNDLE_ROOT"
-    # The next two lines are wrapper text, not this script: the wrapper expands
+    # The next lines are wrapper text, not this script: the wrapper expands
     # them at run time, which is the whole point of quoting them here.
+    # XDG_STATE_HOME is an absolute path per the XDG Base Directory spec, and
+    # non-empty AGENT_COMMS_SHARED_DIR matches commsSharedDirInfo (#1348).
     # shellcheck disable=SC2016
     printf '%s\n' 'export AGENT_BOT_BUNDLE_ROOT' \
-      'PATH="$AGENT_BOT_BUNDLE_ROOT/bin:$PATH"' 'export PATH'
+      'PATH="$AGENT_BOT_BUNDLE_ROOT/bin:$PATH"' 'export PATH' \
+      'if [ -z "${AGENT_COMMS_SHARED_DIR:-}" ] && [ -n "${HOME:-}" ]; then' \
+      '  AGENT_COMMS_SHARED_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agent-comms"' \
+      '  export AGENT_COMMS_SHARED_DIR' \
+      'fi'
     case "$wrapper_name" in
       agent-comms|node)
         printf 'exec "%s" "$@"\n' "$wrapper_target"

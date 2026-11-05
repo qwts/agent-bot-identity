@@ -12,6 +12,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { listSouls, locateSoulDir, populationFile, setSoulAppThen, showSoul } from './agent-population.mjs';
+import { commsSharedDirInfo } from './comms-client.mjs';
 import { isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
 import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness, hasOpencodeExperimentalEnv, isOpencodeDirectEnv } from './detect-harness.mjs';
@@ -477,6 +478,9 @@ export function formatStartReceipt(receipt) {
     `worktree: ${receipt.worktree.path} (branch: ${receipt.worktree.branch}, ${receipt.worktree.created ? 'created' : 'ready'})`,
     `binding:  live session binding ${receipt.binding.alreadyBound ? 'present' : 'established'}`,
   ];
+  if (receipt.comms?.sharedDir) {
+    lines.push(`comms:    ${receipt.comms.sharedDir}`);
+  }
   if (receipt.next) {
     lines.push(`next:     ${receipt.next}`);
   }
@@ -870,6 +874,9 @@ export async function startTask({
     binding: {
       status: bindResult.status,
       alreadyBound: Boolean(bindResult.alreadyBound),
+    },
+    comms: {
+      sharedDir: commsSharedDirInfo({ env, home }).sharedDir,
     },
     next: needsCd ? `cd ${shellSingleQuote(targetWorktree)}` : null,
   };

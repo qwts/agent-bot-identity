@@ -23,8 +23,10 @@ import {
   CommsClient,
   checkBrokerCustody,
   commsPaths,
+  commsSharedDirInfo,
   createCommsSupervisor,
   daemonVouchKeyFile,
+  defaultCommsSharedDir,
   loadCommsCredential,
   nextCommsBackoffMs,
   pairDaemonComms,
@@ -114,10 +116,32 @@ function startFakeBroker(socketPath, onLine) {
   });
 }
 
-test('comms paths follow AGENT_COMMS_SHARED_DIR', () => {
+test('comms paths follow AGENT_COMMS_SHARED_DIR and use platform-appropriate defaults (#1348)', () => {
   const paths = commsPaths({ env: { AGENT_COMMS_SHARED_DIR: '/tmp/iso' } });
   assert.equal(paths.socket, '/tmp/iso/broker.sock');
   assert.equal(paths.proofs, '/tmp/iso/pairing');
+  assert.deepEqual(commsSharedDirInfo({ env: { AGENT_COMMS_SHARED_DIR: '/tmp/iso' }, home: '/home/devin', platform: 'linux' }), {
+    sharedDir: '/tmp/iso',
+    source: 'env',
+    platform: 'linux',
+  });
+
+  // macOS keeps the multi-account shared path.
+  assert.equal(defaultCommsSharedDir({ env: {}, home: '/Users/alice', platform: 'darwin' }), '/Users/Shared/Public/agent-comms');
+  assert.equal(commsPaths({ env: {}, home: '/Users/alice', platform: 'darwin' }).shared, '/Users/Shared/Public/agent-comms');
+
+  // Linux defaults to $XDG_STATE_HOME/agent-comms (falling back to ~/.local/state/agent-comms).
+  assert.equal(defaultCommsSharedDir({ env: {}, home: '/home/devin', platform: 'linux' }), '/home/devin/.local/state/agent-comms');
+  assert.equal(defaultCommsSharedDir({ env: { XDG_STATE_HOME: '/custom/state' }, home: '/home/devin', platform: 'linux' }), '/custom/state/agent-comms');
+  const linuxPaths = commsPaths({ env: {}, home: '/home/devin', platform: 'linux' });
+  assert.equal(linuxPaths.shared, '/home/devin/.local/state/agent-comms');
+  assert.equal(linuxPaths.socket, '/home/devin/.local/state/agent-comms/broker.sock');
+  assert.equal(linuxPaths.proofs, '/home/devin/.local/state/agent-comms/pairing');
+  assert.deepEqual(commsSharedDirInfo({ env: {}, home: '/home/devin', platform: 'linux' }), {
+    sharedDir: '/home/devin/.local/state/agent-comms',
+    source: 'default',
+    platform: 'linux',
+  });
 });
 
 test('a broker request is one v1 line and resolves with result', async () => {

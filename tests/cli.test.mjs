@@ -226,6 +226,45 @@ test('agent-bot pair and unpair are top-level public commands (#1295)', () => {
   assert.deepEqual(parseAgentBotArgs(['unpair']), {
     kind: 'command', command: 'unpair', args: [],
   });
+  assert.deepEqual(parseAgentBotArgs(['broker', 'run', '--single-account']), {
+    kind: 'command', command: 'broker', args: ['run', '--single-account'],
+  });
+});
+
+test('agent-bot broker --help prints usage without spawning and broker forwards AGENT_COMMS_SHARED_DIR (#1348)', () => {
+  const helpRun = spawnSync(process.execPath, [CLI, 'broker', '--help'], {
+    encoding: 'utf8',
+    env: { HOME: '/home/devin', PATH: '/nonexistent' },
+  });
+  assert.equal(helpRun.status, 0, helpRun.stderr);
+  assert.match(helpRun.stdout, /usage:\s+agent-bot broker/iu);
+  assert.match(helpRun.stdout, /AGENT_COMMS_SHARED_DIR/u);
+
+  const root = mkdtempSync(join(tmpdir(), 'agent-bot-broker-cli-'));
+  const fakeBin = join(root, 'bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const fakeComms = join(fakeBin, 'agent-comms');
+  writeFileSync(
+    fakeComms,
+    '#!/bin/sh\nprintf "%s|%s\\n" "$*" "${AGENT_COMMS_SHARED_DIR:-}"\n',
+    { mode: 0o755 },
+  );
+  const expectedDefault = process.platform === 'darwin'
+    ? '/Users/Shared/Public/agent-comms'
+    : join(root, 'xdg-state', 'agent-comms');
+  const statusRun = spawnSync(process.execPath, [CLI, 'broker', 'status'], {
+    encoding: 'utf8',
+    env: { HOME: root, XDG_STATE_HOME: join(root, 'xdg-state'), PATH: `${fakeBin}:/usr/bin:/bin` },
+  });
+  assert.equal(statusRun.status, 0, statusRun.stderr);
+  assert.equal(statusRun.stdout.trim(), `broker status|${expectedDefault}`);
+
+  const runSub = spawnSync(process.execPath, [CLI, 'broker', 'run', '--single-account'], {
+    encoding: 'utf8',
+    env: { HOME: root, AGENT_COMMS_SHARED_DIR: '/custom/shared', PATH: `${fakeBin}:/usr/bin:/bin` },
+  });
+  assert.equal(runSub.status, 0, runSub.stderr);
+  assert.equal(runSub.stdout.trim(), 'broker run --single-account|/custom/shared');
 });
 
 test('mint-token JSON contract is stable and stdout-only secret bearing', () => {
