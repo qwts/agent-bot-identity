@@ -445,7 +445,9 @@ test('startTask from a primary checkout auto-resolves soul, branches from origin
   assert.equal(receipt.binding.alreadyBound, false);
   assert.ok(typeof receipt.comms?.sharedDir === 'string' && receipt.comms.sharedDir.length > 0);
   assert.match(receipt.next, /cd /);
-  assert.match(formatStartReceipt(receipt), /soul: .*auto-resolved: codex/);
+  const formattedReceipt = formatStartReceipt(receipt);
+  assert.match(formattedReceipt, /soul: .*auto-resolved: codex/);
+  assert.ok(formattedReceipt.includes(`comms:    ${receipt.comms.sharedDir}`));
 
   // Primary checkout remains human-attributed and does not track origin/main on the feature branch.
   assert.equal(f.git(f.repo, 'config', '--get', 'user.name'), 'Human Owner');

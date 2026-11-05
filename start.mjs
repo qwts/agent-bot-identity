@@ -478,6 +478,9 @@ export function formatStartReceipt(receipt) {
     `worktree: ${receipt.worktree.path} (branch: ${receipt.worktree.branch}, ${receipt.worktree.created ? 'created' : 'ready'})`,
     `binding:  live session binding ${receipt.binding.alreadyBound ? 'present' : 'established'}`,
   ];
+  if (receipt.comms?.sharedDir) {
+    lines.push(`comms:    ${receipt.comms.sharedDir}`);
+  }
   if (receipt.next) {
     lines.push(`next:     ${receipt.next}`);
   }
