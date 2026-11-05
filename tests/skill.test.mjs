@@ -255,6 +255,10 @@ test('skill and docs document the recommended soul operating model (#1128) and G
   }
   assert.match(main, /qwts\/managed-machine/u);
   assert.match(main, /qwts\/qwts-agent-org/u);
+  for (const text of [main, operations]) {
+    assert.match(text, /agent-bot daemon start --daemonize/u);
+    assert.match(text, /agent-comms broker run --single-account/u);
+  }
 });
 
 test('README and skill surface the headless / CI enrollment and startup quickstart (#1352)', () => {

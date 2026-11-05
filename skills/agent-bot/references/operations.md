@@ -85,6 +85,19 @@ below.
    checkout's custody rather than loosening binding validation. Native storage
    requests have a separate deadline from quick daemon health probes.
 
+   On headless Linux environments without a user `systemd --user` / D-Bus
+   session (CI runners, containers, disposable VMs), `agent-bot install` and
+   `scripts/linux-bundle/install.sh` write the unit files without aborting and
+   fall back to detached startup. Start the daemon and `agent-comms` broker
+   directly without `systemd` (run `agent-bot daemon stop` first when restarting
+   an already-running detached daemon):
+
+   ```bash
+   agent-bot daemon start --daemonize
+   AGENT_COMMS_SHARED_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agent-comms" \
+     nohup agent-comms broker run --single-account >/dev/null 2>&1 &
+   ```
+
 5. Complete the organization-owned shared skills and harness tooling through
    its governance procedure. The runtime installs its own CLI, hooks, optional
    `gh` shim, credentials, and worktree identity; it does not invent or vendor

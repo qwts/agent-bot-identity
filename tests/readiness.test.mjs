@@ -3116,3 +3116,53 @@ test('featureGatesCheck reports github-identity enabled or disabled explicitly w
   assert.match(enabled.message, /github-identity enabled \(user-config\)/);
   assert.equal(enabled.action, null);
 });
+
+test('doctor distinguishes systemd unavailable from daemon not running on headless Linux (#1349)', async () => {
+  const home = tempRoot();
+  const baseDeps = {
+    ...machineDependencies(home),
+    command: 'doctor',
+    scope: 'machine',
+    inspectDaemonSupervisor: () => ({
+      supported: true,
+      applied: true,
+      loaded: false,
+      systemdUnavailable: true,
+      platform: 'linux',
+      kind: 'systemd',
+      unitPath: join(home, '.config', 'systemd', 'user', 'agent-bot-daemon.service'),
+      label: 'agent-bot-daemon.service',
+    }),
+  };
+
+  // When the daemon is not running and systemd is unavailable, doctor warns on
+  // daemon.supervisor and fails daemon.health with the non-systemd start command.
+  const stopped = await collectReadiness({
+    ...baseDeps,
+    probeDaemon: async () => ({ running: false }),
+  });
+  const stoppedSupervisor = stopped.machine.checks.find(({ id }) => id === 'daemon.supervisor');
+  const stoppedHealth = stopped.machine.checks.find(({ id }) => id === 'daemon.health');
+  assert.equal(stoppedSupervisor.status, 'warning');
+  assert.equal(stoppedSupervisor.code, 'systemd-unavailable');
+  assert.match(stoppedSupervisor.message, /systemd --user is unavailable/);
+  assert.match(stoppedSupervisor.action, /agent-bot daemon start --daemonize/);
+  assert.equal(stoppedHealth.status, 'failed');
+  assert.equal(stoppedHealth.code, 'daemon-not-running-systemd-unavailable');
+  assert.equal(stoppedHealth.action, 'run: agent-bot daemon start --daemonize');
+  assert.equal(stopped.ready, false);
+
+  // Once the detached daemon is running, readiness passes even without systemd.
+  const running = await collectReadiness({
+    ...baseDeps,
+    probeDaemon: async () => ({
+      running: true,
+      pid: 9001,
+      port: 50003,
+      startedAt: '2026-08-16T00:00:00.000Z',
+    }),
+  });
+  assert.equal(running.machine.checks.find(({ id }) => id === 'daemon.supervisor').status, 'warning');
+  assert.equal(running.machine.checks.find(({ id }) => id === 'daemon.health').status, 'ready');
+  assert.equal(running.ready, true);
+});

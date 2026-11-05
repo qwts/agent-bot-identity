@@ -96,7 +96,7 @@ function fakeArchiveSource(dir) {
 
 // systemctl is injected rather than mocked in JS: install.sh reaches it through
 // a subprocess, so the seam has to be an executable.
-function fakeSystemctl(home, { active = 'inactive', enabled = 'disabled', enableFails = false } = {}) {
+function fakeSystemctl(home, { active = 'inactive', enabled = 'disabled', enableFails = false, daemonReloadFails = false, daemonReloadError = 'Failed to connect to bus: No medium found' } = {}) {
   const bin = join(home, 'fakes');
   mkdirSync(bin, { recursive: true });
   const log = join(home, 'systemctl.log');
@@ -104,6 +104,7 @@ function fakeSystemctl(home, { active = 'inactive', enabled = 'disabled', enable
   writeFileSync(path, `#!/bin/sh
 printf '%s\\n' "systemctl $*" >> "${log}"
 case "$*" in
+  *daemon-reload*) [ "${daemonReloadFails}" = true ] && { printf '%s\\n' "${daemonReloadError}" >&2; exit 1; } ;;
   *is-active*) printf '%s\\n' "${active}" ;;
   *is-enabled*) printf '%s\\n' "${enabled}" ;;
   *"enable --now"*) [ "${enableFails}" = true ] && exit 1 ;;
@@ -537,6 +538,61 @@ test('#337: --no-services installs the tree and the wrappers but writes no unit'
     assert.doesNotMatch(box.read('.local/share/agent-bot/install-manifest'), /^service=/mu);
   } finally {
     box.cleanup();
+  }
+});
+
+test('#1349: install succeeds and prints the non-systemd recipe when systemctl --user has no D-Bus session', () => {
+  const box = machine('install-no-dbus', { daemonReloadFails: true });
+  try {
+    const result = box.install();
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(box.exists('.local/bin/agent-bot'));
+    assert.ok(box.exists('.local/bin/agent-comms'));
+    assert.ok(box.exists('.config/systemd/user/agent-bot-daemon.service'));
+    assert.ok(box.exists('.config/systemd/user/agent-comms-broker.service'));
+    assert.ok(!systemctlCalls(box.log).some((call) => call.includes('enable --now')));
+    assert.match(result.stdout, /systemd --user is unavailable/u);
+    assert.match(result.stdout, /agent-bot daemon start --daemonize/u);
+    assert.match(result.stdout, /agent-comms broker run --single-account/u);
+    assert.equal(box.uninstall().status, 0);
+
+    // A --bin-dir with spaces emits shell-quoted executable paths in the fallback commands.
+    const spacedBin = join(box.root, 'agent bot bin');
+    const spaced = box.install(['--bin-dir', spacedBin]);
+    assert.equal(spaced.status, 0, spaced.stderr);
+    assert.ok(spaced.stdout.includes(`'${spacedBin}/agent-bot' daemon start --daemonize`));
+    assert.ok(spaced.stdout.includes(`'${spacedBin}/agent-comms' broker run --single-account`));
+  } finally {
+    box.cleanup();
+  }
+
+  // When --migrate is used and daemon-reload reports no D-Bus session, the migrated pair is restored.
+  const migratedNoBus = machine('install-migrate-no-dbus', {
+    active: 'active',
+    enabled: 'enabled',
+    daemonReloadFails: true,
+  });
+  try {
+    mkdirSync(join(migratedNoBus.home, '.config', 'systemd', 'user'), { recursive: true });
+    writeFileSync(join(migratedNoBus.home, '.config', 'systemd', 'user', 'agent-bot-daemon.service'), '[Unit]\nDescription=previous daemon\n');
+    const res = migratedNoBus.install(['--migrate']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /rolled back: the other install's services are running again/u);
+  } finally {
+    migratedNoBus.cleanup();
+  }
+
+  // A real daemon-reload failure (not a missing user bus) still fails closed.
+  const denied = machine('install-reload-denied', {
+    daemonReloadFails: true,
+    daemonReloadError: 'Failed to reload daemon: Permission denied',
+  });
+  try {
+    const failed = denied.install();
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /daemon-reload failed: .*Permission denied/u);
+  } finally {
+    denied.cleanup();
   }
 });
 

@@ -189,17 +189,42 @@ else
       -e "s|@AGENT_BOT_TOOL_PATH@|$(unit_value "$BUNDLE_BIN")|g" \
       "$template" > "$SYSTEMD_USER_DIR/$template_unit"
   done
-  run_systemctl --user daemon-reload
-  for started_unit in "$DAEMON_UNIT" "$BROKER_UNIT"; do
-    if ! try_systemctl --user enable --now "$started_unit"; then
-      # The previous pair is this install's to restore, and this install's own
-      # unit must not be left enabled behind a run that failed.
-      restore_migrated_pair
-      run_systemctl --user disable --now "$started_unit"
-      die "could not start $started_unit; the bundle is installed but its services are not"
+  SYSTEMD_UNAVAILABLE=0
+  if ! command -v "$(systemctl_cmd)" > /dev/null 2>&1; then
+    SYSTEMD_UNAVAILABLE=1
+  else
+    if RELOAD_ERR=$("$(systemctl_cmd)" --user daemon-reload 2>&1); then
+      RELOAD_RC=0
+    else
+      RELOAD_RC=$?
     fi
-    say "service -> $SYSTEMD_USER_DIR/$started_unit"
-  done
+    if [ "$RELOAD_RC" -ne 0 ]; then
+      if is_systemd_unavailable_output "$RELOAD_ERR"; then
+        restore_migrated_pair
+        SYSTEMD_UNAVAILABLE=1
+      else
+        restore_migrated_pair
+        die "daemon-reload failed: $RELOAD_ERR"
+      fi
+    fi
+  fi
+  if [ "$SYSTEMD_UNAVAILABLE" = 0 ]; then
+    for started_unit in "$DAEMON_UNIT" "$BROKER_UNIT"; do
+      if ! try_systemctl --user enable --now "$started_unit"; then
+        # The previous pair is this install's to restore, and this install's own
+        # unit must not be left enabled behind a run that failed.
+        restore_migrated_pair
+        run_systemctl --user disable --now "$started_unit"
+        die "could not start $started_unit; the bundle is installed but its services are not"
+      fi
+      say "service -> $SYSTEMD_USER_DIR/$started_unit"
+    done
+  else
+    say "systemd --user is unavailable (no user D-Bus/systemd session); wrote unit files in $SYSTEMD_USER_DIR without starting them"
+    say "Start the daemon and broker without systemd:"
+    say "  $(shell_quote "$BIN_DIR/agent-bot") daemon start --daemonize"
+    say "  AGENT_COMMS_SHARED_DIR=\${XDG_STATE_HOME:-\$HOME/.local/state}/agent-comms nohup $(shell_quote "$BIN_DIR/agent-comms") broker run --single-account >/dev/null 2>&1 &"
+  fi
 fi
 
 # ------------------------------------------------------------------ manifest

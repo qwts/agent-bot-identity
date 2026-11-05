@@ -1,0 +1,1 @@
+- Add non-systemd fallback for headless Linux environments without a `systemd --user` / D-Bus session across `daemon-supervisor`, `agent-bot install`, `scripts/linux-bundle/install.sh`, `agent-bot daemon start --daemonize`, `agent-bot doctor`, and bundled skill docs (#1349).
