@@ -26,7 +26,8 @@ import { homedir, hostname, platform as osPlatform } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { harnessForSlug, loadConfig } from '../config.mjs';
+import { appLifecycleStatus, harnessForSlug, loadConfig, rosterScope } from '../config.mjs';
+import { profileAppSlugs } from '../organization-profile-schema.mjs';
 import { canonicalJson } from '../canonical-json.mjs';
 import { enforcementProfile } from './identity-format.mjs';
 import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
@@ -966,27 +967,29 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
 
 // ---- CLI ----
 
-export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--replace-harnesses] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
+export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
        agent-bot server status [--json]
        agent-bot server logout
        agent-bot server reconcile [--json]
 
 Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
 enroll uses the device grant (approve in the browser), or AGENT_BOT_ENROLL_TOKEN
-when set (cloud VMs). Re-enrolling with --force or --add-harness preserves
-existing device harnesses unless --replace-harnesses is passed. logout deletes
+when set (cloud VMs). Re-enrolling with --force, --add-harness, or
+--all-configured preserves existing device harnesses unless --replace-harnesses
+is passed. logout deletes
 this machine's device key and pins; revoke the device on <server>/devices as well.
 `;
 
 export function parseServerArgs(argv) {
   const [sub, ...rest] = argv;
-  const out = { sub, harnesses: [], addHarnesses: [], replaceHarnesses: false, tags: [], json: false, force: false };
+  const out = { sub, harnesses: [], addHarnesses: [], allConfigured: false, replaceHarnesses: false, tags: [], json: false, force: false };
   for (let i = 0; i < rest.length; i += 1) {
     const a = rest[i];
     const val = () => { const v = rest[++i]; if (!v || v.startsWith('--')) throw new Error(`${a} requires a value`); return v; };
     if (a === '--json') out.json = true;
     else if (a === '--force') out.force = true;
     else if (a === '--replace-harnesses') out.replaceHarnesses = true;
+    else if (a === '--all-configured') { out.allConfigured = true; out.force = true; }
     else if (a === '--harness') out.harnesses.push(serverHarness(val()));
     else if (a === '--add-harness') { out.addHarnesses.push(serverHarness(val())); out.force = true; }
     else if (a === '--tag') out.tags.push(val());
@@ -1026,9 +1029,45 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
       out.write(a.json ? `${JSON.stringify(status)}\n` : formatStatus(status));
       return status.enrolled && status.ok === false ? 1 : 0;
     }
-    const harnesses = (a.harnesses.length || a.addHarnesses.length) ? a.harnesses : [ambientHarness(env)].filter(Boolean);
+    let addHarnesses = [...a.addHarnesses];
+    if (a.allConfigured) {
+      const cfg = loadConfig({ env });
+      const candidates = rosterScope(cfg) ?? [
+        ...profileAppSlugs(cfg),
+        ...Object.keys(cfg?.identityApps ?? {}),
+        ...Object.values(cfg?.apps ?? {}),
+      ];
+      const configuredSlugs = [...new Set(
+        candidates
+          .filter((slug) => typeof slug === 'string' && slug && cfg?.identityApps?.[slug]?.status !== 'retired' && appLifecycleStatus(slug, cfg) !== 'retired')
+          .map(serverHarness)
+          .filter(Boolean),
+      )];
+      let serverApps = null;
+      if (loadDevice({ env })) {
+        try {
+          const { apps } = await new ServerSession({ base, env, fetchImpl }).harnessApps();
+          if (Array.isArray(apps) && apps.length > 0) {
+            serverApps = new Set(
+              apps
+                .filter((app) => !app?.archived)
+                .map((app) => serverHarness(app.slug ?? app.harness ?? app.name))
+                .filter(Boolean),
+            );
+          }
+        } catch { /* fall back to all configured active slugs */ }
+      }
+      const filtered = serverApps
+        ? configuredSlugs.filter((slug) => serverApps.has(slug))
+        : configuredSlugs;
+      if (filtered.length === 0) {
+        throw new Error('--all-configured found no active configured apps in config.json');
+      }
+      addHarnesses = [...new Set([...addHarnesses, ...filtered])];
+    }
+    const harnesses = (a.harnesses.length || addHarnesses.length) ? a.harnesses : [ambientHarness(env)].filter(Boolean);
     const record = await enroll({
-      base, env, harnesses, addHarnesses: a.addHarnesses, replaceHarnesses: a.replaceHarnesses,
+      base, env, harnesses, addHarnesses, replaceHarnesses: a.replaceHarnesses,
       tags: a.tags, force: a.force, fetchImpl, ...(sleep ? { sleep } : {}),
       ...(a.name ? { deviceName: a.name } : {}), ...(a.platform ? { platform: a.platform } : {}),
       // --json also streams the approval prompt as a machine-readable line on

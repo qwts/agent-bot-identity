@@ -282,6 +282,7 @@ test('configured App slugs are unique and deterministic', () => {
       'org-devin-agent',
       'org-mirror-agent',
       'org-muse-agent',
+      'org-opencode-agent',
       'org-qwen-agent',
       'org-vibe-agent',
       'org-vscode-agent',

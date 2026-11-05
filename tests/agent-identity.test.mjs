@@ -83,6 +83,7 @@ test('discovers explicit, Codex, and Claude transcript locators without storing 
     id: 'claude-1',
   });
   assert.deepEqual(discoverTranscript({ QWEN_CODE_SESSION_ID: 'qwen-1' }), { provider: 'qwen', id: 'qwen-1' });
+  assert.deepEqual(discoverTranscript({ OPENCODE_SESSION_ID: 'ses_1' }), { provider: 'opencode', id: 'ses_1' });
   assert.equal(discoverTranscript({}), null);
 });
 

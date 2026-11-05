@@ -123,6 +123,9 @@ export function discoverTranscript(env = process.env) {
   if (env.QWEN_CODE_SESSION_ID) {
     return { provider: 'qwen', id: requiredText('QWEN_CODE_SESSION_ID', env.QWEN_CODE_SESSION_ID) };
   }
+  if (env.OPENCODE_SESSION_ID) {
+    return { provider: 'opencode', id: requiredText('OPENCODE_SESSION_ID', env.OPENCODE_SESSION_ID) };
+  }
   return null;
 }
 

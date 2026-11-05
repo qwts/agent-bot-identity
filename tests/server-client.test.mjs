@@ -35,11 +35,48 @@ test('server mode is off unless AGENT_BOT_SERVER or settings.agentBotServer is s
   }
 });
 
-test('argument parsing and harness names', () => {
+test('argument parsing and harness names', async () => {
   assert.deepEqual(parseServerArgs(['enroll', '--harness', 'claude-code', '--tag', 'ci']).harnesses, ['claude']);
+  assert.equal(parseServerArgs(['enroll', '--all-configured']).allConfigured, true);
   assert.throws(() => parseServerArgs(['enroll', '--bogus']), /unknown option/);
   assert.throws(() => parseServerArgs(['nope']), /unknown server command/);
   assert.equal(serverHarness('grok'), 'grok');
+
+  const env = sandbox();
+  const cfgPath = join(env.HOME, 'config.json');
+  writeFileSync(cfgPath, JSON.stringify({
+    settings: { agentBotServer: BASE },
+    apps: {
+      opencode: 'you-opencode-agent',
+    },
+    identityApps: {
+      'you-codex-agent': { harness: 'codex' },
+      'you-opencode-agent': { harness: 'opencode' },
+    },
+    profile: {
+      schemaVersion: 1,
+      organization: 'you',
+      accountOwner: 'you',
+      minimumRuntimeInterfaceVersion: 1,
+      identities: [
+        { slug: 'you-codex-agent', harness: 'codex', status: 'retired' },
+        { slug: 'you-opencode-agent', harness: 'opencode', status: 'active' },
+      ],
+    },
+  }));
+  const srv = fakeServer({ approveAfter: 1 });
+  const out = { write: () => {} };
+  const err = { write: () => {} };
+  const rc = await main(['enroll', '--all-configured'], {
+    env: { ...env, AGENT_BOT_CONFIG: cfgPath },
+    out,
+    err,
+    fetchImpl: srv.fetch,
+    sleep,
+  });
+  assert.equal(rc, 0);
+  const dev = loadDevice({ env });
+  assert.deepEqual(dev.harnesses, ['you-opencode-agent']);
 });
 
 test('device-grant enrollment stores a 0600 P-256 key, pins the server key and records management', async () => {
