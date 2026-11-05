@@ -184,6 +184,37 @@ Agent Space are not read, moved or removed.
 Maintainer notes, the component pins, and how to build are in
 [`scripts/linux-bundle/README.md`](scripts/linux-bundle/README.md).
 
+### Headless / CI enrollment & startup quickstart
+
+On a headless Linux VM, container, or CI runner without a browser or a user
+`systemd --user` session, enroll the device with `AGENT_BOT_ENROLL_TOKEN`,
+enable the `github-identity` add-on via `AGENT_BOT_ENABLE_FEATURES=github-identity`
+(or `--features github-identity`), start the daemon and `agent-comms` broker in
+the background, and run `agent-bot start`:
+
+```bash
+# 1. Configure the runtime and enable the github-identity add-on + gh shim headlessly
+AGENT_BOT_ENABLE_FEATURES=github-identity \
+  agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
+
+# 2. Start the identity daemon and single-account agent-comms broker (when systemd --user is absent)
+agent-bot daemon start --daemonize
+AGENT_COMMS_SHARED_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agent-comms" \
+  nohup agent-comms broker run --single-account >/dev/null 2>&1 &
+
+# 3. Enroll the device with the identity server using a headless enrollment token (no browser;
+#    the server token fixes the allowed harnesses and lifetime — do not pass --add-harness / --replace-harnesses)
+AGENT_BOT_SERVER=https://agents.true-line.ai \
+AGENT_BOT_ENROLL_TOKEN="$AGENT_BOT_ENROLL_TOKEN" \
+  agent-bot server enroll --harness <harness-or-app-slug>
+
+# 4. Create/reuse a bound soul worktree and authenticate git/gh per operation
+agent-bot start --branch <branch>
+```
+
+See [docs/server-mode.md](docs/server-mode.md) for the full `agent-bot server`
+contract (`status`, `reconcile`, `logout`, and `--add-harness` scope expansion).
+
 ## Machine install (Homebrew)
 
 This repository is a Homebrew self-tap. Operators install the runtime from

@@ -80,6 +80,33 @@ Direct calls to `agent-bot join`, `agent-bot setup-worktree`, and
 `agent-bot session bind` are `[deprecated]` for routine task/worktree startup;
 always use `agent-bot start [--branch <branch>]`.
 
+### Headless / CI enrollment & startup quickstart
+
+On a headless Linux VM, container, or CI runner without a browser or a user
+`systemd --user` session, run this four-step sequence to bootstrap, enable
+`github-identity`, start the daemon and broker, enroll with `AGENT_BOT_ENROLL_TOKEN`,
+and check in a bound worktree:
+
+```bash
+# 1. Bootstrap machine config + enable github-identity add-on and fail-closed gh shim
+AGENT_BOT_ENABLE_FEATURES=github-identity \
+  agent-bot bootstrap --profile /path/to/organization-profile.json --with-gh-shim --machine-only
+
+# 2. Start the daemon and single-account broker when systemd --user is unavailable
+agent-bot daemon start --daemonize
+AGENT_COMMS_SHARED_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agent-comms" \
+  nohup agent-comms broker run --single-account >/dev/null 2>&1 &
+
+# 3. Enroll headlessly with the identity service (no browser RFC 8628 prompt;
+#    the server token fixes the allowed harnesses and lifetime — do not pass --add-harness / --replace-harnesses)
+AGENT_BOT_SERVER=https://agents.true-line.ai \
+AGENT_BOT_ENROLL_TOKEN="$AGENT_BOT_ENROLL_TOKEN" \
+  agent-bot server enroll --harness <harness-or-app-slug>
+
+# 4. Check in and create/reuse a soul-bound worktree
+agent-bot start --branch <branch>
+```
+
 ## Joining the hub (agent-comms)
 
 For routine coding tasks and repository sessions, `agent-bot start` handles
