@@ -275,6 +275,7 @@
     "skill.mjs": "cli",
     "sop-policy.mjs": "org",
     "sop.mjs": "soul",
+    "workflow.mjs": "cli",
     "soul-app-declarations.mjs": "soul",
     "soul-asides.mjs": "soul",
     "soul-build.mjs": "soul",

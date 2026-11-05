@@ -43,6 +43,7 @@ export const MODULES = new Map([
   ['secret', 'secret.mjs'],
   ['skill', 'skill.mjs'],
   ['sop', 'sop.mjs'],
+  ['workflow', 'workflow.mjs'],
   ['sandbox', 'sandbox.mjs'],
   ['metrics', 'metrics.mjs'],
   ['diagnostics', 'diagnostics-cli.mjs'],

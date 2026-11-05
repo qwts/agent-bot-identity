@@ -1,0 +1,28 @@
+schema_version = 1
+name = "issue-to-pr"
+summary = "Issue provenance -> isolated worktree -> signed commit -> pull request"
+sop = [
+  "docs/sop/feature-lifecycle.md",
+  "docs/sop/branch-pr-review.md"
+]
+
+[[steps]]
+id = "triage-issue"
+mode = "read-only"
+description = "Confirm issue scope, acceptance criteria, and governing SOP documents before mutating code"
+
+[[steps]]
+id = "start-worktree"
+mode = "local-write"
+description = "Check in the session and create or reuse an isolated soul worktree (agent-bot start --branch <branch>)"
+
+[[steps]]
+id = "verify-local"
+mode = "read-only"
+description = "Run hermetic tests, changelog checks, and pre-push security/architecture review on the diff"
+gate = "require-green-tests"
+
+[[steps]]
+id = "publish-pr"
+mode = "remote-write"
+description = "Commit with issue reference, replay with agent-bot signed-commit, push branch, and open pull request"

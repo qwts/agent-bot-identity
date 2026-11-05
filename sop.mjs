@@ -48,6 +48,7 @@ const ORGANIZATION_FIELDS = ['id', 'account', 'profile'];
 // and reports it.
 export const PERSONA_FILE = 'persona.toml';
 const PERSONA_RECORD_FIELDS = ['schemaVersion', 'recordedAt', 'configPath', 'selection', 'org', 'sop', 'persona'];
+const LAST_GOOD_FIELDS = ['schemaVersion', 'updatedAt', 'org', 'sop'];
 
 // git show would run a configured textconv. cat-file prints the raw blob.
 export const SOP_GIT_COMMANDS = Object.freeze(['ls-remote', 'init', 'remote', 'config', 'fetch', 'cat-file']);
@@ -317,10 +318,11 @@ export function assertSopGitCommand(args) {
     // the fetched commit is the catalog or skill SKILL.md read by skill.mjs.
     const profile = fetched !== undefined && isRelativePath(fetched) && !/[\u0000-\u001f\u007f]/.test(fetched) && fetched.endsWith('.json');
     const fetchedMarkdown = fetched !== undefined && isRelativePath(fetched) && !/[\u0000-\u001f\u007f]/.test(fetched) && fetched.endsWith('.md');
+    const pinnedWorkflow = Boolean(doc && /^workflows\/[A-Za-z0-9][A-Za-z0-9_-]*\.toml$/.test(doc));
     const permitted = (mode === 'blob' && (spec === 'FETCH_HEAD:org.json' || spec === `FETCH_HEAD:${PERSONA_FILE}` || spec === `FETCH_HEAD:${POLICY_FILE}` || profile || fetchedMarkdown))
       || (mode === '-p' && pinned && !doc)
-      || (mode === 'blob' && pinned && doc && isRelativePath(doc) && !/[\u0000-\u001f\u007f]/.test(doc) && doc.endsWith('.md'));
-    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml, policy-hooks.json, the organization profile JSON or pinned SOP Markdown/trees');
+      || (mode === 'blob' && pinned && doc && isRelativePath(doc) && !/[\u0000-\u001f\u007f]/.test(doc) && (doc.endsWith('.md') || pinnedWorkflow));
+    if (!permitted) fail('git-refused', 'refusing to read any file other than org.json, persona.toml, policy-hooks.json, the organization profile JSON or pinned SOP Markdown/workflows/trees');
   }
 }
 
@@ -751,6 +753,39 @@ export function acceptSopTrust(report, repo, options = {}) {
 // agent-sop.toml: a soul must not choose the account it runs as.
 
 export function personaRecordFile(options = {}) { return join(sopState(options), 'sop-persona.json'); }
+export function sopLastGoodFile(options = {}) { return join(sopState(options), 'sop-last-good.json'); }
+
+export function recordSopLastGood(report, options = {}) {
+  const sop = report?.repositories?.sop;
+  if (!sop || !OWNER_NAME.test(sop.repository ?? '') || !COMMIT_SHA.test(sop.commit ?? '')) return null;
+  const org = report?.repositories?.org;
+  const record = {
+    schemaVersion: SCHEMA_VERSION,
+    updatedAt: (options.now ?? (() => new Date()))().toISOString(),
+    org: org && OWNER_NAME.test(org.repository ?? '') && COMMIT_SHA.test(org.commit ?? '')
+      ? { repository: org.repository, commit: org.commit, ref: org.ref ?? 'HEAD' }
+      : null,
+    sop: { repository: sop.repository, commit: sop.commit, ref: sop.ref ?? 'HEAD' },
+  };
+  writePrivateJson(sopLastGoodFile(options), record, options);
+  return record;
+}
+
+export function readSopLastGood(options = {}) {
+  const file = sopLastGoodFile(options);
+  try {
+    if (lstatSync(file).isSymbolicLink()) return null;
+    const record = JSON.parse(readFileSync(file, 'utf8'));
+    if (!isObject(record) || record.schemaVersion !== SCHEMA_VERSION) return null;
+    if (!Object.keys(record).every((k) => LAST_GOOD_FIELDS.includes(k))) return null;
+    if (!isObject(record.sop) || !OWNER_NAME.test(record.sop.repository ?? '') || !COMMIT_SHA.test(record.sop.commit ?? '')) return null;
+    if (record.org !== null && (!isObject(record.org) || !OWNER_NAME.test(record.org.repository ?? '') || !COMMIT_SHA.test(record.org.commit ?? ''))) return null;
+    if (typeof record.updatedAt !== 'string') return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
 
 function writePrivateJson(file, value, options) {
   const dir = sopState(options);
@@ -1180,8 +1215,16 @@ function walkDocuments(root, source, commit) {
   return docs;
 }
 
-function cachedDocuments(repo, commit, options) {
+export function cachedDocuments(repo, commit, options = {}) {
   const parent = join(sopState(options), 'sop-cache');
+  const recordPin = () => {
+    try {
+      if (options.report) recordSopLastGood(options.report, options);
+      else recordSopLastGood({ repositories: { sop: { repository: repo, commit, ref: commit } } }, options);
+    } catch {
+      // Best-effort record so read-only SOP cache use never fails on state write.
+    }
+  };
   if (options.offline) {
     const cache = join(parent, commit);
     if (!existsSync(cache)) fail('documents-unavailable-offline', 'Pinned SOP documents are not cached locally');
@@ -1192,7 +1235,11 @@ function cachedDocuments(repo, commit, options) {
   if (lstatSync(parent).isSymbolicLink()) fail('path-unsafe', 'SOP cache must not be a symlink');
   chmodSync(parent, 0o700);
   const cache = join(parent, commit);
-  if (existsSync(cache)) return cache;
+  const cacheComplete = existsSync(cache) && (!options.includeWorkflows || existsSync(join(cache, 'workflows')));
+  if (cacheComplete) {
+    recordPin();
+    return cache;
+  }
   const staging = mkdtempSync(join(parent, '.read-'));
   const gitDir = join(staging, 'git');
   const docsDir = join(staging, 'documents');
@@ -1209,6 +1256,7 @@ function cachedDocuments(repo, commit, options) {
     const tree = /^tree ([0-9a-f]{40})$/m.exec(commitText)?.[1];
     if (!tree) fail('documents-unreadable', 'resolved SOP object is not a commit');
     mkdirSync(docsDir, { mode: 0o700 });
+    mkdirSync(join(docsDir, 'workflows'), { mode: 0o700 });
     let count = 0;
     function readTree(sha, prefix = '', depth = 0) {
       if (depth > 64) fail('documents-unreadable', 'SOP tree is too deep');
@@ -1221,7 +1269,7 @@ function cachedDocuments(repo, commit, options) {
         const path = safePath(prefix + name);
         if (mode === '120000') fail('path-unsafe', `symlink in SOP repository: ${path}`);
         if (type === 'tree') readTree(oid, `${path}/`, depth + 1);
-        else if (['100644', '100755'].includes(mode) && name.endsWith('.md')) {
+        else if (['100644', '100755'].includes(mode) && (name.endsWith('.md') || /^workflows\/[A-Za-z0-9][A-Za-z0-9_-]*\.toml$/.test(path))) {
           const text = run(['-C', gitDir, 'cat-file', 'blob', `${commit}:${path}`]);
           const file = join(docsDir, path);
           mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -1238,8 +1286,18 @@ function cachedDocuments(repo, commit, options) {
     freeze(docsDir);
     // macOS needs write permission on the moved directory to update its parent.
     chmodSync(docsDir, 0o700);
+    if (existsSync(cache) && options.includeWorkflows && !existsSync(join(cache, 'workflows'))) {
+      function thawExisting(dir) {
+        if (!existsSync(dir)) return;
+        chmodSync(dir, 0o700);
+        for (const entry of readdirSync(dir, { withFileTypes: true })) if (entry.isDirectory()) thawExisting(join(dir, entry.name));
+      }
+      thawExisting(cache);
+      rmSync(cache, { recursive: true, force: true });
+    }
     try { renameSync(docsDir, cache); chmodSync(cache, 0o555); }
     catch (error) { if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error; }
+    recordPin();
     return cache;
   } finally {
     // A losing concurrent builder must make its own staging tree removable.
@@ -1253,29 +1311,199 @@ function cachedDocuments(repo, commit, options) {
   }
 }
 
+// Read workflows/*.toml from a resolved SOP commit without modifying the local
+// sop-cache or sop-last-good.json (used by `agent-bot workflow --remote`).
+export function readRemoteSopWorkflows(repo, commit, options = {}) {
+  if (!COMMIT_SHA.test(commit)) fail('documents-unreadable', 'remote workflows are read at a resolved commit');
+  const dir = (options.makeTemp ?? (() => mkdtempSync(join(tmpdir(), 'agent-bot-sop-wf-'))))();
+  const runGit = options.runGit ?? defaultRunGit;
+  const run = (args) => {
+    const result = callGit(runGit, [...GIT_SAFETY, ...args]);
+    if (result.status !== 0) fail('documents-unreadable', `could not read ${repo}@${commit}: ${brief(result.stderr) || 'git failed'}`);
+    return result.stdout;
+  };
+  try {
+    run(['init', '--quiet', dir]);
+    run(['-C', dir, 'fetch', '--depth', '1', '--no-tags', (options.remoteUrl ?? githubRemote)(repo), commit]);
+    const commitText = run(['-C', dir, 'cat-file', '-p', commit]);
+    const rootTree = /^tree ([0-9a-f]{40})$/m.exec(commitText)?.[1];
+    if (!rootTree) fail('documents-unreadable', 'resolved SOP object is not a commit');
+    const rootText = run(['-C', dir, 'cat-file', '-p', rootTree]);
+    let workflowsTree = null;
+    for (const line of rootText.split('\n').filter(Boolean)) {
+      const entry = /^(\d{6}) (blob|tree) ([0-9a-f]{40})\t(.+)$/.exec(line);
+      if (entry && entry[2] === 'tree' && entry[4] === 'workflows') {
+        workflowsTree = entry[3];
+        break;
+      }
+    }
+    if (!workflowsTree) return new Map();
+    const wfText = run(['-C', dir, 'cat-file', '-p', workflowsTree]);
+    const out = new Map();
+    let count = 0;
+    for (const line of wfText.split('\n').filter(Boolean)) {
+      if (++count > 256) fail('documents-unreadable', 'SOP workflows tree has too many entries');
+      const entry = /^(\d{6}) (blob|tree) ([0-9a-f]{40})\t(.+)$/.exec(line);
+      if (!entry) continue;
+      const [, mode, type, , fileName] = entry;
+      if (mode === '120000') fail('path-unsafe', `symlink in SOP repository: workflows/${fileName}`);
+      if (type === 'blob' && ['100644', '100755'].includes(mode) && /^[A-Za-z0-9][A-Za-z0-9_-]*\.toml$/.test(fileName)) {
+        const name = fileName.slice(0, -5);
+        const relPath = `workflows/${fileName}`;
+        const text = run(['-C', dir, 'cat-file', 'blob', `${commit}:${relPath}`]);
+        if (Buffer.byteLength(text, 'utf8') > ORG_JSON_LIMIT) {
+          fail('documents-unreadable', `${relPath} exceeds 1 MiB`);
+        }
+        out.set(name, { name, path: relPath, commit, text });
+      }
+    }
+    return out;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function parseStringArrayContent(raw, lineNo, label = 'sop') {
+  const items = raw.match(/"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,]+/g) ?? [];
+  const values = items.map((item) => safePath(parseValue(item, lineNo)));
+  let rest = raw.trim();
+  for (let i = 0; i < items.length; i += 1) {
+    if (!rest.startsWith(items[i])) fail('workflow-invalid', `invalid workflow ${label} array`);
+    rest = rest.slice(items[i].length).trim();
+    if (rest && !rest.startsWith(',')) fail('workflow-invalid', 'workflow paths must be comma separated');
+    if (rest.startsWith(',')) rest = rest.slice(1).trim();
+  }
+  if (rest) fail('workflow-invalid', `invalid workflow ${label} array`);
+  return values;
+}
+
+const WORKFLOW_MODES = Object.freeze(['read-only', 'local-write', 'remote-write']);
+const WORKFLOW_ROOT_KEYS = Object.freeze(['schema_version', 'name', 'summary', 'sop']);
+const WORKFLOW_STEP_KEYS = Object.freeze(['id', 'mode', 'description', 'gate']);
+
+export function parseWorkflowToml(text, expectedName = null) {
+  if (typeof text !== 'string') fail('workflow-invalid', 'workflow TOML must be text');
+  if (text.includes('\0')) fail('workflow-invalid', 'NUL bytes are not supported in workflow TOML');
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(stripComment);
+
+  const root = {};
+  const steps = [];
+  let currentStep = null;
+  let seenRootKeys = new Set();
+  let seenStepKeys = null;
+  let seenStepIds = new Set();
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const lineNo = i + 1;
+    const trimmed = lines[i].trim();
+    if (trimmed === '') continue;
+
+    if (trimmed === '[[steps]]') {
+      if (currentStep) {
+        for (const req of ['id', 'mode', 'description']) {
+          if (!Object.hasOwn(currentStep, req)) fail('workflow-invalid', `workflow [[steps]] requires ${req}`);
+        }
+      }
+      currentStep = {};
+      seenStepKeys = new Set();
+      steps.push(currentStep);
+      continue;
+    }
+
+    if (trimmed.startsWith('[')) {
+      fail('workflow-invalid', `line ${lineNo}: unsupported table header ${trimmed}; only [[steps]] is supported`);
+    }
+
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) fail('workflow-invalid', `line ${lineNo}: expected key = value in workflow TOML`);
+    const key = trimmed.slice(0, eq).trim();
+    let rhs = trimmed.slice(eq + 1).trim();
+
+    if (currentStep) {
+      if (!WORKFLOW_STEP_KEYS.includes(key)) {
+        fail('workflow-invalid', `line ${lineNo}: unsupported step key ${key}`);
+      }
+      if (seenStepKeys.has(key)) fail('workflow-invalid', `line ${lineNo}: duplicate step key ${key}`);
+      seenStepKeys.add(key);
+      const val = parseValue(rhs, lineNo);
+      if (typeof val !== 'string' || val.trim() === '') {
+        fail('workflow-invalid', `line ${lineNo}: step ${key} must be a non-empty string`);
+      }
+      if (key === 'id') {
+        if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(val)) {
+          fail('workflow-invalid', `line ${lineNo}: step id must be an identifier`);
+        }
+        if (seenStepIds.has(val)) fail('workflow-invalid', `line ${lineNo}: duplicate step id ${val}`);
+        seenStepIds.add(val);
+      }
+      if (key === 'mode' && !WORKFLOW_MODES.includes(val)) {
+        fail('workflow-invalid', `line ${lineNo}: step mode must be one of ${WORKFLOW_MODES.join(', ')}`);
+      }
+      currentStep[key] = val;
+      continue;
+    }
+
+    if (!WORKFLOW_ROOT_KEYS.includes(key)) {
+      fail('workflow-invalid', `line ${lineNo}: unsupported workflow key ${key}`);
+    }
+    if (seenRootKeys.has(key)) fail('workflow-invalid', `line ${lineNo}: duplicate workflow key ${key}`);
+    seenRootKeys.add(key);
+
+    if (key === 'sop') {
+      if (!rhs.startsWith('[')) fail('workflow-invalid', `line ${lineNo}: sop must be an array of paths`);
+      while (!rhs.endsWith(']') && i + 1 < lines.length) {
+        i += 1;
+        rhs = `${rhs}\n${lines[i].trim()}`;
+      }
+      if (!rhs.endsWith(']')) fail('workflow-invalid', `line ${lineNo}: unterminated sop array`);
+      root.sop = parseStringArrayContent(rhs.slice(1, -1), lineNo, 'sop');
+    } else {
+      const val = parseValue(rhs, lineNo);
+      if (key === 'schema_version') {
+        if (val !== 1) fail('workflow-invalid', `line ${lineNo}: workflow schema_version must be 1`);
+        root.schemaVersion = 1;
+      } else if (key === 'name') {
+        if (typeof val !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(val)) {
+          fail('workflow-invalid', `line ${lineNo}: workflow name must be a simple identifier`);
+        }
+        if (expectedName && val !== expectedName) {
+          fail('workflow-invalid', `line ${lineNo}: workflow name ${val} does not match file name ${expectedName}`);
+        }
+        root.name = val;
+      } else if (key === 'summary') {
+        if (typeof val !== 'string' || val.trim() === '') {
+          fail('workflow-invalid', `line ${lineNo}: workflow summary must be a non-empty string`);
+        }
+        root.summary = val;
+      }
+    }
+  }
+
+  if (currentStep) {
+    for (const req of ['id', 'mode', 'description']) {
+      if (!Object.hasOwn(currentStep, req)) fail('workflow-invalid', `workflow [[steps]] requires ${req}`);
+    }
+  }
+  if (!Array.isArray(root.sop)) {
+    fail('workflow-invalid', 'workflow TOML requires sop = ["path.md", ...]');
+  }
+  return {
+    schemaVersion: root.schemaVersion ?? 1,
+    name: root.name ?? expectedName ?? null,
+    summary: root.summary ?? null,
+    sop: root.sop,
+    steps,
+  };
+}
+
 function workflowPaths(report, name) {
   if (!name) return null;
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) fail('path-unsafe', 'workflow must be a simple name');
   if (!report.soul) fail('workflow-invalid', '--workflow requires a current soul or --soul ID');
   const root = join(report.soul.directory, 'workflows');
   const file = containedPath(root, `${name}.toml`);
-  const text = readFileSync(file, 'utf8');
-  // Deliberately small TOML schema: one top-level sop array of quoted paths.
-  const content = text.split(/\r?\n/).map(stripComment).join('\n').trim();
-  const match = /^sop\s*=\s*\[([\s\S]*)\]\s*$/.exec(content);
-  if (!match) fail('workflow-invalid', 'workflow TOML requires sop = ["path.md", ...] only');
-  const items = match[1].match(/"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,]+/g) ?? [];
-  const paths = items.map((item) => safePath(parseValue(item, 1)));
-  // Reparse the separators, rather than silently accepting missing commas.
-  let rest = match[1].trim();
-  for (let i = 0; i < items.length; i++) {
-    if (!rest.startsWith(items[i])) fail('workflow-invalid', 'invalid workflow sop array');
-    rest = rest.slice(items[i].length).trim();
-    if (rest && !rest.startsWith(',')) fail('workflow-invalid', 'workflow paths must be comma separated');
-    if (rest.startsWith(',')) rest = rest.slice(1).trim();
-  }
-  if (rest) fail('workflow-invalid', 'invalid workflow sop array');
-  return new Set(paths);
+  const parsed = parseWorkflowToml(readFileSync(file, 'utf8'), name);
+  return new Set(parsed.sop);
 }
 
 export function listSopDocuments(report, options = {}) {
@@ -1283,7 +1511,7 @@ export function listSopDocuments(report, options = {}) {
   const docs = new Map();
   if (report.inEffect && !(report.trust?.required && !report.trust.accepted)) {
     const { repository, commit } = report.repositories.sop;
-    const cache = cachedDocuments(repository, commit, options);
+    const cache = cachedDocuments(repository, commit, { ...options, report });
     for (const doc of walkDocuments(cache, 'sop', commit)) docs.set(doc.path, doc);
   }
   if (report.soul) {

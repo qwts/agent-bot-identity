@@ -22,6 +22,7 @@ export const SKILL_REFERENCES = Object.freeze({
   'ensure-private-key': 'operations.md',
   secret: 'operations.md',
   daemon: 'operations.md',
+  workflow: 'operations.md',
   'signed-commit': 'verified-publish.md',
   identity: 'execution-identities.md',
   binding: 'execution-identities.md',

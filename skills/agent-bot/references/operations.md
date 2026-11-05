@@ -9,6 +9,7 @@ Use this reference for setup, minting, diagnostics, and identity repair.
 | Start a task or create/reuse a bound soul worktree | `agent-bot start [--branch <branch>] [--repo <path\|owner/name>] [--json]` |
 | Bootstrap from a fresh source checkout | `./agent-bot bootstrap --repair --machine-only [--with-gh-shim] [--json]` (profile from the selected organization), or `--profile <path\|->` |
 | Inspect available commands | `agent-bot --help` |
+| List or inspect deterministic workflows across soul, sop-cache, bundled, and remote tiers | `agent-bot workflow [list\|show <name>\|sync] [--soul ID] [--remote] [--source TIER] [--json]` |
 | Configure this checkout's bot identity (`[deprecated]` for routine startup; prefer `agent-bot start`) | `agent-bot setup-worktree [app-slug]` |
 | Mint a short-lived App installation token | `agent-bot mint-token [--app <slug>] [--json]` |
 | Diagnose the installation and mapped identities | `agent-bot doctor [--json]` |
@@ -424,5 +425,14 @@ is a fresh read, safe after connectivity or configuration is repaired; do
 not label a previous snapshot current. Fresh discovery does not activate
 policy hooks, personas, or change launch snapshots. Review and activate
 those through their existing owner-gated workflows.
+
+`agent-bot workflow` (`list`, `show <name>`) resolves deterministic workflows
+offline across `soul` (`<soul>/workflows/<name>.toml`) → `sop-cache`
+(`<state>/sop-cache/<commit>/workflows/<name>.toml`, using
+`<state>/sop-last-good.json`) → `bundled` (`workflows/<name>.toml`), reporting
+`activeSource`, `shadowedSources`, referenced `sop` documents, and ordered
+non-executable `steps`. Pass `--remote` to compare local tiers against the live
+remote SOP commit, or run `agent-bot workflow sync` to cache the remote SOP
+commit locally.
 
 - `gh issue create --parent` for an issue in another repository fails for GitHub Apps with `Resource not accessible by integration (addSubIssue)` — a GitHub Apps limitation, not a shim bug. The hosted `agents.true-line.ai` MCP has no `bind` tool; binding a session is only on the local `agent-bot mcp`.

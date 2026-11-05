@@ -1,0 +1,24 @@
+schema_version = 1
+name = "pr-review-merge"
+summary = "Wait for reviewers, resolve threads, verify CI, merge, and clean up"
+sop = [
+  "docs/sop/branch-pr-review.md",
+  "docs/sop/feature-lifecycle.md"
+]
+
+[[steps]]
+id = "inspect-reviews"
+mode = "read-only"
+description = "Inspect PR review threads, automated reviewer status, and CI checks"
+gate = "wait-for-reviewers"
+
+[[steps]]
+id = "address-feedback"
+mode = "remote-write"
+description = "Fix review findings, verify locally, sign commit, push, reply with fixing SHA, and resolve threads"
+
+[[steps]]
+id = "merge-pr"
+mode = "remote-write"
+description = "Confirm all review threads are resolved and required checks/approvals are green before merging"
+gate = "require-resolved-threads"

@@ -1,0 +1,23 @@
+schema_version = 1
+name = "workspace-cleanup"
+summary = "Audit, verify, and prune merged or stale branches and worktrees"
+sop = [
+  "docs/sop/branch-pr-review.md",
+  "docs/sop/feature-lifecycle.md"
+]
+
+[[steps]]
+id = "inventory"
+mode = "read-only"
+description = "Fetch/prune and classify worktrees and branches (merged, gone, ahead, dirty)"
+
+[[steps]]
+id = "verify-squash"
+mode = "read-only"
+description = "Verify zero unmerged net diff against origin/main before removing gone/ahead branches"
+gate = "confirm-if-unmerged"
+
+[[steps]]
+id = "prune-safe"
+mode = "local-write"
+description = "Prune missing worktrees and delete branches verified merged into default branch"
