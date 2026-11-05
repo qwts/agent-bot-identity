@@ -194,6 +194,9 @@ test('parseWorkflowArgs and parseWorkflowToml validate inputs and fail closed on
   // Invalid mode or missing step fields fail closed.
   assert.throws(() => parseWorkflowToml('sop = ["a.md"]\n[[steps]]\nid = "s1"\nmode = "exec"\ndescription = "bad"\n'), /step mode must be one of/);
   assert.throws(() => parseWorkflowToml('sop = ["a.md"]\n[[steps]]\nid = "s1"\nmode = "read-only"\n'), /requires description/);
+  // schema_version = 1 requires name and summary.
+  assert.throws(() => parseWorkflowToml('schema_version = 1\nsummary = "s"\nsop = ["a.md"]\n', 'w'), /requires name/);
+  assert.throws(() => parseWorkflowToml('schema_version = 1\nname = "w"\nsop = ["a.md"]\n', 'w'), /requires summary/);
 });
 
 test('cachedDocuments extracts workflows/*.toml with 0444 permissions and records sop-last-good.json', (t) => {
@@ -223,15 +226,22 @@ test('cachedDocuments extracts workflows/*.toml with 0444 permissions and record
   assert.deepEqual(repaired.workflows, ['issue-to-pr', 'pr-review-merge']);
   assert.equal(existsSync(cacheWf), true);
 
-  // If a soul config selects a different repository than sop-last-good.json,
-  // offline workflow resolution does not mix the old repo's sop-cache into the new repo.
-  f.put(join(f.soulDir, 'agent-sop.toml'), `schema_version = 1\n[repos]\norg = "other/org@${f.commit1}"\nsop = "other/sop@main"\n`);
-  const mismatched = listWorkflows({
+  // If a soul config selects a foreign repository, offline workflow resolution
+  // withholds sop-cache until owner trust is accepted, and propagates malformed soul config errors.
+  f.put(join(f.soulDir, 'agent-sop.toml'), `schema_version = 1\n[repos]\norg = "other/org@${f.commit1}"\nsop = "other/sop@${f.commit1}"\n`);
+  const untrusted = listWorkflows({
     ...f.options,
     runGit: () => assert.fail('offline list must not invoke git'),
   });
-  assert.equal(mismatched.cache, null);
-  assert.ok(mismatched.workflows.every((w) => w.activeSource === 'bundled'));
+  assert.equal(untrusted.cache, null);
+  assert.ok(untrusted.workflows.every((w) => w.activeSource === 'bundled'));
+
+  // Malformed soul agent-sop.toml fails closed instead of silently falling through to user config.
+  f.put(join(f.soulDir, 'agent-sop.toml'), 'not valid toml\n');
+  assert.throws(() => listWorkflows({
+    ...f.options,
+    runGit: () => assert.fail('offline list must not invoke git'),
+  }));
 });
 
 test('offline workflow resolution follows soul -> sop-cache -> bundled with zero git calls and reports shadowedSources', (t) => {

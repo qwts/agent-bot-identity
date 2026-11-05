@@ -519,10 +519,11 @@ test('server mode without device enrollment or missing slug scope never falls ba
   assert.equal(inspectLocalAppCredential({ slug: 'qwts-claude-agent', home, env }).status, 'ready');
   assert.equal(inspectLocalAppCredential({ slug: 'trueline-antigravity-agent', home, env }).code, 'server-harness-not-enrolled');
 
-  // Even when config declares a local managed store (e.g. store: 'pass-cli'),
+  // Even when config declares a local managed store (e.g. store: 'pass-cli')
+  // or retains an old settings.legacyLocalCustody flag alongside agentBotServer,
   // server mode short-circuits before reading local stores.
   writeFileSync(env.AGENT_BOT_CONFIG, JSON.stringify({
-    settings: { agentBotServer: 'https://agents.true-line.ai' },
+    settings: { agentBotServer: 'https://agents.true-line.ai', legacyLocalCustody: true },
     identityApps: {
       'qwts-claude-agent': { store: 'pass-cli', id: '12345' },
       'trueline-antigravity-agent': { store: 'pass-cli', id: '67890' },

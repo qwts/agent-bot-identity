@@ -708,6 +708,11 @@ function sopState(options) {
 function trustFile(options) { return join(sopState(options), 'sop-trust.json'); }
 function trustKey(repo, commit) { return `${repo.toLowerCase()}@${commit}`; }
 
+export function isSopTrustAccepted(repo, commit, options = {}) {
+  if (!repo || !commit) return false;
+  return readTrust(options).accepted.includes(trustKey(repo, commit));
+}
+
 function readTrust(options) {
   const file = trustFile(options);
   try {
@@ -1486,6 +1491,10 @@ export function parseWorkflowToml(text, expectedName = null) {
   }
   if (!Array.isArray(root.sop)) {
     fail('workflow-invalid', 'workflow TOML requires sop = ["path.md", ...]');
+  }
+  if (root.schemaVersion !== undefined) {
+    if (!root.name) fail('workflow-invalid', 'workflow TOML with schema_version = 1 requires name');
+    if (!root.summary) fail('workflow-invalid', 'workflow TOML with schema_version = 1 requires summary');
   }
   return {
     schemaVersion: root.schemaVersion ?? 1,

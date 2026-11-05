@@ -18,6 +18,7 @@ import { readBinding } from './identity-cli.mjs';
 import {
   cachedDocuments,
   configPathFor,
+  isSopTrustAccepted,
   loadSopConfig,
   parseWorkflowToml,
   readRemoteSopWorkflows,
@@ -159,19 +160,27 @@ function resolveOfflineSopCache({ soulContext, options = {} }) {
   const lastGood = readSopLastGood({ ...options, stateDir });
 
   // Check the active SOP selection (soul config first if present, else user config).
-  let activeConfig = null;
+  // Only ignore ENOENT when a config file is absent; propagate parse or other I/O errors.
   const readFile = options.readFile ?? ((p) => readFileSync(p, 'utf8'));
-  for (const cfgPath of [
-    soulContext?.directory ? join(soulContext.directory, 'agent-sop.toml') : null,
-    options.configPath ?? configPathFor(home),
-  ].filter(Boolean)) {
+  const readOptionalConfig = (cfgPath) => {
+    if (!cfgPath) return null;
+    let text;
     try {
-      activeConfig = loadSopConfig(readFile(cfgPath));
-      break;
-    } catch {
-      // ignore missing config in offline lookup
+      text = readFile(cfgPath);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') return null;
+      throw Object.assign(
+        new Error(`could not read ${cfgPath}: ${error instanceof Error ? error.message : String(error)}`),
+        { code: 'config-unreadable' },
+      );
     }
-  }
+    return loadSopConfig(text);
+  };
+  const soulConfig = soulContext?.directory ? readOptionalConfig(join(soulContext.directory, 'agent-sop.toml')) : null;
+  const userConfig = Object.hasOwn(options, 'configText')
+    ? (options.configText === null ? null : loadSopConfig(options.configText))
+    : readOptionalConfig(options.configPath ?? configPathFor(home));
+  const activeConfig = soulConfig ?? userConfig;
 
   const configuredRepo = activeConfig?.repos?.sop?.repo ?? null;
   const configuredOrg = activeConfig?.repos?.org?.repo ?? null;
@@ -188,6 +197,18 @@ function resolveOfflineSopCache({ soulContext, options = {} }) {
   const commit = configuredPin ?? (lastGoodMatchesConfig ? lastGood.sop.commit : null);
   const repository = configuredRepo ?? (lastGoodMatchesConfig ? lastGood.sop.repository : null);
   if (!commit) return null;
+
+  if (soulConfig) {
+    const userOrg = userConfig?.repos?.org?.repo?.toLowerCase() ?? null;
+    const soulOrg = soulConfig.repos.org.repo.toLowerCase();
+    const userSop = (userConfig?.repos?.sop?.repo ?? (lastGood?.org?.repository?.toLowerCase() === userOrg ? lastGood?.sop?.repository : null))?.toLowerCase() ?? null;
+    const soulSop = (soulConfig.repos.sop?.repo ?? repository)?.toLowerCase() ?? null;
+    const foreign = !userConfig || userOrg !== soulOrg || !userSop || !soulSop || userSop !== soulSop;
+    if (foreign && (!repository || !isSopTrustAccepted(repository, commit, { ...options, stateDir }))) {
+      return null;
+    }
+  }
+
   const commitDir = join(cacheRoot, commit);
   if (!existsSync(commitDir) || lstatSync(commitDir).isSymbolicLink() || !lstatSync(commitDir).isDirectory()) {
     return { repository, commit, cached: false, directory: null, updatedAt: lastGoodMatchesConfig ? lastGood.updatedAt : null };
