@@ -32,7 +32,7 @@ async function main() {
       const slug = options.app ?? explicitAppArg(process.argv);
       operatorReceipt({ decision: 'denied', appSlug: slug, reason: 'no-live-binding' });
       throw new Error(
-        'cannot mint a GitHub token without a live daemon binding in server mode — run `agent-bot start --branch <branch>` (or `agent-bot join --name NAME --harness HARNESS` and `agent-bot setup-worktree`) in a bound checkout',
+        'cannot mint a GitHub token without a live daemon binding in server mode — run `agent-bot start --branch <branch>` in a bound checkout',
       );
     }
   }

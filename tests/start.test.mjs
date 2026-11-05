@@ -172,26 +172,38 @@ test('parseStartArgs validates flags and worktree names', () => {
   assert.equal(parseStartArgs(['--help', '--unknown']).help, true);
 });
 
-test('discoverAntigravityTranscript picks the most recently updated brain transcript, refuses ambiguous concurrent sessions, and stays hermetic without HOME', async (t) => {
+test('discoverAntigravityTranscript picks the fresh active brain transcript, matches cwd across multiple brains, refuses stale or ambiguous sessions, and stays hermetic without HOME', async (t) => {
   const home = mkdtempSync(path.join(tmpdir(), 'agy-brain-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const olderLog = path.join(home, '.gemini', 'antigravity', 'brain', 'conv-older', '.system_generated', 'logs', 'transcript.jsonl');
   const newerLog = path.join(home, '.gemini', 'antigravity', 'brain', 'conv-newer', '.system_generated', 'logs', 'transcript.jsonl');
   mkdirSync(path.dirname(olderLog), { recursive: true });
   mkdirSync(path.dirname(newerLog), { recursive: true });
-  writeFileSync(olderLog, '{}\n');
-  writeFileSync(newerLog, '{}\n');
-  utimesSync(olderLog, 1_700_000_000, 1_700_000_000);
-  utimesSync(newerLog, 1_700_000_100, 1_700_000_100);
+  writeFileSync(olderLog, '{"cwd":"/workspace/other"}\n');
+  writeFileSync(newerLog, '{"cwd":"/workspace/target"}\n');
+  const nowSec = Math.floor(Date.now() / 1000);
+  utimesSync(olderLog, nowSec - 120, nowSec - 120);
+  utimesSync(newerLog, nowSec - 5, nowSec - 5);
 
-  assert.deepEqual(discoverAntigravityTranscript(home), { provider: 'antigravity', id: 'conv-newer' });
+  assert.deepEqual(discoverAntigravityTranscript(home, { cwd: '/workspace/target' }), { provider: 'antigravity', id: 'conv-newer' });
   assert.deepEqual(
-    await findTranscript({ env: { ANTIGRAVITY_AGENT: '1', HOME: home } }),
+    await findTranscript({ env: { ANTIGRAVITY_AGENT: '1', HOME: home }, cwd: '/workspace/target' }),
     { provider: 'antigravity', id: 'conv-newer' },
   );
-  // Two concurrent transcripts modified within 60s of each other are ambiguous.
-  utimesSync(olderLog, 1_700_000_080, 1_700_000_080);
+  // Two concurrent transcripts modified within 60s without a unique cwd match are ambiguous.
+  utimesSync(olderLog, nowSec - 20, nowSec - 20);
   assert.equal(discoverAntigravityTranscript(home), null);
+  // With a unique cwd in one of the fresh transcripts, cwd disambiguates.
+  assert.deepEqual(discoverAntigravityTranscript(home, { cwd: '/workspace/target' }), { provider: 'antigravity', id: 'conv-newer' });
+  // Path boundary check: /workspace/target-other does not match /workspace/target, and one fresh brain with non-matching cwd (with or without a stale sibling) returns null.
+  utimesSync(olderLog, nowSec - 120, nowSec - 120);
+  assert.equal(discoverAntigravityTranscript(home, { cwd: '/workspace/target-other' }), null);
+  assert.equal(discoverAntigravityTranscript(home, { cwd: '/workspace/tar' }), null);
+  rmSync(path.join(home, '.gemini', 'antigravity', 'brain', 'conv-older'), { recursive: true, force: true });
+  assert.equal(discoverAntigravityTranscript(home, { cwd: '/workspace/other' }), null);
+  // When all transcripts are stale (> 60s old), returns null so an idle conversation never steals another's id.
+  utimesSync(newerLog, nowSec - 180, nowSec - 180);
+  assert.equal(discoverAntigravityTranscript(home, { cwd: '/workspace/target' }), null);
   // Without HOME in a synthetic env object, findTranscript never leaks the host HOME.
   assert.equal(await findTranscript({ env: { ANTIGRAVITY_AGENT: '1' } }), null);
 });
@@ -216,6 +228,12 @@ test('startTask from a primary checkout auto-resolves soul, branches from origin
     CODEX_THREAD_ID: 'thread-1345',
   };
 
+  const reconcileCredentials = async ({ slugs }) => slugs.map((slug) => ({
+    slug,
+    local: { status: 'ready' },
+    live: { status: 'server-registered' },
+  }));
+
   const receipt = await startTask({
     branch: 'feat/issue-1345',
     cwd: f.repo,
@@ -223,6 +241,7 @@ test('startTask from a primary checkout auto-resolves soul, branches from origin
     home: f.home,
     config: f.config,
     clientFactory,
+    reconcileCredentials,
   });
 
   assert.equal(receipt.soul.id, f.identity.id);
@@ -252,11 +271,40 @@ test('startTask from a primary checkout auto-resolves soul, branches from origin
     home: f.home,
     config: f.config,
     clientFactory,
+    reconcileCredentials,
   });
   assert.equal(rerun.worktree.path, receipt.worktree.path);
   assert.equal(rerun.worktree.created, false);
   assert.equal(rerun.binding.alreadyBound, true);
   assert.equal(rerun.next, null);
+
+  // Passing --base when reusing in-place or when destination worktree already exists fails closed.
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/issue-1345',
+      base: 'origin/main',
+      cwd: receipt.worktree.path,
+      env: startEnv,
+      home: f.home,
+      config: f.config,
+      clientFactory,
+      reconcileCredentials,
+    }),
+    (err) => err.code === 'start-base-on-existing-branch',
+  );
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/issue-1345',
+      base: 'origin/main',
+      cwd: f.repo,
+      env: startEnv,
+      home: f.home,
+      config: f.config,
+      clientFactory,
+      reconcileCredentials,
+    }),
+    (err) => err.code === 'start-base-on-existing-branch',
+  );
 
   // Starting a second branch from inside the first branch's worktree branches
   // cleanly from origin/main into a sibling soul worktree and reuses the
@@ -269,6 +317,7 @@ test('startTask from a primary checkout auto-resolves soul, branches from origin
     home: f.home,
     config: f.config,
     clientFactory,
+    reconcileCredentials,
   });
   assert.equal(second.worktree.created, true);
   assert.ok(second.worktree.path.endsWith('my-repo-feat-second-task'));
@@ -358,18 +407,34 @@ test('startTask fails closed before creating soul or worktree when transcript is
   );
   assertNoMutations();
 
-  // 4. Passing --repo with a mismatched owner/name refuses the current checkout even if basename matches.
+  // 4. Passing --repo with a mismatched owner/name refuses the current checkout even if basename matches,
+  //    even if AGENT_BOT_SERVER_REPO is set or a relative directory owner/name exists in cwd.
+  mkdirSync(path.join(f.repo, 'other-org', 'my-repo'), { recursive: true });
   await assert.rejects(
     () => startTask({
       branch: 'feat/wrong-owner',
       repo: 'other-org/my-repo',
       transcriptId: 't-1',
       cwd: f.repo,
-      env: { ...f.env, CODEX_SANDBOX: 'seatbelt' },
+      env: { ...f.env, CODEX_SANDBOX: 'seatbelt', AGENT_BOT_SERVER_REPO: 'other-org/my-repo' },
       home: f.home,
       config: f.config,
     }),
     (err) => err.code === 'start-repo-not-found',
+  );
+  assertNoMutations();
+
+  // 4b. Ambient editor markers (TERM_PROGRAM=vscode, CURSOR_TRACE_ID) do not auto-select a bot harness.
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/ambient-editor',
+      transcriptId: 't-1',
+      cwd: f.repo,
+      env: { ...f.env, TERM_PROGRAM: 'vscode', VSCODE_PID: '1234', CURSOR_TRACE_ID: 'trace-1' },
+      home: f.home,
+      config: f.config,
+    }),
+    /could not detect agent harness from environment/,
   );
   assertNoMutations();
 
@@ -384,8 +449,56 @@ test('startTask fails closed before creating soul or worktree when transcript is
     home: noApp.home,
     config: noApp.config,
     clientFactory,
+    reconcileCredentials: async ({ slugs }) => slugs.map((slug) => ({
+      slug,
+      local: { status: 'ready' },
+      live: { status: 'server-registered' },
+    })),
   });
   assert.equal(backfilled.identity.appSlug, 'test-codex-agent');
   assert.equal(noApp.git(backfilled.worktree.path, 'config', '--worktree', '--get', 'user.name'), 'test-codex-agent[bot]');
+
+  // 6. Bound session/checkout refuses cross-soul --soul or cross-harness --harness overrides.
+  const otherSoul = worktreeSoul({ ...noApp.env }, null, { harness: 'codex', appSlug: 'test-codex-agent' });
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/cross-soul',
+      soul: otherSoul.identity.id,
+      transcriptId: 't-cross',
+      cwd: backfilled.worktree.path,
+      env: { ...noApp.env, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', CODEX_SANDBOX: 'seatbelt' },
+      home: noApp.home,
+      config: noApp.config,
+      clientFactory,
+    }),
+    (err) => err.code === 'start-soul-mismatch',
+  );
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/cross-harness',
+      harness: 'claude',
+      transcriptId: 't-cross',
+      cwd: backfilled.worktree.path,
+      env: { ...noApp.env, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', CODEX_SANDBOX: 'seatbelt' },
+      home: noApp.home,
+      config: noApp.config,
+      clientFactory,
+    }),
+    (err) => err.code === 'start-harness-mismatch',
+  );
+
+  // 7. Multiple active installed souls for the same harness fail closed with start-ambiguous-soul unless --soul is specified.
+  await assert.rejects(
+    () => startTask({
+      branch: 'feat/ambiguous',
+      transcriptId: 't-ambig',
+      cwd: noApp.repo,
+      env: { ...noApp.env, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', CODEX_SANDBOX: 'seatbelt' },
+      home: noApp.home,
+      config: noApp.config,
+      clientFactory,
+    }),
+    (err) => err.code === 'start-ambiguous-soul',
+  );
 });
 

@@ -11,10 +11,10 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { listSouls, locateSoulDir, populationFile, setSoulAppThen, showSoul, soulDirectory } from './agent-population.mjs';
+import { listSouls, locateSoulDir, populationFile, setSoulAppThen, showSoul } from './agent-population.mjs';
 import { isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
-import { detectAgentHarness, detectHarness } from './detect-harness.mjs';
+import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness } from './detect-harness.mjs';
 import { readBinding, reconcileAppCredentials, repoFromCheckout, resolveAgentSlug, serverUrl } from './identity-cli.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
 import { findTranscript, sessionBind } from './session-bind.mjs';
@@ -37,7 +37,7 @@ What \`agent-bot start\` is NOT:
 Options:
   -b, --branch <branch>     Create or switch to this task branch in a linked
                             soul worktree (new branches start from --base, else
-                            origin/<branch>, origin/HEAD, or origin/main)
+                            origin/HEAD or origin/main)
   --base <ref>              Base git ref when creating a new branch
   --repo <path|owner/name>  Target repository path or owner/name (default: cwd)
   --name <worktree-name>    Worktree directory name under <soulDir>/worktrees/
@@ -49,18 +49,6 @@ Options:
   --json                    Print structured JSON receipt
   -h, --help                Show this help and change nothing
 `;
-
-const VALUE_FLAGS = new Map([
-  ['-b', 'branch'],
-  ['--branch', 'branch'],
-  ['--base', 'base'],
-  ['--repo', 'repo'],
-  ['--name', 'name'],
-  ['--harness', 'harness'],
-  ['--soul', 'soul'],
-  ['--transcript-id', 'transcriptId'],
-  ['--provider', 'provider'],
-]);
 
 export function parseStartArgs(argv = process.argv.slice(2)) {
   const options = {
@@ -79,16 +67,38 @@ export function parseStartArgs(argv = process.argv.slice(2)) {
     options.help = true;
     return options;
   }
+  const takeValue = (arg, next, current) => {
+    if (!next || next.startsWith('-')) throw new Error(`${arg} requires a value`);
+    if (current !== null) throw new Error(`${arg} may be passed only once`);
+    return next;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') {
       options.json = true;
-    } else if (VALUE_FLAGS.has(arg)) {
-      const key = VALUE_FLAGS.get(arg);
-      const value = argv[i + 1];
-      if (!value || value.startsWith('-')) throw new Error(`${arg} requires a value`);
-      if (options[key] !== null) throw new Error(`${arg} may be passed only once`);
-      options[key] = value;
+    } else if (arg === '-b' || arg === '--branch') {
+      options.branch = takeValue(arg, argv[i + 1], options.branch);
+      i += 1;
+    } else if (arg === '--base') {
+      options.base = takeValue(arg, argv[i + 1], options.base);
+      i += 1;
+    } else if (arg === '--repo') {
+      options.repo = takeValue(arg, argv[i + 1], options.repo);
+      i += 1;
+    } else if (arg === '--name') {
+      options.name = takeValue(arg, argv[i + 1], options.name);
+      i += 1;
+    } else if (arg === '--harness') {
+      options.harness = takeValue(arg, argv[i + 1], options.harness);
+      i += 1;
+    } else if (arg === '--soul') {
+      options.soul = takeValue(arg, argv[i + 1], options.soul);
+      i += 1;
+    } else if (arg === '--transcript-id') {
+      options.transcriptId = takeValue(arg, argv[i + 1], options.transcriptId);
+      i += 1;
+    } else if (arg === '--provider') {
+      options.provider = takeValue(arg, argv[i + 1], options.provider);
       i += 1;
     } else {
       throw new Error(`unknown option: ${arg}`);
@@ -98,6 +108,45 @@ export function parseStartArgs(argv = process.argv.slice(2)) {
     throw new Error('invalid worktree name: use 1–100 letters, numbers, dots, underscores or hyphens, starting with a letter or number');
   }
   return options;
+}
+
+// Detect only agent-session markers (CLAUDECODE=1, CODEX_*, QWEN_CODE=1,
+// <HARNESS>_AGENT=1, AI_AGENT, process ancestry, or an agent OS account).
+// Deliberately excludes ambient editor markers (VSCODE_*, CURSOR_TRACE_ID,
+// TERM_PROGRAM=vscode) so a human's editor terminal is never auto-attributed
+// to a bot without an explicit --harness or --soul flag.
+function detectAgentHarnessKey(env = process.env, config = null) {
+  const acctKey = config ? accountHarness(config, accountName(env)) : null;
+  if (acctKey) return acctKey;
+  const aiAgent = typeof env?.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
+  if (
+    env?.CLAUDECODE === '1'
+    || (typeof env?.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '')
+    || env?.CLAUDE_AGENT === '1'
+    || aiAgent.startsWith('claude')
+    || /(?:^|[^a-z0-9])claude(?:[^a-z0-9]|$)/i.test(aiAgent)
+  ) {
+    return 'claude';
+  }
+  if (
+    Object.keys(env ?? {}).some((k) => k.startsWith('CODEX_'))
+    || env?.CODEX_AGENT === '1'
+    || /(?:^|[^a-z0-9])codex(?:[^a-z0-9]|$)/i.test(aiAgent)
+  ) {
+    return 'codex';
+  }
+  if (
+    env?.QWEN_CODE === '1'
+    || env?.QWEN_AGENT === '1'
+    || /(?:^|[^a-z0-9])qwen(?:[^a-z0-9]|$)/i.test(aiAgent)
+  ) {
+    return 'qwen';
+  }
+  const explicit = detectExplicitHarnessAgent(env);
+  if (explicit) return explicit;
+  const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
+  if (aiHarness && aiHarness !== 'vscode') return aiHarness;
+  return detectProcessTreeHarness({ env }) ?? aiHarness ?? null;
 }
 
 function gitIn(cwd, args, env = process.env) {
@@ -117,22 +166,38 @@ function tryGit(cwd, args, env = process.env) {
   }
 }
 
+function originSlugFromGit(dir, env) {
+  return repoFromCheckout(dir, { ...env, AGENT_BOT_SERVER_REPO: '' });
+}
+
+function isExplicitPathInput(repo) {
+  return (
+    repo.startsWith('/')
+    || repo.startsWith('./')
+    || repo.startsWith('../')
+    || repo.startsWith('~/')
+    || repo === '.'
+    || repo === '..'
+    || repo.includes('\\')
+    || /^[A-Za-z]:[\\/]/.test(repo)
+  );
+}
+
 function resolveTargetRepo({ repo, cwd, home, env, popOptions }) {
   let candidate = cwd;
   if (repo) {
     const expanded = repo.startsWith('~/') && home ? path.join(home, repo.slice(2)) : repo;
-    if (existsSync(path.resolve(cwd, expanded))) {
-      candidate = path.resolve(cwd, expanded);
-    } else if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+    if (!isExplicitPathInput(repo) && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
       const wanted = repo.toLowerCase();
       const matchesOrigin = (dir) => {
         if (!dir || !existsSync(dir)) return false;
-        const slug = repoFromCheckout(dir, env);
+        const slug = originSlugFromGit(dir, env);
         return typeof slug === 'string' && slug.toLowerCase() === wanted;
       };
       const repoShort = repo.split('/')[1];
       const searchDirs = [
         cwd,
+        path.resolve(cwd, expanded),
         ...(home ? [path.join(home, 'Code', repoShort)] : []),
         path.resolve(cwd, '..', repoShort),
         ...listSouls(popOptions).map((s) => s.worktree).filter(Boolean),
@@ -145,6 +210,8 @@ function resolveTargetRepo({ repo, cwd, home, env, popOptions }) {
         );
       }
       candidate = found;
+    } else if (existsSync(path.resolve(cwd, expanded))) {
+      candidate = path.resolve(cwd, expanded);
     } else {
       throw Object.assign(
         new Error(`repository path does not exist: ${repo}`),
@@ -157,23 +224,23 @@ function resolveTargetRepo({ repo, cwd, home, env, popOptions }) {
     throw new Error('not a git repository (pass --repo <path|owner/name> or run inside a repository checkout)');
   }
   const commonDir = realpathSync(gitIn(toplevel, ['rev-parse', '--path-format=absolute', '--git-common-dir'], env));
-  const originSlug = repoFromCheckout(toplevel, env) ?? null;
+  const originSlug = originSlugFromGit(toplevel, env) ?? null;
   const repoName = originSlug
     ? originSlug.split('/')[1]
     : path.basename(path.basename(commonDir) === '.git' ? path.dirname(commonDir) : toplevel);
   return { toplevel: realpathSync(toplevel), commonDir, originSlug, repoName };
 }
 
-function defaultBaseRef(toplevel, targetBranch, env) {
-  if (targetBranch && tryGit(toplevel, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${targetBranch}`], env)) {
-    return `origin/${targetBranch}`;
-  }
+function defaultBaseRef(toplevel, env) {
   const sym = tryGit(toplevel, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'], env);
   if (sym && tryGit(toplevel, ['rev-parse', '--verify', '-q', sym], env)) return sym;
-  for (const ref of ['origin/main', 'origin/master', 'main', 'HEAD']) {
+  for (const ref of ['origin/main', 'origin/master', 'main']) {
     if (tryGit(toplevel, ['rev-parse', '--verify', '-q', ref], env)) return ref;
   }
-  return 'HEAD';
+  throw Object.assign(
+    new Error('could not resolve a default base branch (checked origin/HEAD, origin/main, origin/master, main); pass --base <ref>'),
+    { code: 'start-invalid-base' },
+  );
 }
 
 function branchCheckedOutElsewhere(toplevel, branch, destination, env) {
@@ -222,6 +289,10 @@ function activeIdentity(id, stateDir) {
   }
 }
 
+function normalizeServerOrigin(url) {
+  return typeof url === 'string' ? url.trim().replace(/\/+$/, '') : '';
+}
+
 function serverDeviceState({ env, home, server }) {
   const stateBase = env.AGENT_BOT_SERVER_STATE
     ? path.resolve(env.AGENT_BOT_SERVER_STATE)
@@ -229,7 +300,7 @@ function serverDeviceState({ env, home, server }) {
   try {
     const dev = JSON.parse(readFileSync(path.join(stateBase, 'device.json'), 'utf8'));
     if (!dev || typeof dev !== 'object' || Array.isArray(dev)) return null;
-    if (dev.server && dev.server !== server) return null;
+    if (dev.server && normalizeServerOrigin(dev.server) !== normalizeServerOrigin(server)) return null;
     return dev;
   } catch {
     return null;
@@ -251,6 +322,7 @@ function slugMatchesDeviceScope(slug, harnesses, config) {
 // Never creates a soul or mutates state so validation checks can run first.
 function lookupExistingSoul({
   explicitSoul,
+  explicitHarness,
   harness,
   toplevel,
   env,
@@ -260,15 +332,9 @@ function lookupExistingSoul({
   popOptions,
 }) {
   const souls = listSouls(popOptions).filter((s) => s.status !== 'retired');
-  if (explicitSoul) {
-    const match = souls.find((s) => s.id === explicitSoul || s.name === explicitSoul || s.displayName === explicitSoul);
-    const id = match ? match.id : validateAgentId(explicitSoul);
-    const identity = activeIdentity(id, stateDir);
-    if (!identity) throw new Error(`${explicitSoul} is not an active soul`);
-    const row = showSoul(id, popOptions);
-    return { identity, row, soulResolution: 'explicit' };
-  }
 
+  // Check caller's bound/ambient soul markers first so --soul and --harness
+  // cannot silently cross into another soul's identity.
   const fromEnv = env.AGENT_BOT_ID || env.QWTS_AGENT_ID || null;
   const binding = readBinding({ env, cwd: toplevel });
   const areaOwner = insideSoulWorktree(toplevel, popOptions);
@@ -279,15 +345,56 @@ function lookupExistingSoul({
       if (val) { pinned = val; break; }
     }
   }
+  let boundSoul = null;
   for (const candidate of [fromEnv, binding?.agentId, areaOwner, pinned]) {
     if (!candidate) continue;
     const identity = activeIdentity(candidate, stateDir);
     if (identity) {
       const row = showSoul(identity.id, popOptions);
       if (row.status !== 'retired') {
-        return { identity, row, soulResolution: 'reused-bound' };
+        boundSoul = { identity, row, soulResolution: 'reused-bound' };
+        break;
       }
     }
+  }
+
+  if (explicitSoul) {
+    const matches = souls.filter((s) => s.id === explicitSoul || s.name === explicitSoul || s.displayName === explicitSoul);
+    if (matches.length > 1) {
+      throw Object.assign(
+        new Error(`multiple active souls match "${explicitSoul}" (${matches.map((s) => s.id).join(', ')}); pass the exact agent_... ID`),
+        { code: 'start-ambiguous-soul' },
+      );
+    }
+    const id = matches.length === 1 ? matches[0].id : validateAgentId(explicitSoul);
+    const identity = activeIdentity(id, stateDir);
+    if (!identity) throw new Error(`${explicitSoul} is not an active soul`);
+    const row = showSoul(id, popOptions);
+    if (boundSoul && boundSoul.identity.id !== identity.id) {
+      throw Object.assign(
+        new Error(`this session/checkout is already bound to soul ${boundSoul.identity.id}; refusing --soul ${explicitSoul}`),
+        { code: 'start-soul-mismatch' },
+      );
+    }
+    const soulHarness = identity.harness ?? row?.harness ?? null;
+    if (harness && soulHarness && soulHarness !== harness) {
+      throw Object.assign(
+        new Error(`soul ${identity.id} belongs to harness ${soulHarness}; refusing harness ${harness}`),
+        { code: 'start-harness-mismatch' },
+      );
+    }
+    return { identity, row, soulResolution: 'explicit' };
+  }
+
+  if (boundSoul) {
+    const boundHarness = boundSoul.identity.harness ?? boundSoul.row?.harness ?? null;
+    if (explicitHarness && boundHarness && boundHarness !== explicitHarness) {
+      throw Object.assign(
+        new Error(`this session/checkout is already bound to soul ${boundSoul.identity.id} (harness ${boundHarness}); refusing --harness ${explicitHarness}`),
+        { code: 'start-harness-mismatch' },
+      );
+    }
+    return boundSoul;
   }
 
   if (!harness) {
@@ -300,27 +407,30 @@ function lookupExistingSoul({
     : null;
 
   const candidates = souls.filter((s) => {
-    if (targetSlug && (s.appSlug === targetSlug || soulOwnsAppSlug({ id: s.id, harness: s.harness, github: { appSlug: s.appSlug } }, targetSlug, config, { env, home }))) {
-      return true;
+    if (targetSlug) {
+      if (s.appSlug === targetSlug || soulOwnsAppSlug({ id: s.id, harness: s.harness, github: { appSlug: s.appSlug } }, targetSlug, config, { env, home })) {
+        return true;
+      }
+      return !s.appSlug && s.harness === harness;
     }
     return s.harness === harness;
   });
 
-  candidates.sort((a, b) => {
-    const aInstalled = existsSync(soulDirectory(a.id, { ...popOptions, readOnly: true })) ? 1 : 0;
-    const bInstalled = existsSync(soulDirectory(b.id, { ...popOptions, readOnly: true })) ? 1 : 0;
-    if (aInstalled !== bInstalled) return bInstalled - aInstalled;
-    return String(b.lastSeen ?? '').localeCompare(String(a.lastSeen ?? ''));
-  });
-
+  const activeCandidates = [];
   for (const candidate of candidates) {
     const identity = activeIdentity(candidate.id, stateDir);
     if (identity) {
-      return { identity, row: candidate, soulResolution: `auto-resolved: ${harness}` };
+      activeCandidates.push({ identity, row: candidate });
     }
   }
-
-  return null;
+  if (activeCandidates.length === 0) return null;
+  if (activeCandidates.length > 1) {
+    throw Object.assign(
+      new Error(`multiple active souls match harness ${harness} (${activeCandidates.map((c) => c.identity.id).join(', ')}); pass --soul <agent-id>`),
+      { code: 'start-ambiguous-soul' },
+    );
+  }
+  return { identity: activeCandidates[0].identity, row: activeCandidates[0].row, soulResolution: `auto-resolved: ${harness}` };
 }
 
 function shellSingleQuote(value) {
@@ -366,7 +476,7 @@ export async function startTask({
   const config = providedConfig ?? loadConfig({ env, home });
   const popOptions = { env, home, config, file: populationFile({ env, home, config }) };
   const stateDir = stateDirectory(popOptions);
-  const harness = explicitHarness ?? detectHarness(env) ?? detectAgentHarness(env);
+  const harness = explicitHarness ?? detectAgentHarnessKey(env, config);
 
   // 1. Resolve target repository checkout (read-only).
   const targetRepo = resolveTargetRepo({ repo, cwd, home, env, popOptions });
@@ -374,6 +484,7 @@ export async function startTask({
   // 2. Look up existing canonical soul for this harness/session (read-only).
   const existingSoul = lookupExistingSoul({
     explicitSoul,
+    explicitHarness,
     harness,
     toplevel: targetRepo.toplevel,
     env,
@@ -391,12 +502,18 @@ export async function startTask({
   const appSlug = githubOn
     ? (existingSoul?.identity?.github?.appSlug ?? resolveAgentSlug({ env, cwd: targetRepo.toplevel, config, harness: effectiveHarness }) ?? slugForHarness(effectiveHarness, config))
     : null;
-  if (githubOn && server && appSlug && !reconcileCredentials) {
+  if (githubOn && server) {
     const dev = serverDeviceState({ env, home, server });
     if (!dev) {
       throw Object.assign(
-        new Error(`this machine is not enrolled with ${server}; run: agent-bot server enroll --add-harness ${appSlug}`),
+        new Error(`this machine is not enrolled with ${server}; run: agent-bot server enroll${appSlug ? ` --add-harness ${appSlug}` : ''}`),
         { code: 'server-device-not-enrolled' },
+      );
+    }
+    if (!appSlug) {
+      throw Object.assign(
+        new Error(`no GitHub App slug is configured for harness ${effectiveHarness}`),
+        { code: 'start-no-app-slug' },
       );
     }
     const scope = Array.isArray(dev.harnesses) ? dev.harnesses : [];
@@ -416,7 +533,8 @@ export async function startTask({
   if (transcriptId) {
     transcript = { provider: provider ?? effectiveHarness, id: transcriptId, source: 'explicit' };
   } else {
-    const discovered = await findTranscriptImpl({ env, cwd: targetRepo.toplevel, home });
+    const discovered = (await findTranscriptImpl({ env, cwd, home }))
+      ?? (cwd !== targetRepo.toplevel ? await findTranscriptImpl({ env, cwd: targetRepo.toplevel, home }) : null);
     if (discovered) {
       transcript = {
         provider: provider ?? discovered.provider ?? effectiveHarness,
@@ -479,6 +597,14 @@ export async function startTask({
     );
   }
 
+  const branchExistsLocally = Boolean(tryGit(targetRepo.toplevel, ['show-ref', '--verify', `refs/heads/${targetBranch}`], env));
+  if (base && (reuseInPlace || (preExistingDest && existsSync(preExistingDest)) || branchExistsLocally)) {
+    throw Object.assign(
+      new Error(`branch ${targetBranch} already exists locally; omit --base to check it out or pass a new --branch`),
+      { code: 'start-base-on-existing-branch' },
+    );
+  }
+
   if (preExistingDest && existsSync(preExistingDest)) {
     const destToplevel = tryGit(preExistingDest, ['rev-parse', '--show-toplevel'], env);
     const destCommon = destToplevel
@@ -497,22 +623,13 @@ export async function startTask({
         { code: 'start-worktree-branch-mismatch' },
       );
     }
-  } else if (!reuseInPlace) {
-    const branchExists = Boolean(tryGit(targetRepo.toplevel, ['show-ref', '--verify', `refs/heads/${targetBranch}`], env));
-    if (branchExists && base) {
+  } else if (!reuseInPlace && branchExistsLocally) {
+    const occupiedBy = branchCheckedOutElsewhere(targetRepo.toplevel, targetBranch, preExistingDest ?? '', env);
+    if (occupiedBy) {
       throw Object.assign(
-        new Error(`branch ${targetBranch} already exists locally; omit --base to check it out or pass a new --branch`),
-        { code: 'start-base-on-existing-branch' },
+        new Error(`branch ${targetBranch} is already checked out at ${occupiedBy}; pass a new --branch <branch>`),
+        { code: 'start-branch-in-use' },
       );
-    }
-    if (branchExists) {
-      const occupiedBy = branchCheckedOutElsewhere(targetRepo.toplevel, targetBranch, preExistingDest ?? '', env);
-      if (occupiedBy) {
-        throw Object.assign(
-          new Error(`branch ${targetBranch} is already checked out at ${occupiedBy}; pass a new --branch <branch>`),
-          { code: 'start-branch-in-use' },
-        );
-      }
     }
   }
 
@@ -520,16 +637,13 @@ export async function startTask({
   //    branch, create soul if none existed, create/reuse worktree, backfill
   //    appSlug if needed, configure attribution, and bind session.
   let usedBase = null;
-  if (!reuseInPlace && !(preExistingDest && existsSync(preExistingDest))) {
-    const branchExists = Boolean(tryGit(targetRepo.toplevel, ['show-ref', '--verify', `refs/heads/${targetBranch}`], env));
-    if (!branchExists) {
-      usedBase = base ?? defaultBaseRef(targetRepo.toplevel, targetBranch, env);
-      if (tryGit(targetRepo.toplevel, ['rev-parse', '--verify', '-q', `${usedBase}^{commit}`], env) === null) {
-        throw Object.assign(
-          new Error(`base ref does not resolve to a commit: ${usedBase}`),
-          { code: 'start-invalid-base' },
-        );
-      }
+  if (!reuseInPlace && !(preExistingDest && existsSync(preExistingDest)) && !branchExistsLocally) {
+    usedBase = base ?? defaultBaseRef(targetRepo.toplevel, env);
+    if (tryGit(targetRepo.toplevel, ['rev-parse', '--verify', '-q', `${usedBase}^{commit}`], env) === null) {
+      throw Object.assign(
+        new Error(`base ref does not resolve to a commit: ${usedBase}`),
+        { code: 'start-invalid-base' },
+      );
     }
   }
 
@@ -565,10 +679,9 @@ export async function startTask({
       targetWorktree = realpathSync(destination);
       targetBranch = destBranch ?? targetBranch;
     } else {
-      usedBase = usedBase ?? base ?? defaultBaseRef(targetRepo.toplevel, targetBranch, env);
+      usedBase = usedBase ?? base ?? defaultBaseRef(targetRepo.toplevel, env);
       const placed = placeWorktree(identity.id, worktreeName, { ...popOptions, repoCommonDir: targetRepo.commonDir });
-      const branchExists = Boolean(tryGit(targetRepo.toplevel, ['show-ref', '--verify', `refs/heads/${targetBranch}`], env));
-      if (branchExists) {
+      if (branchExistsLocally) {
         gitIn(targetRepo.toplevel, ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', placed.path, targetBranch], env);
       } else {
         gitIn(targetRepo.toplevel, ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--no-track', '-b', targetBranch, placed.path, usedBase], env);
@@ -591,9 +704,11 @@ export async function startTask({
     row = showSoul(identity.id, popOptions);
   }
 
-  const effectiveReconcile = reconcileCredentials ?? (server && appSlug
-    ? async () => [{ slug: appSlug, local: { status: 'ready' } }]
-    : reconcileAppCredentials);
+  const effectiveReconcile = reconcileCredentials ?? ((opts) => reconcileAppCredentials({
+    ...opts,
+    config,
+    ...(fetchImpl ? { fetchImpl } : {}),
+  }));
 
   const originalCwd = process.cwd();
   let configured;
@@ -682,7 +797,16 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(START_USAGE);
     return;
   }
-  const receipt = await startTask(options);
+  const receipt = await startTask({
+    branch: options.branch,
+    base: options.base,
+    repo: options.repo,
+    name: options.name,
+    harness: options.harness,
+    soul: options.soul,
+    transcriptId: options.transcriptId,
+    provider: options.provider,
+  });
   if (options.json) {
     process.stdout.write(`${JSON.stringify(receipt)}\n`);
   } else {

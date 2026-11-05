@@ -319,7 +319,7 @@ async function mintThroughServer({ server, slug, env, config, permissions, selec
   if (permissions) throw new Error('--permissions is not available in server mode; the server mints the App\'s installation grant');
   if (!taskId || !operationId) {
     throw Object.assign(new Error(
-      'server mode refuses standalone mints; bind the checkout to a soul conversation (`agent-bot start --branch <branch>`, or `agent-bot join` and `agent-bot setup-worktree`) so the daemon mints per operation',
+      'server mode refuses standalone mints; bind the checkout to a soul conversation (`agent-bot start --branch <branch>`) so the daemon mints per operation',
     ), { code: 'server-standalone-mint-refused' });
   }
   const { mintViaServer, repoFromCheckout, serverHarnessForSlug } = await import('./server-client.mjs');

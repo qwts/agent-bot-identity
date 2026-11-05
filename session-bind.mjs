@@ -7,7 +7,7 @@
 // the private git dir (written by the daemon) and is never printed.
 
 import { execFileSync } from 'node:child_process';
-import { readdirSync, statSync } from 'node:fs';
+import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -49,7 +49,44 @@ async function listDevinSessions(cwd, env) {
   }
 }
 
-export function discoverAntigravityTranscript(home) {
+function readFileTail(filePath, sizeBytes, maxBytes = 65_536) {
+  let fd;
+  try {
+    fd = openSync(filePath, 'r');
+    const len = Math.min(sizeBytes, maxBytes);
+    const offset = Math.max(0, sizeBytes - len);
+    const buf = Buffer.alloc(len);
+    const bytesRead = readSync(fd, buf, 0, len, offset);
+    return buf.subarray(0, bytesRead).toString('utf8');
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
+function textMentionsPath(text, targetPath) {
+  if (!text || !targetPath) return false;
+  let pos = 0;
+  while ((pos = text.indexOf(targetPath, pos)) !== -1) {
+    const before = pos === 0 ? '' : text[pos - 1];
+    const afterIdx = pos + targetPath.length;
+    const after = afterIdx >= text.length ? '' : text[afterIdx];
+    const validBefore = !before || /["'\s=:(]/.test(before);
+    const validAfter = !after || /["'\s/:,;)]/.test(after);
+    if (validBefore && validAfter) return true;
+    pos += 1;
+  }
+  return false;
+}
+
+export function discoverAntigravityTranscript(home, { cwd = null, now = Date.now(), maxAgeMs = 60_000, env = null } = {}) {
+  const explicitId = typeof env?.ANTIGRAVITY_CONVERSATION_ID === 'string' && env.ANTIGRAVITY_CONVERSATION_ID.trim()
+    ? env.ANTIGRAVITY_CONVERSATION_ID.trim()
+    : null;
+  if (explicitId) return { provider: 'antigravity', id: explicitId };
   if (!home) return null;
   const brainDir = path.join(home, '.gemini', 'antigravity', 'brain');
   let entries;
@@ -64,19 +101,28 @@ export function discoverAntigravityTranscript(home) {
     const logPath = path.join(brainDir, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
     try {
       const st = statSync(logPath);
-      candidates.push({ id: entry.name, mtimeMs: st.mtimeMs });
+      candidates.push({ id: entry.name, logPath, mtimeMs: st.mtimeMs, size: st.size });
     } catch {
       /* ignore entries without transcript.jsonl */
     }
   }
   if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  // Two concurrent Antigravity conversations active within 60s of each other
-  // are ambiguous; return null so --transcript-id is required.
-  if (candidates.length > 1 && candidates[0].mtimeMs - candidates[1].mtimeMs < 60_000) {
-    return null;
+  // Require the transcript to have been updated within maxAgeMs of `now`
+  // (Antigravity writes the PLANNER_RESPONSE tool call immediately before
+  // spawning the subprocess). An idle conversation never silently adopts
+  // another conversation's transcript.
+  const fresh = candidates.filter((c) => now - c.mtimeMs <= maxAgeMs && c.mtimeMs - now <= 60_000);
+  if (fresh.length === 0) return null;
+  if (cwd) {
+    const cwdMatched = fresh.filter((c) => {
+      const tail = readFileTail(c.logPath, c.size);
+      return textMentionsPath(tail, cwd);
+    });
+    if (cwdMatched.length !== 1) return null;
+    return { provider: 'antigravity', id: cwdMatched[0].id };
   }
-  return { provider: 'antigravity', id: candidates[0].id };
+  if (fresh.length !== 1) return null;
+  return { provider: 'antigravity', id: fresh[0].id };
 }
 
 // Where this conversation's id comes from when no flag names it (#1275):
@@ -100,7 +146,7 @@ export async function findTranscript({
     if (Array.isArray(ids) && ids.length === 1) return { provider: 'devin', id: ids[0] };
   }
   if (harness === 'antigravity') {
-    const found = discoverAntigravityTranscript(home);
+    const found = discoverAntigravityTranscript(home, { cwd, env });
     if (found) return found;
   }
   return null;
