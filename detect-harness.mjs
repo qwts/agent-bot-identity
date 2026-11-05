@@ -34,6 +34,9 @@ function buildHarnessAgentShellChecks(action = 'return 0', indent = '  ') {
   return [
     ...HARNESS_AGENT_ENV_VARS.map((envVar) => `${indent}[ "$${envVar}" = "1" ] && ${action}`),
     `${indent}[ "$QWEN_CODE" = "1" ] && ${action}`,
+    `${indent}[ "$OPENCODE" = "1" ] && ${action}`,
+    `${indent}[ -n "$OPENCODE_CLIENT" ] && ${action}`,
+    `${indent}[ -n "$OPENCODE_SESSION_ID" ] && ${action}`,
   ].join('\n');
 }
 
@@ -60,6 +63,7 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
       b1 = base(t1)
       if (b1 == "mirror-agent" || t1 ~ /\\/mirror\\/bin\\/mirror$/) return 1
       if (b1 == "vibe-rs" || b1 == "vibe-app-server" || t1 ~ /\\/bin\\/vibe$/) return 1
+      if (b1 == "opencode" || b1 == "opencode-cli" || t1 ~ /\\/(opencode\\/)?bin\\/opencode(-cli)?$/ || line ~ /^\\/.*\\/OpenCode\\.app\\/Contents\\/MacOS\\/(OpenCode|opencode-cli)([[:space:]]|$)/ || line ~ /^\\/.*\\/Application Support\\/ai\\.opencode\\.desktop\\/cli\\/[^\\/]+\\/opencode(-cli)?([[:space:]]|$)/) return 1
       if (is_interp(t1)) {
         for (i = 2; i <= n; i++) {
           if (tok[i] ~ /^-[a-zA-Z]*c/ || tok[i] == "-e" || tok[i] == "--eval" || tok[i] == "-m") break
@@ -68,6 +72,7 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
           b2 = base(t2)
           if (b2 == "mirror-agent" || t2 ~ /\\/(mirror\\/)?bin\\/mirror$/) return 1
           if (b2 == "vibe-rs" || b2 == "vibe-app-server" || t2 ~ /\\/bin\\/vibe$/) return 1
+          if (b2 == "opencode" || b2 == "opencode-cli" || t2 ~ /\\/(opencode\\/)?bin\\/opencode(-cli)?$/) return 1
           break
         }
       }
@@ -137,11 +142,21 @@ function isProcessInterpreter(token) {
 
 function matchProcessHarnessCommand(command) {
   if (typeof command !== 'string' || !command.trim()) return null;
-  const tokens = command.trim().split(/\s+/);
+  const trimmed = command.trim();
+  const tokens = trimmed.split(/\s+/);
   const t1 = tokens[0] ?? '';
   const b1 = baseName(t1);
   if (b1 === 'mirror-agent' || /\/mirror\/bin\/mirror$/.test(t1)) return 'mirror';
   if (b1 === 'vibe-rs' || b1 === 'vibe-app-server' || /\/bin\/vibe$/.test(t1)) return 'vibe';
+  if (
+    b1 === 'opencode' ||
+    b1 === 'opencode-cli' ||
+    /\/(?:opencode\/)?bin\/opencode(?:-cli)?$/.test(t1) ||
+    /^\/.*\/OpenCode\.app\/Contents\/MacOS\/(?:OpenCode|opencode-cli)(?:\s|$)/.test(trimmed) ||
+    /^\/.*\/Application Support\/ai\.opencode\.desktop\/cli\/[^/]+\/opencode(?:-cli)?(?:\s|$)/.test(trimmed)
+  ) {
+    return 'opencode';
+  }
   if (isProcessInterpreter(t1)) {
     for (let i = 1; i < tokens.length; i += 1) {
       const tok = tokens[i];
@@ -150,6 +165,7 @@ function matchProcessHarnessCommand(command) {
       const b2 = baseName(tok);
       if (b2 === 'mirror-agent' || /\/(?:mirror\/)?bin\/mirror$/.test(tok)) return 'mirror';
       if (b2 === 'vibe-rs' || b2 === 'vibe-app-server' || /\/bin\/vibe$/.test(tok)) return 'vibe';
+      if (b2 === 'opencode' || b2 === 'opencode-cli' || /\/(?:opencode\/)?bin\/opencode(?:-cli)?$/.test(tok)) return 'opencode';
       break;
     }
   }
@@ -249,6 +265,15 @@ function hasHarnessToken(text, harness) {
   return HARNESS_TOKEN_RES.get(harness)?.test(text) ?? false;
 }
 
+export function isOpencodeAgentEnv(e) {
+  return (
+    e?.OPENCODE === '1' ||
+    e?.OPENCODE_AGENT === '1' ||
+    (typeof e?.OPENCODE_CLIENT === 'string' && e.OPENCODE_CLIENT.trim() !== '') ||
+    (typeof e?.OPENCODE_SESSION_ID === 'string' && e.OPENCODE_SESSION_ID.trim() !== '')
+  );
+}
+
 const HARNESSES = [
   {
     key: 'claude',
@@ -300,6 +325,13 @@ const HARNESSES = [
       e.QWEN_CODE === '1' ||
       hasHarnessToken(e.AI_AGENT, 'qwen') ||
       e.QWEN_AGENT === '1',
+  },
+  {
+    key: 'opencode',
+    match: (e) =>
+      isOpencodeAgentEnv(e) ||
+      hasHarnessToken(e.AI_AGENT, 'opencode') ||
+      (typeof e.__CFBundleIdentifier === 'string' && e.__CFBundleIdentifier.toLowerCase() === 'ai.opencode.desktop'),
   },
   {
     // Reflection.ai Mirror CLI (`mirror` -> `mirror-agent`) and Mistral Vibe
@@ -463,6 +495,12 @@ export function detectHarness(env = process.env, options = {}) {
     ) {
       return 'qwen';
     }
+    if (
+      isOpencodeAgentEnv(env) ||
+      hasHarnessToken(aiAgent, 'opencode')
+    ) {
+      return 'opencode';
+    }
 
     // Explicit <HARNESS>_AGENT=1 outranks ambient editor markers (CURSOR_*,
     // WINDSURF_*, MUSE_*, VSCODE_*), avoiding split attribution between
@@ -540,6 +578,11 @@ export function detectAgentHarness(
     hasHarnessToken(aiAgent, 'qwen')
   ) {
     key = 'qwen';
+  } else if (
+    isOpencodeAgentEnv(env) ||
+    hasHarnessToken(aiAgent, 'opencode')
+  ) {
+    key = 'opencode';
   } else {
     const explicitHarness = detectExplicitHarnessAgent(env);
     if (explicitHarness) {

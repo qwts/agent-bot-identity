@@ -14,8 +14,8 @@ import { pathToFileURL } from 'node:url';
 import { listSouls, locateSoulDir, populationFile, setSoulAppThen, showSoul } from './agent-population.mjs';
 import { isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
-import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness } from './detect-harness.mjs';
-import { readBinding, reconcileAppCredentials, repoFromCheckout, resolveAgentSlug, serverUrl } from './identity-cli.mjs';
+import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness, isOpencodeAgentEnv } from './detect-harness.mjs';
+import { enroll, readBinding, reconcileAppCredentials, repoFromCheckout, resolveAgentSlug, serverUrl } from './identity-cli.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
 import { findTranscript, sessionBind } from './session-bind.mjs';
 import { clearInheritedPin, configureWorktree } from './setup-worktree.mjs';
@@ -41,11 +41,14 @@ Options:
   --base <ref>              Base git ref when creating a new branch
   --repo <path|owner/name>  Target repository path or owner/name (default: cwd)
   --name <worktree-name>    Worktree directory name under <soulDir>/worktrees/
-                            (default: <repo>-<branch> or <repo>)
+                            (default: <repo>-<branch> or <repo>; aliases:
+                            --worktree, --worktree-dir)
   --harness <harness>       Harness key override (default: auto-detected)
   --soul <agent-id|name>    Soul Agent ID or census name override
   --transcript-id <id>      Conversation/session ID override
   --provider <name>         Transcript provider override
+  --no-enroll               Do not initiate device-grant enrollment when the
+                            device or harness is not yet enrolled in server mode
   --json                    Print structured JSON receipt
   -h, --help                Show this help and change nothing
 `;
@@ -62,6 +65,7 @@ export function parseStartArgs(argv = process.argv.slice(2)) {
     soul: null,
     transcriptId: null,
     provider: null,
+    noEnroll: false,
   };
   if (argv.includes('--help') || argv.includes('-h')) {
     options.help = true;
@@ -88,6 +92,25 @@ export function parseStartArgs(argv = process.argv.slice(2)) {
     } else if (arg === '--name') {
       options.name = takeValue(arg, argv[i + 1], options.name);
       i += 1;
+    } else if (arg === '--worktree' || arg === '--worktree-dir') {
+      const raw = takeValue(arg, argv[i + 1], options.name);
+      const trimmed = raw.replace(/[\\/]+$/, '');
+      if (
+        !trimmed
+        || trimmed.startsWith('/')
+        || trimmed.startsWith('\\')
+        || trimmed.split(/[\\/]+/).includes('..')
+      ) {
+        throw new Error('invalid worktree name: use 1–100 letters, numbers, dots, underscores or hyphens, starting with a letter or number');
+      }
+      const stripped = trimmed.replace(/^(?:\.worktrees|worktrees)[\\/]+/, '');
+      if (stripped.includes('/') || stripped.includes('\\')) {
+        throw new Error('invalid worktree name: use 1–100 letters, numbers, dots, underscores or hyphens, starting with a letter or number');
+      }
+      options.name = sanitizeWorktreeName(stripped);
+      i += 1;
+    } else if (arg === '--no-enroll') {
+      options.noEnroll = true;
     } else if (arg === '--harness') {
       options.harness = takeValue(arg, argv[i + 1], options.harness);
       i += 1;
@@ -141,6 +164,12 @@ function detectAgentHarnessKey(env = process.env, config = null) {
     || /(?:^|[^a-z0-9])qwen(?:[^a-z0-9]|$)/i.test(aiAgent)
   ) {
     return 'qwen';
+  }
+  if (
+    isOpencodeAgentEnv(env)
+    || /(?:^|[^a-z0-9])opencode(?:[^a-z0-9]|$)/i.test(aiAgent)
+  ) {
+    return 'opencode';
   }
   const explicit = detectExplicitHarnessAgent(env);
   if (explicit) return explicit;
@@ -472,6 +501,9 @@ export async function startTask({
   resolveBotUid,
   fetchImpl,
   findTranscriptImpl = findTranscript,
+  autoEnroll = false,
+  enrollImpl = null,
+  onEnrollPrompt = null,
 } = {}) {
   const config = providedConfig ?? loadConfig({ env, home });
   const popOptions = { env, home, config, file: populationFile({ env, home, config }) };
@@ -495,7 +527,8 @@ export async function startTask({
   });
   const effectiveHarness = harness ?? existingSoul?.identity?.harness ?? existingSoul?.row?.harness ?? 'custom';
 
-  // 3. Verify server-mode readiness (read-only, before any soul or worktree creation).
+  // 3. Verify server-mode readiness (and stage --add-harness device enrollment
+  //    when autoEnroll / enrollImpl is active, before any soul or worktree creation).
   const githubOn = isGateEnabled('github-identity', { env, home, config });
   let server = null;
   try { server = serverUrl({ env, config }); } catch { server = null; }
@@ -503,7 +536,57 @@ export async function startTask({
     ? (existingSoul?.identity?.github?.appSlug ?? resolveAgentSlug({ env, cwd: targetRepo.toplevel, config, harness: effectiveHarness }) ?? slugForHarness(effectiveHarness, config))
     : null;
   if (githubOn && server) {
-    const dev = serverDeviceState({ env, home, server });
+    let dev = serverDeviceState({ env, home, server });
+    if (dev && !appSlug) {
+      throw Object.assign(
+        new Error(`no GitHub App slug is configured for harness ${effectiveHarness}`),
+        { code: 'start-no-app-slug' },
+      );
+    }
+    const scope = Array.isArray(dev?.harnesses) ? dev.harnesses : [];
+    const needsEnroll = !dev || !slugMatchesDeviceScope(appSlug, scope, config);
+    if (needsEnroll && (autoEnroll || typeof enrollImpl === 'function')) {
+      if (!appSlug) {
+        throw Object.assign(
+          new Error(`no GitHub App slug is configured for harness ${effectiveHarness}`),
+          { code: 'start-no-app-slug' },
+        );
+      }
+      const hadDev = Boolean(dev);
+      const runEnroll = typeof enrollImpl === 'function'
+        ? enrollImpl
+        : enroll;
+      const defaultPrompt = (p) => {
+        process.stderr.write(
+          `Device scope expansion required for ${appSlug}:\n`
+          + `Approve this device at ${p.verification_uri_complete}\n`
+          + `  code: ${p.user_code}\n`
+          + `  key:  ${p.jkt}\n`
+          + 'Waiting for approval…\n',
+        );
+      };
+      try {
+        await runEnroll({
+          base: server,
+          env,
+          home,
+          addHarnesses: [appSlug],
+          ...(fetchImpl ? { fetchImpl } : {}),
+          onPrompt: onEnrollPrompt ?? defaultPrompt,
+        });
+      } catch (err) {
+        const fallbackCmd = `agent-bot server enroll --add-harness ${appSlug}`;
+        throw Object.assign(
+          new Error(
+            hadDev
+              ? `this device is not enrolled for ${appSlug} (enrolled: ${scope.join(', ') || 'none'}) and automatic enrollment failed (${err.message}); run: ${fallbackCmd}`
+              : `this machine is not enrolled with ${server} and automatic enrollment failed (${err.message}); run: ${fallbackCmd}`,
+          ),
+          { code: hadDev ? 'server-harness-not-enrolled' : 'server-device-not-enrolled', cause: err },
+        );
+      }
+      dev = serverDeviceState({ env, home, server });
+    }
     if (!dev) {
       throw Object.assign(
         new Error(`this machine is not enrolled with ${server}; run: agent-bot server enroll${appSlug ? ` --add-harness ${appSlug}` : ''}`),
@@ -516,10 +599,10 @@ export async function startTask({
         { code: 'start-no-app-slug' },
       );
     }
-    const scope = Array.isArray(dev.harnesses) ? dev.harnesses : [];
-    if (!slugMatchesDeviceScope(appSlug, scope, config)) {
+    const updatedScope = Array.isArray(dev.harnesses) ? dev.harnesses : [];
+    if (!slugMatchesDeviceScope(appSlug, updatedScope, config)) {
       throw Object.assign(
-        new Error(`this device is not enrolled for ${appSlug} (enrolled: ${scope.join(', ') || 'none'}); run: agent-bot server enroll --add-harness ${appSlug}`),
+        new Error(`this device is not enrolled for ${appSlug} (enrolled: ${updatedScope.join(', ') || 'none'}); run: agent-bot server enroll --add-harness ${appSlug}`),
         { code: 'server-harness-not-enrolled' },
       );
     }
@@ -806,6 +889,7 @@ export async function main(argv = process.argv.slice(2)) {
     soul: options.soul,
     transcriptId: options.transcriptId,
     provider: options.provider,
+    autoEnroll: !options.noEnroll,
   });
   if (options.json) {
     process.stdout.write(`${JSON.stringify(receipt)}\n`);

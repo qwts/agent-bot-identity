@@ -619,6 +619,7 @@
         "cacheAppDoctorRows",
         "createSecretProviderRegistry",
         "discoverTranscript",
+        "enroll",
         "extractToken",
         "identityAppFailure",
         "identityAppsCommand",

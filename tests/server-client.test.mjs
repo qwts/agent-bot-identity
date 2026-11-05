@@ -37,6 +37,7 @@ test('server mode is off unless AGENT_BOT_SERVER or settings.agentBotServer is s
 
 test('argument parsing and harness names', () => {
   assert.deepEqual(parseServerArgs(['enroll', '--harness', 'claude-code', '--tag', 'ci']).harnesses, ['claude']);
+  assert.equal(parseServerArgs(['enroll', '--all-configured']).allConfigured, true);
   assert.throws(() => parseServerArgs(['enroll', '--bogus']), /unknown option/);
   assert.throws(() => parseServerArgs(['nope']), /unknown server command/);
   assert.equal(serverHarness('grok'), 'grok');

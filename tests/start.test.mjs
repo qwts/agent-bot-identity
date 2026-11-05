@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { parseAgentBotArgs } from '../cli/parse.mjs';
 import { helpText } from '../cli/output.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
-import { discoverAntigravityTranscript, findTranscript } from '../session-bind.mjs';
+import { discoverAntigravityTranscript, discoverOpencodeTranscript, findTranscript } from '../session-bind.mjs';
 import { START_USAGE, formatStartReceipt, parseStartArgs, startTask } from '../start.mjs';
+import { createRequire } from 'node:module';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import { worktreeSoul } from './helpers/worktree-soul.mjs';
 
@@ -163,13 +164,82 @@ test('parseStartArgs validates flags and worktree names', () => {
       soul: 's1',
       transcriptId: 't1',
       provider: 'claude',
+      noEnroll: false,
     },
   );
+  assert.equal(parseStartArgs(['--worktree', '.worktrees/feat-auth']).name, 'feat-auth');
+  assert.equal(parseStartArgs(['--worktree-dir', 'worktrees/my-wt/']).name, 'my-wt');
+  assert.equal(parseStartArgs(['--no-enroll']).noEnroll, true);
   assert.throws(() => parseStartArgs(['--branch']), /--branch requires a value/);
   assert.throws(() => parseStartArgs(['--branch', 'a', '-b', 'b']), /may be passed only once/);
   assert.throws(() => parseStartArgs(['--unknown']), /unknown option: --unknown/);
   assert.throws(() => parseStartArgs(['--name', '../escape']), /invalid worktree name/);
+  assert.throws(() => parseStartArgs(['--worktree', '../escape']), /invalid worktree name/);
+  assert.throws(() => parseStartArgs(['--worktree-dir', '/tmp/worktrees/my-wt']), /invalid worktree name/);
   assert.equal(parseStartArgs(['--help', '--unknown']).help, true);
+});
+
+test('discoverOpencodeTranscript picks the fresh active OpenCode SQLite session, matches cwd across multiple sessions, and refuses stale sessions', async (t) => {
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+  const home = mkdtempSync(path.join(tmpdir(), 'opencode-db-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const dbPath = path.join(home, '.local', 'share', 'opencode', 'opencode.db');
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE session_v2 (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      parent_id TEXT,
+      directory TEXT NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      time_busy INTEGER,
+      time_idle INTEGER,
+      time_archived INTEGER
+    );
+    CREATE TABLE session_message (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
+    );
+    CREATE TABLE worktree (
+      name TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      directory TEXT NOT NULL PRIMARY KEY
+    );
+  `);
+  const nowMs = Date.now();
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    'ses_home', 'proj_home', null, home, nowMs - 5_000, nowMs - 5_000, nowMs - 5_000, null, null,
+  );
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    'ses_older', 'proj_1', null, '/workspace/other', nowMs - 120_000, nowMs - 120_000, null, nowMs - 120_000, null,
+  );
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    'ses_newer', 'proj_2', null, '/workspace/target', nowMs - 10_000, nowMs - 5_000, nowMs - 5_000, null, null,
+  );
+  db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?)').run(
+    'msg_1', 'ses_newer', nowMs - 5_000, nowMs - 5_000, '{"path":{"cwd":"/workspace/target","root":"/workspace/target"}}',
+  );
+  db.close();
+
+  // An unrelated session opened in $HOME does not match a child directory under $HOME.
+  assert.equal(discoverOpencodeTranscript(home, { cwd: path.join(home, 'unmatched-project') }), null);
+  assert.deepEqual(discoverOpencodeTranscript(home, { cwd: '/workspace/target' }), { provider: 'opencode', id: 'ses_newer' });
+  assert.deepEqual(
+    await findTranscript({ env: { OPENCODE: '1', HOME: home }, cwd: '/workspace/target' }),
+    { provider: 'opencode', id: 'ses_newer' },
+  );
+
+  // When all sessions are stale (> 60s old), returns null so an idle session never steals another's id.
+  const db2 = new DatabaseSync(dbPath);
+  db2.prepare('UPDATE session_v2 SET time_updated = ?, time_busy = NULL, time_idle = ?').run(nowMs - 180_000, nowMs - 180_000);
+  db2.prepare('UPDATE session_message SET time_updated = ?').run(nowMs - 180_000);
+  db2.close();
+  assert.equal(discoverOpencodeTranscript(home, { cwd: '/workspace/target' }), null);
 });
 
 test('discoverAntigravityTranscript picks the fresh active brain transcript, matches cwd across multiple brains, refuses stale or ambiguous sessions, and stays hermetic without HOME', async (t) => {
@@ -352,6 +422,35 @@ test('startTask in server mode fails closed with server enroll guidance when dev
     }),
     (err) => err.code === 'server-harness-not-enrolled' && /this device is not enrolled for test-codex-agent \(enrolled: claude\); run: agent-bot server enroll --add-harness test-codex-agent/.test(err.message),
   );
+
+  // When enrollImpl is provided (or autoEnroll is enabled in CLI start), startTask automatically stages --add-harness enrollment and proceeds once enrolled.
+  const { clientFactory } = await startTestDaemon(t, wrongScope);
+  const enrollCalls = [];
+  const enrolledReceipt = await startTask({
+    branch: 'feat/auto-enrolled',
+    transcriptId: 't-auto-enroll',
+    cwd: wrongScope.repo,
+    env: { ...wrongScope.env, CODEX_SANDBOX: 'seatbelt' },
+    home: wrongScope.home,
+    config: wrongScope.config,
+    clientFactory,
+    reconcileCredentials: async ({ slugs }) => slugs.map((slug) => ({
+      slug,
+      local: { status: 'ready' },
+      live: { status: 'server-registered' },
+    })),
+    enrollImpl: async ({ addHarnesses }) => {
+      enrollCalls.push({ addHarnesses });
+      writeFileSync(path.join(wrongScope.home, 'server-state', 'device.json'), JSON.stringify({
+        server: 'https://agents.true-line.ai',
+        device_id: 'dev_test',
+        harnesses: ['claude', ...addHarnesses],
+      }));
+    },
+  });
+  assert.deepEqual(enrollCalls, [{ addHarnesses: ['test-codex-agent'] }]);
+  assert.equal(enrolledReceipt.worktree.branch, 'feat/auto-enrolled');
+  assert.equal(enrolledReceipt.binding.status, 'live');
 });
 
 test('startTask fails closed before creating soul or worktree when transcript is missing, branch is occupied, or --repo mismatches origin', async (t) => {

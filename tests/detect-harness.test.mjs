@@ -357,3 +357,26 @@ test('Reflection.ai Mirror CLI and Mistral Vibe are detected from mirror-agent a
   ].join('\n');
   assert.equal(detectProcessTreeHarness({ pid: 300, psOutput: inlineArgsPs }), null);
 });
+
+test('OpenCode is detected from OPENCODE=1, OPENCODE_CLIENT, OPENCODE_SESSION_ID, bundle identifier, and opencode-cli process ancestry', () => {
+  assert.equal(detectHarness({ OPENCODE: '1' }), 'opencode');
+  assert.equal(detectAgentHarness({ OPENCODE: '1' }, cfg), 'you-opencode-agent');
+  assert.equal(detectHarness({ OPENCODE_CLIENT: 'desktop' }), 'opencode');
+  assert.equal(detectAgentHarness({ OPENCODE_CLIENT: 'desktop' }, cfg), 'you-opencode-agent');
+  assert.equal(detectHarness({ OPENCODE_SESSION_ID: 'ses_123' }), 'opencode');
+  assert.equal(detectAgentHarness({ OPENCODE_SESSION_ID: 'ses_123' }, cfg), 'you-opencode-agent');
+  assert.equal(detectHarness({ __CFBundleIdentifier: 'ai.opencode.desktop' }), 'opencode');
+  // Ambient bundle identifier without OPENCODE=1 / OPENCODE_CLIENT / process ancestry is editor-ambient only.
+  assert.equal(detectAgentHarness({ __CFBundleIdentifier: 'ai.opencode.desktop' }, cfg), null);
+
+  const opencodeDesktopPs = [
+    '  100     1 /sbin/launchd',
+    '  200   100 /Applications/OpenCode.app/Contents/MacOS/OpenCode',
+    '  300   200 /Users/user/Library/Application Support/ai.opencode.desktop/cli/1.14.19/opencode-cli serve --hostname 127.0.0.1 --port 54130 --service',
+    '  400   300 /bin/zsh -c -l agent-bot start --branch feat/opencode',
+  ].join('\n');
+
+  assert.equal(detectProcessTreeHarness({ pid: 400, psOutput: opencodeDesktopPs }), 'opencode');
+  assert.equal(detectHarness({}, { pid: 400, psOutput: opencodeDesktopPs }), 'opencode');
+  assert.equal(detectAgentHarness({}, cfg, 'user', { pid: 400, psOutput: opencodeDesktopPs }), 'you-opencode-agent');
+});

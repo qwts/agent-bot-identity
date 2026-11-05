@@ -7,8 +7,9 @@
 // the private git dir (written by the daemon) and is never printed.
 
 import { execFileSync } from 'node:child_process';
-import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -24,14 +25,16 @@ Note: [deprecated] Prefer \`agent-bot start [--branch <branch>]\` for routine ta
 With an existing binding this validates it at the daemon and needs no
 transcript id. Without one, the conversation is named by --transcript-id,
 else by the harness: CODEX_THREAD_ID, CLAUDE_SESSION_ID,
-CURSOR_CONVERSATION_ID, QWEN_CODE_SESSION_ID, a lifecycle hook's session
-id, Antigravity's active brain transcript, or Devin's session list when it
+CURSOR_CONVERSATION_ID, QWEN_CODE_SESSION_ID, OPENCODE_SESSION_ID, a
+lifecycle hook's session id, Antigravity's active brain transcript,
+OpenCode's active session database, or Devin's session list when it
 names exactly one session for this worktree.
 `;
 
 const NO_TRANSCRIPT = '--transcript-id is required: no session id was found for this conversation '
   + '(run `agent-bot session bind --transcript-id <session-id>` in a plain shell, '
-  + 'Qwen Code exports QWEN_CODE_SESSION_ID; for Devin, run `devin list --format json` in the directory '
+  + 'Qwen Code exports QWEN_CODE_SESSION_ID, OpenCode exports OPENCODE_SESSION_ID or records active sessions in opencode.db; '
+  + 'for Devin, run `devin list --format json` in the directory '
   + 'the session started in), or bind with the MCP bind tool';
 
 // Devin exports no session id, so its list is the only witness: the ids it
@@ -125,10 +128,145 @@ export function discoverAntigravityTranscript(home, { cwd = null, now = Date.now
   return { provider: 'antigravity', id: fresh[0].id };
 }
 
+function realOrResolve(dir) {
+  if (!dir || typeof dir !== 'string') return null;
+  try {
+    return realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+function primaryRepoRootFor(cwd, env = process.env) {
+  if (!cwd) return null;
+  try {
+    const commonDir = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
+      env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5_000,
+    }).trim();
+    const realCommon = realOrResolve(commonDir);
+    if (realCommon && path.basename(realCommon) === '.git') {
+      return realOrResolve(path.dirname(realCommon));
+    }
+  } catch { /* not a git checkout */ }
+  return null;
+}
+
+export function discoverOpencodeTranscript(home, { cwd = null, now = Date.now(), maxAgeMs = 60_000, env = null } = {}) {
+  const explicitId = typeof env?.OPENCODE_SESSION_ID === 'string' && env.OPENCODE_SESSION_ID.trim()
+    ? env.OPENCODE_SESSION_ID.trim()
+    : null;
+  if (explicitId) return { provider: 'opencode', id: explicitId };
+  const explicitDb = typeof env?.OPENCODE_DB_PATH === 'string' && env.OPENCODE_DB_PATH.trim()
+    ? path.resolve(env.OPENCODE_DB_PATH.trim())
+    : null;
+  const dataHome = typeof env?.XDG_DATA_HOME === 'string' && env.XDG_DATA_HOME.trim()
+    ? path.resolve(env.XDG_DATA_HOME.trim())
+    : (home ? path.join(home, '.local', 'share') : null);
+  const dbPath = explicitDb ?? (dataHome ? path.join(dataHome, 'opencode', 'opencode.db') : null);
+  if (!dbPath || !existsSync(dbPath)) return null;
+
+  let db;
+  try {
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const tables = new Set(
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name),
+    );
+    const sessionTable = tables.has('session_v2') ? 'session_v2' : (tables.has('session') ? 'session' : null);
+    if (!sessionTable) return null;
+    const hasMessages = tables.has('session_message');
+    const hasWorktrees = tables.has('worktree');
+
+    const rows = db.prepare(
+      `SELECT s.id, s.project_id, s.parent_id, s.directory, s.time_created, s.time_updated, s.time_busy, s.time_idle, s.time_archived${
+        hasMessages ? ', (SELECT MAX(m.time_updated) FROM session_message m WHERE m.session_id = s.id) AS last_msg_updated' : ''
+      } FROM ${sessionTable} s WHERE s.time_archived IS NULL AND s.parent_id IS NULL ORDER BY s.time_updated DESC LIMIT 50`,
+    ).all();
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+
+    const worktreesByProject = new Map();
+    if (hasWorktrees) {
+      for (const wt of db.prepare('SELECT project_id, directory FROM worktree').all()) {
+        if (!wt?.project_id || !wt?.directory) continue;
+        const list = worktreesByProject.get(wt.project_id) ?? [];
+        list.push(realOrResolve(wt.directory));
+        worktreesByProject.set(wt.project_id, list);
+      }
+    }
+
+    const msgStmt = hasMessages
+      ? db.prepare('SELECT data FROM session_message WHERE session_id = ? ORDER BY time_updated DESC LIMIT 5')
+      : null;
+
+    const candidates = rows.map((row) => {
+      const timeBusy = Number(row.time_busy) || 0;
+      const timeIdle = Number(row.time_idle) || 0;
+      const lastMod = Math.max(Number(row.time_updated) || 0, Number(row.last_msg_updated) || 0);
+      const isBusy = timeBusy > 0 && (!timeIdle || timeBusy >= timeIdle) && (now - timeBusy <= 30 * 60_000) && (timeBusy - now <= 60_000);
+      const isRecent = lastMod > 0 && (now - lastMod <= maxAgeMs) && (lastMod - now <= 60_000);
+      return {
+        id: String(row.id),
+        projectId: row.project_id ? String(row.project_id) : null,
+        sessionDir: realOrResolve(row.directory),
+        isBusy,
+        isRecent,
+        lastMod,
+      };
+    });
+
+    const fresh = candidates.filter((c) => c.isBusy || c.isRecent);
+    if (fresh.length === 0) return null;
+
+    if (cwd) {
+      const realCwd = realOrResolve(cwd);
+      const primaryRepo = primaryRepoRootFor(cwd, env ?? process.env);
+      const evaluated = fresh.map((c) => {
+        const wts = (c.projectId && worktreesByProject.get(c.projectId)) || [];
+        const exactDir = Boolean(
+          (c.sessionDir && (c.sessionDir === realCwd || (primaryRepo && c.sessionDir === primaryRepo)))
+          || wts.some((wt) => wt === realCwd || (primaryRepo && wt === primaryRepo)),
+        );
+        let mentionsCwd = false;
+        if (msgStmt) {
+          const msgs = msgStmt.all(c.id);
+          const recentText = msgs.map((m) => String(m?.data ?? '')).join('\n');
+          mentionsCwd = textMentionsPath(recentText, realCwd) || (realCwd !== cwd && textMentionsPath(recentText, cwd));
+        }
+        return { ...c, exactDir, mentionsCwd };
+      });
+
+      const matched = evaluated.filter((c) => c.exactDir || c.mentionsCwd);
+      if (matched.length === 1) return { provider: 'opencode', id: matched[0].id };
+      if (matched.length > 1) {
+        const byMention = matched.filter((c) => c.mentionsCwd);
+        if (byMention.length === 1) return { provider: 'opencode', id: byMention[0].id };
+        const byBusy = matched.filter((c) => c.isBusy);
+        if (byBusy.length === 1) return { provider: 'opencode', id: byBusy[0].id };
+        const byExact = matched.filter((c) => c.exactDir);
+        if (byExact.length === 1) return { provider: 'opencode', id: byExact[0].id };
+      }
+      return null;
+    }
+
+    if (fresh.length === 1) return { provider: 'opencode', id: fresh[0].id };
+    const busyOnly = fresh.filter((c) => c.isBusy);
+    if (busyOnly.length === 1) return { provider: 'opencode', id: busyOnly[0].id };
+    return null;
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
+  }
+}
+
 // Where this conversation's id comes from when no flag names it (#1275):
 // the harness's own environment, then the lifecycle hook payload's session
 // id, then (Devin only) a session list naming exactly one session for this
-// worktree, or Antigravity's most recently updated brain transcript.
+// worktree, Antigravity's most recently updated brain transcript, or
+// OpenCode's active session in opencode.db.
 export async function findTranscript({
   env = process.env,
   cwd = process.cwd(),
@@ -147,6 +285,10 @@ export async function findTranscript({
   }
   if (harness === 'antigravity') {
     const found = discoverAntigravityTranscript(home, { cwd, env });
+    if (found) return found;
+  }
+  if (harness === 'opencode') {
+    const found = discoverOpencodeTranscript(home, { cwd, env });
     if (found) return found;
   }
   return null;
