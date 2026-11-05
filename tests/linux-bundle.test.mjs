@@ -1100,3 +1100,31 @@ test('#337: every systemctl and ps call the installer makes goes through an inje
   assert.match(raw, /AGENT_BOT_SYSTEMCTL/u);
   assert.match(raw, /AGENT_BOT_PS/u);
 });
+
+test('#1348: patchCommsSharedDirDefault rewrites hardcoded macOS sharedDir in staged agent-comms host-config.mjs', async (t) => {
+  const { patchCommsSharedDirDefault, scriptLauncher } = await import('../scripts/linux-bundle/build.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'abi-1348-bundle-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const libDir = join(root, 'lib');
+  mkdirSync(libDir, { recursive: true });
+  writeFileSync(
+    join(libDir, 'host-config.mjs'),
+    `import path from 'node:path';\nexport function defaultHostConfig(stateHome = '/home/devin/.local/state') {\n  return {\n    sharedDir: '/Users/Shared/Public/agent-comms',\n    brokerStateDir: path.join(stateHome, 'agent-comms-broker'),\n  };\n}\n`,
+    'utf8',
+  );
+  assert.equal(patchCommsSharedDirDefault(root), true);
+  const patched = readFileSync(join(libDir, 'host-config.mjs'), 'utf8');
+  assert.match(patched, /process\.platform === 'darwin' \? '\/Users\/Shared\/Public\/agent-comms' : path\.join\(stateHome, 'agent-comms'\)/u);
+  // Idempotent on a second call once already patched.
+  assert.equal(patchCommsSharedDirDefault(root), false);
+
+  // Fails closed if /Users/Shared/Public/agent-comms is present in an unrecognized shape.
+  writeFileSync(join(libDir, 'host-config.mjs'), `export const X = '/Users/Shared/Public/agent-comms';\n`, 'utf8');
+  assert.throws(() => patchCommsSharedDirDefault(root), /missing stateHome or path\.join/u);
+
+  const launcherBody = scriptLauncher('lib/agent-comms/bin/agent-comms.mjs', 'Runs agent-comms.');
+  assert.match(launcherBody, /AGENT_COMMS_SHARED_DIR="\$\{XDG_STATE_HOME:-\$HOME\/\.local\/state\}\/agent-comms"/u);
+
+  const commonSh = readFileSync(join(BUNDLE, 'lib', 'common.sh'), 'utf8');
+  assert.match(commonSh, /AGENT_COMMS_SHARED_DIR="\$\{XDG_STATE_HOME:-\$HOME\/\.local\/state\}\/agent-comms"/u);
+});

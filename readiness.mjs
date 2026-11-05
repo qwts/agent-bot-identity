@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveSpacesHome } from './agent-space.mjs';
+import { commsSharedDirInfo } from './comms-client.mjs';
 import { ServerSession, appOwnerMismatch, repoFromCheckout, serverUrl } from './identity-cli.mjs';
 import { inspectSoulSpace } from './soul-memory.mjs';
 import { readSoulEnvironment } from './soul-env.mjs';
@@ -542,6 +543,16 @@ function spacesRootCheck({ home, env, config }) {
     status: 'ready',
     message: `Agent Space root ${resolution.root}`,
     evidence: { root: resolution.root, source: resolution.source },
+  });
+}
+
+export function commsSharedDirCheck({ home, env, platform = process.platform }) {
+  const info = commsSharedDirInfo({ home, env, platform });
+  return readinessCheck({
+    id: 'comms.shared_dir',
+    status: 'ready',
+    message: `agent-comms shared directory ${info.sharedDir} (${info.source})`,
+    evidence: { shared_dir: info.sharedDir, source: info.source, platform: info.platform },
   });
 }
 
@@ -3042,6 +3053,7 @@ export async function collectReadiness({
     machineChecks.push(app ? appServiceAction(daemonHealth, app) : daemonHealth);
     machineChecks.push(await keydVersionCheck({ home, env, probe: probeKeyd, exists: probeKeyd === keydStatus ? exists : null }));
     machineChecks.push(spacesRootCheck({ home, env, config }));
+    machineChecks.push(commsSharedDirCheck({ home, env }));
     machineChecks.push(sopPolicyCheck({ home, env }));
     machineChecks.push(spacesHomeCheck({ home, env, config, inspectCutover }));
     const unreferencedSouls = unreferencedSoulsCheck({ home, env, git });

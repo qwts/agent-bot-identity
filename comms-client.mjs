@@ -75,14 +75,38 @@ function fail(code, message) {
 
 // --- paths ---
 
-export function commsPaths({ env = process.env, home = homedir() } = {}) {
-  const shared = env.AGENT_COMMS_SHARED_DIR || '/Users/Shared/Public/agent-comms';
-  const stateHome = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
+export function defaultCommsSharedDir({ env = process.env, home = homedir(), platform = process.platform } = {}) {
+  if (platform === 'darwin') return '/Users/Shared/Public/agent-comms';
+  const state = stateHome({ env, home });
+  if (platform === 'win32') {
+    const localAppData = env.LOCALAPPDATA ? path.resolve(env.LOCALAPPDATA) : path.join(home, 'AppData', 'Local');
+    return path.join(localAppData, 'agent-comms');
+  }
+  return path.join(state, 'agent-comms');
+}
+
+// Per the XDG Base Directory Specification, XDG_STATE_HOME is an absolute path;
+// AGENT_COMMS_SHARED_DIR is treated as set when non-empty, matching the POSIX
+// wrapper check `[ -z "${AGENT_COMMS_SHARED_DIR:-}" ]`.
+export function commsSharedDirInfo({ env = process.env, home = homedir(), platform = process.platform } = {}) {
+  const explicit = typeof env.AGENT_COMMS_SHARED_DIR === 'string' && env.AGENT_COMMS_SHARED_DIR.length > 0
+    ? env.AGENT_COMMS_SHARED_DIR
+    : '';
+  return {
+    sharedDir: explicit || defaultCommsSharedDir({ env, home, platform }),
+    source: explicit ? 'env' : 'default',
+    platform,
+  };
+}
+
+export function commsPaths({ env = process.env, home = homedir(), platform = process.platform } = {}) {
+  const shared = commsSharedDirInfo({ env, home, platform }).sharedDir;
+  const state = stateHome({ env, home });
   return {
     shared,
     socket: path.join(shared, 'broker.sock'),
     serviceLabel: env.AGENT_COMMS_SERVICE_LABEL || 'dev.qwts.agent-comms.broker',
-    brokerState: path.resolve(env.AGENT_COMMS_BROKER_STATE_DIR || path.join(stateHome, 'agent-comms-broker')),
+    brokerState: path.resolve(env.AGENT_COMMS_BROKER_STATE_DIR || path.join(state, 'agent-comms-broker')),
     // Group brokers use a sticky 1777 proof directory; private brokers use
     // 0700. In both modes the kernel stamps the proof owner.
     proofs: path.join(shared, 'pairing'),

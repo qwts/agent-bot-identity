@@ -12,6 +12,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { listSouls, locateSoulDir, populationFile, setSoulAppThen, showSoul } from './agent-population.mjs';
+import { commsSharedDirInfo } from './comms-client.mjs';
 import { isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
 import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness, hasOpencodeExperimentalEnv, isOpencodeDirectEnv } from './detect-harness.mjs';
@@ -870,6 +871,9 @@ export async function startTask({
     binding: {
       status: bindResult.status,
       alreadyBound: Boolean(bindResult.alreadyBound),
+    },
+    comms: {
+      sharedDir: commsSharedDirInfo({ env, home }).sharedDir,
     },
     next: needsCd ? `cd ${shellSingleQuote(targetWorktree)}` : null,
   };

@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { commsSharedDirInfo } from '../comms-client.mjs';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
 import { windowsGitShell, gitShellEnvironment } from '../windows-git-shell.mjs';
 
@@ -137,6 +138,20 @@ and their effects.
 `;
 
 const HOOK_PATTERN = /^[a-z][a-z0-9-]*$/;
+const BROKER_USAGE = `usage: agent-bot broker <run [--single-account]|status|...> [options]
+
+Run or inspect the local agent-comms broker with a platform-appropriate
+AGENT_COMMS_SHARED_DIR default (macOS: /Users/Shared/Public/agent-comms;
+Linux: \${XDG_STATE_HOME:-~/.local/state}/agent-comms).
+`;
+
+function resolveBundledCommsEntry(env = process.env) {
+  const candidates = [
+    ...(env.AGENT_BOT_BUNDLE_ROOT ? [join(env.AGENT_BOT_BUNDLE_ROOT, 'lib', 'agent-comms', 'bin', 'agent-comms.mjs')] : []),
+    join(ROOT, '..', 'agent-comms', 'bin', 'agent-comms.mjs'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
 
 function run(executable, args, env = process.env) {
   const result = spawnSync(executable, args, { stdio: 'inherit', env });
@@ -146,8 +161,8 @@ function run(executable, args, env = process.env) {
 
 // A following reader must remain interruptible while its child is running.
 // The synchronous dispatcher used by finite commands cannot forward SIGINT.
-function follow(executable, args) {
-  const child = spawn(executable, args, { stdio: 'inherit' });
+function follow(executable, args, env = process.env) {
+  const child = spawn(executable, args, { stdio: 'inherit', env });
   const interrupt = () => child.kill('SIGINT');
   process.on('SIGINT', interrupt);
   child.once('error', (error) => {
@@ -163,6 +178,21 @@ function follow(executable, args) {
 }
 
 export function dispatchAgentBot(parsed) {
+  if (parsed.command === 'broker') {
+    if (parsed.args.length === 0 || ['--help', '-h'].includes(parsed.args[0])) {
+      process.stdout.write(BROKER_USAGE);
+      return 0;
+    }
+    const { sharedDir } = commsSharedDirInfo({ env: process.env });
+    const brokerEnv = { ...process.env, AGENT_COMMS_SHARED_DIR: sharedDir };
+    const entry = resolveBundledCommsEntry(process.env);
+    const executable = entry ? process.execPath : 'agent-comms';
+    const brokerArgs = entry ? [entry, 'broker', ...parsed.args] : ['broker', ...parsed.args];
+    if (parsed.args[0] === 'run') {
+      return follow(executable, brokerArgs, brokerEnv);
+    }
+    return run(executable, brokerArgs, brokerEnv);
+  }
   if (parsed.command === 'soul' && ['--help', '-h'].includes(parsed.args[0])) {
     process.stdout.write(SOUL_HELP);
     return 0;

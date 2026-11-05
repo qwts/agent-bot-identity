@@ -443,6 +443,7 @@ test('startTask from a primary checkout auto-resolves soul, branches from origin
   assert.equal(f.git(receipt.worktree.path, 'config', '--worktree', '--get', 'agentBot.agentId'), f.identity.id);
   assert.equal(receipt.binding.status, 'live');
   assert.equal(receipt.binding.alreadyBound, false);
+  assert.ok(typeof receipt.comms?.sharedDir === 'string' && receipt.comms.sharedDir.length > 0);
   assert.match(receipt.next, /cd /);
   assert.match(formatStartReceipt(receipt), /soul: .*auto-resolved: codex/);
 
