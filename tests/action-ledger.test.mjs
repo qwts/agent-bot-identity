@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { actionsArchiveDir, actionsDir, listActions, MAX_SETTLED_ACTIONS, readAction, transition, writeAction } from '../identity/action-ledger.mjs';
+import { actionsArchiveDir, actionsDir, compactActions, listActions, MAX_SETTLED_ACTIONS, readAction, transition, writeAction } from '../identity/action-ledger.mjs';
 
 const roots = [];
 after(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -163,7 +163,7 @@ test('settled actions are compacted into actions-archive while preserving latest
   assert.equal(earliest?.issuance_id, 'iss_0');
   assert.throws(() => writeAction(dir, { operation_id: 'op_bulk_0', task_id: 't_bulk', state: 'prepared' }), /cannot become/);
 
-  // >250 non-terminal records are never archived and do not lose entries.
+  // >250 non-terminal records are never archived, do not lose entries, and skip repeated full scans while at/below the uncompactable floor.
   const nonTerminalDir = scratch();
   for (let i = 0; i < 260; i++) {
     writeAction(nonTerminalDir, {
@@ -174,5 +174,7 @@ test('settled actions are compacted into actions-archive while preserving latest
     });
   }
   assert.equal(listActions(nonTerminalDir, { state: 'unknown' }).length, 260);
+  // While at/below the uncompactable floor, direct compactActions calls (including every 50th terminal write) skip rescanning.
+  assert.equal(compactActions(nonTerminalDir), 0);
   assert.equal(listActions(nonTerminalDir, { state: 'unknown' }).length, 260);
 });

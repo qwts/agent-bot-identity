@@ -614,6 +614,8 @@ export class ServerSession {
     this.base = base ?? serverUrl({ env });
     this.fetch = noRedirect(fetchImpl);
     this.token = null;
+    this.tokenInFlight = null;
+    this.revokedAt = false;
   }
 
   device() {
@@ -628,6 +630,8 @@ export class ServerSession {
   // and everything listeners hold, and record it so no later process tries.
   revoked(detail = 'device_revoked') {
     this.token = null;
+    this.tokenInFlight = null;
+    this.revokedAt = true;
     const d = loadDevice(this.opts, { includeOutcomes: false });
     if (d && !d.revoked_at) saveDevice(this.opts, { ...d, revoked_at: new Date().toISOString() });
     for (const listener of revokedListeners) { try { listener(); } catch { /* a listener never blocks revocation */ } }
@@ -649,28 +653,39 @@ export class ServerSession {
   }
 
   async accessToken({ force = false } = {}) {
-    if (!force && this.token && Date.now() < this.token.refreshAt) return this.token;
     const dev = this.device();
-    const deviceKey = loadDeviceKey(this.opts);
-    if (!deviceKey) throw new Error('device key missing; re-enroll with `agent-bot server enroll --force`');
-    const { privateKey: ek } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    const t = now();
-    const assertion = signJws(deviceKey, { alg: 'ES256', typ: 'JWT' }, {
-      iss: dev.device_id, sub: dev.device_id, aud: `${this.base}/oauth/token`, iat: t, exp: t + 120, jti: newJti(),
-      cnf: { jwk: publicJwk(ek) },
-    });
-    const res = await this.send(`${this.base}/oauth/token`, form({ grant_type: GRANT_JWT_BEARER, assertion }));
-    if (res.status >= 500) throw serverError('credential-unavailable', `the identity service token endpoint answered ${res.status}; nothing was issued`);
-    const body = await readJson(res);
-    if (body.error === 'device_revoked' || (body.error === 'invalid_grant' && /device_revoked/.test(body.error_description ?? ''))) throw this.revoked();
-    if (!res.ok || !body.access_token) {
-      const e = oauthError('agent-bot server token', body);
-      if (body.error === 'invalid_grant') e.message += ' — the device may be revoked or expired; re-enroll';
-      throw e;
-    }
-    const life = (Number(body.expires_in) || 900) * 1000;
-    this.token = { value: body.access_token, ek, refreshAt: Date.now() + Math.max(life - REFRESH_MARGIN_MS, life / 2), management: body.management };
-    return this.token;
+    if (!force && this.token && Date.now() < this.token.refreshAt) return this.token;
+    if (!force && this.tokenInFlight) return this.tokenInFlight;
+    let promise;
+    promise = (async () => {
+      try {
+        const deviceKey = loadDeviceKey(this.opts);
+        if (!deviceKey) throw new Error('device key missing; re-enroll with `agent-bot server enroll --force`');
+        const { privateKey: ek } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+        const t = now();
+        const assertion = signJws(deviceKey, { alg: 'ES256', typ: 'JWT' }, {
+          iss: dev.device_id, sub: dev.device_id, aud: `${this.base}/oauth/token`, iat: t, exp: t + 120, jti: newJti(),
+          cnf: { jwk: publicJwk(ek) },
+        });
+        const res = await this.send(`${this.base}/oauth/token`, form({ grant_type: GRANT_JWT_BEARER, assertion }));
+        if (res.status >= 500) throw serverError('credential-unavailable', `the identity service token endpoint answered ${res.status}; nothing was issued`);
+        const body = await readJson(res);
+        if (body.error === 'device_revoked' || (body.error === 'invalid_grant' && /device_revoked/.test(body.error_description ?? ''))) throw this.revoked();
+        if (!res.ok || !body.access_token) {
+          const e = oauthError('agent-bot server token', body);
+          if (body.error === 'invalid_grant') e.message += ' — the device may be revoked or expired; re-enroll';
+          throw e;
+        }
+        const life = (Number(body.expires_in) || 900) * 1000;
+        const tok = { value: body.access_token, ek, refreshAt: Date.now() + Math.max(life - REFRESH_MARGIN_MS, life / 2), management: body.management };
+        if (!this.revokedAt) this.token = tok;
+        return tok;
+      } finally {
+        if (this.tokenInFlight === promise) this.tokenInFlight = null;
+      }
+    })();
+    if (!force) this.tokenInFlight = promise;
+    return promise;
   }
 
   async call(method, route, payload) {

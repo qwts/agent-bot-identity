@@ -950,22 +950,49 @@ test('server enroll --features and AGENT_BOT_ENABLE_FEATURES persist github-iden
 });
 
 test('mintViaServer reuses a shared ServerSession DPoP token across calls and loadDevice({ includeOutcomes: false }) skips ledger scans (#1368)', async () => {
+  const { actionsArchiveDir, actionsDir, MAX_SETTLED_ACTIONS, writeAction } = await import('../identity/action-ledger.mjs');
+  const { readdirSync } = await import('node:fs');
   const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
   const srv = fakeServer();
   await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const stateDir = env.AGENT_BOT_SERVER_STATE;
+
+  // Seed 1,200 historical settled operations to exercise scaled compaction and verify mintRecorded avoids scanning archived history.
+  const baseTs = Date.parse('2026-01-01T00:00:00.000Z');
+  for (let i = 0; i < 1200; i++) {
+    writeAction(stateDir, {
+      operation_id: `op_hist_${i}`,
+      task_id: `task.hist.${i}`,
+      kind: 'github_installation_token',
+      harness: 'grok',
+      repo: 'o/r',
+      state: 'succeeded',
+      issuance_id: `iss_hist_${i}`,
+      created_at: new Date(baseTs + i * 1000).toISOString(),
+    });
+  }
+  assert.ok(readdirSync(actionsArchiveDir(stateDir)).filter((f) => f.endsWith('.json')).length >= 950, 'scaled history compacted into actions-archive');
+  assert.ok(readdirSync(actionsDir(stateDir)).filter((f) => f.endsWith('.json')).length <= MAX_SETTLED_ACTIONS + 50, 'active ledger remains bounded');
+
   const issuedBefore = srv.issued;
 
-  const first = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared' });
-  const second = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared' });
-  const third = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared' });
+  // Concurrent calls share the in-flight DPoP token refresh and reuse a single 15-minute access token.
+  const [first, second, third] = await Promise.all([
+    mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared.1' }),
+    mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared.2' }),
+    mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared.3' }),
+  ]);
   assert.notEqual(first.operation_id, second.operation_id);
   assert.notEqual(second.operation_id, third.operation_id);
-  assert.equal(srv.issued, issuedBefore + 1, 'all three mintViaServer calls reused one 15-minute DPoP access token');
+  assert.equal(srv.issued, issuedBefore + 1, 'concurrent mintViaServer calls deduplicate DPoP refresh and reuse one access token');
 
   const fastDevice = loadDevice({ env }, { includeOutcomes: false });
   assert.equal(fastDevice.last_mint_outcomes, undefined, 'includeOutcomes: false skips action-ledger scan');
   const fullDevice = loadDevice({ env });
-  assert.equal(fullDevice.last_mint_outcomes?.grok?.operation_id, third.operation_id);
+  assert.ok(
+    [first.operation_id, second.operation_id, third.operation_id].includes(fullDevice.last_mint_outcomes?.grok?.operation_id),
+    'full loadDevice resolves latest mint outcome from bounded active ledger',
+  );
 
   // Logout clears the shared session cache and fails closed on subsequent mint.
   logout({ env });

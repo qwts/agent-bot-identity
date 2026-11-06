@@ -77,6 +77,8 @@ export function compactActions(stateDir) {
       uncompactableFloor.delete(stateDir);
       return 0;
     }
+    const floor = uncompactableFloor.get(stateDir) ?? COMPACT_TRIGGER;
+    if (names.length <= floor) return 0;
     const records = names
       .map((name) => {
         const opId = name.slice(0, -5);
@@ -175,6 +177,9 @@ export function writeAction(stateDir, record) {
   writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, file);
   if (TERMINAL.has(next.state)) {
+    if (current && !TERMINAL.has(current.state) && uncompactableFloor.has(stateDir)) {
+      uncompactableFloor.set(stateDir, Math.max(COMPACT_TRIGGER, uncompactableFloor.get(stateDir) - 1));
+    }
     const count = (writesSinceCompact.get(stateDir) ?? COMPACT_INTERVAL) + 1;
     if (count >= COMPACT_INTERVAL) {
       writesSinceCompact.set(stateDir, 0);
