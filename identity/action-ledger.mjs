@@ -12,10 +12,16 @@ import { REDACTION_PATTERNS } from './redaction-patterns.mjs';
 import path from 'node:path';
 
 export const ACTION_STATES = Object.freeze(['prepared', 'submitted', 'succeeded', 'rejected', 'unknown']);
+export const MAX_SETTLED_ACTIONS = 200;
+const COMPACT_TRIGGER = 250;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function actionsDir(stateDir) {
   return path.join(stateDir, 'actions');
+}
+
+export function actionsArchiveDir(stateDir) {
+  return path.join(stateDir, 'actions-archive');
 }
 
 function fileFor(stateDir, operationId) {
@@ -23,12 +29,105 @@ function fileFor(stateDir, operationId) {
   return path.join(actionsDir(stateDir), `${operationId}.json`);
 }
 
+function archiveFileFor(stateDir, operationId) {
+  if (!ID.test(operationId)) throw new Error('operation_id must be 1-128 characters of [A-Za-z0-9._:-]');
+  return path.join(actionsArchiveDir(stateDir), `${operationId}.json`);
+}
+
+function readJsonFile(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+}
+
 export function readAction(stateDir, operationId) {
-  try { return JSON.parse(readFileSync(fileFor(stateDir, operationId), 'utf8')); } catch { return null; }
+  try {
+    return readJsonFile(fileFor(stateDir, operationId)) ?? readJsonFile(archiveFileFor(stateDir, operationId));
+  } catch {
+    return null;
+  }
 }
 
 // Terminal states settle an operation for good; nothing moves past them.
 const TERMINAL = new Set(['succeeded', 'rejected']);
+const COMPACT_INTERVAL = 50;
+
+function compareCreatedAt(a, b) {
+  const left = String(a?.created_at ?? '');
+  const right = String(b?.created_at ?? '');
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+const writesSinceCompact = new Map();
+const uncompactableFloor = new Map();
+
+/**
+ * Compacts settled (`succeeded` / `rejected`) records in `actionsDir(stateDir)`
+ * into `actionsArchiveDir(stateDir)` once the active directory exceeds
+ * `COMPACT_TRIGGER`, retaining:
+ *   - all non-terminal (`prepared`, `submitted`, `unknown`) records,
+ *   - the latest record per `harness` (so `last_mint_outcomes` is unchanged),
+ *   - the most recent `MAX_SETTLED_ACTIONS` terminal records.
+ * Archived records remain readable via `readAction(stateDir, operationId)`.
+ */
+export function compactActions(stateDir) {
+  try {
+    const dir = actionsDir(stateDir);
+    let names = [];
+    try { names = readdirSync(dir).filter((name) => name.endsWith('.json')); } catch { return 0; }
+    if (names.length <= COMPACT_TRIGGER) {
+      uncompactableFloor.delete(stateDir);
+      return 0;
+    }
+    const records = names
+      .map((name) => {
+        const opId = name.slice(0, -5);
+        const data = ID.test(opId) ? readJsonFile(path.join(dir, name)) : null;
+        return data && typeof data === 'object' && !Array.isArray(data) ? { name, opId, data } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => compareCreatedAt(a.data, b.data));
+
+    const keep = new Set();
+    const latestByHarness = new Map();
+    const terminal = [];
+    for (const entry of records) {
+      if (typeof entry.data.harness === 'string' && entry.data.harness) {
+        latestByHarness.set(entry.data.harness, entry.name);
+      }
+      if (!TERMINAL.has(entry.data.state)) {
+        keep.add(entry.name);
+      } else {
+        terminal.push(entry);
+      }
+    }
+    for (const name of latestByHarness.values()) keep.add(name);
+    for (const entry of terminal.slice(-MAX_SETTLED_ACTIONS)) keep.add(entry.name);
+
+    const archiveDir = actionsArchiveDir(stateDir);
+    let moved = 0;
+    let archiveCreated = false;
+    for (const entry of terminal) {
+      if (keep.has(entry.name)) continue;
+      try {
+        if (!archiveCreated) {
+          mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
+          try { chmodSync(archiveDir, 0o700); } catch { /* windows */ }
+          archiveCreated = true;
+        }
+        renameSync(path.join(dir, entry.name), path.join(archiveDir, entry.name));
+        moved += 1;
+      } catch { /* best-effort compaction */ }
+    }
+    const remaining = names.length - moved;
+    if (remaining > COMPACT_TRIGGER) {
+      uncompactableFloor.set(stateDir, remaining + COMPACT_INTERVAL);
+    } else {
+      uncompactableFloor.delete(stateDir);
+    }
+    return moved;
+  } catch {
+    return 0;
+  }
+}
 
 // A record holds identifiers and states only — an allowlist, never a
 // denylist: the fields every caller writes, no more, and scalar values only.
@@ -75,6 +174,15 @@ export function writeAction(stateDir, record) {
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, file);
+  if (TERMINAL.has(next.state)) {
+    const count = (writesSinceCompact.get(stateDir) ?? COMPACT_INTERVAL) + 1;
+    if (count >= COMPACT_INTERVAL) {
+      writesSinceCompact.set(stateDir, 0);
+      compactActions(stateDir);
+    } else {
+      writesSinceCompact.set(stateDir, count);
+    }
+  }
   return next;
 }
 
@@ -84,11 +192,21 @@ export function transition(stateDir, operationId, state, fields = {}) {
   return writeAction(stateDir, { ...current, ...fields, state });
 }
 
-/** Every recorded action, oldest first; `state` filters. */
+/** Every recorded active action, oldest first; `state` filters. */
 export function listActions(stateDir, { state = null } = {}) {
+  const dir = actionsDir(stateDir);
   let names = [];
-  try { names = readdirSync(actionsDir(stateDir)).filter((name) => name.endsWith('.json')); } catch { return []; }
-  return names.map((name) => readAction(stateDir, name.slice(0, -5))).filter(Boolean)
+  try { names = readdirSync(dir).filter((name) => name.endsWith('.json')); } catch { return []; }
+  const trigger = Math.max(COMPACT_TRIGGER, uncompactableFloor.get(stateDir) ?? 0);
+  if (names.length > trigger && compactActions(stateDir) > 0) {
+    try { names = readdirSync(dir).filter((name) => name.endsWith('.json')); } catch { return []; }
+  }
+  return names
+    .map((name) => {
+      const opId = name.slice(0, -5);
+      return ID.test(opId) ? readJsonFile(path.join(dir, opId + '.json')) : null;
+    })
+    .filter(Boolean)
     .filter((record) => state === null || record.state === state)
-    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    .sort(compareCreatedAt);
 }

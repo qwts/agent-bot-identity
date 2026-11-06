@@ -28,7 +28,7 @@ export function isServerEnrolledApp(slug, { env = process.env, home = homedir(),
   try { server = serverUrl({ env, config: cfg }); } catch { return null; }
   if (!server) return null;
   let device;
-  try { device = loadDevice({ env, home }); } catch { return null; }
+  try { device = loadDevice({ env, home }, { includeOutcomes: false }); } catch { return null; }
   if (!device || typeof device !== 'object' || Array.isArray(device) || (device.server && device.server !== server)) return null;
   const harnesses = Array.isArray(device?.harnesses) ? device.harnesses : [];
   return isSlugInServerScope(slug, harnesses, cfg) ? server : null;
@@ -40,7 +40,7 @@ export function serverEnrollmentGap(slug, { env = process.env, home = homedir(),
   try { server = serverUrl({ env, config: cfg }); } catch { return null; }
   if (!server) return null;
   let device = null;
-  try { device = loadDevice({ env, home }); } catch { device = null; }
+  try { device = loadDevice({ env, home }, { includeOutcomes: false }); } catch { device = null; }
   if (!device || typeof device !== 'object' || Array.isArray(device) || (device.server && device.server !== server)) {
     return {
       code: 'server-device-not-enrolled',

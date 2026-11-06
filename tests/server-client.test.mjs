@@ -948,3 +948,26 @@ test('server enroll --features and AGENT_BOT_ENABLE_FEATURES persist github-iden
   assert.equal(isGateEnabled('github-identity', { home: env.HOME, env }), true);
   assert.equal(existsSync(join(env.HOME, '.config', 'agent-bot', 'bin', 'gh')), true);
 });
+
+test('mintViaServer reuses a shared ServerSession DPoP token across calls and loadDevice({ includeOutcomes: false }) skips ledger scans (#1368)', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const issuedBefore = srv.issued;
+
+  const first = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared' });
+  const second = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared' });
+  const third = await mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.shared' });
+  assert.notEqual(first.operation_id, second.operation_id);
+  assert.notEqual(second.operation_id, third.operation_id);
+  assert.equal(srv.issued, issuedBefore + 1, 'all three mintViaServer calls reused one 15-minute DPoP access token');
+
+  const fastDevice = loadDevice({ env }, { includeOutcomes: false });
+  assert.equal(fastDevice.last_mint_outcomes, undefined, 'includeOutcomes: false skips action-ledger scan');
+  const fullDevice = loadDevice({ env });
+  assert.equal(fullDevice.last_mint_outcomes?.grok?.operation_id, third.operation_id);
+
+  // Logout clears the shared session cache and fails closed on subsequent mint.
+  logout({ env });
+  await assert.rejects(() => mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.after.logout' }), /not enrolled/);
+});

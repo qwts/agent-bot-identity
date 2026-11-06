@@ -590,7 +590,7 @@ export function createDaemonServer({
       try { parsed = JSON.parse(raw); } catch { return; }
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
       let base; try { base = serverUrl({ env }); } catch { return; }
-      if (!base || !loadDevice({ env, home })) return;
+      if (!base || !loadDevice({ env, home }, { includeOutcomes: false })) return;
       const sha = createHash('sha256').update(raw).digest('hex');
       // The digest only changes on a write; once the server accepted (or
       // 409'd) a given sha256, re-uploading it is wasted work.
@@ -851,14 +851,14 @@ export function createDaemonServer({
         case 'GET /v0/health': {
           // `busy`: souls with any daemon turn in flight, beside
           // the warm pool's connected harnesses.
+          const soulTokens = soulTokensMode({ env, home, now, config });
           sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, version: runtimeVersion(),
             // The enforcement profile in force (0.4 R8): never stronger than shown.
             profile: enforcementProfile({ env, home, now }),
             // Soul token signing in force (#1196): v2 means the identity
             // service signs; `vouchKeyOnHost` is a stat, never a read.
-            soulTokens: typeof soulTokensMode({ env, home, now, config }) === 'string'
-              ? soulTokensMode({ env, home, now, config }) : 'v2',
-            ...(typeof soulTokensMode({ env, home, now, config }) === 'object'
+            soulTokens: typeof soulTokens === 'string' ? soulTokens : 'v2',
+            ...(typeof soulTokens === 'object'
               ? { vouchKeyOnHost: existsSync(vouchKeyPath(vouchStateDir({ env, home }))) }
               : {}),
             warmPool: warmPool.list(),
@@ -1441,7 +1441,7 @@ export function soulTokensMode({ env = process.env, home = homedir(), now = () =
   let base;
   try { base = serverUrl({ env }); } catch { base = null; }
   let device;
-  try { device = loadDevice({ env, home }); } catch { device = null; }
+  try { device = loadDevice({ env, home }, { includeOutcomes: false }); } catch { device = null; }
   if (!base || !device?.device_id) return 'v2-unavailable';
   return { v: 2, issuer: base, device: device.device_id };
 }
