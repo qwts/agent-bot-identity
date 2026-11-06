@@ -221,7 +221,7 @@ export function isSlugInServerScope(slug, harnesses = [], config) {
 // by the enrolled device scope (#1346).
 export function serverHarnessForSlug({ slug, env = process.env, config, scope } = {}) {
   if (env.AGENT_BOT_SERVER_HARNESS) return serverHarness(env.AGENT_BOT_SERVER_HARNESS);
-  const hs = Array.isArray(scope) ? scope : (loadDevice({ env })?.harnesses ?? []);
+  const hs = Array.isArray(scope) ? scope : (loadDevice({ env }, { includeOutcomes: false })?.harnesses ?? []);
   if (slug) {
     if (hs.includes(slug)) return slug;
     if (!isSlugInServerScope(slug, hs, config)) return null;
@@ -293,11 +293,11 @@ export function loadDeviceKey(opts = {}, { create = false } = {}) {
   return privateKey;
 }
 
-export function loadDevice(opts = {}) {
+export function loadDevice(opts = {}, { includeOutcomes = true } = {}) {
   const { device } = statePaths(opts);
   if (!existsSync(device)) return null;
   const parsed = JSON.parse(readFileSync(device, 'utf8'));
-  if (!parsed || typeof parsed !== 'object') return parsed;
+  if (!parsed || typeof parsed !== 'object' || !includeOutcomes) return parsed;
   try {
     const actions = listActions(serverStateDir(opts));
     const latest = {};
@@ -445,7 +445,7 @@ export async function enroll({
     throw new Error('--add-harness and --replace-harnesses cannot be used with AGENT_BOT_ENROLL_TOKEN (enrollment token scope is fixed on the server)');
   }
   const opts = { env, home };
-  const prior = loadDevice(opts);
+  const prior = loadDevice(opts, { includeOutcomes: false });
   const effectiveForce = force || addHarnesses.length > 0;
   if (!effectiveForce && prior) throw new Error('already enrolled; run `agent-bot server logout` first (or pass --force)');
   if (requestedFeatures.length > 0) {
@@ -602,6 +602,7 @@ export async function fetchCatalog({ base, env = process.env, home, fetchImpl = 
 
 export function logout(opts = {}) {
   const { dir } = statePaths(opts);
+  sharedMintSessions.delete(dir);
   rmSync(dir, { recursive: true, force: true });
 }
 
@@ -613,10 +614,12 @@ export class ServerSession {
     this.base = base ?? serverUrl({ env });
     this.fetch = noRedirect(fetchImpl);
     this.token = null;
+    this.tokenInFlight = null;
+    this.revokedAt = false;
   }
 
   device() {
-    const d = loadDevice(this.opts);
+    const d = loadDevice(this.opts, { includeOutcomes: false });
     if (!d) throw new Error('this machine is not enrolled with the agent-bot server; run `agent-bot server enroll`');
     if (d.server !== this.base) throw new Error(`enrolled with ${d.server}, not ${this.base}; run \`agent-bot server enroll --force\``);
     if (d.revoked_at) throw serverError('device-revoked', `this device was revoked at the identity service (${d.revoked_at}); re-enroll with \`agent-bot server enroll --force\``);
@@ -627,7 +630,9 @@ export class ServerSession {
   // and everything listeners hold, and record it so no later process tries.
   revoked(detail = 'device_revoked') {
     this.token = null;
-    const d = loadDevice(this.opts);
+    this.tokenInFlight = null;
+    this.revokedAt = true;
+    const d = loadDevice(this.opts, { includeOutcomes: false });
     if (d && !d.revoked_at) saveDevice(this.opts, { ...d, revoked_at: new Date().toISOString() });
     for (const listener of revokedListeners) { try { listener(); } catch { /* a listener never blocks revocation */ } }
     return serverError('device-revoked', `the identity service revoked this device (${detail}); cached credentials were dropped; re-enroll with \`agent-bot server enroll --force\``);
@@ -648,28 +653,39 @@ export class ServerSession {
   }
 
   async accessToken({ force = false } = {}) {
-    if (!force && this.token && Date.now() < this.token.refreshAt) return this.token;
     const dev = this.device();
-    const deviceKey = loadDeviceKey(this.opts);
-    if (!deviceKey) throw new Error('device key missing; re-enroll with `agent-bot server enroll --force`');
-    const { privateKey: ek } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    const t = now();
-    const assertion = signJws(deviceKey, { alg: 'ES256', typ: 'JWT' }, {
-      iss: dev.device_id, sub: dev.device_id, aud: `${this.base}/oauth/token`, iat: t, exp: t + 120, jti: newJti(),
-      cnf: { jwk: publicJwk(ek) },
-    });
-    const res = await this.send(`${this.base}/oauth/token`, form({ grant_type: GRANT_JWT_BEARER, assertion }));
-    if (res.status >= 500) throw serverError('credential-unavailable', `the identity service token endpoint answered ${res.status}; nothing was issued`);
-    const body = await readJson(res);
-    if (body.error === 'device_revoked' || (body.error === 'invalid_grant' && /device_revoked/.test(body.error_description ?? ''))) throw this.revoked();
-    if (!res.ok || !body.access_token) {
-      const e = oauthError('agent-bot server token', body);
-      if (body.error === 'invalid_grant') e.message += ' — the device may be revoked or expired; re-enroll';
-      throw e;
-    }
-    const life = (Number(body.expires_in) || 900) * 1000;
-    this.token = { value: body.access_token, ek, refreshAt: Date.now() + Math.max(life - REFRESH_MARGIN_MS, life / 2), management: body.management };
-    return this.token;
+    if (!force && this.token && Date.now() < this.token.refreshAt) return this.token;
+    if (!force && this.tokenInFlight) return this.tokenInFlight;
+    let promise;
+    promise = (async () => {
+      try {
+        const deviceKey = loadDeviceKey(this.opts);
+        if (!deviceKey) throw new Error('device key missing; re-enroll with `agent-bot server enroll --force`');
+        const { privateKey: ek } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+        const t = now();
+        const assertion = signJws(deviceKey, { alg: 'ES256', typ: 'JWT' }, {
+          iss: dev.device_id, sub: dev.device_id, aud: `${this.base}/oauth/token`, iat: t, exp: t + 120, jti: newJti(),
+          cnf: { jwk: publicJwk(ek) },
+        });
+        const res = await this.send(`${this.base}/oauth/token`, form({ grant_type: GRANT_JWT_BEARER, assertion }));
+        if (res.status >= 500) throw serverError('credential-unavailable', `the identity service token endpoint answered ${res.status}; nothing was issued`);
+        const body = await readJson(res);
+        if (body.error === 'device_revoked' || (body.error === 'invalid_grant' && /device_revoked/.test(body.error_description ?? ''))) throw this.revoked();
+        if (!res.ok || !body.access_token) {
+          const e = oauthError('agent-bot server token', body);
+          if (body.error === 'invalid_grant') e.message += ' — the device may be revoked or expired; re-enroll';
+          throw e;
+        }
+        const life = (Number(body.expires_in) || 900) * 1000;
+        const tok = { value: body.access_token, ek, refreshAt: Date.now() + Math.max(life - REFRESH_MARGIN_MS, life / 2), management: body.management };
+        if (!this.revokedAt) this.token = tok;
+        return tok;
+      } finally {
+        if (this.tokenInFlight === promise) this.tokenInFlight = null;
+      }
+    })();
+    if (!force) this.tokenInFlight = promise;
+    return promise;
   }
 
   async call(method, route, payload) {
@@ -964,6 +980,12 @@ export async function reconcilePendingCredentials({ base, env = process.env, hom
   return results;
 }
 
+// Shared per-stateDir ServerSession for mintViaServer so the daemon reuses its
+// 15-minute DPoP access token across back-to-back credential requests instead
+// of re-minting on every gh invocation (#1368).
+const sharedMintSessions = new Map();
+onDeviceRevoked(() => sharedMintSessions.clear());
+
 // One credential per task and operation (credential/v1). The token goes to
 // the caller for this one operation and is never cached or reused; receipts
 // carry the issuance reference instead.
@@ -973,9 +995,23 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
   const op = operationId ?? newOperationId();
   const task = taskId ?? taskIdFor({ env, operationId: op });
   if (!ID_PART.test(op) || !ID_PART.test(task)) throw new Error('task and operation IDs are 1-128 characters of [A-Za-z0-9._:-]');
-  const profile = enforcementProfile({ env, ...(home ? { home } : {}) }).profile;
-  const s = session ?? new ServerSession({ base, env, home, fetchImpl });
-  const out = await mintRecorded(s, { harness, repo, taskId: task, operationId: op, profile, stateDir: serverStateDir({ env, ...(home ? { home } : {}) }), sessionId });
+  const opts = { env, ...(home ? { home } : {}) };
+  const profile = enforcementProfile(opts).profile;
+  const stateDir = serverStateDir(opts);
+  let s = session;
+  if (!s) {
+    const resolvedBase = base ?? serverUrl({ env });
+    const dev = loadDevice(opts, { includeOutcomes: false });
+    const deviceId = dev?.device_id ?? null;
+    const cached = sharedMintSessions.get(stateDir);
+    if (cached && cached.base === resolvedBase && cached.rawFetch === fetchImpl && cached.deviceId === deviceId && deviceId) {
+      s = cached.session;
+    } else {
+      s = new ServerSession({ base: resolvedBase, env, home, fetchImpl });
+      if (deviceId) sharedMintSessions.set(stateDir, { session: s, base: resolvedBase, rawFetch: fetchImpl, deviceId });
+    }
+  }
+  const out = await mintRecorded(s, { harness, repo, taskId: task, operationId: op, profile, stateDir, sessionId });
   return {
     token: out.token, expires_at: out.expires_at, installation_id: null, repo: out.repo ?? repo, git_author: out.git_author,
     source: 'agent-bot-server', issuance_id: out.issuance_id, task_id: out.task_id, operation_id: out.operation_id,
@@ -1070,7 +1106,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
           .filter(Boolean),
       )];
       let serverApps = null;
-      if (loadDevice({ env })) {
+      if (loadDevice({ env }, { includeOutcomes: false })) {
         try {
           const { apps } = await new ServerSession({ base, env, fetchImpl }).harnessApps();
           if (Array.isArray(apps) && apps.length > 0) {

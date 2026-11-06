@@ -71,7 +71,7 @@ export function createServerNotices({ env = process.env, fetchImpl = fetch, home
   };
   const api = {
     enabled: () => Boolean(serverUrl({ env, config })),
-    device: () => loadDevice({ env, home }),
+    device: () => loadDevice({ env, home }, { includeOutcomes: false }),
     take: async (opts = {}) => s().call('POST', '/api/daemon/notices/take', noticeQuery(opts)),
     peek: async (opts = {}) => {
       const q = new URLSearchParams(Object.entries(noticeQuery(opts)).map(([k, v]) => [k, String(v)]));

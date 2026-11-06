@@ -331,7 +331,7 @@ async function mintThroughServer({ server, slug, env, config, permissions, selec
   // way (e.g. trueline-grokbot-agent): when this device's scope names the
   // resolved slug itself, ask for it rather than its harness family.
   const { loadDevice } = await import('./server-client.mjs');
-  const device = loadDevice({ env });
+  const device = loadDevice({ env }, { includeOutcomes: false });
   const scope = Array.isArray(device?.harnesses) ? device.harnesses : [];
   const harness = serverHarnessForSlug({ slug: resolvedSlug, env, config, scope });
   if (selected) selected({ appSlug: resolvedSlug, reason: 'agent-bot-server' });

@@ -5,11 +5,11 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { actionsDir, listActions, readAction, transition, writeAction } from '../identity/action-ledger.mjs';
+import { actionsArchiveDir, actionsDir, compactActions, listActions, MAX_SETTLED_ACTIONS, readAction, transition, writeAction } from '../identity/action-ledger.mjs';
 
 const roots = [];
 after(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -106,4 +106,75 @@ test('a torn write beside the real file corrupts nothing', () => {
   // A write that wins the rename still lands complete.
   writeAction(dir, { operation_id: 'op_3', task_id: 't', state: 'prepared' });
   assert.equal(readAction(dir, 'op_3').state, 'prepared');
+});
+
+test('settled actions are compacted into actions-archive while preserving latest per harness, non-terminal entries, and readAction lookup (#1368)', () => {
+  const dir = scratch();
+  // Write an early settled record for a rarely-used harness; compaction must never drop it from active actionsDir.
+  writeAction(dir, {
+    operation_id: 'op_rare',
+    task_id: 't_rare',
+    kind: 'github_installation_token',
+    harness: 'trueline-rare-agent',
+    repo: 'o/r',
+    state: 'succeeded',
+    issuance_id: 'iss_rare',
+    created_at: '2026-01-01T00:00:00.000Z',
+  });
+  // Write a non-terminal unknown record; compaction must never archive it.
+  writeAction(dir, {
+    operation_id: 'op_pending_unknown',
+    task_id: 't_unk',
+    kind: 'github_installation_token',
+    harness: 'trueline-codex-agent',
+    repo: 'o/r',
+    state: 'unknown',
+    created_at: '2026-01-01T00:00:01.000Z',
+  });
+
+  for (let i = 0; i < 320; i += 1) {
+    const ts = new Date(Date.UTC(2026, 0, 2, 0, 0, i)).toISOString();
+    writeAction(dir, {
+      operation_id: `op_bulk_${i}`,
+      task_id: 't_bulk',
+      kind: 'github_installation_token',
+      harness: 'trueline-codex-agent',
+      repo: 'o/r',
+      state: 'succeeded',
+      issuance_id: `iss_${i}`,
+      created_at: ts,
+    });
+  }
+
+  const activeFiles = readdirSync(actionsDir(dir)).filter((f) => f.endsWith('.json'));
+  const archivedFiles = readdirSync(actionsArchiveDir(dir)).filter((f) => f.endsWith('.json'));
+  assert.ok(activeFiles.length <= MAX_SETTLED_ACTIONS + 50, `active files bounded (${activeFiles.length})`);
+  assert.ok(archivedFiles.length >= 100, `older settled files archived (${archivedFiles.length})`);
+
+  const activeList = listActions(dir);
+  assert.ok(activeList.some((r) => r.operation_id === 'op_rare'), 'latest record for rare harness stays active');
+  assert.ok(activeList.some((r) => r.operation_id === 'op_pending_unknown'), 'non-terminal unknown record stays active');
+  assert.ok(activeList.some((r) => r.operation_id === 'op_bulk_319'), 'newest settled record stays active');
+  assert.deepEqual(listActions(dir, { state: 'unknown' }).map((r) => r.operation_id), ['op_pending_unknown']);
+
+  // Archived operations remain readable via readAction and still enforce terminal monotonicity.
+  const earliest = readAction(dir, 'op_bulk_0');
+  assert.equal(earliest?.state, 'succeeded');
+  assert.equal(earliest?.issuance_id, 'iss_0');
+  assert.throws(() => writeAction(dir, { operation_id: 'op_bulk_0', task_id: 't_bulk', state: 'prepared' }), /cannot become/);
+
+  // >250 non-terminal records are never archived, do not lose entries, and skip repeated full scans while at/below the uncompactable floor.
+  const nonTerminalDir = scratch();
+  for (let i = 0; i < 260; i++) {
+    writeAction(nonTerminalDir, {
+      operation_id: `op_nt_${i}`,
+      task_id: 't_nt',
+      state: 'unknown',
+      created_at: new Date(Date.parse('2026-04-01T00:00:00.000Z') + i * 1000).toISOString(),
+    });
+  }
+  assert.equal(listActions(nonTerminalDir, { state: 'unknown' }).length, 260);
+  // While at/below the uncompactable floor, direct compactActions calls (including every 50th terminal write) skip rescanning.
+  assert.equal(compactActions(nonTerminalDir), 0);
+  assert.equal(listActions(nonTerminalDir, { state: 'unknown' }).length, 260);
 });

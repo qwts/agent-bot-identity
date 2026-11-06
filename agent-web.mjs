@@ -854,7 +854,7 @@ const enrollChildren = new Set();
       try { assertMachineAuthorized({ principal, operation: 'approve' }); }
       catch { throw failure(403, 'principal is not authorized for this operation'); }
       for (const key of Object.keys(body)) throw failure(400, 'unknown field');
-      const device = loadDevice({ env, home });
+      const device = loadDevice({ env, home }, { includeOutcomes: false });
       const harnesses = device?.harnesses ?? [];
       if (harnesses.length === 0) throw failure(409, 'no enrolled harnesses to re-enroll');
       // One enrollment at a time across the whole grant lifecycle: a second
