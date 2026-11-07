@@ -1,7 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { HARNESSES, accountName, detectAgentHarness, detectHarness, detectProcessTreeHarness } from '../detect-harness.mjs';
+import {
+  HARNESSES,
+  ZCODE_APP_BUNDLE_PATH,
+  ZCODE_CODESIGN_REQUIREMENT,
+  ZCODE_TEAM_ID,
+  accountName,
+  detectAgentHarness,
+  detectHarness,
+  detectProcessTreeHarness,
+  inspectSignedZcodeProcess,
+} from '../detect-harness.mjs';
 import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
 
 const cfg = { prefix: 'you' };
@@ -393,4 +403,158 @@ test('OpenCode is detected from OPENCODE=1, OPENCODE_CLIENT, OPENCODE_SESSION_ID
   assert.equal(detectProcessTreeHarness({ pid: 400, psOutput: opencodeDesktopPs }), 'opencode');
   assert.equal(detectHarness({}, { pid: 400, psOutput: opencodeDesktopPs }), 'opencode');
   assert.equal(detectAgentHarness({}, cfg, 'user', { pid: 400, psOutput: opencodeDesktopPs }), 'you-opencode-agent');
+});
+
+test('ZCode is detected from ZCODE_SESSION_ID, ZCODE_PROJECT_DIR (outranking Claude-compat env shims), bundle identifier, and signed /Applications/ZCode.app process ancestry', () => {
+  const zcodeEnv = {
+    ZCODE_SESSION_ID: 'sess_8de726e0-1f59-46d7-b913-a81145a56a82',
+    ZCODE_PROJECT_DIR: '/Users/user/Downloads/Docs',
+    CLAUDE_SESSION_ID: 'sess_8de726e0-1f59-46d7-b913-a81145a56a82',
+    CLAUDE_CODE_SESSION_ID: 'sess_8de726e0-1f59-46d7-b913-a81145a56a82',
+    CLAUDE_PROJECT_DIR: '/Users/user/Downloads/Docs',
+  };
+  assert.equal(detectHarness(zcodeEnv), 'zcode');
+  assert.equal(detectAgentHarness(zcodeEnv, cfg), 'you-zcode-agent');
+  // Even if a future ZCode build exports CLAUDECODE=1 alongside ZCODE_SESSION_ID, ZCode wins.
+  assert.equal(detectHarness({ ...zcodeEnv, CLAUDECODE: '1' }), 'zcode');
+  assert.equal(detectAgentHarness({ ...zcodeEnv, CLAUDECODE: '1' }, cfg), 'you-zcode-agent');
+  assert.equal(detectHarness({ ZCODE_PROJECT_DIR: '/workspace/proj' }), 'zcode');
+  assert.equal(detectAgentHarness({ ZCODE_PROJECT_DIR: '/workspace/proj' }, cfg), 'you-zcode-agent');
+  // Whitespace-only values must not trigger ZCode detection.
+  assert.equal(detectHarness({ ZCODE_SESSION_ID: '   ', ZCODE_PROJECT_DIR: ' \t ' }), null);
+  assert.equal(detectAgentHarness({ ZCODE_SESSION_ID: '   ', ZCODE_PROJECT_DIR: ' \t ' }, cfg), null);
+  assert.equal(detectHarness({ __CFBundleIdentifier: 'dev.zcode.app' }), 'zcode');
+  assert.equal(detectAgentHarness({ __CFBundleIdentifier: 'dev.zcode.app' }, cfg), null);
+
+  const zcodeDesktopPs = [
+    '    1     0 /sbin/launchd',
+    '58035     1 /Applications/ZCode.app/Contents/MacOS/ZCode',
+    '58471 58035 /Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper --type=utility',
+    '58497 58471 /usr/local/bin/node /Applications/ZCode.app/Contents/Resources/glm/packages/zcode-cli/dist/zcode.cjs',
+    '59100 58497 /bin/zsh -c -l agent-bot start --repo true-line/agent-bot-platform --json',
+  ].join('\n');
+
+  // By default detectProcessTreeHarness fails closed on ZCode command matches
+  // unless the process or one of its ZCode ancestors passes codesign verification.
+  assert.equal(
+    detectProcessTreeHarness({
+      pid: 59100,
+      psOutput: zcodeDesktopPs,
+      codesignPath: '/nonexistent/codesign',
+    }),
+    null,
+  );
+  // Explicit opt-out (verifyZcodeSignature: false) tests raw command-tree matching only.
+  assert.equal(
+    detectProcessTreeHarness({ pid: 59100, psOutput: zcodeDesktopPs, verifyZcodeSignature: false }),
+    'zcode',
+  );
+
+  // With codesignRunner (or live Darwin verification), an unsigned `node .../zcode.cjs`
+  // child (58497) is skipped and the walk continues up to the signed ZCode Helper
+  // (58471, dev.zcode.app.helper) and ZCode.app (58035, dev.zcode.app) ancestors.
+  const validCodesignRunner = (args) => {
+    if (args[0] === '-dv') {
+      const pidArg = args[1];
+      if (pidArg === '58497') {
+        return {
+          stderr: [
+            'Executable=/usr/local/bin/node',
+            'Identifier=node',
+            'TeamIdentifier=not set',
+          ].join('\n'),
+        };
+      }
+      const execPath = pidArg === '58035'
+        ? `${ZCODE_APP_BUNDLE_PATH}/Contents/MacOS/ZCode`
+        : `${ZCODE_APP_BUNDLE_PATH}/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper`;
+      const ident = pidArg === '58035' ? 'dev.zcode.app' : 'dev.zcode.app.helper';
+      return {
+        stderr: [
+          `Executable=${execPath}`,
+          `Identifier=${ident}`,
+          'Format=app bundle with Mach-O universal (x86_64 arm64)',
+          `TeamIdentifier=${ZCODE_TEAM_ID}`,
+        ].join('\n'),
+      };
+    }
+    if (args[0] === '--verify') {
+      assert.equal(args[1], `-R=${ZCODE_CODESIGN_REQUIREMENT}`);
+      return { stdout: '', stderr: '' };
+    }
+    throw new Error(`unexpected codesign args: ${args.join(' ')}`);
+  };
+
+  assert.equal(inspectSignedZcodeProcess(58497, { codesignRunner: validCodesignRunner }).valid, false);
+  const verifiedHelper = inspectSignedZcodeProcess(58471, { codesignRunner: validCodesignRunner });
+  assert.equal(verifiedHelper.valid, true);
+  assert.equal(verifiedHelper.bundlePath, '/Applications/ZCode.app');
+  assert.equal(verifiedHelper.identifier, 'dev.zcode.app.helper');
+  assert.equal(verifiedHelper.teamIdentifier, '8A5X4JJ39T');
+
+  assert.equal(
+    detectProcessTreeHarness({ pid: 59100, psOutput: zcodeDesktopPs, codesignRunner: validCodesignRunner }),
+    'zcode',
+  );
+  assert.equal(
+    detectHarness({}, { pid: 59100, psOutput: zcodeDesktopPs, codesignRunner: validCodesignRunner }),
+    'zcode',
+  );
+  assert.equal(
+    detectAgentHarness({}, cfg, 'user', { pid: 59100, psOutput: zcodeDesktopPs, codesignRunner: validCodesignRunner }),
+    'you-zcode-agent',
+  );
+
+  // Rejects an unsigned or spoofed `zcode-cli` binary outside /Applications/ZCode.app.
+  const spoofedPathRunner = (args) => {
+    if (args[0] === '-dv') {
+      return {
+        stderr: [
+          'Executable=/tmp/fake/zcode-cli',
+          'Identifier=dev.zcode.app.helper',
+          `TeamIdentifier=${ZCODE_TEAM_ID}`,
+        ].join('\n'),
+      };
+    }
+    return { stdout: '', stderr: '' };
+  };
+  assert.deepEqual(
+    inspectSignedZcodeProcess(58497, { codesignRunner: spoofedPathRunner }),
+    {
+      valid: false,
+      reason: 'executable-outside-zcode-bundle',
+      executablePath: '/tmp/fake/zcode-cli',
+      identifier: 'dev.zcode.app.helper',
+      teamIdentifier: '8A5X4JJ39T',
+    },
+  );
+  assert.equal(
+    detectProcessTreeHarness({ pid: 59100, psOutput: zcodeDesktopPs, codesignRunner: spoofedPathRunner }),
+    null,
+  );
+
+  // Rejects a binary whose TeamIdentifier or cryptographic requirement verification fails.
+  const wrongTeamRunner = (args) => {
+    if (args[0] === '-dv') {
+      return {
+        stderr: [
+          `Executable=${ZCODE_APP_BUNDLE_PATH}/Contents/MacOS/ZCode`,
+          'Identifier=dev.zcode.app',
+          'TeamIdentifier=WRONGTEAM1',
+        ].join('\n'),
+      };
+    }
+    return { stdout: '', stderr: '' };
+  };
+  assert.equal(inspectSignedZcodeProcess(58035, { codesignRunner: wrongTeamRunner }).reason, 'unexpected-team-identifier');
+
+  const verifyFailRunner = (args) => {
+    if (args[0] === '-dv') return validCodesignRunner(args);
+    throw new Error('test-requirement: code failed to satisfy specified code requirement(s)');
+  };
+  assert.equal(inspectSignedZcodeProcess(58035, { codesignRunner: verifyFailRunner }).reason, 'codesign-requirement-failed');
+  assert.equal(
+    detectProcessTreeHarness({ pid: 59100, psOutput: zcodeDesktopPs, codesignRunner: verifyFailRunner }),
+    null,
+  );
 });

@@ -37,6 +37,8 @@ function buildHarnessAgentShellChecks(action = 'return 0', indent = '  ') {
     `${indent}[ "$OPENCODE" = "1" ] && ${action}`,
     `${indent}case "$OPENCODE_CLIENT" in *[![:space:]]*) ${action} ;; esac`,
     `${indent}case "$OPENCODE_SESSION_ID" in *[![:space:]]*) ${action} ;; esac`,
+    `${indent}case "$ZCODE_SESSION_ID" in *[![:space:]]*) ${action} ;; esac`,
+    `${indent}case "$ZCODE_PROJECT_DIR" in *[![:space:]]*) ${action} ;; esac`,
     `${indent}if [ -x /usr/bin/awk ] && /usr/bin/awk 'BEGIN { for (k in ENVIRON) if (k ~ /^OPENCODE_EXPERIMENTAL_[A-Za-z0-9_]+$/ && ENVIRON[k] ~ /[^[:space:]]/) exit 0; exit 1 }'; then ${action}; fi`,
   ].join('\n');
 }
@@ -65,6 +67,7 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
       if (b1 == "mirror-agent" || t1 ~ /\\/mirror\\/bin\\/mirror$/) return 1
       if (b1 == "vibe-rs" || b1 == "vibe-app-server" || t1 ~ /\\/bin\\/vibe$/) return 1
       if (b1 == "opencode" || b1 == "opencode-cli" || t1 ~ /\\/(opencode\\/)?bin\\/opencode(-cli)?$/ || line ~ /^\\/.*\\/OpenCode\\.app\\/Contents\\/MacOS\\/(OpenCode|opencode-cli)([[:space:]]|$)/ || line ~ /^\\/.*\\/Application Support\\/ai\\.opencode\\.desktop\\/cli\\/[^\\/]+\\/opencode(-cli)?([[:space:]]|$)/) return 1
+      if (b1 == "zcode" || b1 == "zcode-cli" || b1 ~ /^zcode-host-/ || t1 ~ /\\/(zcode\\/)?bin\\/zcode(-cli)?$/ || line ~ /^\\/.*\\/ZCode\\.app\\/Contents\\/(MacOS\\/ZCode|Frameworks\\/ZCode Helper( \\((Renderer|Plugin|GPU)\\))?\\.app\\/Contents\\/MacOS\\/ZCode Helper( \\((Renderer|Plugin|GPU)\\))?)([[:space:]]|$)/) return 1
       if (is_interp(t1)) {
         for (i = 2; i <= n; i++) {
           if (tok[i] ~ /^-[a-zA-Z]*c/ || tok[i] == "-e" || tok[i] == "--eval" || tok[i] == "-m") break
@@ -74,6 +77,7 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
           if (b2 == "mirror-agent" || t2 ~ /\\/(mirror\\/)?bin\\/mirror$/) return 1
           if (b2 == "vibe-rs" || b2 == "vibe-app-server" || t2 ~ /\\/bin\\/vibe$/) return 1
           if (b2 == "opencode" || b2 == "opencode-cli" || t2 ~ /\\/(opencode\\/)?bin\\/opencode(-cli)?$/) return 1
+          if (b2 == "zcode" || b2 == "zcode-cli" || b2 == "zcode.cjs" || t2 ~ /\\/(zcode\\/)?bin\\/zcode(-cli)?$/ || t2 ~ /\\/ZCode\\.app\\/Contents\\/Resources\\/.*\\/zcode\\.cjs$/) return 1
           break
         }
       }
@@ -141,6 +145,114 @@ function isProcessInterpreter(token) {
   );
 }
 
+export const ZCODE_APP_BUNDLE_PATH = '/Applications/ZCode.app';
+export const ZCODE_TEAM_ID = '8A5X4JJ39T';
+export const ZCODE_IDENTIFIERS = Object.freeze([
+  'dev.zcode.app',
+  'dev.zcode.app.helper',
+  'dev.zcode.app.helper.GPU',
+  'dev.zcode.app.helper.Plugin',
+  'dev.zcode.app.helper.Renderer',
+]);
+export const ZCODE_CODESIGN_REQUIREMENT =
+  'anchor apple generic and (identifier "dev.zcode.app" or identifier "dev.zcode.app.helper" or identifier "dev.zcode.app.helper.GPU" or identifier "dev.zcode.app.helper.Plugin" or identifier "dev.zcode.app.helper.Renderer") and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "8A5X4JJ39T"';
+
+export function inspectSignedZcodeProcess(
+  pid,
+  { codesignPath = '/usr/bin/codesign', codesignRunner } = {},
+) {
+  const targetPid = Number(pid);
+  if (!Number.isInteger(targetPid) || targetPid <= 1) {
+    return { valid: false, reason: 'invalid-pid' };
+  }
+  if (typeof codesignRunner !== 'function' && process.platform !== 'darwin') {
+    return { valid: false, reason: 'unsupported-platform' };
+  }
+  let infoOutput = '';
+  if (typeof codesignRunner === 'function') {
+    try {
+      const res = codesignRunner(['-dv', String(targetPid)], { codesignPath, pid: targetPid });
+      infoOutput = typeof res === 'string' ? res : String(res?.stderr ?? res?.stdout ?? '');
+    } catch {
+      return { valid: false, reason: 'codesign-display-failed' };
+    }
+  } else {
+    try {
+      // `codesign -dv <pid>` writes its key=value output to stderr on exit 0.
+      infoOutput = execFileSync(
+        '/bin/sh',
+        ['-c', 'exec "$1" -dv "$2" 2>&1', 'sh', codesignPath, String(targetPid)],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
+      );
+    } catch {
+      return { valid: false, reason: 'codesign-display-failed' };
+    }
+  }
+  const executableMatch = infoOutput.match(/^Executable=(.+)$/m);
+  const identifierMatch = infoOutput.match(/^Identifier=(.+)$/m);
+  const teamMatch = infoOutput.match(/^TeamIdentifier=(.+)$/m);
+  const executablePath = executableMatch ? executableMatch[1].trim() : '';
+  const identifier = identifierMatch ? identifierMatch[1].trim() : '';
+  const teamIdentifier = teamMatch ? teamMatch[1].trim() : '';
+  if (!executablePath.startsWith(`${ZCODE_APP_BUNDLE_PATH}/Contents/`)) {
+    return {
+      valid: false,
+      reason: 'executable-outside-zcode-bundle',
+      executablePath: executablePath || null,
+      identifier: identifier || null,
+      teamIdentifier: teamIdentifier || null,
+    };
+  }
+  if (!ZCODE_IDENTIFIERS.includes(identifier)) {
+    return {
+      valid: false,
+      reason: 'unexpected-identifier',
+      executablePath,
+      identifier: identifier || null,
+      teamIdentifier: teamIdentifier || null,
+    };
+  }
+  if (teamIdentifier !== ZCODE_TEAM_ID) {
+    return {
+      valid: false,
+      reason: 'unexpected-team-identifier',
+      executablePath,
+      identifier,
+      teamIdentifier: teamIdentifier || null,
+    };
+  }
+  try {
+    if (typeof codesignRunner === 'function') {
+      codesignRunner(['--verify', `-R=${ZCODE_CODESIGN_REQUIREMENT}`, String(targetPid)], {
+        codesignPath,
+        pid: targetPid,
+      });
+    } else {
+      execFileSync(codesignPath, ['--verify', `-R=${ZCODE_CODESIGN_REQUIREMENT}`, String(targetPid)], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 2_000,
+      });
+    }
+  } catch {
+    return {
+      valid: false,
+      reason: 'codesign-requirement-failed',
+      executablePath,
+      identifier,
+      teamIdentifier,
+    };
+  }
+  return {
+    valid: true,
+    pid: targetPid,
+    executablePath,
+    bundlePath: ZCODE_APP_BUNDLE_PATH,
+    identifier,
+    teamIdentifier,
+  };
+}
+
 function matchProcessHarnessCommand(command) {
   if (typeof command !== 'string' || !command.trim()) return null;
   const trimmed = command.trim();
@@ -158,6 +270,15 @@ function matchProcessHarnessCommand(command) {
   ) {
     return 'opencode';
   }
+  if (
+    b1 === 'zcode' ||
+    b1 === 'zcode-cli' ||
+    /^zcode-host-/.test(b1) ||
+    /\/(?:zcode\/)?bin\/zcode(?:-cli)?$/.test(t1) ||
+    /^\/.*\/ZCode\.app\/Contents\/(?:MacOS\/ZCode|Frameworks\/ZCode Helper(?: \((?:Renderer|Plugin|GPU)\))?\.app\/Contents\/MacOS\/ZCode Helper(?: \((?:Renderer|Plugin|GPU)\))?)(?:\s|$)/.test(trimmed)
+  ) {
+    return 'zcode';
+  }
   if (isProcessInterpreter(t1)) {
     for (let i = 1; i < tokens.length; i += 1) {
       const tok = tokens[i];
@@ -167,6 +288,15 @@ function matchProcessHarnessCommand(command) {
       if (b2 === 'mirror-agent' || /\/(?:mirror\/)?bin\/mirror$/.test(tok)) return 'mirror';
       if (b2 === 'vibe-rs' || b2 === 'vibe-app-server' || /\/bin\/vibe$/.test(tok)) return 'vibe';
       if (b2 === 'opencode' || b2 === 'opencode-cli' || /\/(?:opencode\/)?bin\/opencode(?:-cli)?$/.test(tok)) return 'opencode';
+      if (
+        b2 === 'zcode' ||
+        b2 === 'zcode-cli' ||
+        b2 === 'zcode.cjs' ||
+        /\/(?:zcode\/)?bin\/zcode(?:-cli)?$/.test(tok) ||
+        /\/ZCode\.app\/Contents\/Resources\/.*\/zcode\.cjs$/.test(tok)
+      ) {
+        return 'zcode';
+      }
       break;
     }
   }
@@ -204,6 +334,9 @@ export function detectProcessTreeHarness({
   pid = process.pid,
   psOutput,
   psPath = '/bin/ps',
+  codesignPath = '/usr/bin/codesign',
+  codesignRunner,
+  verifyZcodeSignature,
 } = {}) {
   try {
     if (psOutput === undefined) {
@@ -211,7 +344,14 @@ export function detectProcessTreeHarness({
       if (process.argv.some((arg) => arg === '--test' || /\.test\.[cm]?js$/.test(arg))) {
         return null;
       }
-      if (cachedLiveProcessHarness !== undefined && pid === process.pid && psPath === '/bin/ps') {
+      if (
+        cachedLiveProcessHarness !== undefined &&
+        pid === process.pid &&
+        psPath === '/bin/ps' &&
+        codesignPath === '/usr/bin/codesign' &&
+        codesignRunner === undefined &&
+        verifyZcodeSignature === undefined
+      ) {
         return cachedLiveProcessHarness;
       }
     }
@@ -221,6 +361,7 @@ export function detectProcessTreeHarness({
         : execFileSync(psPath, ['-axo', 'pid=,ppid=,command='], {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 2_000,
           });
     const table = new Map();
     for (const line of raw.split('\n')) {
@@ -228,13 +369,21 @@ export function detectProcessTreeHarness({
       if (!m) continue;
       table.set(Number(m[1]), { ppid: Number(m[2]), command: m[3] });
     }
+    const shouldVerifyZcode =
+      verifyZcodeSignature !== undefined ? Boolean(verifyZcodeSignature) : true;
     let cur = Number(pid);
     let found = null;
     for (let depth = 0; cur > 1 && depth < 32; depth += 1) {
       const entry = table.get(cur);
       if (!entry) break;
       const harness = matchProcessHarnessCommand(entry.command);
-      if (harness) {
+      if (harness === 'zcode' && shouldVerifyZcode) {
+        const verified = inspectSignedZcodeProcess(cur, { codesignPath, codesignRunner });
+        if (verified.valid) {
+          found = 'zcode';
+          break;
+        }
+      } else if (harness) {
         found = harness;
         break;
       }
@@ -244,7 +393,15 @@ export function detectProcessTreeHarness({
       if (entry.ppid === cur) break;
       cur = entry.ppid;
     }
-    if (psOutput === undefined && env === process.env && pid === process.pid && psPath === '/bin/ps') {
+    if (
+      psOutput === undefined &&
+      env === process.env &&
+      pid === process.pid &&
+      psPath === '/bin/ps' &&
+      codesignPath === '/usr/bin/codesign' &&
+      codesignRunner === undefined &&
+      verifyZcodeSignature === undefined
+    ) {
       cachedLiveProcessHarness = found;
     }
     return found;
@@ -285,7 +442,28 @@ export function isOpencodeAgentEnv(e) {
   return isOpencodeDirectEnv(e) || hasOpencodeExperimentalEnv(e);
 }
 
+export function isZcodeDirectEnv(e) {
+  return (
+    e?.ZCODE_AGENT === '1' ||
+    (typeof e?.ZCODE_SESSION_ID === 'string' && e.ZCODE_SESSION_ID.trim() !== '') ||
+    (typeof e?.ZCODE_PROJECT_DIR === 'string' && e.ZCODE_PROJECT_DIR.trim() !== '')
+  );
+}
+
 const HARNESSES = [
+  {
+    // ZCode Desktop (`/Applications/ZCode.app`, `dev.zcode.app`) exports
+    // `ZCODE_SESSION_ID` and `ZCODE_PROJECT_DIR` alongside Claude-compatible
+    // `CLAUDE_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, and `CLAUDE_PROJECT_DIR`
+    // in every Bash tool invocation (`zcode.cjs`). Placing `zcode` ahead of
+    // `claude` ensures direct ZCode session markers win even if a future ZCode
+    // build also sets `CLAUDECODE=1` for hook compatibility.
+    key: 'zcode',
+    match: (e) =>
+      isZcodeDirectEnv(e) ||
+      hasHarnessToken(e.AI_AGENT, 'zcode') ||
+      (typeof e.__CFBundleIdentifier === 'string' && e.__CFBundleIdentifier.toLowerCase() === 'dev.zcode.app'),
+  },
   {
     key: 'claude',
     match: (e) =>
@@ -432,7 +610,7 @@ export function accountName(env = process.env) {
   }
 }
 
-// ENG-0339: the account short name is itself a detection input. Agent
+// ENG-0339: the account short name is itself a viewer input. Agent
 // accounts are named by their harness-level App slug (account
 // `qwts-goose-agent` is the goose persona), so an account whose name IS the
 // slug a harness resolves to identifies that harness with no per-tool env
@@ -487,6 +665,12 @@ export function detectHarness(env = process.env, options = {}) {
   try {
     const aiAgent = typeof env?.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
     if (
+      isZcodeDirectEnv(env) ||
+      hasHarnessToken(aiAgent, 'zcode')
+    ) {
+      return 'zcode';
+    }
+    if (
       env?.CLAUDECODE === '1' ||
       (typeof env?.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
       aiAgent.startsWith('claude') ||
@@ -527,7 +711,7 @@ export function detectHarness(env = process.env, options = {}) {
     const aiHarness = detectAiAgentHarness(env?.AI_AGENT);
     if (aiHarness && aiHarness !== 'vscode') return aiHarness;
 
-    // Process-ancestry CLI harnesses (`mirror-agent`, `vibe-rs`, `vibe-app-server`)
+    // Process-ancestry CLI harnesses (`mirror-agent`, `vibe-rs`, `vibe-app-server`, `zcode-cli`)
     // outrank ambient surrounding-editor markers just like `qwen`.
     const processHarness = detectProcessTreeHarness({ env, ...options });
     if (processHarness) return processHarness;
@@ -574,6 +758,11 @@ export function detectAgentHarness(
   const aiAgent = typeof env?.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
   let key = null;
   if (
+    isZcodeDirectEnv(env) ||
+    hasHarnessToken(aiAgent, 'zcode')
+  ) {
+    key = 'zcode';
+  } else if (
     env?.CLAUDECODE === '1' ||
     (typeof env?.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '') ||
     env?.CLAUDE_AGENT === '1' ||
@@ -624,4 +813,5 @@ export {
   detectAiAgentHarness,
   detectExplicitHarnessAgent,
   harnessEnvKey,
+  matchProcessHarnessCommand,
 };

@@ -660,20 +660,53 @@ export function discoverOpencodeTranscript(home, { cwd = null, now = Date.now(),
   return null;
 }
 
+export function discoverZcodeTranscript(home, { cwd = null, now = Date.now(), maxAgeMs = 60_000, env = null, forceBufferReader = false } = {}) {
+  const explicitId = typeof env?.ZCODE_SESSION_ID === 'string' && env.ZCODE_SESSION_ID.trim()
+    ? env.ZCODE_SESSION_ID.trim()
+    : null;
+  if (explicitId) return { provider: 'zcode', id: explicitId };
+  const explicitDb = typeof env?.ZCODE_DB_PATH === 'string' && env.ZCODE_DB_PATH.trim()
+    ? path.resolve(env.ZCODE_DB_PATH.trim())
+    : null;
+  const dbPath = explicitDb ?? (home ? path.join(home, '.zcode', 'cli', 'db', 'db.sqlite') : null);
+  if (dbPath && existsSync(dbPath)) {
+    const sqliteData = readOpencodeSqlite(dbPath, { forceBufferReader });
+    if (sqliteData) {
+      const projectDir = typeof env?.ZCODE_PROJECT_DIR === 'string' && env.ZCODE_PROJECT_DIR.trim()
+        ? env.ZCODE_PROJECT_DIR.trim()
+        : null;
+      const found = selectOpencodeCandidate({ ...sqliteData, cwd: cwd ?? projectDir, now, maxAgeMs })
+        ?? (cwd && projectDir && projectDir !== cwd
+          ? selectOpencodeCandidate({ ...sqliteData, cwd: projectDir, now, maxAgeMs })
+          : null);
+      if (found) return { provider: 'zcode', id: found.id };
+    }
+  }
+  return null;
+}
+
 // Where this conversation's id comes from when no flag names it (#1275):
 // the harness's own environment, then the lifecycle hook payload's session
 // id, then (Devin only) a session list naming exactly one session for this
-// worktree, Antigravity's most recently updated brain transcript, or
-// OpenCode's active session in opencode.db.
+// worktree, Antigravity's most recently updated brain transcript,
+// OpenCode's active session in opencode.db, or ZCode's active session in
+// ~/.zcode/cli/db/db.sqlite.
 export async function findTranscript({
   env = process.env,
   cwd = process.cwd(),
   home = env.HOME ?? (env === process.env ? homedir() : null),
   listDevinSessionsImpl = listDevinSessions,
 } = {}) {
+  let detectedHarness;
+  const getHarness = () => (detectedHarness === undefined ? (detectedHarness = detectHarness(env)) : detectedHarness);
   const native = discoverTranscript(env);
-  if (native) return native;
-  const harness = detectHarness(env);
+  if (native) {
+    if (native.provider === 'claude' && getHarness() === 'zcode') {
+      return { provider: 'zcode', id: native.id };
+    }
+    return native;
+  }
+  const harness = getHarness();
   if (env.AGENT_HOOK_SESSION_ID) {
     return { provider: harness ?? env.AGENT_HOOK_HARNESS ?? 'custom', id: env.AGENT_HOOK_SESSION_ID };
   }
@@ -687,6 +720,10 @@ export async function findTranscript({
   }
   if (harness === 'opencode') {
     const found = discoverOpencodeTranscript(home, { cwd, env });
+    if (found) return found;
+  }
+  if (harness === 'zcode') {
+    const found = discoverZcodeTranscript(home, { cwd, env });
     if (found) return found;
   }
   return null;
@@ -774,6 +811,12 @@ export async function sessionBind({
       }
     }
     if (binding) {
+      const expectedAgentId = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? null;
+      if (expectedAgentId && binding.agentId && binding.agentId !== expectedAgentId) {
+        throw new Error(
+          `this worktree is bound to ${binding.agentId}, which does not match expected Agent ID ${expectedAgentId}`,
+        );
+      }
       const result = {
         status: 'live',
         alreadyBound: true,

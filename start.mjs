@@ -15,7 +15,7 @@ import { listSouls, locateSoulDir, populationFile, setSoulAppThen, showSoul } fr
 import { commsSharedDirInfo } from './comms-client.mjs';
 import { isGateEnabled, loadConfig, slugForHarness, soulOwnsAppSlug } from './config.mjs';
 import { daemonClient, identityOp } from './daemon-client.mjs';
-import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness, hasOpencodeExperimentalEnv, isOpencodeDirectEnv } from './detect-harness.mjs';
+import { accountHarness, accountName, detectAiAgentHarness, detectExplicitHarnessAgent, detectProcessTreeHarness, hasOpencodeExperimentalEnv, isOpencodeDirectEnv, isZcodeDirectEnv } from './detect-harness.mjs';
 import { enroll, readBinding, reconcileAppCredentials, repoFromCheckout, resolveAgentSlug, serverUrl } from './identity-cli.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
 import { findTranscript, sessionBind } from './session-bind.mjs';
@@ -144,6 +144,12 @@ function detectAgentHarnessKey(env = process.env, config = null) {
   if (acctKey) return acctKey;
   const aiAgent = typeof env?.AI_AGENT === 'string' ? env.AI_AGENT.toLowerCase() : '';
   if (
+    isZcodeDirectEnv(env)
+    || /(?:^|[^a-z0-9])zcode(?:[^a-z0-9]|$)/i.test(aiAgent)
+  ) {
+    return 'zcode';
+  }
+  if (
     env?.CLAUDECODE === '1'
     || (typeof env?.CLAUDE_CODE_ENTRYPOINT === 'string' && env.CLAUDE_CODE_ENTRYPOINT !== '')
     || env?.CLAUDE_AGENT === '1'
@@ -262,6 +268,15 @@ function resolveTargetRepo({ repo, cwd, home, env, popOptions }) {
   return { toplevel: realpathSync(toplevel), commonDir, originSlug, repoName };
 }
 
+function isUnbornRepo(toplevel, env) {
+  if (tryGit(toplevel, ['rev-parse', '--git-dir'], env) === null) return false;
+  if (tryGit(toplevel, ['symbolic-ref', '-q', 'HEAD'], env) === null) return false;
+  return (
+    tryGit(toplevel, ['rev-parse', '--verify', '-q', 'HEAD'], env) === null
+    && tryGit(toplevel, ['rev-list', '-n', '1', '--all'], env) === ''
+  );
+}
+
 function defaultBaseRef(toplevel, env) {
   const sym = tryGit(toplevel, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'], env);
   if (sym && tryGit(toplevel, ['rev-parse', '--verify', '-q', sym], env)) return sym;
@@ -356,6 +371,7 @@ function lookupExistingSoul({
   explicitHarness,
   harness,
   toplevel,
+  callerToplevel = toplevel,
   env,
   home,
   config,
@@ -365,14 +381,19 @@ function lookupExistingSoul({
   const souls = listSouls(popOptions).filter((s) => s.status !== 'retired');
 
   // Check caller's bound/ambient soul markers first so --soul and --harness
-  // cannot silently cross into another soul's identity.
+  // cannot silently cross into another soul's identity. Never inspect a
+  // foreign `toplevel` discovered via `--repo <owner/name>` when the caller's
+  // own `cwd` is outside that checkout.
   const fromEnv = env.AGENT_BOT_ID || env.QWTS_AGENT_ID || null;
-  const binding = readBinding({ env, cwd: toplevel });
-  const areaOwner = insideSoulWorktree(toplevel, popOptions);
+  const fromSessionEnv = Boolean(fromEnv || env.AGENT_BOT_BINDING);
+  const binding = callerToplevel
+    ? readBinding({ env, cwd: callerToplevel })
+    : (env.AGENT_BOT_BINDING ? readBinding({ env, cwd: toplevel }) : null);
+  const areaOwner = callerToplevel ? insideSoulWorktree(callerToplevel, popOptions) : null;
   let pinned = null;
   if (areaOwner) {
     for (const key of AGENT_ID_KEYS) {
-      const val = tryGit(toplevel, ['config', '--worktree', '--get', key], env);
+      const val = tryGit(callerToplevel, ['config', '--worktree', '--get', key], env);
       if (val) { pinned = val; break; }
     }
   }
@@ -386,6 +407,16 @@ function lookupExistingSoul({
         boundSoul = { identity, row, soulResolution: 'reused-bound' };
         break;
       }
+    }
+  }
+
+  if (boundSoul && !fromSessionEnv && !explicitHarness) {
+    const boundHarness = boundSoul.identity.harness ?? boundSoul.row?.harness ?? null;
+    if (harness && boundHarness && boundHarness !== harness) {
+      // The caller is running as `harness` (e.g. `zcode`) inside a checkout
+      // that happens to be bound on disk to another harness (`qwen`). Ignore
+      // the foreign checkout's soul binding and resolve the caller's own soul.
+      boundSoul = null;
     }
   }
 
@@ -434,24 +465,29 @@ function lookupExistingSoul({
 
   const githubOn = isGateEnabled('github-identity', { env, home, config });
   const targetSlug = githubOn
-    ? (resolveAgentSlug({ env, cwd: toplevel, config, harness }) ?? slugForHarness(harness, config))
+    ? (resolveAgentSlug({ env, cwd: toplevel, config, harness, ignoreWorktreePins: true }) ?? slugForHarness(harness, config))
     : null;
 
-  const candidates = souls.filter((s) => {
-    if (targetSlug) {
-      if (s.appSlug === targetSlug || soulOwnsAppSlug({ id: s.id, harness: s.harness, github: { appSlug: s.appSlug } }, targetSlug, config, { env, home })) {
-        return true;
-      }
-      return !s.appSlug && s.harness === harness;
-    }
-    return s.harness === harness;
-  });
-
   const activeCandidates = [];
-  for (const candidate of candidates) {
-    const identity = activeIdentity(candidate.id, stateDir);
-    if (identity) {
-      activeCandidates.push({ identity, row: candidate });
+  for (const s of souls) {
+    const identity = activeIdentity(s.id, stateDir);
+    if (!identity) continue;
+    const soulHarness = identity.harness ?? s.harness ?? null;
+    const soulApp = s.appSlug ?? identity.github?.appSlug ?? null;
+    const matches = targetSlug
+      ? (
+        soulApp === targetSlug
+        || soulOwnsAppSlug(
+          { id: s.id, harness: soulHarness, github: soulApp ? { appSlug: soulApp } : undefined },
+          targetSlug,
+          config,
+          { env, home },
+        )
+        || (!soulApp && soulHarness === harness)
+      )
+      : soulHarness === harness;
+    if (matches) {
+      activeCandidates.push({ identity, row: s });
     }
   }
   if (activeCandidates.length === 0) return null;
@@ -461,7 +497,11 @@ function lookupExistingSoul({
       { code: 'start-ambiguous-soul' },
     );
   }
-  return { identity: activeCandidates[0].identity, row: activeCandidates[0].row, soulResolution: `auto-resolved: ${harness}` };
+  return {
+    identity: activeCandidates[0].identity,
+    row: activeCandidates[0].row,
+    soulResolution: `auto-resolved: ${harness}`,
+  };
 }
 
 function shellSingleQuote(value) {
@@ -515,7 +555,9 @@ export async function startTask({
   const stateDir = stateDirectory(popOptions);
   const harness = explicitHarness ?? detectAgentHarnessKey(env, config);
 
-  // 1. Resolve target repository checkout (read-only).
+  // 1. Resolve target repository checkout and caller checkout (read-only).
+  const rawCallerToplevel = tryGit(cwd, ['rev-parse', '--show-toplevel'], env);
+  const callerToplevel = rawCallerToplevel ? realpathSync(rawCallerToplevel) : null;
   const targetRepo = resolveTargetRepo({ repo, cwd, home, env, popOptions });
 
   // 2. Look up existing canonical soul for this harness/session (read-only).
@@ -524,6 +566,7 @@ export async function startTask({
     explicitHarness,
     harness,
     toplevel: targetRepo.toplevel,
+    callerToplevel,
     env,
     home,
     config,
@@ -531,6 +574,12 @@ export async function startTask({
     popOptions,
   });
   const effectiveHarness = harness ?? existingSoul?.identity?.harness ?? existingSoul?.row?.harness ?? 'custom';
+  const reuseBoundCheckout = Boolean(
+    existingSoul?.soulResolution === 'reused-bound'
+    && callerToplevel
+    && callerToplevel === targetRepo.toplevel,
+  );
+  const ignoreTargetWorktreePins = !reuseBoundCheckout;
 
   // 3. Verify server-mode readiness (and stage --add-harness device enrollment
   //    when autoEnroll / enrollImpl is active, before any soul or worktree creation).
@@ -538,7 +587,15 @@ export async function startTask({
   let server = null;
   try { server = serverUrl({ env, config }); } catch { server = null; }
   const appSlug = githubOn
-    ? (existingSoul?.identity?.github?.appSlug ?? resolveAgentSlug({ env, cwd: targetRepo.toplevel, config, harness: effectiveHarness }) ?? slugForHarness(effectiveHarness, config))
+    ? (existingSoul?.identity?.github?.appSlug
+      ?? resolveAgentSlug({
+        env: existingSoul ? { ...env, AGENT_BOT_ID: existingSoul.identity.id } : env,
+        cwd: targetRepo.toplevel,
+        config,
+        harness: effectiveHarness,
+        ignoreWorktreePins: ignoreTargetWorktreePins,
+      })
+      ?? slugForHarness(effectiveHarness, config))
     : null;
   if (githubOn && server) {
     let dev = serverDeviceState({ env, home, server });
@@ -616,7 +673,9 @@ export async function startTask({
   // 4. Resolve conversation / transcript locator (read-only).
   //    Reuse `identity.transcript` ONLY when the caller checkout or target
   //    worktree already holds a live binding for this soul.
-  const callerBinding = readBinding({ env, cwd: targetRepo.toplevel });
+  const callerBinding = reuseBoundCheckout
+    ? readBinding({ env, cwd: callerToplevel })
+    : (env.AGENT_BOT_BINDING ? readBinding({ env, cwd: callerToplevel ?? targetRepo.toplevel }) : null);
   let transcript = null;
   if (transcriptId) {
     transcript = { provider: provider ?? effectiveHarness, id: transcriptId, source: 'explicit' };
@@ -639,7 +698,9 @@ export async function startTask({
   }
 
   // 5. Validate target worktree and branch plan before mutating anything.
-  const currentAreaOwner = insideSoulWorktree(targetRepo.toplevel, popOptions);
+  const currentAreaOwner = callerToplevel === targetRepo.toplevel
+    ? insideSoulWorktree(targetRepo.toplevel, popOptions)
+    : null;
   const currentBranch = tryGit(targetRepo.toplevel, ['symbolic-ref', '--short', 'HEAD'], env);
   const reuseInPlace = Boolean(
     existingSoul
@@ -685,6 +746,7 @@ export async function startTask({
     );
   }
 
+  const unbornRepo = isUnbornRepo(targetRepo.toplevel, env);
   const branchExistsLocally = Boolean(tryGit(targetRepo.toplevel, ['show-ref', '--verify', `refs/heads/${targetBranch}`], env));
   if (base && (reuseInPlace || (preExistingDest && existsSync(preExistingDest)) || branchExistsLocally)) {
     throw Object.assign(
@@ -711,7 +773,7 @@ export async function startTask({
         { code: 'start-worktree-branch-mismatch' },
       );
     }
-  } else if (!reuseInPlace && branchExistsLocally) {
+  } else if (!reuseInPlace && (branchExistsLocally || unbornRepo)) {
     const occupiedBy = branchCheckedOutElsewhere(targetRepo.toplevel, targetBranch, preExistingDest ?? '', env);
     if (occupiedBy) {
       throw Object.assign(
@@ -726,12 +788,14 @@ export async function startTask({
   //    appSlug if needed, configure attribution, and bind session.
   let usedBase = null;
   if (!reuseInPlace && !(preExistingDest && existsSync(preExistingDest)) && !branchExistsLocally) {
-    usedBase = base ?? defaultBaseRef(targetRepo.toplevel, env);
-    if (tryGit(targetRepo.toplevel, ['rev-parse', '--verify', '-q', `${usedBase}^{commit}`], env) === null) {
-      throw Object.assign(
-        new Error(`base ref does not resolve to a commit: ${usedBase}`),
-        { code: 'start-invalid-base' },
-      );
+    if (base || !unbornRepo) {
+      usedBase = base ?? defaultBaseRef(targetRepo.toplevel, env);
+      if (tryGit(targetRepo.toplevel, ['rev-parse', '--verify', '-q', `${usedBase}^{commit}`], env) === null) {
+        throw Object.assign(
+          new Error(`base ref does not resolve to a commit: ${usedBase}`),
+          { code: 'start-invalid-base' },
+        );
+      }
     }
   }
 
@@ -767,11 +831,13 @@ export async function startTask({
       targetWorktree = realpathSync(destination);
       targetBranch = destBranch ?? targetBranch;
     } else {
-      usedBase = usedBase ?? base ?? defaultBaseRef(targetRepo.toplevel, env);
       const placed = placeWorktree(identity.id, worktreeName, { ...popOptions, repoCommonDir: targetRepo.commonDir });
       if (branchExistsLocally) {
         gitIn(targetRepo.toplevel, ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', placed.path, targetBranch], env);
+      } else if (unbornRepo && !usedBase) {
+        gitIn(targetRepo.toplevel, ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--orphan', '-b', targetBranch, placed.path], env);
       } else {
+        usedBase = usedBase ?? base ?? defaultBaseRef(targetRepo.toplevel, env);
         gitIn(targetRepo.toplevel, ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--no-track', '-b', targetBranch, placed.path, usedBase], env);
       }
       clearInheritedPin(identity.id, { cwd: placed.path });

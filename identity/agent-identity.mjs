@@ -109,6 +109,14 @@ export function discoverTranscript(env = process.env) {
   if (env.CODEX_THREAD_ID) {
     return { provider: 'codex', id: requiredText('CODEX_THREAD_ID', env.CODEX_THREAD_ID) };
   }
+  // ZCode Desktop (`/Applications/ZCode.app`) sets `ZCODE_SESSION_ID` alongside
+  // Claude-compatible `CLAUDE_SESSION_ID` and `CLAUDE_CODE_SESSION_ID` in every
+  // Bash tool invocation (`zcode.cjs`). Check `ZCODE_SESSION_ID` before
+  // `CLAUDE_SESSION_ID` so ZCode sessions are attributed to `provider: 'zcode'`.
+  const zcodeSessionId = typeof env.ZCODE_SESSION_ID === 'string' ? env.ZCODE_SESSION_ID.trim() : '';
+  if (zcodeSessionId) {
+    return { provider: 'zcode', id: requiredText('ZCODE_SESSION_ID', zcodeSessionId) };
+  }
   if (env.CLAUDE_SESSION_ID) {
     return { provider: 'claude', id: requiredText('CLAUDE_SESSION_ID', env.CLAUDE_SESSION_ID) };
   }

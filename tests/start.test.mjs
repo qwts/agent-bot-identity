@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { parseAgentBotArgs } from '../cli/parse.mjs';
 import { helpText } from '../cli/output.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
-import { discoverAntigravityTranscript, discoverOpencodeTranscript, findTranscript } from '../session-bind.mjs';
+import { displayName, upsertSoul } from '../agent-population.mjs';
+import { discoverAntigravityTranscript, discoverOpencodeTranscript, discoverZcodeTranscript, findTranscript } from '../session-bind.mjs';
 import { START_USAGE, formatStartReceipt, parseStartArgs, startTask } from '../start.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 import { worktreeSoul } from './helpers/worktree-soul.mjs';
@@ -720,5 +721,144 @@ test('startTask fails closed before creating soul or worktree when transcript is
     }),
     (err) => err.code === 'start-ambiguous-soul',
   );
+});
+
+test('startTask from a ZCode session targeting --repo on an empty repo with a foreign Qwen-bound checkout never hijacks Qwen soul or credentials and creates an orphan ZCode soul worktree', async (t) => {
+  const f = makeFixture(t, {
+    harness: 'qwen',
+    serverMode: true,
+    deviceHarnesses: ['test-qwen-agent', 'test-zcode-agent'],
+  });
+  f.config.apps.zcode = 'test-zcode-agent';
+  f.config.identityApps['test-zcode-agent'] = {
+    id: '123457',
+    botUid: '999002',
+    botAvatarUrl: 'https://avatars.githubusercontent.com/u/999002?v=4',
+  };
+  writeFileSync(f.env.AGENT_BOT_CONFIG, `${JSON.stringify(f.config, null, 2)}\n`);
+
+  const { clientFactory } = await startTestDaemon(t, f);
+
+  // Create an empty (unborn HEAD, zero commits) repository checked out under a Qwen conversation directory
+  // and bound to the Qwen soul (`f.identity.id`), mirroring `/Users/user/Documents/Qwen Code/.../agent-bot-platform`.
+  const qwenEmptyCheckout = path.join(f.home, 'Qwen Code', 'Conversations', 'conv-1', 'agent-bot-platform');
+  mkdirSync(qwenEmptyCheckout, { recursive: true });
+  f.git(qwenEmptyCheckout, 'init', '-q', '-b', 'main');
+  f.git(qwenEmptyCheckout, 'remote', 'add', 'origin', 'https://github.com/true-line/agent-bot-platform.git');
+  f.git(qwenEmptyCheckout, 'config', 'extensions.worktreeConfig', 'true');
+  f.git(qwenEmptyCheckout, 'config', '--worktree', 'agentBot.app', 'test-qwen-agent');
+  f.git(qwenEmptyCheckout, 'config', '--worktree', 'agentBot.agentId', f.identity.id);
+  f.git(qwenEmptyCheckout, 'config', '--worktree', 'user.name', 'test-qwen-agent[bot]');
+
+  // Record Qwen's checkout in population.json and write a live binding file inside Qwen's checkout
+  // so `resolveTargetRepo` finds `true-line/agent-bot-platform` via `listSouls()`.
+  upsertSoul({
+    id: f.identity.id,
+    name: displayName(f.identity.id),
+    harness: 'qwen',
+    status: 'active',
+    appSlug: 'test-qwen-agent',
+    worktree: qwenEmptyCheckout,
+    spacePath: path.join(f.env.AGENT_BOT_SPACES_HOME, f.identity.id),
+  }, f.options);
+  writeFileSync(
+    path.join(qwenEmptyCheckout, '.git', 'agent-bot-binding'),
+    `${JSON.stringify({ agentId: f.identity.id, secret: 'qwen-secret-token' })}\n`,
+    { mode: 0o600 },
+  );
+
+  // Also verify discoverZcodeTranscript against ~/.zcode/cli/db/db.sqlite.
+  const zcodeDbPath = path.join(f.home, '.zcode', 'cli', 'db', 'db.sqlite');
+  mkdirSync(path.dirname(zcodeDbPath), { recursive: true });
+  const nowMs = Date.now();
+  const docsDir = path.join(f.home, 'Downloads', 'Docs');
+  mkdirSync(docsDir, { recursive: true });
+  writeFileSync(zcodeDbPath, buildTestOpencodeSqliteBuffer({
+    sessions: [
+      ['sess_zcode_sqlite', 'proj_docs', null, docsDir, nowMs - 5_000, nowMs - 2_000, nowMs - 2_000, null, null],
+    ],
+  }));
+  assert.deepEqual(
+    discoverZcodeTranscript(f.home, { cwd: docsDir }),
+    { provider: 'zcode', id: 'sess_zcode_sqlite' },
+  );
+  // Falls back to ZCODE_PROJECT_DIR when cwd is another directory (e.g. a newly created worktree).
+  assert.deepEqual(
+    discoverZcodeTranscript(f.home, { cwd: qwenEmptyCheckout, env: { ZCODE_PROJECT_DIR: docsDir } }),
+    { provider: 'zcode', id: 'sess_zcode_sqlite' },
+  );
+
+  // ZCode exports both ZCODE_SESSION_ID and Claude-compatible CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID.
+  const zcodeEnv = {
+    ...f.env,
+    AGENT_BOT_ID: '',
+    QWTS_AGENT_ID: '',
+    ZCODE_SESSION_ID: 'sess_8de726e0-1f59-46d7-b913-a81145a56a82',
+    ZCODE_PROJECT_DIR: docsDir,
+    CLAUDE_SESSION_ID: 'sess_8de726e0-1f59-46d7-b913-a81145a56a82',
+    CLAUDE_CODE_SESSION_ID: 'sess_8de726e0-1f59-46d7-b913-a81145a56a82',
+    CLAUDE_PROJECT_DIR: docsDir,
+  };
+
+  const reconcileCredentials = async ({ slugs }) => slugs.map((slug) => ({
+    slug,
+    local: { status: 'ready' },
+    live: { status: 'server-registered' },
+  }));
+
+  // First-time `agent-bot start` even when invoked directly inside Qwen's bound checkout
+  // (before any ZCode soul exists in population.json) must ignore Qwen's binding/pins and
+  // create a fresh ZCode soul + linked orphan worktree.
+  const receipt = await startTask({
+    cwd: qwenEmptyCheckout,
+    env: zcodeEnv,
+    home: f.home,
+    config: f.config,
+    comms: async () => ({}),
+    clientFactory,
+    reconcileCredentials,
+  });
+
+  // Must NOT reuse Qwen's soul (`f.identity.id`) or Qwen's credentials (`test-qwen-agent`).
+  assert.notEqual(receipt.soul.id, f.identity.id);
+  assert.equal(receipt.soul.harness, 'zcode');
+  assert.equal(receipt.soul.resolution, 'created');
+  assert.deepEqual(receipt.session, {
+    provider: 'zcode',
+    id: 'sess_8de726e0-1f59-46d7-b913-a81145a56a82',
+    source: 'auto-detected',
+  });
+  assert.equal(receipt.identity.appSlug, 'test-zcode-agent');
+  assert.equal(receipt.identity.bot, 'test-zcode-agent[bot]');
+  assert.equal(receipt.repo.name, 'true-line/agent-bot-platform');
+  assert.equal(receipt.repo.base, null);
+  assert.equal(receipt.worktree.created, true);
+  assert.notEqual(receipt.worktree.path, realpathSync(qwenEmptyCheckout));
+  assert.equal(f.git(receipt.worktree.path, 'config', '--worktree', '--get', 'user.name'), 'test-zcode-agent[bot]');
+  assert.equal(f.git(receipt.worktree.path, 'config', '--worktree', '--get', 'agentBot.agentId'), receipt.soul.id);
+  assert.equal(receipt.binding.status, 'live');
+  assert.equal(receipt.binding.alreadyBound, false);
+
+  // Qwen's checkout remains untouched and bound to Qwen's soul.
+  assert.equal(f.git(qwenEmptyCheckout, 'config', '--worktree', '--get', 'user.name'), 'test-qwen-agent[bot]');
+  assert.equal(f.git(qwenEmptyCheckout, 'config', '--worktree', '--get', 'agentBot.agentId'), f.identity.id);
+
+  // Subsequent `agent-bot start --repo true-line/agent-bot-platform` from outside git (`docsDir`)
+  // resolves the existing ZCode soul and its linked worktree.
+  const fromDocsDir = await startTask({
+    repo: 'true-line/agent-bot-platform',
+    cwd: docsDir,
+    env: zcodeEnv,
+    home: f.home,
+    config: f.config,
+    comms: async () => ({}),
+    clientFactory,
+    reconcileCredentials,
+  });
+  assert.equal(fromDocsDir.soul.id, receipt.soul.id);
+  assert.equal(fromDocsDir.soul.harness, 'zcode');
+  assert.equal(fromDocsDir.identity.appSlug, 'test-zcode-agent');
+  assert.equal(fromDocsDir.worktree.path, receipt.worktree.path);
+  assert.match(fromDocsDir.next, /cd /);
 });
 
