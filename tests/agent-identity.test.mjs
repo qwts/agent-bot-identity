@@ -82,6 +82,21 @@ test('discovers explicit, Codex, and Claude transcript locators without storing 
     provider: 'claude',
     id: 'claude-1',
   });
+  assert.deepEqual(discoverTranscript({
+    ZCODE_SESSION_ID: 'sess_zcode_1',
+    CLAUDE_SESSION_ID: 'sess_zcode_1',
+    CLAUDE_CODE_SESSION_ID: 'sess_zcode_1',
+  }), {
+    provider: 'zcode',
+    id: 'sess_zcode_1',
+  });
+  assert.deepEqual(discoverTranscript({
+    ZCODE_SESSION_ID: '   ',
+    CLAUDE_SESSION_ID: 'claude-fallback-1',
+  }), {
+    provider: 'claude',
+    id: 'claude-fallback-1',
+  });
   assert.deepEqual(discoverTranscript({ QWEN_CODE_SESSION_ID: 'qwen-1' }), { provider: 'qwen', id: 'qwen-1' });
   assert.deepEqual(discoverTranscript({ OPENCODE_SESSION_ID: 'ses_1' }), { provider: 'opencode', id: 'ses_1' });
   assert.equal(discoverTranscript({}), null);

@@ -311,6 +311,7 @@ test('configured App slugs are unique and deterministic', () => {
       'org-qwen-agent',
       'org-vibe-agent',
       'org-vscode-agent',
+      'org-zcode-agent',
       'z-agent',
     ],
   );

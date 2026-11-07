@@ -136,18 +136,19 @@ export function resolveAgentSlug({
   account = accountName(env),
   detect = true,
   harness = null,
+  ignoreWorktreePins = false,
 } = {}) {
   const cfg = config ?? loadConfig({ env });
   if (explicit) return requireActiveProfileApp(explicit, cfg);
   if (env.GH_AGENT_APP) return requireActiveProfileApp(env.GH_AGENT_APP, cfg);
-  const pinned = pinnedSlug(cwd, { git });
+  const pinned = ignoreWorktreePins ? null : pinnedSlug(cwd, { git });
   if (pinned) return requireActiveProfileApp(pinned, cfg);
   const originOwner = readOriginOwner(cwd, { git, config: cfg });
   // Managed App assignments are explicit soul identity metadata. Existing
   // explicit App/environment/worktree choices retain their precedence.
   const hasServerEnrollment = Boolean(env.AGENT_BOT_SERVER || cfg.settings?.agentBotServer);
   if ((cfg.identityApps && Object.keys(cfg.identityApps).length) || hasServerEnrollment) {
-    const id = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? readGitConfig(cwd, AGENT_ID_KEYS, { git });
+    const id = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? (ignoreWorktreePins ? null : readGitConfig(cwd, AGENT_ID_KEYS, { git }));
     if (id) {
       let identity = null;
       try {
