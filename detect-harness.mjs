@@ -59,6 +59,12 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
       b = base(bin)
       return (b == "sh" || b == "bash" || b == "zsh" || b == "dash" || b == "ksh" || b == "node" || b ~ /^[Pp]ython([0-9.]*)?$/)
     }
+    function verify_zcode(pid,    req, cmd) {
+      if (pid <= 1) return 0
+      req = "anchor apple generic and (identifier \\"dev.zcode.app\\" or identifier \\"dev.zcode.app.helper\\" or identifier \\"dev.zcode.app.helper.GPU\\" or identifier \\"dev.zcode.app.helper.Plugin\\" or identifier \\"dev.zcode.app.helper.Renderer\\") and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \\"8A5X4JJ39T\\""
+      cmd = "[ -x /usr/bin/codesign ] && /usr/bin/codesign -dv " pid " 2>&1 | /usr/bin/grep -q \\"^Executable=/Applications/ZCode.app/Contents/\\" && /usr/bin/codesign --verify -R=\\047" req "\\047 " pid " >/dev/null 2>&1"
+      return (system(cmd) == 0)
+    }
     function match_harness(line,    n, tok, t1, t2, b1, b2, i) {
       n = split(line, tok, /[[:space:]]+/)
       if (n < 1) return 0
@@ -67,7 +73,7 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
       if (b1 == "mirror-agent" || t1 ~ /\\/mirror\\/bin\\/mirror$/) return 1
       if (b1 == "vibe-rs" || b1 == "vibe-app-server" || t1 ~ /\\/bin\\/vibe$/) return 1
       if (b1 == "opencode" || b1 == "opencode-cli" || t1 ~ /\\/(opencode\\/)?bin\\/opencode(-cli)?$/ || line ~ /^\\/.*\\/OpenCode\\.app\\/Contents\\/MacOS\\/(OpenCode|opencode-cli)([[:space:]]|$)/ || line ~ /^\\/.*\\/Application Support\\/ai\\.opencode\\.desktop\\/cli\\/[^\\/]+\\/opencode(-cli)?([[:space:]]|$)/) return 1
-      if (b1 == "zcode" || b1 == "zcode-cli" || b1 ~ /^zcode-host-/ || t1 ~ /\\/(zcode\\/)?bin\\/zcode(-cli)?$/ || line ~ /^\\/.*\\/ZCode\\.app\\/Contents\\/(MacOS\\/ZCode|Frameworks\\/ZCode Helper( \\((Renderer|Plugin|GPU)\\))?\\.app\\/Contents\\/MacOS\\/ZCode Helper( \\((Renderer|Plugin|GPU)\\))?)([[:space:]]|$)/) return 1
+      if (b1 == "zcode" || b1 == "zcode-cli" || b1 ~ /^zcode-host-/ || t1 ~ /\\/(zcode\\/)?bin\\/zcode(-cli)?$/ || line ~ /^\\/.*\\/ZCode\\.app\\/Contents\\/(MacOS\\/ZCode|Frameworks\\/ZCode Helper( \\((Renderer|Plugin|GPU)\\))?\\.app\\/Contents\\/MacOS\\/ZCode Helper( \\((Renderer|Plugin|GPU)\\))?)([[:space:]]|$)/) return 2
       if (is_interp(t1)) {
         for (i = 2; i <= n; i++) {
           if (tok[i] ~ /^-[a-zA-Z]*c/ || tok[i] == "-e" || tok[i] == "--eval" || tok[i] == "-m") break
@@ -77,7 +83,7 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
           if (b2 == "mirror-agent" || t2 ~ /\\/(mirror\\/)?bin\\/mirror$/) return 1
           if (b2 == "vibe-rs" || b2 == "vibe-app-server" || t2 ~ /\\/bin\\/vibe$/) return 1
           if (b2 == "opencode" || b2 == "opencode-cli" || t2 ~ /\\/(opencode\\/)?bin\\/opencode(-cli)?$/) return 1
-          if (b2 == "zcode" || b2 == "zcode-cli" || b2 == "zcode.cjs" || t2 ~ /\\/(zcode\\/)?bin\\/zcode(-cli)?$/ || t2 ~ /\\/ZCode\\.app\\/Contents\\/Resources\\/.*\\/zcode\\.cjs$/) return 1
+          if (b2 == "zcode" || b2 == "zcode-cli" || b2 == "zcode.cjs" || t2 ~ /\\/(zcode\\/)?bin\\/zcode(-cli)?$/ || t2 ~ /\\/ZCode\\.app\\/Contents\\/Resources\\/.*\\/zcode\\.cjs$/) return 2
           break
         }
       }
@@ -116,7 +122,8 @@ function buildProcessTreeShellFunction(fnName = 'agent_bot_process_tree_context'
       cur = (self + 0 in cmd) ? (self + 0) : (ppid + 0)
       for (depth = 0; cur > 1 && depth < 32; depth++) {
         if (!(cur in cmd)) break
-        if (match_harness(cmd[cur])) exit 0
+        m = match_harness(cmd[cur])
+        if (m == 1 || (m == 2 && verify_zcode(cur))) exit 0
         if (is_test_runner(cmd[cur])) exit 1
         if (parent[cur] == cur) break
         cur = parent[cur]

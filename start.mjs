@@ -473,7 +473,7 @@ function lookupExistingSoul({
     const identity = activeIdentity(s.id, stateDir);
     if (!identity) continue;
     const soulHarness = identity.harness ?? s.harness ?? null;
-    const soulApp = s.appSlug ?? identity.github?.appSlug ?? null;
+    const soulApp = identity.github?.appSlug ?? s.appSlug ?? null;
     const matches = targetSlug
       ? (
         soulApp === targetSlug

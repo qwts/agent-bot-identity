@@ -811,7 +811,7 @@ export async function sessionBind({
       }
     }
     if (binding) {
-      const expectedAgentId = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? null;
+      const expectedAgentId = env.AGENT_BOT_ID || env.QWTS_AGENT_ID || null;
       if (expectedAgentId && binding.agentId && binding.agentId !== expectedAgentId) {
         throw new Error(
           `this worktree is bound to ${binding.agentId}, which does not match expected Agent ID ${expectedAgentId}`,
@@ -854,7 +854,7 @@ export async function sessionBind({
     transcript,
     parentId: parentAgentId,
     app: resolveSlugImpl(env, cwd),
-    expectedAgentId: env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID ?? null,
+    expectedAgentId: env.AGENT_BOT_ID || env.QWTS_AGENT_ID || null,
   });
   // The daemon may repin attribution; mirror the MCP tool's follow-up.
   if (result.repinRequired) repinImpl(cwd, 'agentBot.agentId', result.agentId);
