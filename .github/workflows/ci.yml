@@ -48,7 +48,7 @@ jobs:
       run_post_merge: ${{ steps.policy.outputs.run_post_merge }}
     steps:
       - id: policy
-        uses: qwts/qwts-agent-ci/.github/actions/ci-policy@946d8cd4148f18f982c6b1786b70849c6447ce01
+        uses: true-line/trueline-agent-ci/.github/actions/ci-policy@8ec38da39c9b43af2181d1f5e5b7e09226c0bfad
 
   merge-evidence:
     name: Verify exact main evidence
@@ -181,8 +181,8 @@ jobs:
       - name: Checkout pinned runtime checker
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: qwts/qwts-agent-ci
-          ref: 946d8cd4148f18f982c6b1786b70849c6447ce01
+          repository: true-line/trueline-agent-ci
+          ref: 8ec38da39c9b43af2181d1f5e5b7e09226c0bfad
           path: .ci-runtime-policy
           sparse-checkout: tools/ci-runtime
           persist-credentials: false
@@ -217,7 +217,7 @@ jobs:
           git archive HEAD | tar -x -C "$pkg/src"
           rm -rf "$pkg/src/tests" "$pkg/src/tools" "$pkg/src/governance" "$pkg/src/Formula"
           cp -R "$pkg/src/"* "$pkg/libexec/"
-      - uses: qwts/qwts-agent-ci/.github/actions/cli-skill-gate@946d8cd4148f18f982c6b1786b70849c6447ce01
+      - uses: true-line/trueline-agent-ci/.github/actions/cli-skill-gate@8ec38da39c9b43af2181d1f5e5b7e09226c0bfad
         with:
           skill: skills/agent-bot
           executable: ${{ runner.temp }}/pkg/libexec/agent-bot
