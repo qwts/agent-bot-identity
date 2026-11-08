@@ -1,0 +1,1 @@
+- ADR-1381 applies agent-bot-daemon D6 and platform PDR-0027. HQ runs in its own `_agent-bot-hq` / `agent-bot-hq` account, superseding ADR-0332 decision 2. HQ identity authority is HQ core in agent-bot-daemon, and this repository's plugin registers member surfaces only, superseding ADR-1183 decision 1's identity bullet (#1381).
