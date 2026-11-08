@@ -52,7 +52,7 @@ import { currentAgentId } from './agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
 import { soulMarkers } from './owner-gate.mjs';
 import { appDeclarations, appUsers } from '../soul-app-declarations.mjs';
-import { readManagedAppCredential, readAppMetadata } from './identity-app-store.mjs';
+import { readManagedAppCredential, readAppMetadata } from './app-records.mjs';
 import { loadConfig } from '../config.mjs';
 import { createPassCredentialStore } from './secret-providers/pass-cli-credentials.mjs';
 import { CREDENTIAL_STORES, credentialNamespace, itemTitle, managedAppItem, managedAppWebhookFile, managedAppWebhookItem, secretNameOrThrow, slugOrThrow, soulAppItem, soulSecretItem } from './identity-format.mjs';
@@ -527,7 +527,7 @@ export function appKeyStores(slug, { env = process.env, home = homedir(), config
 // The live check: an App JWT signed with the stored key, sent to GET /app.
 // It proves GitHub accepts the key without minting an installation token.
 export async function verifyAppCredential({ appId, privateKeyPem }, { env = process.env, fetchImpl = fetch } = {}) {
-  const { assertLegacyLocalCustody, buildAppJwt } = await import('./mint-token.mjs');
+  const { assertLegacyLocalCustody, buildAppJwt } = await import('./app-jwt.mjs');
   const { appJwtApiBase, loadConfig } = await import('../config.mjs');
   // Signing with a key on this host is legacy local custody (#1184).
   assertLegacyLocalCustody({ env });
