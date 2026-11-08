@@ -16,15 +16,15 @@ import { duplicateSoulDirs, locateSoulDir, populationFile, showSoul, showSoulByN
 import { buildSoulDirectory } from './soul-build.mjs';
 import { ENV_CONTRACT_VERSION, GENERATED_HARNESS_MARKER, GENERATED_HARNESS_PATHS, RETENTION, SOUL_LAYOUT, classificationContract } from './soul-env-contract.mjs';
 import { credentialStores } from './identity-soul.mjs';
-import { inspectToolHomes, readMigrationJournal } from './soul-env-migrate.mjs';
 import { REVISIONS_FILE, TURNS_FILE, runsDirectory } from './soul-history.mjs';
 import { legacyThreadJournalPath, THREAD_CONTEXT_RELATIVE } from './soul-threads.mjs';
 import { npmHarnessInstalls } from './soul-home.mjs';
 import { inspectSoulSpace, spaceMigrateCommand } from './soul-memory.mjs';
-import { STEP_FINAL_STATUSES } from './soul-migration-journal.mjs';
+import { STEP_FINAL_STATUSES, readMigrationJournal } from './soul-migration-journal.mjs';
 import { secretSetCommand } from './soul-providers.mjs';
 import { inspectRuntimeOverrides, inspectSoulRuntimes, runtimeLaunchEnv } from './soul-runtimes.mjs';
 import { inspectSoulSecrets } from './soul-secrets.mjs';
+import { inspectToolHomes } from './soul-tool-home-inspect.mjs';
 import { adoptCommand, adoptStepId } from './soul-tool-homes.mjs';
 import { soulsHome } from './souls-root.mjs';
 
