@@ -1,22 +1,28 @@
 // Soul's daemon routes (#645, F9 step 3; owner decision D6). POST
 // /v0/register records a soul's space and worktree in the population census
 // for setup-worktree and join. agent-daemon.mjs keeps the server and its
-// auth (the route stays bearer-only, docs/daemon-api.md) and calls this
-// handler before its own switch; the request helpers come in as ports.
-// handleSoulRoute answers true when it handled the route and false when the
-// route is not soul's.
+// auth (the route stays bearer-only, docs/daemon-api.md); the request helpers
+// come in as ports. createSoulRoutes returns soul's registration for the
+// daemon's route registry (route-registry.mjs, HQ plan Stage 0 row 8): its
+// route with the auth class, and handleSoulRoute, which answers true when it
+// handled the route and false when the route is not soul's.
 
 import path from 'node:path';
 
 import { upsertIdentitySoul } from './agent-population.mjs';
 import { stateDirectory } from './state-paths.mjs';
 
+// Soul's route and its class (docs/daemon-api.md).
+const SOUL_ROUTES = Object.freeze({
+  'POST /v0/register': { auth: 'bearer' },
+});
+
 export function createSoulRoutes({
   env, home,
   readBody, parseJsonBody, sendJson,
   requireAgentId, populationOverride,
 }) {
-  return async function handleSoulRoute(route, req, res) {
+  async function handleSoulRoute(route, req, res) {
     switch (route) {
       case 'POST /v0/register': {
         const body = parseJsonBody(await readBody(req));
@@ -45,5 +51,7 @@ export function createSoulRoutes({
       default:
         return false;
     }
-  };
+  }
+
+  return { module: 'soul', routes: SOUL_ROUTES, handle: handleSoulRoute };
 }
