@@ -1622,7 +1622,7 @@ async function main() {
         throw new Error('population backfill accepts only --dry-run and --json');
       }
       const { backfillTranscriptLocators, formatBackfillReport } = await import('./agent-backfill.mjs');
-      const report = backfillTranscriptLocators({ apply: !args.flags.has('dry-run') });
+      const report = backfillTranscriptLocators({ census: { populationFile, listSouls, upsertSoul }, apply: !args.flags.has('dry-run') });
       if (args.flags.has('json')) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       else process.stdout.write(formatBackfillReport(report));
       break;

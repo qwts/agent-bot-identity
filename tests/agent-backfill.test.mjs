@@ -12,7 +12,10 @@ import {
   formatBackfillReport,
   scanTranscriptStores,
 } from '../agent-backfill.mjs';
-import { displayName, showSoul, upsertSoul } from '../agent-population.mjs';
+import { displayName, listSouls, populationFile, showSoul, upsertSoul } from '../agent-population.mjs';
+
+// The census as agent-population.mjs passes it to the backfill (#1386).
+const census = { populationFile, listSouls, upsertSoul };
 
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
 const BOUND_ID = 'agent_11111111-1111-4111-8111-111111111111';
@@ -124,7 +127,7 @@ test('dry run reports every repair without touching the census', () => {
   const root = scratch();
   const stores = plantStores(root);
   const file = plantPopulation(root);
-  const report = backfillTranscriptLocators({ file, stores, apply: false });
+  const report = backfillTranscriptLocators({ census, file, stores, apply: false });
   assert.equal(report.applied, false);
   assert.deepEqual(report.updated.map((soul) => soul.id).sort(), [CLAUDE_ID, CODEX_ID]);
   assert.deepEqual(report.ambiguous.map((soul) => soul.id), [AMBIGUOUS_ID]);
@@ -139,7 +142,7 @@ test('apply repairs unambiguous rows and leaves everything else honest (#91)', (
   const root = scratch();
   const stores = plantStores(root);
   const file = plantPopulation(root);
-  const report = backfillTranscriptLocators({ file, stores, apply: true });
+  const report = backfillTranscriptLocators({ census, file, stores, apply: true });
   assert.equal(report.applied, true);
   assert.deepEqual(showSoul(CLAUDE_ID, { file }).transcriptLocator, {
     provider: 'claude',
@@ -165,7 +168,7 @@ test('the report names each repair and totals the rest', () => {
   const root = scratch();
   const stores = plantStores(root);
   const file = plantPopulation(root);
-  const text = formatBackfillReport(backfillTranscriptLocators({ file, stores, apply: false }));
+  const text = formatBackfillReport(backfillTranscriptLocators({ census, file, stores, apply: false }));
   assert.match(text, new RegExp(`would repair\t.*\t${CLAUDE_ID}\tclaude:${CLAUDE_SESSION}`));
   assert.match(text, new RegExp(`ambiguous\t.*\t${AMBIGUOUS_ID}\tappears in 2 transcripts`));
   assert.match(text, new RegExp(`unfound\t.*\t${UNFOUND_ID}\tno local transcript names it`));

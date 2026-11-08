@@ -14,13 +14,15 @@
 // resumes it.
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, copyFileSync, chmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { populationFile, setSoulSpacePath, showSoul } from './agent-population.mjs';
 import { initAgentSpace, inspectAgentSpace, showAgentSpace, spacePath } from './agent-space.mjs';
 import { readMigrationStep, recordMigrationStep } from './soul-migration-journal.mjs';
+import { soulSpacePath } from './soul-space-path.mjs';
+
+export { soulSpacePath } from './soul-space-path.mjs';
 
 export const SPACE_STEP_ID = 'space-into-soul';
 export const SPACE_MIGRATION_PHASES = Object.freeze(['pending', 'copying', 'verifying', 'switching', 'done']);
@@ -43,21 +45,6 @@ function inside(root, candidate) {
 
 /** The migrate command that contains a linked space, for readiness actions and docs. */
 export const spaceMigrateCommand = (id) => `agent-bot soul env migrate ${id} --space-into-soul`;
-
-/**
- * Where a soul's Agent Space is: the census `spacePath` when the census
- * knows the soul (authoritative, decision 8), else the spaces root path
- * `initAgentSpace` would use. Never creates anything.
- */
-export function soulSpacePath(agentId, { env = process.env, home = env.HOME ?? homedir(), ...rest } = {}) {
-  const id = validateAgentId(agentId);
-  const file = rest.file ?? populationFile({ env, home });
-  try {
-    const recorded = showSoul(id, { file }).spacePath;
-    if (typeof recorded === 'string' && path.isAbsolute(recorded)) return recorded;
-  } catch { /* unknown to the census: the default root */ }
-  return spacePath(id, { env, home, ...rest });
-}
 
 /**
  * The soul's Agent Space, made only when the census has none: the census

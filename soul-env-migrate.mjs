@@ -29,14 +29,15 @@ import { isVersionName, npmHarnessRoot, writeNpmInstallStamp } from './soul-home
 import { SPACE_STEP_ID, migrateSpaceIntoSoul, verifySpaceTree } from './soul-memory.mjs';
 import { MIGRATION_SCHEMA_VERSION, readMigrationJournal, readMigrationStep, recordMigrationStep } from './soul-migration-journal.mjs';
 import { readInstallStamp } from './soul-runtimes.mjs';
-import { readToolHomeRecord } from './soul-tool-home-record.mjs';
 import { planTemplateRename, renameFromTemplate } from './soul-templates.mjs';
-import { TOOL_HOME_REGISTRY, adoptStepId, hostToolStore, toolHomeDecision, toolHomeEnv, toolHomeFiles, toolHomeFor, toolHomePath, toolHomeRelative, toolHomesRoot } from './soul-tool-homes.mjs';
+import { inspectToolHomes } from './soul-tool-home-inspect.mjs';
+import { TOOL_HOME_REGISTRY, adoptStepId, hostToolStore, toolHomeEnv, toolHomeFiles, toolHomeFor, toolHomePath, toolHomesRoot } from './soul-tool-homes.mjs';
 import { readManifestText } from './soul-package.mjs';
 
 // The journal lives in soul-migration-journal.mjs (shared with the space
 // move); its API stays importable from here.
 export { MIGRATION_JOURNAL, MIGRATION_SCHEMA_VERSION, STEP_STATUSES, readMigrationJournal } from './soul-migration-journal.mjs';
+export { inspectToolHomes } from './soul-tool-home-inspect.mjs';
 export const TEMPLATE_NAME_STEP_ID = 'template-name';
 // The legacy `.soul-state/harnesses` npm adapter install moved under the
 // runtimes (#583 slice 8); `soul env` lists it pending while the legacy
@@ -60,43 +61,6 @@ function fail(code, message, { action = null } = {}) {
 function lstat(file) {
   try { return lstatSync(file); }
   catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EACCES') return null; throw error; }
-}
-
-// Presence of a regular file, never through a link: a linked sign-in would
-// be adopted from wherever it points.
-const fileState = (file) => (lstat(file)?.isFile() ? 'present' : 'missing');
-
-/**
- * The tool homes of a soul for the given harnesses, by existence only:
- * `{ harness, path, home, routing, containment, reason, choice, hostPath,
- * signIn, hostSignIn, adopted, note, files[] }`. `containment` is
- * `toolHomeDecision` over what is found and the soul's recorded `choice`
- * (#617, null without one), and `routing` the variables the next launch
- * sets (none unless contained). Never reads a sign-in file's contents; an
- * unusable tool-homes record is `tool-home-record-invalid`.
- * On macOS a host Claude sign-in lives in the keychain, which no file
- * shows and nothing here reads, so its absent file is `unknown`, not
- * `missing`: a signed-in host is never mistaken for one with nothing to
- * lose.
- */
-export function inspectToolHomes(soulDir, harnesses, { env = process.env, home = env.HOME ?? homedir(), platform = process.platform } = {}) {
-  const journal = readMigrationJournal(soulDir);
-  const record = readToolHomeRecord(soulDir);
-  return harnesses.map((harness) => {
-    const routed = toolHomeEnv(soulDir, harness);
-    const row = toolHomeFor(harness);
-    const files = toolHomeFiles(soulDir, harness, { env, home }).map((file) => ({ kind: file.kind, path: file.path, soul: fileState(file.soulPath), host: fileState(file.hostPath) }));
-    const signIns = files.filter((file) => file.kind === 'sign-in');
-    const state = (side) => (!row.routable || !signIns.length ? 'unknown' : signIns.every((file) => file[side] === 'present') ? 'present' : 'missing');
-    const signIn = state('soul');
-    let hostSignIn = state('host');
-    if (hostSignIn === 'missing' && row.note && platform === 'darwin') hostSignIn = 'unknown';
-    const adopted = journal.some((step) => step.id === adoptStepId(harness) && (step.status === 'done' || step.status === 'skipped'));
-    const choice = (row.routable && record?.harnesses[harness]) || null;
-    const decision = toolHomeDecision(harness, { signIn, hostSignIn, adopted, choice });
-    return { harness, path: toolHomeRelative(harness), home: routed.home, routing: decision.containment === 'soul' ? routed.routing : [], containment: decision.containment,
-      reason: decision.reason, choice, hostPath: hostToolStore(harness, { env, home }), signIn, hostSignIn, adopted, note: row.note, files };
-  });
 }
 
 // Whether the next launch of a harness is routed into the soul: the
@@ -521,8 +485,7 @@ function templateNameBase(soul, soulDir, { env, now }) {
 // Idempotent: nothing pending is `skipped` with no steps, no gate and no
 // receipt.
 async function complete({ soul, soulDir, principal, json, plan, gate, running, write, env, home, cwd, now, options }) {
-  // Loaded on demand: soul-env.mjs imports this module for the tool homes
-  // and the journal, so a static import would be a cycle.
+  // Loaded on demand: only `--complete` needs the descriptor.
   const { readSoulEnvironment } = await import('./soul-env.mjs');
   const describe = () => readSoulEnvironment(soul.id, { env, home, now, ...(options.config === undefined ? {} : { config: options.config }),
     ...(options.platform ? { platform: options.platform } : {}), ...(options.stateDir ? { stateDir: options.stateDir } : {}) });

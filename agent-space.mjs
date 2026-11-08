@@ -38,27 +38,15 @@ import {
   serializePack,
   uploadPackToGist,
 } from './agent-space-pack.mjs';
-import { loadConfig, spacesRootSetting } from './config.mjs';
+import { resolveSpacesHome, spacePath, spacesHome } from './agent-space-root.mjs';
+
+export { resolveSpacesHome, spacePath, spacesHome } from './agent-space-root.mjs';
 
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = 'space.json';
 // Optional suitcase-handoff pointer recorded after a gist export. Pointer
 // only — never pack contents, never credentials.
 const HANDOFF_PATTERN = /^gist:[A-Za-z0-9]{1,64}$/;
-
-export function resolveSpacesHome({ env = process.env, home = homedir(), config } = {}) {
-  if (env.AGENT_BOT_SPACES_HOME) {
-    return { root: path.resolve(env.AGENT_BOT_SPACES_HOME), source: 'environment' };
-  }
-  const loaded = config === undefined ? loadConfig({ home, env }) : config;
-  const configured = spacesRootSetting(loaded);
-  if (configured) return { root: path.resolve(configured), source: 'setting' };
-  return { root: path.join(home, '.agent-space'), source: 'default' };
-}
-
-export function spacesHome(options = {}) {
-  return resolveSpacesHome(options).root;
-}
 
 // Names the pre-amendment ENG-0172 tree for the one-time cutover only.
 // XDG_DATA_HOME is not a resolution input.
@@ -67,10 +55,6 @@ export function legacySpacesHome({ env = process.env, home = homedir() } = {}) {
     ? path.resolve(env.XDG_DATA_HOME)
     : path.join(home, '.local', 'share');
   return path.join(dataHome, 'agent-bot', 'spaces');
-}
-
-export function spacePath(agentId, options = {}) {
-  return path.join(spacesHome(options), validateAgentId(agentId));
 }
 
 function markerPath(root) {
@@ -491,7 +475,7 @@ async function main() {
   const args = parseCli(process.argv);
   // The census path is authoritative for a soul it knows (ADR-0583
   // decision 8); loaded on demand like the lifecycle commands below.
-  const { soulSpacePath } = await import('./soul-memory.mjs');
+  const { soulSpacePath } = await import('./soul-space-path.mjs');
   switch (args.command) {
     case 'init': {
       const id = resolveTargetId(args);

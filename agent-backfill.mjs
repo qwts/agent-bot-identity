@@ -20,8 +20,6 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { listSouls, populationFile, upsertSoul } from './agent-population.mjs';
-
 const AGENT_ID_PATTERN = /agent_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 
@@ -88,8 +86,12 @@ export function scanTranscriptStores(stores) {
 }
 
 // Repair pass. `apply: false` reports what would change without writing —
-// the operator sees the exact repairs before any census mutation.
+// the operator sees the exact repairs before any census mutation. The census
+// passes in its own `populationFile`, `listSouls` and `upsertSoul` as
+// `census`, so this module does not import agent-population.mjs, which loads
+// it for `population backfill` (#1386, HQ plan §2.4).
 export function backfillTranscriptLocators({
+  census: { populationFile, listSouls, upsertSoul },
   file = populationFile(),
   home = homedir(),
   stores = defaultTranscriptStores(home),

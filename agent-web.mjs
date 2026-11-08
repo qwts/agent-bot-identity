@@ -47,7 +47,9 @@ import {
   pairedPublicKey, pinDaemonPub, pinPath, unpairAgentDaemon, verifyResponse,
   writeAgentDaemonPeer,
 } from './machine-client.mjs';
-import { daemonStateFile, daemonStatus, wrongAccountWarning } from './agent-daemon.mjs';
+import { daemonStateFile } from './daemon-client.mjs';
+import { wrongAccountWarning } from './daemon-state.mjs';
+import { daemonStatus } from './daemon-status.mjs';
 
 export const UI_CSRF_HEADER = 'x-agent-bot-ui';
 export const PAIRING_CODE_TTL_MS = 2 * 60_000;
