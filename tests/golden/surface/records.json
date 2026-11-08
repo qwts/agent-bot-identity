@@ -1,0 +1,97 @@
+{
+  "layout": [
+    ".agent-bot/",
+    ".agent-bot/souls/",
+    ".agent-bot/souls/golden - Golden.soul/",
+    ".agent-bot/souls/golden - Golden.soul/.soul-state/",
+    ".agent-bot/souls/golden - Golden.soul/.soul-state/agent-id",
+    ".agent-bot/souls/golden - Golden.soul/.soul-state/runs/",
+    ".agent-bot/souls/golden - Golden.soul/.soul-state/runs/revisions.jsonl",
+    ".agent-bot/souls/golden - Golden.soul/.soul-state/tool-homes.json",
+    ".agent-bot/souls/golden - Golden.soul/AGENTS.md",
+    ".agent-bot/souls/golden - Golden.soul/soul.json",
+    ".local/",
+    ".local/state/",
+    ".local/state/agent-bot/",
+    ".local/state/agent-bot/agent-identities/",
+    ".local/state/agent-bot/agent-identities/<agent-id>.json",
+    ".local/state/agent-bot/agent-identities/soul-revisions/",
+    ".local/state/agent-bot/agent-identities/soul-revisions/<agent-id>/",
+    ".local/state/agent-bot/agent-identities/soul-revisions/<agent-id>/<sequence>.json",
+    ".local/state/agent-bot/agent-identities/soul-revisions/<agent-id>/objects/",
+    ".local/state/agent-bot/agent-identities/soul-revisions/<agent-id>/objects/<sha256>.soul/",
+    ".local/state/agent-bot/agent-identities/soul-revisions/<agent-id>/objects/<sha256>.soul/AGENTS.md",
+    ".local/state/agent-bot/agent-identities/soul-revisions/<agent-id>/objects/<sha256>.soul/soul.json",
+    ".local/state/agent-bot/population.json"
+  ],
+  "agentIdRecord": {
+    "artifacts": [],
+    "createdAt": "string",
+    "finalizedAt": "null",
+    "genesis": {
+      "parentSoul": "null",
+      "revision": "string"
+    },
+    "harness": "null",
+    "id": "string",
+    "level": "null",
+    "parentId": "null",
+    "schemaVersion": "number",
+    "squad": "null",
+    "status": "string",
+    "subjects": [],
+    "team": "null",
+    "transcript": "null",
+    "type": "string",
+    "updatedAt": "string"
+  },
+  "population": {
+    "schemaVersion": "number",
+    "souls": {
+      "<agent-id>": {
+        "appSlug": "null",
+        "comms": "boolean",
+        "computerUse": "boolean",
+        "id": "string",
+        "lastSeen": "string",
+        "managed": "boolean",
+        "name": "string",
+        "parentId": "null",
+        "paused": "boolean",
+        "soulDir": "string",
+        "spacePath": "string",
+        "status": "string",
+        "transcriptLocator": "null",
+        "worktree": "null",
+        "worktrees": []
+      }
+    }
+  },
+  "soulMarker": "<agent-id>\n",
+  "binding": {
+    "worktreeFile": "<git-dir>/agent-binding.json",
+    "worktreeRecord": {
+      "account": "string",
+      "agentId": "string",
+      "daemon": "string",
+      "parent": "null",
+      "secret": "string",
+      "v": "number"
+    },
+    "registryEntry": [
+      {
+        "agentId": "string",
+        "app": "string",
+        "boundAt": "string",
+        "createdAt": "string",
+        "gitDir": "string",
+        "harness": "null",
+        "lastUsedAt": "string",
+        "parent": "null",
+        "sessionId": "null",
+        "transcript": "null",
+        "worktree": "string"
+      }
+    ]
+  }
+}
