@@ -15,7 +15,7 @@
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, readSoulPackageEntries } from './soul-package.mjs';
-import { revisionHistory, revisionPackagePath } from './soul-revisions.mjs';
+import { revisionHistory, revisionPackagePath } from './soul-revision-store.mjs';
 import { NOT_CAPTURED } from './skill-references.mjs';
 
 const SKILL_PATH = /^skills\/([^/]+)(?:\/(.+))?$/;

@@ -34,7 +34,7 @@ import { loadConfig } from './config.mjs';
 import { validateAgentId } from './identity-format.mjs';
 import { SANDBOX_OVERRIDES, listSouls, populationFile, setSoulSandbox, showSoul, showSoulByName, soulShownName } from './agent-population.mjs';
 import { assertOwnerAction } from './owner-action.mjs';
-import { PERSONA_FILE, parseTomlSubset, readSopPersonaRecord } from './sop.mjs';
+import { PERSONA_FILE, parseTomlSubset, readSopPersonaRecord } from './sop-resolver.mjs';
 import { formatSandboxRemovalResult, refuseSoulCaller, runSandboxRemoval } from './sandbox-remove.mjs';
 import { readManifestText } from './soul-package.mjs';
 
