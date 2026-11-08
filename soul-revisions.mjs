@@ -11,7 +11,6 @@ import { boundedPackageReader, canonicalJson, computePackageRevision, readSoulPa
 import { diffPackageSkills, skillsChanged, skillsCommand } from './skill-manifest.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { withLock } from './file-lock.mjs';
-import { stateDirectory } from './state-paths.mjs';
 import { appendSoulRevision, registeredSoulDir } from './soul-history.mjs';
 import { soulSpacePath } from './soul-memory.mjs';
 import { assertOwnerAction, ownerCredentialRequired, presenceOrConsent } from './owner-action.mjs';
@@ -19,6 +18,10 @@ import { populationFile, showSoulByName, soulDirectory } from './agent-populatio
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { GENERATED_HARNESS_PATHS, PACKAGE_IGNORE_LIST, classifyPath } from './soul-env-contract.mjs';
 import { kindOf } from './soul-profile.mjs';
+import { events, objectPath, revisionHistory, rootFor, storedPackage } from './soul-revision-store.mjs';
+
+// The RevisionStore port's readers, exported here before the port existed (#1388).
+export { revisionHistory, revisionJournalRoot, revisionPackagePath } from './soul-revision-store.mjs';
 
 const ZERO = `sha256:${'0'.repeat(64)}`;
 const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
@@ -49,29 +52,13 @@ const text = (value, label) => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
   return value;
 };
-function rootFor(id, options) {
-  return join(options.stateDir ?? stateDirectory(), 'soul-revisions', validateAgentId(id));
-}
 function active(id, options) {
   const identity = identityOp('read', { id, stateDir: options.stateDir });
   if (identity.status === 'retired') throw new Error('retired souls cannot change revisions');
   return identity;
 }
-function events(root) {
-  if (!existsSync(root)) return [];
-  return readdirSync(root).filter((name) => /^\d{10}\.json$/.test(name)).sort().map((name) => json(join(root, name)));
-}
 function head(root) {
   return events(root).filter((event) => event.kind === 'revision').at(-1) ?? null;
-}
-function objectPath(root, revision) {
-  if (!/^sha256:[a-f0-9]{64}$/.test(revision)) throw new Error('invalid revision');
-  return join(root, 'objects', revision.slice(7) + '.soul');
-}
-function storedPackage(root, revision) {
-  const file = objectPath(root, revision);
-  if (validateSoulPackage(file).revision !== revision) throw new Error('stored revision hash mismatch');
-  return file;
 }
 // All local revision writers enter one synchronous critical section. Network
 // authorization and other asynchronous orchestration must finish before it.
@@ -242,17 +229,6 @@ function skillReport(root, parentRevision, packagePath) {
   return skillsChanged(diff) ? { skills: diff } : {};
 }
 
-// The journal directory, for bounded read-only verifiers that must not use
-// the unbounded readers here (skill-dream-evidence.mjs).
-export function revisionJournalRoot(id, options = {}) {
-  return rootFor(id, options);
-}
-export function revisionHistory(id, options = {}) {
-  return events(rootFor(id, options)).filter((event) => event.kind === 'revision');
-}
-export function revisionPackagePath(id, revision, options = {}) {
-  return storedPackage(rootFor(id, options), revision);
-}
 export function adoptSoulPackage(id, packagePath, { reason = 'Adopt starting package', ...options } = {}) {
   text(reason, 'reason');
   // An owner-decision linkage is validated before anything, objects/ included, is written.
