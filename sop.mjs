@@ -11,11 +11,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, openSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
-import { identityOp } from './daemon-client.mjs';
-import { validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
-import { soulDirectory } from './agent-population.mjs';
-import { readBinding } from './identity-soul.mjs';
 import process from 'node:process';
 import { assertOwnerAction } from './owner-action.mjs';
 import { pathToFileURL } from 'node:url';
@@ -26,20 +22,14 @@ import {
   githubRemote, isObject, listSopDocuments, loadSopConfig, oneLine, readConfigText, readRepoFile, recordSopPersona,
   resolveSelection, safePath, showSopDocument, sopState, trustNotice,
 } from './sop-resolver.mjs';
+import { acceptSopTrust, resolveSop } from './sop-selection.mjs';
 
-// The org resolver's names this file exported before the split (#1388).
+// The org resolver's and the soul selection's names this file exported
+// before the split (#1388).
 export {
   PERSONA_FILE, POLICY_FILE, REFERENCE_HEADER, SOP_GIT_COMMANDS, SopError, assertSopGitCommand, cachedDocuments, configPathFor, createRunGit, defaultRunGit, gitSubcommand, githubRemote, listSopDocuments, loadSopConfig, parseOrgPins, parseTomlSubset, parseWorkflowToml, personaRecordFile, readRemoteSopWorkflows, readRepoFile, readSelectedOrganizationProfile, readSopLastGood, readSopPersonaRecord, recordSopLastGood, recordSopPersona, showSopDocument, sopGitEnv, sopLastGoodFile,
 } from './sop-resolver.mjs';
-
-// The session's Agent ID: the environment first, so the common case starts
-// no process; only without one does identity's entry read the checkout pin
-// (#645, F6).
-function sessionAgentId({ env = process.env, cwd } = {}) {
-  const fromEnv = env.AGENT_BOT_ID ?? env.QWTS_AGENT_ID;
-  if (fromEnv) return validateAgentId(fromEnv);
-  return identityOp('current', { pinOnly: true }, cwd === undefined ? {} : { cwd });
-}
+export { acceptSopTrust, isSopTrustAccepted, resolveSop } from './sop-selection.mjs';
 
 export const USAGE = `usage: agent-bot sop [--json] [--config <path>] [--soul ID]
        agent-bot sop list [--soul ID] [--workflow NAME] [--json]
@@ -65,50 +55,6 @@ policy activate (owner only) reads policy-hooks.json at the user's SOP
 commit, validates it and pins it; the daemon's launches then apply its
 deny rules offline. show reports what is active and what it covers.
 `;
-
-function trustFile(options) { return join(sopState(options), 'sop-trust.json'); }
-function trustKey(repo, commit) { return `${repo.toLowerCase()}@${commit}`; }
-
-export function isSopTrustAccepted(repo, commit, options = {}) {
-  if (!repo || !commit) return false;
-  return readTrust(options).accepted.includes(trustKey(repo, commit));
-}
-
-function readTrust(options) {
-  const file = trustFile(options);
-  try {
-    if (lstatSync(file).isSymbolicLink()) fail('trust-invalid', 'SOP trust file must not be a symlink');
-    const record = JSON.parse(readFileSync(file, 'utf8'));
-    if (record.schemaVersion !== 1 || !Array.isArray(record.accepted)
-      || !record.accepted.every((key) => typeof key === 'string')) fail('trust-invalid', 'invalid SOP trust record');
-    return record;
-  } catch (error) {
-    if (error.code === 'ENOENT') return { schemaVersion: 1, accepted: [] };
-    throw error;
-  }
-}
-
-export function acceptSopTrust(report, repo, options = {}) {
-  const selected = report.repositories?.sop;
-  if (!OWNER_NAME.test(repo) || !selected || repo.toLowerCase() !== selected.repository.toLowerCase()) {
-    fail('trust-invalid', 'trust must name the selected SOP repository; use --soul ID to select its soul');
-  }
-  const dir = sopState(options);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const file = trustFile(options);
-  withLock(`${file}.lock`, 'SOP trust', () => {
-    const record = readTrust(options);
-    const key = trustKey(selected.repository, selected.commit);
-    if (!record.accepted.includes(key)) record.accepted.push(key);
-    const temp = mkdtempSync(join(dir, '.sop-trust-'));
-    try {
-      const pending = join(temp, 'record');
-      writeFileSync(pending, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
-      chmodSync(pending, 0o600);
-      renameSync(pending, file);
-    } finally { rmSync(temp, { recursive: true, force: true }); }
-  });
-}
 
 // --- selected-pack launch policy (#677) ----------------------------------------
 // The owner activates the user's SOP's policy-hooks.json at its resolved
@@ -310,45 +256,6 @@ export function formatSopPolicyState(result) {
   lines.push(`Covers ${POLICY_COVERAGE.covered.join('; ')}.`, `Not covered: ${POLICY_COVERAGE.notCovered}.`,
     'A soul starting its team is refused by a deny rule; an owner launch it denies asks for Touch ID or a password to override, and is recorded.');
   return `${lines.join('\n')}\n`;
-}
-
-export function resolveSop(options = {}) {
-  const home = options.home ?? homedir();
-  const env = options.env ?? process.env;
-  let current = null;
-  if (!options.soul) {
-    try { current = (options.currentAgentId ?? sessionAgentId)({ env, cwd: options.cwd ?? process.cwd() }); }
-    catch (error) { if (error.status !== 128) throw error; }
-  }
-  const identity = options.soul ?? current
-    ?? (options.readBinding ?? readBinding)({ env, cwd: options.cwd ?? process.cwd() })?.agentId;
-  const soulDir = identity ? (options.soulDirectory ?? soulDirectory)(identity, { home, env, ...options.populationOptions }) : null;
-  const userPath = options.configPath ?? configPathFor(home);
-  const readFile = options.readFile ?? ((path) => readFileSync(path, 'utf8'));
-  const soulPath = soulDir ? join(soulDir, 'agent-sop.toml') : null;
-  const soulText = soulPath ? readConfigText(soulPath, readFile) : null;
-  const userText = Object.hasOwn(options, 'configText') ? options.configText : readConfigText(userPath, readFile);
-  const source = soulText !== null ? 'soul' : userText !== null ? 'user' : 'none';
-  const report = resolveSelection({ ...options, configText: soulText ?? userText, configPath: soulText !== null ? soulPath : userPath });
-  report.selection = { source, path: source === 'none' ? null : report.configPath };
-  if (soulDir) report.soul = { agentId: identity, directory: soulDir };
-  if (source === 'soul') {
-    // Resolve the user's effective SOP too: it can be selected through org.json.
-    const user = userText === null ? null : resolveSelection({ ...options, configText: userText, configPath: userPath });
-    const foreign = !user
-      || user.repositories.org.repository.toLowerCase() !== report.repositories.org.repository.toLowerCase()
-      || user.repositories.sop.repository.toLowerCase() !== report.repositories.sop.repository.toLowerCase();
-    if (foreign) {
-      const { repository: repo, commit } = report.repositories.sop;
-      report.trust = {
-        required: true,
-        reason: user ? 'Soul selects a different organization or SOP repository from the user' : 'Soul selects an SOP repository without a user selection',
-        repo,
-        accepted: readTrust(options).accepted.includes(trustKey(repo, commit)),
-      };
-    }
-  }
-  return report;
 }
 
 function appendRepo(lines, role, repo) {

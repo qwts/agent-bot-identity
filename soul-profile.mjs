@@ -9,7 +9,8 @@ import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent
 import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { validateAppearanceDeclaration, validateCredentialsDeclaration, validateSkillsDeclaration } from './soul-package.mjs';
-import { listSopDocuments, resolveSop } from './sop.mjs';
+import { listSopDocuments } from './sop-resolver.mjs';
+import { resolveSop } from './sop-selection.mjs';
 
 const MAX_BYTES = 256 * 1024;
 const MAX_FILES = 500;
