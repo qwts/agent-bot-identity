@@ -162,8 +162,8 @@ covers them, and `--for` says so. An unknown subcommand is an error that lists
 the known ones; there is no nearest match. `--for` with any skill other than
 `agent-bot` is an error. `--json` adds `for` to the bundled fields.
 
-`tests/skill-catalog.test.mjs` fails when a command in `cli/dispatch.mjs` or
-`cli/parse.mjs` is in neither the reference table nor the no-reference list.
+`tests/skill-catalog.test.mjs` fails when a command registered in
+`cli/dispatch.mjs` is in neither the reference table nor the no-reference list.
 
 ## Exit status
 

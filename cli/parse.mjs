@@ -1,59 +1,8 @@
-const PUBLIC_COMMANDS = new Set([
-  'start',
-  'bootstrap',
-  'setup-worktree',
-  'join',
-  'mint-token',
-  'events',
-  'doctor',
-  'identity',
-  'space',
-  'population',
-  'principal',
-  'binding',
-  'session',
-  'soul',
-  'harness',
-  'daemon',
-  'broker',
-  'keyd',
-  'owner',
-  'approvals',
-  'audit',
-  'mcp',
-  'machine',
-  'pair',
-  'unpair',
-  'reach-mcp',
-  'wake',
-  'web',
-  'telegram',
-  'install',
-  'update',
-  'install-gh-shim',
-  'ensure-private-key',
-  'signed-commit',
-  'secret',
-  'skill',
-  'sop',
-  'workflow',
-  'sandbox',
-  'metrics',
-  'diagnostics',
-  'server',
-  'notices',
-]);
+import { COMMANDS } from './dispatch.mjs';
 
-const INTERNAL_COMMANDS = new Set([
-  'credential',
-  'worktree-token',
-  'gh-inbox-query',
-  'gh-pr-view-json',
-  'claude-worktree-create',
-  'hook',
-  // Called by every harness's generated hook config, never by a person.
-  'agent-hook',
-]);
+// The registered commands (cli/dispatch.mjs, #1394): the public ones, in
+// registration order; any registered name, public or internal, parses.
+const PUBLIC_COMMANDS = new Set(COMMANDS.names('public'));
 
 export function parseAgentBotArgs(argv) {
   const args = [...argv];
@@ -65,7 +14,7 @@ export function parseAgentBotArgs(argv) {
     return { kind: 'version' };
   }
   const command = args.shift();
-  if (!PUBLIC_COMMANDS.has(command) && !INTERNAL_COMMANDS.has(command)) {
+  if (!COMMANDS.get(command)) {
     throw new Error(`unknown command: ${command}`);
   }
   if (command === 'hook') {
