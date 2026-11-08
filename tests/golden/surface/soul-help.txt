@@ -1,0 +1,120 @@
+usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-]
+  agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT|list|show UUID|verify UUID|check UUID [--json]
+  agent-bot soul skill update UUID --check CHECK_ID [--apply --expected-accepted DIGEST --expected-local DIGEST]
+  agent-bot soul skill update UUID --recover
+  agent-bot soul skill learn UUID --soul AGENT_ID [--package STAGING --outcome FILE --reason TEXT] [--json]
+  agent-bot soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin]
+  agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin]
+  agent-bot soul skill status --soul AGENT_ID [--json]
+  agent-bot soul skill search --soul AGENT_ID QUERY [--json]
+  agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json] [--principal-stdin]
+  agent-bot soul build [PATH] [--check] [--json]
+  agent-bot soul pack validate PATH
+  agent-bot soul revision <command>
+  agent-bot soul revision edit ID PATH REASON [--apply] [--json] [--principal-stdin]
+  agent-bot soul revision prepare <agentId|name> [--json] [--dest PATH]
+  agent-bot soul revision prepare --discard STAGING
+  agent-bot soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin]
+  agent-bot soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin]
+  agent-bot soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin]
+  agent-bot soul tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin]
+  agent-bot soul stop <agentId|name> [--json]
+  agent-bot soul pause|resume <agentId|name> [--json]
+  agent-bot soul show <agentId|name> [--json]
+  agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
+  agent-bot soul env <agentId|name> [--json]
+  agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin]
+  agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
+  agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin]
+  agent-bot soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
+  agent-bot soul env history <agentId|name> [--json] [--limit N]
+  agent-bot soul runtimes <agentId|name> [--json]
+  agent-bot soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin]
+  agent-bot soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin]
+  agent-bot soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable>|--clear [--json] [--principal-stdin]
+  agent-bot soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin]
+  agent-bot soul secret <agentId|name> status [--json]
+  agent-bot soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin]
+  agent-bot soul remove <agentId|name> [--scope soul|team] [--plan] [--json] [--principal-stdin]
+  agent-bot soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin]
+  agent-bot soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json]
+  agent-bot soul dir AGENT_ID
+  agent-bot soul locate PATH [--json]
+  agent-bot soul templates [--json]
+  agent-bot soul spawn TEMPLATE_PATH --name NAME [--harness H]
+  agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
+  agent-bot soul confinement AGENT_ID off|warn|deny
+  agent-bot soul confinement-report AGENT_ID [--json]
+
+Create independent tailored agents from one package with agent-bot soul spawn.
+Spawning creates an instance and returns JSON with its Agent ID, soulDir,
+displayName, and current revision. It does not launch a harness.
+Listing reads local packages without network or secret access.
+
+The account-local population census records each soul's absolute soulDir;
+its default directory is <soulsRoot>/<census-name>.soul. Named template
+instances use their manifest display name instead.
+
+Cold wake is owner only.
+soul remove turns cold wake off, leaves agent-comms as the soul, retires it
+(there is no un-retire), and moves every folder carrying its marker to
+<souls root>/.archive/<UTC stamp>-<folder>. --scope soul (default) lets the
+souls it leads stand on their own; --scope team removes every active soul it
+leads too, deepest first. --plan prints the exact souls a scope would
+archive, make independent or leave unchanged, changing nothing and asking
+nobody. Nothing restores or deletes an archived soul.
+
+soul env reads the soul's environment descriptor (where its definition,
+generated output, workspaces, home, memory and history live, what is
+installed, and what is not ready); it never provisions. soul env migrate
+--adopt-host-signin copies the host's harness sign-in files (never the
+keychain) into the soul's own tool home once (owner only); soul env migrate
+--space-into-soul moves a linked Agent Space into .soul-state/space (copied,
+verified, the census updated, the source renamed .retired-<date>; owner
+only, never while the soul runs); soul env migrate --template-name renames
+an instance that kept its template's name when the bundled template now
+goes by another name (one package revision and the census display name;
+a name the owner chose is never changed; owner only, --plan reads only);
+soul env migrate --harnesses-into-runtimes moves a joined soul's legacy
+.soul-state/harnesses adapter install under .soul-state/runtimes/harnesses
+with an install stamp (owner only, never while the soul runs, --plan reads
+only); soul env migrate --complete finishes every migration step the
+descriptor lists as pending, interrupted or failed through the same
+mechanisms (owner only, never while the soul runs, --plan reads only).
+soul env clean removes
+only what the contract classifies reconstructible or disposable (the cache,
+temporary files, runtime caches, leftover install stagings), never the
+definition, home, tool state, credentials, memory, history or a workspace
+(owner only, never while the soul runs, --plan lists paths and sizes).
+a name the owner chose is never changed; owner only, --plan reads only).
+soul env export writes the soul's life as one archive (definition, home,
+tool state minus sign-in files, memory, history, settings, revision journal,
+soul-owned workspaces whole, linked ones as a pointer with patch and
+untracked files; never credentials, secrets, sign-ins, runtimes or caches;
+owner only, never while the soul runs, --plan prints the manifest). soul env
+import restores one keeping its Agent ID (a moved life); --fork mints a new
+one; an active local ID is refused unless --replace, which moves the
+existing root aside, never deletes it (owner only, --plan reads only).
+soul env history lists the soul's history mirror (.soul-state/runs: turns
+and revisions, facts only, never a prompt or an output), newest first, at
+most --limit per file (1..500, default 50); read-only, no gate.
+soul template refresh brings the paths a template declares as maintained
+(its soul.json "maintained" prefixes) up to the bundled template in one
+package revision, leaving AGENTS.md edits, memory and history alone
+(owner only, --plan reads only). soul revision
+prepare stages the editable definition under .soul-state/tmp for a host to
+edit and apply. soul runtimes reports the runtimes (node, python, go) and
+non-npm harnesses a soul declares against what is installed under its
+.soul-state/runtimes; soul runtimes install provisions what is missing
+(owner only; a launch does the same). soul runtimes upgrade shows how each
+pinned runtime would move to the newest catalog pin; --apply (owner only)
+moves and installs them. soul runtimes override sets or clears
+one owner-managed executable path for this soul (POSIX only); the launch uses
+a one-name shim and reports the selection as unverified external. soul secret stores, clears or reports
+the provider secrets a soul declares (credentials.secrets) for its
+harnesses' providers; set and clear are owner only and the value arrives on
+stdin, never on argv; status says present or missing, never the value.
+
+See docs/soul-homes.md, docs/soul-environment.md, docs/soul-tool-homes.md, docs/soul-memory-history.md, docs/soul-runtimes.md, docs/soul-providers.md, docs/soul-templates.md,
+docs/joining.md, docs/soul-revisions.md, and README.md for the subcommands
+and their effects.
