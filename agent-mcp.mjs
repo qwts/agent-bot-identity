@@ -32,6 +32,7 @@ import { detectAgentHarness } from './detect-harness.mjs';
 import { SKILL_REFERENCES, skillReferenceFor } from './skill-for-map.mjs';
 import { loadConfig } from './config.mjs';
 import { serverStatusReport, doctorReport } from './server-status.mjs';
+import { createToolRegistry } from './tool-registry.mjs';
 const PROTOCOL_VERSION = '2025-06-18';
 
 function serverVersion() {
@@ -51,9 +52,15 @@ function git(cwd, ...args) {
   }).trim();
 }
 
+// The member tools (#1394, HQ plan Stage 0 row 9): each declares its name,
+// description, schema, class and handler once, and registers in MEMBER_TOOLS
+// below, the in-place form of `ctx.tools.register` (plan section 4.2).
+// tools/list shows only the four META_TOOLS; these stay callable through them.
 const TOOLS = [
   {
     name: 'bind',
+    class: 'write',
+    handler: bindTool,
     description:
       'Surrender this worktree\'s bind token and bind the current conversation '
       + 'to its execution identity. Call once at conversation start, before any '
@@ -71,11 +78,24 @@ const TOOLS = [
   },
   {
     name: 'whoami',
+    class: 'read',
+    handler: (state) => {
+      requireBound(state);
+      return state.client.binding(state.secret);
+    },
     description: 'Report the identity this connection is bound to, as enforced by the daemon.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'population',
+    class: 'read',
+    handler: async (state, args) => {
+      const souls = await state.client.population({
+        status: typeof args.status === 'string' ? args.status : null,
+        app: typeof args.app === 'string' ? args.app : null,
+      });
+      return { souls };
+    },
     description: 'List the population census of agent souls in this account.',
     inputSchema: {
       type: 'object',
@@ -87,11 +107,19 @@ const TOOLS = [
   },
   {
     name: 'space_path',
+    class: 'read',
+    handler: async (state) => {
+      requireBound(state);
+      const binding = await state.client.binding(state.secret);
+      return state.client.spacePath(binding.agentId);
+    },
     description: 'Path of the bound identity\'s Agent Space (requires bind).',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'credential',
+    class: 'write',
+    handler: credentialTool,
     description:
       'Check that the identity this connection is bound to can obtain a GitHub '
       + 'credential (requires bind). Returns a credential reference (the identity '
@@ -102,6 +130,8 @@ const TOOLS = [
   },
   {
     name: 'take_notices',
+    class: 'write',
+    handler: (state, args) => noticesTool(state, 'take', args),
     description:
       'Lease up to `count` GitHub notices (mentions, review requests, reviews, comments, issue/PR/discussion changes) for this '
       + 'bound soul\'s App from the agent-bot server, oldest first. Each has an `id` and a `lease`; call ack_notices with the '
@@ -117,6 +147,8 @@ const TOOLS = [
   },
   {
     name: 'peek_notices',
+    class: 'read',
+    handler: (state, args) => noticesTool(state, 'peek', args),
     description: 'List visible notices (same filters as take_notices) without leasing them. Requires bind and server mode.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {
       count: { type: 'integer', minimum: 1, maximum: 50 }, type: { type: 'string' }, kind: { type: 'string' },
@@ -125,6 +157,8 @@ const TOOLS = [
   },
   {
     name: 'ack_notices',
+    class: 'write',
+    handler: (state, args) => noticesTool(state, 'ack', args),
     description: 'Delete handled notices. Pass the `lease` tokens from take_notices (a stale lease is reported, not acked).',
     inputSchema: { type: 'object', additionalProperties: false, required: ['ids'], properties: {
       ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 },
@@ -132,6 +166,8 @@ const TOOLS = [
   },
   {
     name: 'release_notices',
+    class: 'write',
+    handler: (state, args) => noticesTool(state, 'release', args),
     description: 'Hand leased notices back to the queue early, unhandled.',
     inputSchema: { type: 'object', additionalProperties: false, required: ['ids'], properties: {
       ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 },
@@ -139,6 +175,8 @@ const TOOLS = [
   },
   {
     name: 'take_inbox',
+    class: 'write',
+    handler: takeInbox,
     description:
       'DEPRECATED: use take_notices + ack_notices. In server mode this takes one notice for the bound repository and acks it. Take the next subscribed GitHub notice (including mentions, review requests, '
       + 'merges, reviews, issue changes and discussion changes) for the App and '
@@ -153,6 +191,8 @@ const TOOLS = [
   },
   {
     name: 'request_grant',
+    class: 'write',
+    handler: (state, args) => grantTool(state, () => state.client.requestGrant(state.secret, args.operation)),
     description:
       'Ask the owner for one named write as their GitHub account (#108): an '
       + 'issue or pull request comment, closing or reopening one, or a review '
@@ -176,6 +216,8 @@ const TOOLS = [
   },
   {
     name: 'spend_grant',
+    class: 'write',
+    handler: (state, args) => grantTool(state, () => state.client.spendGrant(state.secret, args.proposal_id, args.operation)),
     description:
       'Perform an approved grant once, as the owner\'s account. Pass the '
       + 'grant\'s proposal_id and the operation exactly as requested. A '
@@ -192,21 +234,14 @@ const TOOLS = [
   },
 ];
 
-const TOOL_CLASS = Object.freeze({
-  whoami: 'read', population: 'read', space_path: 'read', peek_notices: 'read',
-  doctor: 'read', server_status: 'read', guide: 'read',
-  bind: 'write', credential: 'write', take_notices: 'write', ack_notices: 'write',
-  release_notices: 'write', take_inbox: 'write', request_grant: 'write', spend_grant: 'write',
-  machine_status: 'read', machine_receipts: 'read',
-  machine_plan: 'write', machine_apply: 'write', machine_update: 'write',
-});
-
 function oneLine(text) {
   return text.replace(/\s+/g, ' ').replace(/\.`/g, "'").split('. ')[0].replace(/\.$/, '');
 }
 
-// The hidden registry: legacy names stay callable but are no longer listed.
-const HIDDEN = new Map(TOOLS.map((tool) => [tool.name, tool]));
+// The member tool registry: legacy names stay callable but are no longer
+// listed. Registration closes once the last tool below is in.
+export const MEMBER_TOOLS = createToolRegistry({ server: 'agent-bot' });
+for (const tool of TOOLS) MEMBER_TOOLS.register(tool);
 
 const META_TOOLS = [
   {
@@ -247,13 +282,17 @@ const META_TOOLS = [
 
 // Extra read tools added for the meta-tool surface; their schemas live here so
 // describe_tool stays accurate while tools/list shows only the four.
-HIDDEN.set('doctor', {
+MEMBER_TOOLS.register({
   name: 'doctor',
+  class: 'read',
+  handler: (state) => doctorReport({ env: state.env, cwd: state.cwd }),
   description: 'Machine and worktree readiness: overall status, the first failing check and its fix.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {} },
 });
-HIDDEN.set('server_status', {
+MEMBER_TOOLS.register({
   name: 'server_status',
+  class: 'read',
+  handler: (state) => serverStatusReport({ env: state.env, home: state.home, cwd: state.cwd }),
   description: 'Server-mode status: whether enrolled, the device id/name, approved harnesses, and the repo this checkout would mint for.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {} },
 });
@@ -263,52 +302,65 @@ const MACHINE_FIELDS = {
   target: { type: 'string', description: 'verb-specific target' },
   plan_id: { type: 'string', description: 'plan id an apply refers back to' },
 };
-HIDDEN.set('machine_status', {
+MEMBER_TOOLS.register({
   name: 'machine_status',
+  class: 'read',
+  handler: (state, args) => machineTool(state, 'status', args),
   description: 'Agent-machine daemon status through the paired machine client (requires bind and machine pairing).',
   inputSchema: { type: 'object', additionalProperties: false, properties: {} },
 });
-HIDDEN.set('machine_receipts', {
+MEMBER_TOOLS.register({
   name: 'machine_receipts',
+  class: 'read',
+  handler: (state, args) => machineTool(state, 'receipts', args),
   description: 'Agent-machine operation receipts for this machine.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {} },
 });
-HIDDEN.set('machine_plan', {
+MEMBER_TOOLS.register({
   name: 'machine_plan',
+  class: 'write',
+  handler: (state, args) => machineTool(state, 'plan', args),
   description: 'Ask agent-machine to plan a catalog operation; returns a plan id to apply.',
   inputSchema: { type: 'object', additionalProperties: false, properties: MACHINE_FIELDS },
 });
-HIDDEN.set('machine_apply', {
+MEMBER_TOOLS.register({
   name: 'machine_apply',
+  class: 'write',
+  handler: (state, args) => machineTool(state, 'apply', args),
   description: 'Apply an agent-machine plan id.',
   inputSchema: { type: 'object', additionalProperties: false, properties: MACHINE_FIELDS },
 });
-HIDDEN.set('machine_update', {
+MEMBER_TOOLS.register({
   name: 'machine_update',
+  class: 'write',
+  handler: (state, args) => machineTool(state, 'update', args),
   description: 'Ask agent-machine to update a catalog app.',
   inputSchema: { type: 'object', additionalProperties: false, properties: MACHINE_FIELDS },
 });
-HIDDEN.set('guide', {
+MEMBER_TOOLS.register({
   name: 'guide',
+  class: 'read',
+  handler: (state, args) => guideText(state, typeof args.topic === 'string' ? args.topic : null),
   description: 'The bundled agent-bot skill text for a subcommand or topic; no topic returns the routing summary.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {
     topic: { type: 'string', description: 'an agent-bot subcommand or reference name (omit for the routing summary)' },
   } },
 });
+MEMBER_TOOLS.close();
 
 function mcpError(code, message) {
   return Object.assign(new Error(`${message} [${code}]`), { code });
 }
 
 function describeEntry(name) {
-  const tool = HIDDEN.get(name);
+  const tool = MEMBER_TOOLS.get(name);
   if (!tool) throw mcpError('unknown-tool', `unknown tool: ${name}`);
-  return { name, desc: oneLine(tool.description ?? ''), class: TOOL_CLASS[name] ?? 'write', inputSchema: tool.inputSchema };
+  return { name, desc: oneLine(tool.description), class: tool.class, inputSchema: tool.inputSchema };
 }
 
 function searchTools(query) {
   const needle = (query ?? '').toLowerCase().trim();
-  const entries = [...HIDDEN.keys()].filter((n) => !META_TOOLS.some((m) => m.name === n)).map((n) => describeEntry(n));
+  const entries = MEMBER_TOOLS.names().map((n) => describeEntry(n));
   if (needle === '') return entries.map(({ name, desc }) => ({ name, desc }));
   const words = needle.split(/[^a-z0-9_]+/i).filter(Boolean);
   const scored = entries.map((entry) => {
@@ -483,173 +535,148 @@ function repinApp(state, app) {
   return { ...app, next: 'run agent-bot setup-worktree in this checkout to commit as the reconciled App' };
 }
 
-async function callTool(state, name, args = {}) {
-  switch (name) {
-    case 'bind': {
-      let existing = null;
-      try {
-        existing = readBinding({ env: state.env, cwd: state.cwd });
-      } catch (error) {
+function requireBound(state) {
+  if (!state.secret) throw new Error('not bound — call the bind tool first');
+}
+
+async function bindTool(state, args) {
+  let existing = null;
+  try {
+    existing = readBinding({ env: state.env, cwd: state.cwd });
+  } catch (error) {
+    throw inboxError(
+      'inbox-daemon-unreachable',
+      `bind failed: the worktree binding could not be read (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot doctor\`, then \`agent-bot setup-worktree\` if the binding is corrupt`,
+      { cause: error },
+    );
+  }
+  if (existing) {
+    try {
+      const binding = await state.client.binding(existing.secret);
+      state.secret = existing.secret;
+      state.agentId = binding.agentId;
+      // A binding outlives its session, so a new session run as another
+      // App reconciles here as a first bind would (#107). The binding is
+      // live either way: a daemon that cannot reconcile leaves it as is.
+      const claimed = claimedApp(state);
+      if (!claimed) return binding;
+      let app = null;
+      try { ({ app = null } = await state.client.reconcileApp(existing.secret, claimed)); } catch { /* record unchanged */ }
+      return app ? { ...binding, app: repinApp(state, app) } : binding;
+    } catch (error) {
+      // #1179: if a restarted daemon rejects the stale binding secret (403)
+      // and `setup-worktree` has minted a fresh bind token, fall through to
+      // surrender that token; otherwise tell the caller how to mint one.
+      if (error?.statusCode === 403) {
+        let freshToken = null;
+        try { freshToken = readBindToken(git(state.cwd, 'rev-parse', '--absolute-git-dir')); } catch { freshToken = null; }
+        if (!freshToken) {
+          throw inboxError(
+            'inbox-not-bound',
+            'bind failed: the daemon rejected this worktree\'s existing binding (it may have restarted) — run `agent-bot setup-worktree` to mint a fresh bind token, then retry bind',
+            { cause: error },
+          );
+        }
+      } else {
+        const cause = describeFetchCause(error);
+        const safeMessage = sanitizeInboxDetail(cause.message ?? error?.message ?? 'unknown error');
+        const causeCode = cause.code ? `${cause.code}: ` : '';
         throw inboxError(
           'inbox-daemon-unreachable',
-          `bind failed: the worktree binding could not be read (${sanitizeInboxDetail(error?.message ?? 'unknown error')}); run \`agent-bot doctor\`, then \`agent-bot setup-worktree\` if the binding is corrupt`,
+          `bind failed: the daemon is unreachable to re-bind this worktree (${causeCode}${safeMessage}); run \`agent-bot daemon status\` and \`agent-bot doctor\`, then retry`,
           { cause: error },
         );
       }
-      if (existing) {
-        try {
-          const binding = await state.client.binding(existing.secret);
-          state.secret = existing.secret;
-          state.agentId = binding.agentId;
-          // A binding outlives its session, so a new session run as another
-          // App reconciles here as a first bind would (#107). The binding is
-          // live either way: a daemon that cannot reconcile leaves it as is.
-          const claimed = claimedApp(state);
-          if (!claimed) return binding;
-          let app = null;
-          try { ({ app = null } = await state.client.reconcileApp(existing.secret, claimed)); } catch { /* record unchanged */ }
-          return app ? { ...binding, app: repinApp(state, app) } : binding;
-        } catch (error) {
-          // #1179: if a restarted daemon rejects the stale binding secret (403)
-          // and `setup-worktree` has minted a fresh bind token, fall through to
-          // surrender that token; otherwise tell the caller how to mint one.
-          if (error?.statusCode === 403) {
-            let freshToken = null;
-            try { freshToken = readBindToken(git(state.cwd, 'rev-parse', '--absolute-git-dir')); } catch { freshToken = null; }
-            if (!freshToken) {
-              throw inboxError(
-                'inbox-not-bound',
-                'bind failed: the daemon rejected this worktree\'s existing binding (it may have restarted) — run `agent-bot setup-worktree` to mint a fresh bind token, then retry bind',
-                { cause: error },
-              );
-            }
-          } else {
-            const cause = describeFetchCause(error);
-            const safeMessage = sanitizeInboxDetail(cause.message ?? error?.message ?? 'unknown error');
-            const causeCode = cause.code ? `${cause.code}: ` : '';
-            throw inboxError(
-              'inbox-daemon-unreachable',
-              `bind failed: the daemon is unreachable to re-bind this worktree (${causeCode}${safeMessage}); run \`agent-bot daemon status\` and \`agent-bot doctor\`, then retry`,
-              { cause: error },
-            );
-          }
-        }
-      }
-      if (typeof args.transcript_id !== 'string' || args.transcript_id === '') {
-        throw new Error('bind requires transcript_id');
-      }
-      const gitDir = git(state.cwd, 'rev-parse', '--absolute-git-dir');
-      const record = readBindToken(gitDir);
-      if (!record) {
-        throw new Error('no bind token is minted for this worktree — run `agent-bot setup-worktree` first');
-      }
-      const result = await state.client.bind({
-        gitDir,
-        token: record.token,
-        transcript: {
-          provider: args.transcript_provider ?? detectAgentHarness(state.env) ?? 'custom',
-          id: args.transcript_id,
-        },
-        parentId: args.parent_agent_id ?? null,
-        app: claimedApp(state),
-      });
-      state.secret = result.secret;
-      state.agentId = result.agentId;
-      // The reuse policy may have resolved a different identity than the
-      // token's original pin (a later conversation reusing the worktree);
-      // repinning here keeps commits and binding attributing identically.
-      if (result.repinRequired) {
-        git(state.cwd, 'config', 'extensions.worktreeConfig', 'true');
-        git(state.cwd, 'config', '--worktree', 'agentBot.agentId', result.agentId);
-      }
-      if (result.app) result.app = repinApp(state, result.app);
-      const { secret, ...safe } = result;
-      return safe;
     }
-    case 'whoami': {
-      if (!state.secret) throw new Error('not bound — call the bind tool first');
-      return state.client.binding(state.secret);
-    }
-    case 'population': {
-      const souls = await state.client.population({
-        status: typeof args.status === 'string' ? args.status : null,
-        app: typeof args.app === 'string' ? args.app : null,
-      });
-      return { souls };
-    }
-    case 'space_path': {
-      if (!state.secret) throw new Error('not bound — call the bind tool first');
-      const binding = await state.client.binding(state.secret);
-      return state.client.spacePath(binding.agentId);
-    }
-    case 'credential': {
-      if (!state.secret) throw new Error('not bound — call the bind tool first');
-      // Members get credential references only (#1184 goal): a token in a
-      // tool result would enter the model's context. git and gh resolve a
-      // fresh credential per operation through the helper and the shim.
-      const grant = await state.client.credential(state.secret);
-      return {
-        agentId: grant.agentId, appSlug: grant.appSlug, credential_ref: grant.credential_ref ?? null,
-        task_id: grant.task_id ?? null, operation_id: grant.operation_id ?? null, expires_at: grant.expires_at,
-        use: 'git and gh in this worktree authenticate as the bot per operation; no token is handed to you',
-      };
-    }
-    case 'take_inbox':
-      return takeInbox(state, args);
-    case 'take_notices':
-    case 'peek_notices':
-    case 'ack_notices':
-    case 'release_notices': {
-      if (!state.secret) throw new Error('not bound — call the bind tool first');
-      try {
-        return await state.client.notices(state.secret, name.slice(0, -'_notices'.length), args ?? {});
-      } catch (error) {
-        throw new Error(`${name} failed: ${daemonDetail(error)}`, { cause: error });
-      }
-    }
-    case 'request_grant':
-    case 'spend_grant': {
-      if (!state.secret) throw new Error('not bound — call the bind tool first');
-      try {
-        return name === 'request_grant'
-          ? await state.client.requestGrant(state.secret, args.operation)
-          : await state.client.spendGrant(state.secret, args.proposal_id, args.operation);
-      } catch (error) {
-        // The daemon's sentence and code; neither carries a credential.
-        if (typeof error?.code === 'string' && error.detail) throw new Error(`${error.detail} [${error.code}]`);
-        throw error;
-      }
-    }
-    case 'doctor': {
-      return doctorReport({ env: state.env, cwd: state.cwd });
-    }
-    case 'machine_status':
-    case 'machine_receipts':
-    case 'machine_plan':
-    case 'machine_apply':
-    case 'machine_update': {
-      if (!state.secret) throw new Error('not bound — call the bind tool first');
-      const verb = name.slice('machine_'.length);
-      const { name: appName, option, target, plan_id } = args ?? {};
-      try {
-        return await state.client.machine(state.secret, {
-          verb,
-          ...(appName !== undefined ? { name: appName } : {}),
-          ...(option !== undefined ? { option } : {}),
-          ...(target !== undefined ? { target } : {}),
-          ...(plan_id !== undefined ? { plan_id } : {}),
-        });
-      } catch (error) {
-        throw new Error(`${name} failed: ${error.detail ?? error.message}`, { cause: error });
-      }
-    }
-    case 'server_status':
-      return serverStatusReport({ env: state.env, home: state.home, cwd: state.cwd });
-    case 'guide':
-      return guideText(state, typeof args.topic === 'string' ? args.topic : null);
-    default:
-      throw mcpError('unknown-tool', `unknown tool: ${name}`);
   }
+  if (typeof args.transcript_id !== 'string' || args.transcript_id === '') {
+    throw new Error('bind requires transcript_id');
+  }
+  const gitDir = git(state.cwd, 'rev-parse', '--absolute-git-dir');
+  const record = readBindToken(gitDir);
+  if (!record) {
+    throw new Error('no bind token is minted for this worktree — run `agent-bot setup-worktree` first');
+  }
+  const result = await state.client.bind({
+    gitDir,
+    token: record.token,
+    transcript: {
+      provider: args.transcript_provider ?? detectAgentHarness(state.env) ?? 'custom',
+      id: args.transcript_id,
+    },
+    parentId: args.parent_agent_id ?? null,
+    app: claimedApp(state),
+  });
+  state.secret = result.secret;
+  state.agentId = result.agentId;
+  // The reuse policy may have resolved a different identity than the
+  // token's original pin (a later conversation reusing the worktree);
+  // repinning here keeps commits and binding attributing identically.
+  if (result.repinRequired) {
+    git(state.cwd, 'config', 'extensions.worktreeConfig', 'true');
+    git(state.cwd, 'config', '--worktree', 'agentBot.agentId', result.agentId);
+  }
+  if (result.app) result.app = repinApp(state, result.app);
+  const { secret, ...safe } = result;
+  return safe;
+}
+
+async function credentialTool(state) {
+  requireBound(state);
+  // Members get credential references only (#1184 goal): a token in a
+  // tool result would enter the model's context. git and gh resolve a
+  // fresh credential per operation through the helper and the shim.
+  const grant = await state.client.credential(state.secret);
+  return {
+    agentId: grant.agentId, appSlug: grant.appSlug, credential_ref: grant.credential_ref ?? null,
+    task_id: grant.task_id ?? null, operation_id: grant.operation_id ?? null, expires_at: grant.expires_at,
+    use: 'git and gh in this worktree authenticate as the bot per operation; no token is handed to you',
+  };
+}
+
+async function noticesTool(state, verb, args) {
+  const name = `${verb}_notices`;
+  requireBound(state);
+  try {
+    return await state.client.notices(state.secret, verb, args ?? {});
+  } catch (error) {
+    throw new Error(`${name} failed: ${daemonDetail(error)}`, { cause: error });
+  }
+}
+
+async function grantTool(state, call) {
+  requireBound(state);
+  try {
+    return await call();
+  } catch (error) {
+    // The daemon's sentence and code; neither carries a credential.
+    if (typeof error?.code === 'string' && error.detail) throw new Error(`${error.detail} [${error.code}]`);
+    throw error;
+  }
+}
+
+async function machineTool(state, verb, args) {
+  const name = `machine_${verb}`;
+  requireBound(state);
+  const { name: appName, option, target, plan_id } = args ?? {};
+  try {
+    return await state.client.machine(state.secret, {
+      verb,
+      ...(appName !== undefined ? { name: appName } : {}),
+      ...(option !== undefined ? { option } : {}),
+      ...(target !== undefined ? { target } : {}),
+      ...(plan_id !== undefined ? { plan_id } : {}),
+    });
+  } catch (error) {
+    throw new Error(`${name} failed: ${error.detail ?? error.message}`, { cause: error });
+  }
+}
+
+// Calls a member tool by name through its registered handler.
+async function callTool(state, name, args = {}) {
+  const tool = MEMBER_TOOLS.get(name);
+  if (!tool) throw mcpError('unknown-tool', `unknown tool: ${name}`);
+  return tool.handler(state, args);
 }
 
 function rpcResult(id, result) {
@@ -701,9 +728,9 @@ export async function handleMcpMessage(state, message) {
             return reply(rpcResult(id, { content: [{ type: 'text', text: JSON.stringify({ name: d.name, desc: d.desc, class: d.class, inputSchema: d.inputSchema }, null, 2) }] }));
           }
           if (name === 'call_tool' || name === 'call_write_tool') {
-            const target = HIDDEN.get(args.name);
+            const target = MEMBER_TOOLS.get(args.name);
             if (!target) throw mcpError('unknown-tool', `unknown tool: ${args.name}`);
-            const cls = TOOL_CLASS[args.name] ?? 'write';
+            const cls = target.class;
             if (name === 'call_tool' && cls !== 'read') throw mcpError('use-call-write-tool', `${args.name} is a write tool — run it through call_write_tool`);
             if (name === 'call_write_tool' && cls !== 'write') throw mcpError('use-call-tool', `${args.name} is a read tool — run it through call_tool`);
             const result = await callTool(state, args.name, args.arguments ?? {});
