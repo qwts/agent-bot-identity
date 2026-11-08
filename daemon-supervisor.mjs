@@ -33,7 +33,9 @@ import { windowsTaskJobArguments, windowsTaskJobCommandLine } from './windows-ta
 import { windowsInstallDirectory } from './windows-install-path.mjs';
 import process from 'node:process';
 
-import { daemonStateFile, daemonStatus, startDaemon, stopDaemon } from './agent-daemon.mjs';
+import { daemonStateFile } from './daemon-client.mjs';
+import { startDaemon, stopDaemon } from './daemon-state.mjs';
+import { daemonStatus } from './daemon-status.mjs';
 import { keydSignerEnvironment } from './config.mjs';
 import { daemonLogMaxBytes, daemonLogPath } from './daemon-log.mjs';
 import { NAMESPACE_VARIABLE, VAULT_VARIABLE, credentialNamespace, credentialVault } from './identity-format.mjs';
