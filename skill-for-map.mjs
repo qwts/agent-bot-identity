@@ -5,8 +5,8 @@
 // need-to-skill index: a subcommand the agent is about to run is the key, and
 // an unknown key is an error, never a nearest match.
 //
-// tests/skill-catalog.test.mjs fails when a command in cli/dispatch.mjs or
-// cli/parse.mjs is in neither table, so the two cannot drift silently.
+// tests/skill-catalog.test.mjs fails when a command registered in
+// cli/dispatch.mjs is in neither table, so the two cannot drift silently.
 //
 // Shared by the CLI (--for) and the MCP `guide` tool. Data only: both the cli
 // and host modules may import it (it is assigned to `shared`).
