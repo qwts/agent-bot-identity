@@ -80,7 +80,7 @@ const LAUNCH_PATHS = {
   'identity/server-client.mjs': [1, 'git; reads the checkout\'s origin remote for server-mode minting'],
   'session-bind.mjs': [4, 'git; first-party: the installed agent-bot under the caller\'s own env; devin list, the Devin session lookup (#1275)'],
   'identity/signed-commit.mjs': [1, 'git'],
-  'sop.mjs': [1, 'git'],
+  'sop-resolver.mjs': [1, 'git; the bounded SOP and org reads (moved from sop.mjs, #1388)'],
   'soul-coauthor.mjs': [1, 'git'],
   'wake-listen.mjs': [1, 'git'],
   'identity/worktree-token.mjs': [1, 'git'],
