@@ -5,58 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { commsSharedDirInfo } from '../comms-client.mjs';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
 import { windowsGitShell, gitShellEnvironment } from '../windows-git-shell.mjs';
+import { createCommandRegistry } from './command-registry.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-export const MODULES = new Map([
-  ['start', 'start.mjs'],
-  ['bootstrap', 'bootstrap.mjs'],
-  ['setup-worktree', 'setup-worktree.mjs'],
-  ['join', 'soul-join.mjs'],
-  ['mint-token', 'cli/mint-token.mjs'],
-  ['events', 'events.mjs'],
-  ['doctor', 'doctor.mjs'],
-  ['identity', 'cli/identity.mjs'],
-  ['space', 'agent-space.mjs'],
-  ['population', 'agent-population.mjs'],
-  ['principal', 'cli/principal.mjs'],
-  ['binding', 'agent-binding.mjs'],
-  ['session', 'session-bind.mjs'],
-  ['soul', 'cold-wake-settings.mjs'],
-  ['harness', 'harness-auth.mjs'],
-  ['daemon', 'agent-daemon.mjs'],
-  ['keyd', 'keyd-supervisor.mjs'],
-  ['owner', 'cli/owner.mjs'],
-  ['approvals', 'agent-approvals.mjs'],
-  ['audit', 'agent-audit.mjs'],
-  ['mcp', 'agent-mcp.mjs'],
-  ['machine', 'cli/machine.mjs'],
-  ['pair', 'cli/machine.mjs'],
-  ['unpair', 'cli/machine.mjs'],
-  ['reach-mcp', 'daemon-mcp.mjs'],
-  ['wake', 'wake-listen.mjs'],
-  ['web', 'agent-web.mjs'],
-  ['telegram', 'telegram-adapter.mjs'],
-  ['install', 'install.mjs'],
-  ['update', 'update.mjs'],
-  ['install-gh-shim', 'install-gh-shim.mjs'],
-  ['ensure-private-key', 'ensure-private-key.mjs'],
-  ['signed-commit', 'signed-commit.mjs'],
-  ['secret', 'secret.mjs'],
-  ['skill', 'skill.mjs'],
-  ['sop', 'sop.mjs'],
-  ['workflow', 'workflow.mjs'],
-  ['sandbox', 'sandbox.mjs'],
-  ['metrics', 'metrics.mjs'],
-  ['diagnostics', 'diagnostics-cli.mjs'],
-  ['server', 'identity/server-client.mjs'],
-  ['notices', 'identity/server-notices.mjs'],
-  ['credential', 'git-credential-bot.mjs'],
-  ['worktree-token', 'worktree-token.mjs'],
-  ['gh-inbox-query', 'gh-inbox-query.mjs'],
-  ['gh-pr-view-json', 'gh-pr-view-json.mjs'],
-  ['claude-worktree-create', 'claude-worktree-create.mjs'],
-  ['agent-hook', 'agent-hook.mjs'],
-]);
 
 const SOUL_USAGE = 'usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul skill import PATH_OR_HTTPS_DOCUMENT|list|show UUID|verify UUID|check UUID [--json] | soul skill update UUID --check CHECK_ID [--apply --expected-accepted DIGEST --expected-local DIGEST] | soul skill update UUID --recover | soul skill learn UUID --soul AGENT_ID [--package STAGING --outcome FILE --reason TEXT] [--json] | soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin] | soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin] | soul skill status --soul AGENT_ID [--json] | soul skill search --soul AGENT_ID QUERY [--json] | soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json] [--principal-stdin] | soul build [PATH] [--check] [--json] | soul pack validate PATH | soul revision <command> | soul revision edit ID PATH REASON [--apply] [--json] [--principal-stdin] | soul revision prepare <agentId|name> [--json] [--dest PATH] | soul revision prepare --discard STAGING | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul profile <agentId|name> [--json] [--file RELATIVE_PATH] | soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin] | soul env history <agentId|name> [--json] [--limit N] | soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin] | soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable>|--clear [--json] [--principal-stdin] | soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--scope soul|team] [--plan] [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH [--json] | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]';
 
@@ -177,139 +128,161 @@ function follow(executable, args, env = process.env) {
   return 0;
 }
 
-export function dispatchAgentBot(parsed) {
-  if (parsed.command === 'broker') {
-    if (parsed.args.length === 0 || ['--help', '-h'].includes(parsed.args[0])) {
-      process.stdout.write(BROKER_USAGE);
-      return 0;
-    }
-    const { sharedDir } = commsSharedDirInfo({ env: process.env });
-    const brokerEnv = { ...process.env, AGENT_COMMS_SHARED_DIR: sharedDir };
-    const entry = resolveBundledCommsEntry(process.env);
-    const executable = entry ? process.execPath : 'agent-comms';
-    const brokerArgs = entry ? [entry, 'broker', ...parsed.args] : ['broker', ...parsed.args];
-    if (parsed.args[0] === 'run') {
-      return follow(executable, brokerArgs, brokerEnv);
-    }
-    return run(executable, brokerArgs, brokerEnv);
-  }
-  if (parsed.command === 'soul' && ['--help', '-h'].includes(parsed.args[0])) {
-    process.stdout.write(SOUL_HELP);
+function runBroker(parsed) {
+  if (parsed.args.length === 0 || ['--help', '-h'].includes(parsed.args[0])) {
+    process.stdout.write(BROKER_USAGE);
     return 0;
   }
-  if (parsed.command === 'soul' && parsed.args[0] === 'stop') {
-    return run(process.execPath, [join(ROOT, 'soul-stop.mjs'), ...parsed.args.slice(1)]);
+  const { sharedDir } = commsSharedDirInfo({ env: process.env });
+  const brokerEnv = { ...process.env, AGENT_COMMS_SHARED_DIR: sharedDir };
+  const entry = resolveBundledCommsEntry(process.env);
+  const executable = entry ? process.execPath : 'agent-comms';
+  const brokerArgs = entry ? [entry, 'broker', ...parsed.args] : ['broker', ...parsed.args];
+  if (parsed.args[0] === 'run') {
+    return follow(executable, brokerArgs, brokerEnv);
   }
-  if (parsed.command === 'soul' && ['pause', 'resume'].includes(parsed.args[0])) {
-    return run(process.execPath, [join(ROOT, 'soul-pause.mjs'), ...parsed.args]);
+  return run(executable, brokerArgs, brokerEnv);
+}
+
+function runHook(parsed) {
+  if (!HOOK_PATTERN.test(parsed.hook)) throw new Error(`invalid hook name: ${parsed.hook}`);
+  const hook = join(ROOT, 'hooks', parsed.hook);
+  if (!GIT_HOOK_NAMES.includes(parsed.hook) || !existsSync(hook)) {
+    throw new Error(`unsupported hook: ${parsed.hook}`);
   }
-  if (parsed.command === 'soul' && parsed.args[0] === 'show') {
-    return run(process.execPath, [join(ROOT, 'agent-population.mjs'), ...parsed.args]);
+  if (process.platform === 'win32') {
+    const shell = windowsGitShell();
+    return run(shell, [hook.replaceAll('\\', '/'), ...parsed.args], gitShellEnvironment(shell));
   }
-  if (parsed.command === 'soul' && parsed.args[0] === 'profile') {
-    return run(process.execPath, [join(ROOT, 'soul-profile.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'env' && parsed.args[1] === 'migrate') {
-    return run(process.execPath, [join(ROOT, 'soul-env-migrate.mjs'), ...parsed.args.slice(2)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'env' && parsed.args[1] === 'clean') {
-    return run(process.execPath, [join(ROOT, 'soul-env-clean.mjs'), ...parsed.args.slice(2)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'env' && parsed.args[1] === 'history') {
-    return run(process.execPath, [join(ROOT, 'soul-env-history.mjs'), ...parsed.args.slice(2)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'env' && ['export', 'import'].includes(parsed.args[1])) {
-    return run(process.execPath, [join(ROOT, 'cli', 'soul-env-transfer.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'env') {
-    return run(process.execPath, [join(ROOT, 'soul-env.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'runtimes') {
-    return run(process.execPath, [join(ROOT, 'soul-runtimes.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'secret') {
-    return run(process.execPath, [join(ROOT, 'soul-secrets.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && ['confinement', 'confinement-report'].includes(parsed.args[0])) {
-    return run(process.execPath, [join(ROOT, 'confinement.mjs'), ...parsed.args]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'templates') {
-    return run(process.execPath, [join(ROOT, 'soul-templates.mjs'), '--list', ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'spawn') {
-    return run(process.execPath, [join(ROOT, 'soul-templates.mjs'), '--spawn', ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'template') {
-    return run(process.execPath, [join(ROOT, 'soul-template-refresh.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'identity' && ['app', 'apps', 'addon'].includes(parsed.args[0])) {
-    return run(process.execPath, [join(ROOT, 'cli', 'identity-apps.mjs'), ...parsed.args]);
-  }
-  if (parsed.command === 'identity' && parsed.args[0] === 'migrate-credentials') {
-    return run(process.execPath, [join(ROOT, 'cli', 'migrate-credentials.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'hook') {
-    if (!HOOK_PATTERN.test(parsed.hook)) throw new Error(`invalid hook name: ${parsed.hook}`);
-    const hook = join(ROOT, 'hooks', parsed.hook);
-    if (!GIT_HOOK_NAMES.includes(parsed.hook) || !existsSync(hook)) {
-      throw new Error(`unsupported hook: ${parsed.hook}`);
-    }
-    if (process.platform === 'win32') {
-      const shell = windowsGitShell();
-      return run(shell, [hook.replaceAll('\\', '/'), ...parsed.args], gitShellEnvironment(shell));
-    }
-    return run(hook, parsed.args);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'dir') {
-    return run(process.execPath, [join(ROOT, 'soul-dir.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'locate') {
-    return run(process.execPath, [join(ROOT, 'soul-dir.mjs'), ...parsed.args]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'build') {
-    return run(process.execPath, [join(ROOT, 'soul-build.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'pack') {
-    return run(process.execPath, [join(ROOT, 'soul-package.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'model') return run(process.execPath, [join(ROOT, 'soul-model.mjs'), ...parsed.args.slice(1)]);
-  if (parsed.command === 'soul' && parsed.args[0] === 'computer-use') return run(process.execPath, [join(ROOT, 'soul-computer-use.mjs'), ...parsed.args.slice(1)]);
-  if (parsed.command === 'soul' && parsed.args[0] === 'mode') return run(process.execPath, [join(ROOT, 'soul-mode.mjs'), ...parsed.args.slice(1)]);
-  if (parsed.command === 'soul' && parsed.args[0] === 'tool-home') return run(process.execPath, [join(ROOT, 'soul-tool-home.mjs'), ...parsed.args.slice(1)]);
-  if (parsed.command === 'soul' && parsed.args[0] === 'comms') {
-    return run(process.execPath, [join(ROOT, 'soul-comms.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'asides') {
-    return run(process.execPath, [join(ROOT, 'soul-asides.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'remove') {
-    return run(process.execPath, [join(ROOT, 'soul-remove.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'fork') {
-    return run(process.execPath, [join(ROOT, 'soul-fork.mjs'), ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'soul' && parsed.args[0] === 'skill') return run(process.execPath, [join(ROOT, 'cli/soul-skill.mjs'), ...parsed.args.slice(1)]);
-  if (parsed.command === 'sandbox' && parsed.args[0] === 'export') return run(process.execPath, [join(ROOT, 'cli/sandbox-export.mjs'), ...parsed.args.slice(1)]);
-  if (parsed.command === 'soul' && parsed.args[0] === 'revision') {
-    return run(process.execPath, [join(ROOT, 'soul-revisions.mjs'), ...parsed.args.slice(1)]);
-  }
-  const module = MODULES.get(parsed.command);
-  if (!module) throw new Error(`unsupported command: ${parsed.command}`);
-  if (parsed.command === 'audit' && parsed.args[0] === 'tail') {
-    return follow(process.execPath, [join(ROOT, module), ...parsed.args]);
-  }
+  return run(hook, parsed.args);
+}
+
+// Every agent-bot command, in the order the parser and help have always
+// listed them: public first, then internal (#1394, HQ plan Stage 0 row 9).
+// Each registers through cli/command-registry.mjs, the in-place form of
+// `ctx.commands.register` (plan section 4.2). The registry says what an
+// invocation runs; dispatchAgentBot runs it.
+const SOUL_SUBCOMMANDS = [
+  { words: ['cold-wake'], module: 'cold-wake-settings.mjs', drop: 1 },
+  { words: ['stop'], module: 'soul-stop.mjs', drop: 1 },
+  { words: ['pause'], module: 'soul-pause.mjs' },
+  { words: ['resume'], module: 'soul-pause.mjs' },
+  { words: ['show'], module: 'agent-population.mjs' },
+  { words: ['profile'], module: 'soul-profile.mjs', drop: 1 },
+  { words: ['env', 'migrate'], module: 'soul-env-migrate.mjs', drop: 2 },
+  { words: ['env', 'clean'], module: 'soul-env-clean.mjs', drop: 2 },
+  { words: ['env', 'history'], module: 'soul-env-history.mjs', drop: 2 },
+  { words: ['env', 'export'], module: 'cli/soul-env-transfer.mjs', drop: 1 },
+  { words: ['env', 'import'], module: 'cli/soul-env-transfer.mjs', drop: 1 },
+  { words: ['env'], module: 'soul-env.mjs', drop: 1 },
+  { words: ['runtimes'], module: 'soul-runtimes.mjs', drop: 1 },
+  { words: ['secret'], module: 'soul-secrets.mjs', drop: 1 },
+  { words: ['confinement'], module: 'confinement.mjs' },
+  { words: ['confinement-report'], module: 'confinement.mjs' },
+  { words: ['templates'], module: 'soul-templates.mjs', drop: 1, prepend: ['--list'] },
+  { words: ['spawn'], module: 'soul-templates.mjs', drop: 1, prepend: ['--spawn'] },
+  { words: ['template'], module: 'soul-template-refresh.mjs', drop: 1 },
+  { words: ['dir'], module: 'soul-dir.mjs', drop: 1 },
+  { words: ['locate'], module: 'soul-dir.mjs' },
+  { words: ['build'], module: 'soul-build.mjs', drop: 1 },
+  { words: ['pack'], module: 'soul-package.mjs', drop: 1 },
+  { words: ['model'], module: 'soul-model.mjs', drop: 1 },
+  { words: ['computer-use'], module: 'soul-computer-use.mjs', drop: 1 },
+  { words: ['mode'], module: 'soul-mode.mjs', drop: 1 },
+  { words: ['tool-home'], module: 'soul-tool-home.mjs', drop: 1 },
+  { words: ['comms'], module: 'soul-comms.mjs', drop: 1 },
+  { words: ['asides'], module: 'soul-asides.mjs', drop: 1 },
+  { words: ['remove'], module: 'soul-remove.mjs', drop: 1 },
+  { words: ['fork'], module: 'soul-fork.mjs', drop: 1 },
+  { words: ['skill'], module: 'cli/soul-skill.mjs', drop: 1 },
+  { words: ['revision'], module: 'soul-revisions.mjs', drop: 1 },
+];
+
+export const COMMANDS = createCommandRegistry();
+for (const command of [
+  { name: 'start', visibility: 'public', module: 'start.mjs' },
+  { name: 'bootstrap', visibility: 'public', module: 'bootstrap.mjs' },
   // A person (or a harness startup script) ran it by name, not a git hook:
   // setup-worktree may then say why it did nothing (#382).
-  if (parsed.command === 'setup-worktree') {
-    return run(process.execPath, [join(ROOT, module), ...parsed.args], { ...process.env, AGENT_BOT_SETUP_HINT: '1' });
+  { name: 'setup-worktree', visibility: 'public', module: 'setup-worktree.mjs', env: { AGENT_BOT_SETUP_HINT: '1' } },
+  { name: 'join', visibility: 'public', module: 'soul-join.mjs' },
+  { name: 'mint-token', visibility: 'public', module: 'cli/mint-token.mjs' },
+  { name: 'events', visibility: 'public', module: 'events.mjs' },
+  { name: 'doctor', visibility: 'public', module: 'doctor.mjs' },
+  { name: 'identity', visibility: 'public', module: 'cli/identity.mjs', subcommands: [
+    { words: ['app'], module: 'cli/identity-apps.mjs' },
+    { words: ['apps'], module: 'cli/identity-apps.mjs' },
+    { words: ['addon'], module: 'cli/identity-apps.mjs' },
+    { words: ['migrate-credentials'], module: 'cli/migrate-credentials.mjs', drop: 1 },
+  ] },
+  { name: 'space', visibility: 'public', module: 'agent-space.mjs' },
+  { name: 'population', visibility: 'public', module: 'agent-population.mjs' },
+  { name: 'principal', visibility: 'public', module: 'cli/principal.mjs' },
+  { name: 'binding', visibility: 'public', module: 'agent-binding.mjs' },
+  { name: 'session', visibility: 'public', module: 'session-bind.mjs' },
+  // Only `soul cold-wake` reaches the command's own module; any other
+  // subcommand it does not register is a usage error.
+  { name: 'soul', visibility: 'public', module: 'cold-wake-settings.mjs', help: SOUL_HELP, usage: SOUL_USAGE, subcommands: SOUL_SUBCOMMANDS },
+  { name: 'harness', visibility: 'public', module: 'harness-auth.mjs' },
+  { name: 'daemon', visibility: 'public', module: 'agent-daemon.mjs' },
+  { name: 'broker', visibility: 'public', run: runBroker },
+  { name: 'keyd', visibility: 'public', module: 'keyd-supervisor.mjs' },
+  { name: 'owner', visibility: 'public', module: 'cli/owner.mjs' },
+  { name: 'approvals', visibility: 'public', module: 'agent-approvals.mjs' },
+  { name: 'audit', visibility: 'public', module: 'agent-audit.mjs', subcommands: [
+    { words: ['tail'], module: 'agent-audit.mjs', follow: true },
+  ] },
+  { name: 'mcp', visibility: 'public', module: 'agent-mcp.mjs' },
+  { name: 'machine', visibility: 'public', module: 'cli/machine.mjs' },
+  { name: 'pair', visibility: 'public', module: 'cli/machine.mjs', prepend: ['pair'], subcommands: [
+    { words: ['comms'], module: 'agent-daemon.mjs', drop: 1, prepend: ['pair-comms'] },
+  ] },
+  { name: 'unpair', visibility: 'public', module: 'cli/machine.mjs', prepend: ['unpair'] },
+  { name: 'reach-mcp', visibility: 'public', module: 'daemon-mcp.mjs' },
+  { name: 'wake', visibility: 'public', module: 'wake-listen.mjs' },
+  { name: 'web', visibility: 'public', module: 'agent-web.mjs' },
+  { name: 'telegram', visibility: 'public', module: 'telegram-adapter.mjs' },
+  { name: 'install', visibility: 'public', module: 'install.mjs' },
+  { name: 'update', visibility: 'public', module: 'update.mjs' },
+  { name: 'install-gh-shim', visibility: 'public', module: 'install-gh-shim.mjs' },
+  { name: 'ensure-private-key', visibility: 'public', module: 'ensure-private-key.mjs' },
+  { name: 'signed-commit', visibility: 'public', module: 'signed-commit.mjs' },
+  { name: 'secret', visibility: 'public', module: 'secret.mjs' },
+  { name: 'skill', visibility: 'public', module: 'skill.mjs' },
+  { name: 'sop', visibility: 'public', module: 'sop.mjs' },
+  { name: 'workflow', visibility: 'public', module: 'workflow.mjs' },
+  { name: 'sandbox', visibility: 'public', module: 'sandbox.mjs', subcommands: [
+    { words: ['export'], module: 'cli/sandbox-export.mjs', drop: 1 },
+  ] },
+  { name: 'metrics', visibility: 'public', module: 'metrics.mjs' },
+  { name: 'diagnostics', visibility: 'public', module: 'diagnostics-cli.mjs' },
+  { name: 'server', visibility: 'public', module: 'identity/server-client.mjs' },
+  { name: 'notices', visibility: 'public', module: 'identity/server-notices.mjs' },
+  { name: 'credential', visibility: 'internal', module: 'git-credential-bot.mjs' },
+  { name: 'worktree-token', visibility: 'internal', module: 'worktree-token.mjs' },
+  { name: 'gh-inbox-query', visibility: 'internal', module: 'gh-inbox-query.mjs' },
+  { name: 'gh-pr-view-json', visibility: 'internal', module: 'gh-pr-view-json.mjs' },
+  { name: 'claude-worktree-create', visibility: 'internal', module: 'claude-worktree-create.mjs' },
+  { name: 'hook', visibility: 'internal', run: runHook },
+  // Called by every harness's generated hook config, never by a person.
+  { name: 'agent-hook', visibility: 'internal', module: 'agent-hook.mjs' },
+]) COMMANDS.register(command);
+COMMANDS.close();
+
+// Command name -> the module it runs, for the commands that run one.
+export const MODULES = COMMANDS.modules();
+
+export function dispatchAgentBot(parsed) {
+  const route = COMMANDS.resolve(parsed.command, parsed.args);
+  if (!route) throw new Error(`unsupported command: ${parsed.command}`);
+  if (route.kind === 'help') {
+    process.stdout.write(route.text);
+    return 0;
   }
-  if (parsed.command === 'pair' && parsed.args[0] === 'comms') {
-    return run(process.execPath, [join(ROOT, 'agent-daemon.mjs'), 'pair-comms', ...parsed.args.slice(1)]);
-  }
-  if (parsed.command === 'pair' || parsed.command === 'unpair') {
-    return run(process.execPath, [join(ROOT, module), parsed.command, ...parsed.args]);
-  }
-  const args = parsed.command === 'soul' && parsed.args[0] === 'cold-wake' ? parsed.args.slice(1) : parsed.args;
-  if (parsed.command === 'soul' && parsed.args[0] !== 'cold-wake') throw new Error(SOUL_USAGE);
-  return run(process.execPath, [join(ROOT, module), ...args]);
+  if (route.kind === 'usage') throw new Error(route.text);
+  if (route.kind === 'run') return route.run(parsed);
+  const args = [join(ROOT, route.module), ...route.args];
+  const env = route.env ? { ...process.env, ...route.env } : process.env;
+  if (route.follow) return follow(process.execPath, args, env);
+  return run(process.execPath, args, env);
 }

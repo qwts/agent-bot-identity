@@ -1,12 +1,18 @@
 // The agent-bot command registry (cli/command-registry.mjs, #1394; HQ plan
-// Stage 0 row 9). This file checks the registry refuses what it does not know
-// and resolves an invocation to help, a usage error, a run function or a
-// module with its arguments.
+// Stage 0 row 9). Every command registers once in cli/dispatch.mjs, and the
+// parser and the dispatcher read the registry. This file checks the registry
+// refuses what it does not know, keeps the public commands equal to the ones
+// `agent-bot --help` lists, and pins the command modules and subcommand
+// routes the dispatcher had before the registry.
+// tests/golden-surface.test.mjs pins the help, the public list and the map.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { COMMAND_VISIBILITY, createCommandRegistry } from '../cli/command-registry.mjs';
+import { COMMANDS, MODULES } from '../cli/dispatch.mjs';
+import { helpText } from '../cli/output.mjs';
+import { PUBLIC_COMMANDS } from '../cli/parse.mjs';
 
 const run = () => 0;
 const invalid = (declaration) => assert.throws(() => createCommandRegistry().register(declaration),
@@ -95,4 +101,109 @@ test('resolve: help, then the longest subcommand, then usage or the command modu
   assert.deepEqual(commands.resolve('p', ['x']), module('p.mjs', ['p', 'x'], false, { HINT: '1' }));
   assert.deepEqual(commands.resolve('r', ['--help']), { kind: 'run', run });
   assert.equal(commands.resolve('nope', []), null);
+});
+
+test('agent-bot: the public commands are exactly the ones --help lists, and the rest are internal', () => {
+  const help = helpText();
+  const section = help.slice(help.indexOf('\nCommands:\n'), help.indexOf('\n\n', help.indexOf('\nCommands:\n') + 1));
+  const listed = section.split('\n').map((line) => /^ {2}([a-z][a-z-]*)\s/.exec(line)?.[1]).filter(Boolean);
+  assert.equal(new Set(listed).size, listed.length, 'help lists each command once');
+  assert.deepEqual([...COMMANDS.names('public')].sort(), [...listed].sort());
+  assert.deepEqual([...PUBLIC_COMMANDS], COMMANDS.names('public'));
+  assert.deepEqual(COMMANDS.names('internal'),
+    ['credential', 'worktree-token', 'gh-inbox-query', 'gh-pr-view-json', 'claude-worktree-create', 'hook', 'agent-hook']);
+  assert.throws(() => COMMANDS.register({ name: 'late', visibility: 'public', module: 'late.mjs' }), /registration is closed/);
+});
+
+// The command -> module map cli/dispatch.mjs had before the registry, in its
+// order. broker and hook ran no module of their own and still do not.
+const MODULES_BEFORE = [
+  ['start', 'start.mjs'], ['bootstrap', 'bootstrap.mjs'], ['setup-worktree', 'setup-worktree.mjs'], ['join', 'soul-join.mjs'],
+  ['mint-token', 'cli/mint-token.mjs'], ['events', 'events.mjs'], ['doctor', 'doctor.mjs'], ['identity', 'cli/identity.mjs'],
+  ['space', 'agent-space.mjs'], ['population', 'agent-population.mjs'], ['principal', 'cli/principal.mjs'],
+  ['binding', 'agent-binding.mjs'], ['session', 'session-bind.mjs'], ['soul', 'cold-wake-settings.mjs'],
+  ['harness', 'harness-auth.mjs'], ['daemon', 'agent-daemon.mjs'], ['keyd', 'keyd-supervisor.mjs'], ['owner', 'cli/owner.mjs'],
+  ['approvals', 'agent-approvals.mjs'], ['audit', 'agent-audit.mjs'], ['mcp', 'agent-mcp.mjs'], ['machine', 'cli/machine.mjs'],
+  ['pair', 'cli/machine.mjs'], ['unpair', 'cli/machine.mjs'], ['reach-mcp', 'daemon-mcp.mjs'], ['wake', 'wake-listen.mjs'],
+  ['web', 'agent-web.mjs'], ['telegram', 'telegram-adapter.mjs'], ['install', 'install.mjs'], ['update', 'update.mjs'],
+  ['install-gh-shim', 'install-gh-shim.mjs'], ['ensure-private-key', 'ensure-private-key.mjs'],
+  ['signed-commit', 'signed-commit.mjs'], ['secret', 'secret.mjs'], ['skill', 'skill.mjs'], ['sop', 'sop.mjs'],
+  ['workflow', 'workflow.mjs'], ['sandbox', 'sandbox.mjs'], ['metrics', 'metrics.mjs'], ['diagnostics', 'diagnostics-cli.mjs'],
+  ['server', 'identity/server-client.mjs'], ['notices', 'identity/server-notices.mjs'], ['credential', 'git-credential-bot.mjs'],
+  ['worktree-token', 'worktree-token.mjs'], ['gh-inbox-query', 'gh-inbox-query.mjs'], ['gh-pr-view-json', 'gh-pr-view-json.mjs'],
+  ['claude-worktree-create', 'claude-worktree-create.mjs'], ['agent-hook', 'agent-hook.mjs'],
+];
+
+test('agent-bot: every command keeps the module it ran', () => {
+  assert.deepEqual([...MODULES], MODULES_BEFORE);
+  assert.equal(COMMANDS.get('broker').run.name, 'runBroker');
+  assert.equal(COMMANDS.get('hook').run.name, 'runHook');
+});
+
+// Every branch cli/dispatch.mjs had before the registry: an invocation, the
+// module it ran and that module's arguments, and whether the dispatcher
+// followed the child (stayed interruptible) or added to its environment.
+const ROUTES_BEFORE = [
+  ['soul cold-wake A on', 'cold-wake-settings.mjs', 'A on'],
+  ['soul stop A --json', 'soul-stop.mjs', 'A --json'],
+  ['soul pause A', 'soul-pause.mjs', 'pause A'],
+  ['soul resume A', 'soul-pause.mjs', 'resume A'],
+  ['soul show A', 'agent-population.mjs', 'show A'],
+  ['soul profile A', 'soul-profile.mjs', 'A'],
+  ['soul env migrate A --complete', 'soul-env-migrate.mjs', 'A --complete'],
+  ['soul env clean A --plan', 'soul-env-clean.mjs', 'A --plan'],
+  ['soul env history A', 'soul-env-history.mjs', 'A'],
+  ['soul env export A --to F', 'cli/soul-env-transfer.mjs', 'export A --to F'],
+  ['soul env import F', 'cli/soul-env-transfer.mjs', 'import F'],
+  ['soul env A --json', 'soul-env.mjs', 'A --json'],
+  ['soul runtimes install A', 'soul-runtimes.mjs', 'install A'],
+  ['soul secret A status', 'soul-secrets.mjs', 'A status'],
+  ['soul confinement A deny', 'confinement.mjs', 'confinement A deny'],
+  ['soul confinement-report A', 'confinement.mjs', 'confinement-report A'],
+  ['soul templates --json', 'soul-templates.mjs', '--list --json'],
+  ['soul spawn T --name N', 'soul-templates.mjs', '--spawn T --name N'],
+  ['soul template refresh A', 'soul-template-refresh.mjs', 'refresh A'],
+  ['soul dir A', 'soul-dir.mjs', 'A'],
+  ['soul locate P', 'soul-dir.mjs', 'locate P'],
+  ['soul build P --check', 'soul-build.mjs', 'P --check'],
+  ['soul pack validate P', 'soul-package.mjs', 'validate P'],
+  ['soul model A show', 'soul-model.mjs', 'A show'],
+  ['soul computer-use A on', 'soul-computer-use.mjs', 'A on'],
+  ['soul mode A safe', 'soul-mode.mjs', 'A safe'],
+  ['soul tool-home claude soul --soul A', 'soul-tool-home.mjs', 'claude soul --soul A'],
+  ['soul comms A off', 'soul-comms.mjs', 'A off'],
+  ['soul asides A', 'soul-asides.mjs', 'A'],
+  ['soul remove A --plan', 'soul-remove.mjs', 'A --plan'],
+  ['soul fork C --name N', 'soul-fork.mjs', 'C --name N'],
+  ['soul skill list --json', 'cli/soul-skill.mjs', 'list --json'],
+  ['soul revision prepare A', 'soul-revisions.mjs', 'prepare A'],
+  ['identity app create', 'cli/identity-apps.mjs', 'app create'],
+  ['identity apps list', 'cli/identity-apps.mjs', 'apps list'],
+  ['identity addon github-identity on', 'cli/identity-apps.mjs', 'addon github-identity on'],
+  ['identity migrate-credentials --all', 'cli/migrate-credentials.mjs', '--all'],
+  ['identity show', 'cli/identity.mjs', 'show'],
+  ['sandbox export --for O', 'cli/sandbox-export.mjs', '--for O'],
+  ['sandbox status', 'sandbox.mjs', 'status'],
+  ['audit tail --json', 'agent-audit.mjs', 'tail --json', { follow: true }],
+  ['audit list', 'agent-audit.mjs', 'list'],
+  ['setup-worktree app', 'setup-worktree.mjs', 'app', { env: { AGENT_BOT_SETUP_HINT: '1' } }],
+  ['pair comms --broker B', 'agent-daemon.mjs', 'pair-comms --broker B'],
+  ['pair --repin', 'cli/machine.mjs', 'pair --repin'],
+  ['unpair', 'cli/machine.mjs', 'unpair'],
+  ['machine status', 'cli/machine.mjs', 'status'],
+  ['mcp', 'agent-mcp.mjs', ''],
+];
+
+test('agent-bot: every subcommand runs the module and arguments it did', () => {
+  for (const [invocation, module, args, { follow = false, env = null } = {}] of ROUTES_BEFORE) {
+    const [command, ...rest] = invocation.split(' ');
+    assert.deepEqual(COMMANDS.resolve(command, rest), { kind: 'module', module, args: args ? args.split(' ') : [], follow, env }, invocation);
+  }
+  const routed = COMMANDS.entries().flatMap((command) => command.subcommands.map((entry) => `${command.name} ${entry.words.join(' ')}`));
+  const pinned = new Set(ROUTES_BEFORE.map(([invocation]) => invocation));
+  assert.deepEqual(routed.filter((route) => ![...pinned].some((invocation) => `${invocation} `.startsWith(`${route} `))), [],
+    'every registered subcommand has a pinned invocation');
+  assert.deepEqual(COMMANDS.resolve('soul', ['--help']).kind, 'help');
+  assert.deepEqual(COMMANDS.resolve('soul', ['nope']).kind, 'usage');
+  assert.deepEqual(COMMANDS.resolve('soul', []).kind, 'usage');
 });
