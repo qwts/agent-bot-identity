@@ -7,54 +7,12 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { harnessSettings, tomlStatements } from './soul-builder.mjs';
-import { readSettingsText } from './soul-mode.mjs';
+import { readSettingsText } from './soul-mode-store.mjs';
+import { emptySetting, modelList, readSoulModels, soulModel, soulModelFile, validateModelId } from './soul-model-store.mjs';
 
-export function validateModelId(value) {
-  if (typeof value !== 'string' || !value.trim() || value.length > 120 || /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value)) {
-    throw new Error('modelId must be nonempty printable text no longer than 120 characters');
-  }
-  return value;
-}
-
-const emptySetting = () => ({ model: null, available: null, listedAt: null });
-
-export function soulModelFile({ env = process.env, home = homedir() } = {}) {
-  const base = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
-  return path.join(base, 'agent-bot', 'soul-models.json');
-}
-
-function modelList(availableModels) {
-  if (!Array.isArray(availableModels)) throw new Error('availableModels must be an array');
-  return availableModels.map(({ modelId, name, description }) => {
-    validateModelId(modelId);
-    if (typeof name !== 'string' || (description !== undefined && typeof description !== 'string')) throw new Error('invalid model description');
-    return { modelId, name, ...(description === undefined ? {} : { description }) };
-  });
-}
-
-export function readSoulModels(options = {}) {
-  try {
-    const settings = JSON.parse(readFileSync(soulModelFile(options), 'utf8'))?.settings ?? {};
-    if (typeof settings !== 'object' || Array.isArray(settings)) throw new Error('invalid settings');
-    for (const [id, value] of Object.entries(settings)) {
-      validateAgentId(id);
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid setting');
-      if (value.model !== null) validateModelId(value.model);
-      if (value.available !== null) modelList(value.available);
-      if (value.listedAt !== null && (typeof value.listedAt !== 'string' || new Date(value.listedAt).toISOString() !== value.listedAt)) throw new Error('invalid listedAt');
-    }
-    return settings;
-  } catch (error) {
-    if (error.code === 'ENOENT') return {};
-    throw new Error('soul model settings could not be read');
-  }
-}
-
-export function soulModel(agentId, options = {}) {
-  return readSoulModels(options)[validateAgentId(agentId)] ?? emptySetting();
-}
+export { readSoulModels, soulModel, soulModelFile, validateModelId } from './soul-model-store.mjs';
 
 function updateSoulModel(agentId, update, { env, home }) {
   const id = validateAgentId(agentId);

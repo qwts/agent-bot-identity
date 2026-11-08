@@ -49,7 +49,7 @@ import { populationFile, registerSoulDir, setSoulSpacePath, showSoul, showSoulBy
 import { appendAuditReceipt, isAgentId } from './identity-format.mjs';
 import { initSoulSpace } from './agent-space.mjs';
 import { minimalChildEnv } from './child-env.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { CLASSIFICATIONS, classifyPath, retentionOf } from './soul-env-contract.mjs';
 import { recordMigrationStep } from './soul-migration-journal.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision, readManifestText } from './soul-package.mjs';

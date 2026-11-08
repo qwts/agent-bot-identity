@@ -36,7 +36,7 @@ import { appendAuditReceipt } from './identity-format.mjs';
 import { spacesHome } from './agent-space.mjs';
 import { listSouls, populationFile } from './agent-population.mjs';
 import { minimalChildEnv } from './child-env.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { readExportManifest } from './soul-env-export.mjs';
 
 export const SANDBOX_EXPORT_SCHEMA = 1;

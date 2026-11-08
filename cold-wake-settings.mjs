@@ -9,7 +9,7 @@ import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { assertColdWakeLock, coldWakeFile, withColdWakeLock } from './cold-wake-lock.mjs';
 export { coldWakeFile } from './cold-wake-lock.mjs';
 import { loadConfig } from './config.mjs';
-import { assertOwnerAction } from './owner-action.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { resolveAgentSlug } from './identity-soul.mjs';
 import { RESUME_POLICIES } from './wake-resume.mjs';
 import { checkWebhook, readWebhookLocked, removeWebhookLocked, saveWebhookLocked } from './wake-webhook-store.mjs';
@@ -120,12 +120,6 @@ export function setColdWakeWebhook(agentId, webhook, options = {}) {
 function readSecretFile(file, readStdin) {
   return (file === '-' ? readStdin() : readFileSync(file, 'utf8')).trim();
 }
-
-// The owner gate for cold wake changes (#293): any soul marker refuses, then
-// the owner proves themselves with a presented principal or the consent
-// dialog. Harness detection stays off here, as before: only stated markers
-// count.
-export const ownerGate = (action, { principal, target, env, cwd }) => assertOwnerAction(action, { principal, target, env, cwd, detect: false });
 
 // `agent-bot soul cold-wake`. Every change (on, off, resume, webhook) passes
 // the owner gate; `show` is read-only and only refuses a marked soul. The

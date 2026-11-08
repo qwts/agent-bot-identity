@@ -7,34 +7,11 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { harnessSettings, opencodeDenies } from './soul-builder.mjs';
+import { readSettingsText, readSoulModes, SOUL_MODES, soulMode, soulModeFile } from './soul-mode-store.mjs';
 
-export const SOUL_MODES = Object.freeze(['safe', 'autopilot']);
-
-export function soulModeFile({ env = process.env, home = homedir() } = {}) {
-  const base = env.XDG_STATE_HOME ? path.resolve(env.XDG_STATE_HOME) : path.join(home, '.local', 'state');
-  return path.join(base, 'agent-bot', 'soul-modes.json');
-}
-
-export function readSoulModes(options = {}) {
-  try {
-    const settings = JSON.parse(readFileSync(soulModeFile(options), 'utf8'))?.settings ?? {};
-    if (typeof settings !== 'object' || Array.isArray(settings)) throw new Error('invalid settings');
-    for (const [id, mode] of Object.entries(settings)) {
-      validateAgentId(id);
-      if (!SOUL_MODES.includes(mode)) throw new Error('invalid mode');
-    }
-    return settings;
-  } catch (error) {
-    if (error.code === 'ENOENT') return {};
-    throw new Error('soul mode settings could not be read');
-  }
-}
-
-export function soulMode(agentId, options = {}) {
-  return readSoulModes(options)[validateAgentId(agentId)] ?? 'safe';
-}
+export { readSettingsText, readSoulModes, SOUL_MODES, soulMode, soulModeFile } from './soul-mode-store.mjs';
 
 // Settings precedence for the permission mode (#379, docs/soul-builder.md).
 // The owner's explicit pick (`soul mode`, GeniusBar's mode picker, each behind
@@ -48,21 +25,6 @@ export function soulMode(agentId, options = {}) {
 // Only values the builder renders are read from native files; anything else
 // is a layer that does not declare a mode.
 export const LOOSENING_NEEDS_OWNER = 'permission-mode-loosening-needs-owner';
-
-// The repo may be an untrusted clone: only a small regular file is read, never
-// a symlink (a link to /dev/zero would stall the daemon). The file is opened
-// once without following a link or blocking, and checked and read through
-// that descriptor, so it cannot be swapped between the check and the read.
-const SETTINGS_FILE_MAX = 64 * 1024;
-export const readSettingsText = (file) => {
-  let fd;
-  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
-  catch { return null; }
-  try {
-    const stat = fstatSync(fd);
-    return stat.isFile() && stat.size <= SETTINGS_FILE_MAX ? readFileSync(fd, 'utf8') : null;
-  } catch { return null; } finally { closeSync(fd); }
-};
 
 // A layer's declaration: its mode (or null), the file it was read from, and
 // the sha256 of the text the mode came from.

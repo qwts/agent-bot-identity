@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { appendAuditReceipt, validateAgentId } from './identity-format.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { soulMarkers } from './identity-soul.mjs';
 import { setSoulComputerUse } from './agent-population.mjs';
 import { daemonClient } from './daemon-client.mjs';
