@@ -926,6 +926,34 @@ tool with `search_tools`, read its schema with `describe_tool`, run reads with
 `server_status` and `guide`. Calling a legacy tool name directly (for example
 `bind`) still works, so existing instructions need no change.
 
+Each tool is registered once, with its schema, class and handler, in the
+server's tool registry (`tool-registry.mjs`, #1394), the in-place form of HQ
+plugin registration. `tests/tool-registry.test.mjs` keeps this table equal to
+the registry, in its order (the order `search_tools` lists):
+
+| Tool | Class |
+| --- | --- |
+| `bind` | write |
+| `whoami` | read |
+| `population` | read |
+| `space_path` | read |
+| `credential` | write |
+| `take_notices` | write |
+| `peek_notices` | read |
+| `ack_notices` | write |
+| `release_notices` | write |
+| `take_inbox` | write |
+| `request_grant` | write |
+| `spend_grant` | write |
+| `doctor` | read |
+| `server_status` | read |
+| `machine_status` | read |
+| `machine_receipts` | read |
+| `machine_plan` | write |
+| `machine_apply` | write |
+| `machine_update` | write |
+| `guide` | read |
+
 Mount it in the harness (for Claude Code, `.mcp.json` in the repo or project):
 
 ```json
@@ -1042,6 +1070,22 @@ interaction-store invocation, so its reach server leaves out
 the message and its thread. A turn the policy stopped with nothing said
 answers with a short notice naming the refused tools, never the rules
 (#408).
+
+The reach tools are registered in the same tool registry as `agent-bot mcp`'s,
+each with the conditions it is listed under: `invocation` (the turn has an
+interaction-store invocation) and `comms` (agent-comms is on for the soul).
+`tests/tool-registry.test.mjs` keeps this table equal to the registry, in the
+order `tools/list` shows them:
+
+| Tool | Class | Listed when |
+| --- | --- | --- |
+| `fetch_context` | read | invocation |
+| `post_reply` | write | invocation |
+| `report_status` | write | invocation |
+| `clock_in` | write | always |
+| `fleet` | read | comms |
+| `send_message` | write | comms |
+| `start_soul` | write | comms |
 
 A soul waits for a teammate's answer rather than chasing it (#427). Until a
 teammate answers in a thread, or for 10 minutes, `send_message` refuses a

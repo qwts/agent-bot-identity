@@ -53,6 +53,7 @@ import { claimSend, recordThreadMessage } from './soul-threads.mjs';
 import { recordAside } from './soul-asides.mjs';
 import { detectAgentHarness } from './detect-harness.mjs';
 import { PROOF_HEADER, readBinding, readGitConfig, signBindingProof } from './identity-host.mjs';
+import { createToolRegistry } from './tool-registry.mjs';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -86,14 +87,7 @@ export const BINDING_ENV = 'AGENT_BOT_BINDING';
 // allows exactly these (see reachPolicyRules).
 import { REACH_SERVER_NAME } from './reach-contract.mjs';
 export { REACH_SERVER_NAME };
-export const REACH_TOOL_NAMES = Object.freeze([
-  'fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message', 'start_soul',
-]);
-const COMMS_TOOL_NAMES = new Set(['fleet', 'send_message', 'start_soul']);
-// The tools that address an interaction-store invocation. A comms turn (a
-// cold wake or a launch) has none, so its injected server leaves them out
-// rather than offer a fetch_context that can only fail (#407).
-const INVOCATION_TOOL_NAMES = new Set(['fetch_context', 'post_reply', 'report_status']);
+// REACH_TOOL_NAMES, the registered tools in order, follows the registry below.
 
 // Store-location variables forwarded into the injected entry so the spawned
 // server resolves the same interaction store even under a harness that does
@@ -135,9 +129,25 @@ function serverVersion() {
   }
 }
 
+// The reach tools (#1394, HQ plan Stage 0 row 9): each declares its name,
+// description, schema, class, handler and the conditions it is listed under
+// once, and registers in REACH_TOOLS below, the in-place form of
+// `ctx.tools.register` (plan section 4.2). Two conditions decide which tools
+// a turn sees:
+//
+// - comms: the teammate tools, withheld for a soul launched with comms off.
+// - invocation: the tools that address an interaction-store invocation. A
+//   comms turn (a cold wake or a launch) has none, so its injected server
+//   leaves them out rather than offer a fetch_context that can only fail
+//   (#407).
+//
+// A handler is called as handler(state, args, { identity, options }).
 const TOOLS = [
   {
     name: 'fetch_context',
+    class: 'read',
+    when: ['invocation'],
+    handler: fetchContext,
     description:
       'Fetch the context of the invocation this session was driven for: the '
       + 'inbound message, attachment references (space:// refs resolved to '
@@ -155,6 +165,9 @@ const TOOLS = [
   },
   {
     name: 'post_reply',
+    class: 'write',
+    when: ['invocation'],
+    handler: postReply,
     description:
       'Deliver this session\'s answer to the adapter thread that originated '
       + 'the invocation. The reply lands as a durable event the adapter '
@@ -173,6 +186,9 @@ const TOOLS = [
   },
   {
     name: 'report_status',
+    class: 'write',
+    when: ['invocation'],
+    handler: reportStatus,
     description:
       'Report interim progress to the originating adapter thread while the '
       + 'work is still running. Short note, not the answer.',
@@ -190,6 +206,8 @@ const TOOLS = [
   },
   {
     name: 'clock_in',
+    class: 'write',
+    handler: clockIn,
     description:
       'Identity heartbeat: report which agent soul is at the keyboard. With '
       + 'an invocation in scope the clock-in is a durable event on its '
@@ -207,6 +225,9 @@ const TOOLS = [
   },
   {
     name: 'fleet',
+    class: 'read',
+    when: ['comms'],
+    handler: fleetTool,
     description:
       'List your teammates: the other agent souls you may message through '
       + 'agent-comms, with each one\'s name, address, and harness. Use it to '
@@ -215,6 +236,9 @@ const TOOLS = [
   },
   {
     name: 'send_message',
+    class: 'write',
+    when: ['comms'],
+    handler: sendMessage,
     description:
       'Send an agent-comms message, as yourself, to a teammate (a name from '
       + 'fleet, an address, or an Agent ID) or to a person by principal name. '
@@ -232,6 +256,9 @@ const TOOLS = [
   },
   {
     name: 'start_soul',
+    class: 'write',
+    when: ['comms'],
+    handler: startSoulTool,
     description:
       'Start a new agent soul: a full soul of its own (its own folder, '
       + 'identity, and inbox), not a subagent in your session. By default it '
@@ -272,6 +299,11 @@ const TOOLS = [
   },
 ];
 
+export const REACH_TOOLS = createToolRegistry({ server: 'agent-reach', conditions: ['comms', 'invocation'] });
+for (const tool of TOOLS) REACH_TOOLS.register(tool);
+REACH_TOOLS.close();
+export const REACH_TOOL_NAMES = Object.freeze(REACH_TOOLS.names());
+
 // The daemon's permission rules for this server: an exact allow for each of
 // its own tools under the canonical `mcp__<server>__<tool>` naming, prepended to whatever policy
 // the owner configured. A cold turn has nobody to approve a call, so without
@@ -292,9 +324,10 @@ function invocationScoped(state) {
   return stamped || !injected;
 }
 
+const CONDITIONS = Object.freeze({ comms: commsEnabled, invocation: invocationScoped });
+
 function toolsFor(state) {
-  return TOOLS.filter((tool) => (commsEnabled(state) || !COMMS_TOOL_NAMES.has(tool.name))
-    && (invocationScoped(state) || !INVOCATION_TOOL_NAMES.has(tool.name)));
+  return REACH_TOOLS.list((condition) => CONDITIONS[condition](state));
 }
 
 export function createReachState({
@@ -465,201 +498,210 @@ function resolveAttachment(reference, soul) {
   return resolved;
 }
 
+// Calls a reach tool by name through its registered handler. An invocation
+// tool outside an invocation turn is refused before anything else; the
+// identity is resolved for every other call, known tool or not.
 async function callTool(state, name, args = {}) {
-  if (INVOCATION_TOOL_NAMES.has(name) && !invocationScoped(state)) {
+  const tool = REACH_TOOLS.get(name);
+  if (tool?.when.includes('invocation') && !invocationScoped(state)) {
     throw new Error(`${name} is not available in this turn: the message and its thread are already in your prompt, and your final answer is the reply`);
   }
   const identity = resolveReachIdentity(state);
   const options = storeOptions(state);
-  switch (name) {
-    case 'fetch_context': {
-      const invocation = requireInvocation(state, args, { identity });
-      const payload = readInvocationPayload(invocation.invocationId, options);
-      let soul = null;
-      try {
-        soul = showSoul(invocation.agentId, { file: populationFile(options) });
-      } catch {
-        /* no census record — attachments stay opaque */
-      }
-      const thread = listInvocations({ sessionId: invocation.sessionId }, options)
-        .filter((entry) => entry.invocationId !== invocation.invocationId)
-        .slice(-THREAD_HISTORY_LIMIT)
-        .map((entry) => ({
-          invocationId: entry.invocationId,
-          status: entry.status,
-          createdAt: entry.createdAt,
-          message: truncate(
-            readInvocationPayload(entry.invocationId, options)?.message ?? null,
-            THREAD_TEXT_LIMIT,
-          ),
-          reply: lastReplyText(entry.invocationId, options),
-        }));
-      return {
-        invocation: {
-          invocationId: invocation.invocationId,
-          sessionId: invocation.sessionId,
-          agentId: invocation.agentId,
-          status: invocation.status,
-          createdAt: invocation.createdAt,
-        },
-        message: payload?.message ?? null,
-        attachments: (payload?.attachments ?? []).map((ref) => resolveAttachment(ref, soul)),
-        thread,
-      };
-    }
-    case 'post_reply': {
-      const invocation = requireInvocation(state, args, { identity });
-      if (
-        typeof args.text !== 'string' || args.text.length === 0
-        || Buffer.byteLength(args.text, 'utf8') > MAX_REPLY_TEXT_BYTES
-      ) {
-        throw new Error(`reply text must be a non-empty string of at most ${MAX_REPLY_TEXT_BYTES} bytes`);
-      }
-      const event = appendEvent(invocation.invocationId, 'reply', {
-        agentId: identity.agentId,
-        text: args.text,
-      }, { ...options, now: state.now });
-      return { delivered: true, invocationId: invocation.invocationId, seq: event.seq, at: event.at };
-    }
-    case 'report_status': {
-      const invocation = requireInvocation(state, args, { identity });
-      if (
-        typeof args.note !== 'string' || args.note.length === 0
-        || Buffer.byteLength(args.note, 'utf8') > MAX_STATUS_NOTE_BYTES
-      ) {
-        throw new Error(`status note must be a non-empty string of at most ${MAX_STATUS_NOTE_BYTES} bytes`);
-      }
-      const event = appendEvent(invocation.invocationId, 'agent-status', {
-        agentId: identity.agentId,
-        note: args.note,
-      }, { ...options, now: state.now });
-      return { recorded: true, invocationId: invocation.invocationId, seq: event.seq, at: event.at };
-    }
-    case 'clock_in': {
-      if (identity === null) {
-        throw new Error(
-          'no reach-back identity — set '
-          + `${REACH_AGENT_ID_ENV} or run from a worktree with agentBot.agentId configured`,
-        );
-      }
-      const harness = detectAgentHarness(state.env) ?? null;
-      const scoped = typeof args.invocation_id === 'string' && args.invocation_id !== ''
-        ? args.invocation_id
-        : state.env[REACH_INVOCATION_ENV];
-      if (typeof scoped === 'string' && scoped !== '') {
-        const invocation = requireInvocation(state, args, { identity });
-        const event = appendEvent(invocation.invocationId, 'clock-in', {
-          agentId: identity.agentId,
-          placement: identity.placement,
-          harness,
-        }, { ...options, now: state.now });
-        return {
-          agentId: identity.agentId,
-          placement: identity.placement,
-          harness,
-          durable: true,
-          invocationId: invocation.invocationId,
-          seq: event.seq,
-          at: event.at,
-        };
-      }
-      return {
-        agentId: identity.agentId,
-        placement: identity.placement,
-        harness,
-        durable: false,
-        at: state.now().toISOString(),
-      };
-    }
-    case 'fleet': {
-      const soul = commsSoul(state, identity);
-      const { peers = [] } = await asSoul(state)(soul, ['peers']);
-      return {
-        you: soul.agentId,
-        teammates: peers.map(({ name: peerName = null, address, account, agentId, harness = null, parent = null, verification = null }) => ({
-          name: peerName, address, account, agentId, harness, parent, verification,
-        })),
-      };
-    }
-    case 'send_message': {
-      const soul = commsSoul(state, identity);
-      const to = boundedString(args.to, 'to', { max: MAX_ADDRESS_LENGTH }).trim();
-      const body = boundedString(args.body, 'body', { max: MAX_MESSAGE_BYTES, bytes: true });
-      const replyTo = args.reply_to === undefined || args.reply_to === null || args.reply_to === ''
-        ? null
-        : boundedString(args.reply_to, 'reply_to', { max: 128 });
-      const run = asSoul(state);
-      const address = await resolveRecipient(run, soul, to);
-      const correlation = turnCorrelation(state);
-      // One message per teammate per thread until it answers (#427): a
-      // teammate still waking would otherwise be re-pinged, and each
-      // message wakes it again. The claim holds the thread while this send
-      // is in flight, so a concurrent call cannot pass too (#433).
-      const claim = claimSend(soul.agentId, { to: address, correlation, now: state.now() }, threadOptions(state));
-      if (claim.waiting) {
-        throw new Error(`${address} has not answered your message from ${claim.waiting.at} yet. It may still be starting up; `
-          + 'its reply will wake you in a later turn. Do not message it again in the meantime; '
-          + 'follow up after it answers.');
-      }
-      try {
-        const sent = await run(soul, [
-          'send', address, '--body', body,
-          ...(replyTo ? ['--reply-to', replyTo] : []),
-          ...(correlation ? ['--correlation', correlation] : []),
-        ]);
-        recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body }, 'send_message');
-        return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null, ...(isAgentId(address.split('/').pop()) ? awaitingNote(address) : {}) };
-      } finally {
-        claim.release();
-      }
-    }
-    case 'start_soul': {
-      const soul = commsSoul(state, identity);
-      const request = { name: boundedString(args.name, 'name', { max: 128 }).trim() };
-      if (args.harness !== undefined && args.harness !== null && args.harness !== '') {
-        request.harness = boundedString(args.harness, 'harness', { max: 32 });
-      }
-      if (args.template !== undefined && args.template !== null && args.template !== '') {
-        request.template = boundedString(args.template, 'template', { max: 4096 });
-      }
-      if (args.model !== undefined && args.model !== null && args.model !== '') {
-        request.model = boundedString(args.model, 'model', { max: 120 });
-      }
-      if (args.provider !== undefined && args.provider !== null && args.provider !== '') {
-        request.provider = boundedString(args.provider, 'provider', { max: 64 });
-      }
-      // "self" is the default (the request names no parent); "none" asks the
-      // daemon for an independent root soul. The daemon decides either way.
-      if (args.parent !== undefined && args.parent !== null && args.parent !== '' && args.parent !== 'self') {
-        if (args.parent !== 'none') throw new Error('parent must be "self" (default) or "none"');
-        request.parent = null;
-      }
-      const brief = args.brief === undefined || args.brief === null || args.brief === ''
-        ? null
-        : boundedString(args.brief, 'brief', { max: MAX_MESSAGE_BYTES, bytes: true });
-      const started = await startSoul(state, soul, request);
-      // The daemon reports what the new soul effectively runs with; the
-      // parent is the caller unless the daemon started an independent soul.
-      const result = { started: true, agentId: started.agentId, name: started.name, harness: started.harness,
-        ...(started.model === undefined ? {} : { model: started.model }),
-        ...(started.provider === undefined ? {} : { provider: started.provider }),
-        parent: started.parent === undefined ? soul.agentId : started.parent };
-      if (brief !== null) {
-        try {
-          const correlation = turnCorrelation(state);
-          const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief, ...(correlation ? ['--correlation', correlation] : [])]);
-          recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, kind: 'brief', body: brief }, 'start_soul');
-          result.brief = { sent: true, messageId: sent.messageId ?? null };
-          Object.assign(result, awaitingNote(started.name ?? started.agentId));
-        } catch (error) {
-          result.brief = { sent: false, error: error.message };
-        }
-      }
-      return result;
-    }
-    default:
-      throw new Error(`unknown tool: ${name}`);
+  if (!tool) throw new Error(`unknown tool: ${name}`);
+  return tool.handler(state, args, { identity, options });
+}
+
+function fetchContext(state, args, { identity, options }) {
+  const invocation = requireInvocation(state, args, { identity });
+  const payload = readInvocationPayload(invocation.invocationId, options);
+  let soul = null;
+  try {
+    soul = showSoul(invocation.agentId, { file: populationFile(options) });
+  } catch {
+    /* no census record — attachments stay opaque */
   }
+  const thread = listInvocations({ sessionId: invocation.sessionId }, options)
+    .filter((entry) => entry.invocationId !== invocation.invocationId)
+    .slice(-THREAD_HISTORY_LIMIT)
+    .map((entry) => ({
+      invocationId: entry.invocationId,
+      status: entry.status,
+      createdAt: entry.createdAt,
+      message: truncate(
+        readInvocationPayload(entry.invocationId, options)?.message ?? null,
+        THREAD_TEXT_LIMIT,
+      ),
+      reply: lastReplyText(entry.invocationId, options),
+    }));
+  return {
+    invocation: {
+      invocationId: invocation.invocationId,
+      sessionId: invocation.sessionId,
+      agentId: invocation.agentId,
+      status: invocation.status,
+      createdAt: invocation.createdAt,
+    },
+    message: payload?.message ?? null,
+    attachments: (payload?.attachments ?? []).map((ref) => resolveAttachment(ref, soul)),
+    thread,
+  };
+}
+
+function postReply(state, args, { identity, options }) {
+  const invocation = requireInvocation(state, args, { identity });
+  if (
+    typeof args.text !== 'string' || args.text.length === 0
+    || Buffer.byteLength(args.text, 'utf8') > MAX_REPLY_TEXT_BYTES
+  ) {
+    throw new Error(`reply text must be a non-empty string of at most ${MAX_REPLY_TEXT_BYTES} bytes`);
+  }
+  const event = appendEvent(invocation.invocationId, 'reply', {
+    agentId: identity.agentId,
+    text: args.text,
+  }, { ...options, now: state.now });
+  return { delivered: true, invocationId: invocation.invocationId, seq: event.seq, at: event.at };
+}
+
+function reportStatus(state, args, { identity, options }) {
+  const invocation = requireInvocation(state, args, { identity });
+  if (
+    typeof args.note !== 'string' || args.note.length === 0
+    || Buffer.byteLength(args.note, 'utf8') > MAX_STATUS_NOTE_BYTES
+  ) {
+    throw new Error(`status note must be a non-empty string of at most ${MAX_STATUS_NOTE_BYTES} bytes`);
+  }
+  const event = appendEvent(invocation.invocationId, 'agent-status', {
+    agentId: identity.agentId,
+    note: args.note,
+  }, { ...options, now: state.now });
+  return { recorded: true, invocationId: invocation.invocationId, seq: event.seq, at: event.at };
+}
+
+function clockIn(state, args, { identity, options }) {
+  if (identity === null) {
+    throw new Error(
+      'no reach-back identity — set '
+      + `${REACH_AGENT_ID_ENV} or run from a worktree with agentBot.agentId configured`,
+    );
+  }
+  const harness = detectAgentHarness(state.env) ?? null;
+  const scoped = typeof args.invocation_id === 'string' && args.invocation_id !== ''
+    ? args.invocation_id
+    : state.env[REACH_INVOCATION_ENV];
+  if (typeof scoped === 'string' && scoped !== '') {
+    const invocation = requireInvocation(state, args, { identity });
+    const event = appendEvent(invocation.invocationId, 'clock-in', {
+      agentId: identity.agentId,
+      placement: identity.placement,
+      harness,
+    }, { ...options, now: state.now });
+    return {
+      agentId: identity.agentId,
+      placement: identity.placement,
+      harness,
+      durable: true,
+      invocationId: invocation.invocationId,
+      seq: event.seq,
+      at: event.at,
+    };
+  }
+  return {
+    agentId: identity.agentId,
+    placement: identity.placement,
+    harness,
+    durable: false,
+    at: state.now().toISOString(),
+  };
+}
+
+async function fleetTool(state, args, { identity }) {
+  const soul = commsSoul(state, identity);
+  const { peers = [] } = await asSoul(state)(soul, ['peers']);
+  return {
+    you: soul.agentId,
+    teammates: peers.map(({ name: peerName = null, address, account, agentId, harness = null, parent = null, verification = null }) => ({
+      name: peerName, address, account, agentId, harness, parent, verification,
+    })),
+  };
+}
+
+async function sendMessage(state, args, { identity }) {
+  const soul = commsSoul(state, identity);
+  const to = boundedString(args.to, 'to', { max: MAX_ADDRESS_LENGTH }).trim();
+  const body = boundedString(args.body, 'body', { max: MAX_MESSAGE_BYTES, bytes: true });
+  const replyTo = args.reply_to === undefined || args.reply_to === null || args.reply_to === ''
+    ? null
+    : boundedString(args.reply_to, 'reply_to', { max: 128 });
+  const run = asSoul(state);
+  const address = await resolveRecipient(run, soul, to);
+  const correlation = turnCorrelation(state);
+  // One message per teammate per thread until it answers (#427): a
+  // teammate still waking would otherwise be re-pinged, and each
+  // message wakes it again. The claim holds the thread while this send
+  // is in flight, so a concurrent call cannot pass too (#433).
+  const claim = claimSend(soul.agentId, { to: address, correlation, now: state.now() }, threadOptions(state));
+  if (claim.waiting) {
+    throw new Error(`${address} has not answered your message from ${claim.waiting.at} yet. It may still be starting up; `
+      + 'its reply will wake you in a later turn. Do not message it again in the meantime; '
+      + 'follow up after it answers.');
+  }
+  try {
+    const sent = await run(soul, [
+      'send', address, '--body', body,
+      ...(replyTo ? ['--reply-to', replyTo] : []),
+      ...(correlation ? ['--correlation', correlation] : []),
+    ]);
+    recordSent(state, soul, { id: sent.messageId, to: address, replyTo, correlation, body }, 'send_message');
+    return { sent: true, to: address, messageId: sent.messageId ?? null, wake: sent.wake ?? null, ...(isAgentId(address.split('/').pop()) ? awaitingNote(address) : {}) };
+  } finally {
+    claim.release();
+  }
+}
+
+async function startSoulTool(state, args, { identity }) {
+  const soul = commsSoul(state, identity);
+  const request = { name: boundedString(args.name, 'name', { max: 128 }).trim() };
+  if (args.harness !== undefined && args.harness !== null && args.harness !== '') {
+    request.harness = boundedString(args.harness, 'harness', { max: 32 });
+  }
+  if (args.template !== undefined && args.template !== null && args.template !== '') {
+    request.template = boundedString(args.template, 'template', { max: 4096 });
+  }
+  if (args.model !== undefined && args.model !== null && args.model !== '') {
+    request.model = boundedString(args.model, 'model', { max: 120 });
+  }
+  if (args.provider !== undefined && args.provider !== null && args.provider !== '') {
+    request.provider = boundedString(args.provider, 'provider', { max: 64 });
+  }
+  // "self" is the default (the request names no parent); "none" asks the
+  // daemon for an independent root soul. The daemon decides either way.
+  if (args.parent !== undefined && args.parent !== null && args.parent !== '' && args.parent !== 'self') {
+    if (args.parent !== 'none') throw new Error('parent must be "self" (default) or "none"');
+    request.parent = null;
+  }
+  const brief = args.brief === undefined || args.brief === null || args.brief === ''
+    ? null
+    : boundedString(args.brief, 'brief', { max: MAX_MESSAGE_BYTES, bytes: true });
+  const started = await startSoul(state, soul, request);
+  // The daemon reports what the new soul effectively runs with; the
+  // parent is the caller unless the daemon started an independent soul.
+  const result = { started: true, agentId: started.agentId, name: started.name, harness: started.harness,
+    ...(started.model === undefined ? {} : { model: started.model }),
+    ...(started.provider === undefined ? {} : { provider: started.provider }),
+    parent: started.parent === undefined ? soul.agentId : started.parent };
+  if (brief !== null) {
+    try {
+      const correlation = turnCorrelation(state);
+      const sent = await asSoul(state)(soul, ['send', started.agentId, '--body', brief, ...(correlation ? ['--correlation', correlation] : [])]);
+      recordSent(state, soul, { id: sent.messageId, to: started.agentId, replyTo: null, correlation, kind: 'brief', body: brief }, 'start_soul');
+      result.brief = { sent: true, messageId: sent.messageId ?? null };
+      Object.assign(result, awaitingNote(started.name ?? started.agentId));
+    } catch (error) {
+      result.brief = { sent: false, error: error.message };
+    }
+  }
+  return result;
 }
 
 // The injected turn's thread key, when the daemon stamped one.
