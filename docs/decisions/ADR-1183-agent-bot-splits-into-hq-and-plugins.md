@@ -3,6 +3,14 @@
 **Status:** Accepted (2026-10-27, by the owner, decision D1 on [qwts/agent-bot-daemon#2](https://github.com/qwts/agent-bot-daemon/pull/2), relayed in chat)
 **Date:** 2026-10-27
 **Issue:** [qwts/agent-bot-identity#1183](https://github.com/qwts/agent-bot-identity/issues/1183)
+**Amended:** [ADR-1381](ADR-1381-hq-runs-in-its-own-account-and-holds-identity-authority.md)
+supersedes decision 1's agent-bot-identity bullet. Decision 1's other
+repository names predate the platform's
+[repository catalog](https://github.com/true-line/agent-bot-platform/blob/main/docs/03-architecture/repository-catalog.md),
+which governs them: comms stays agent-comms, and the Soul runtime's entry
+point is agent-bot-souls, with package and render code in soul-package and
+adapters in soul-adapters. No agent-bot-comms or agent-bot-soul-runtime
+repository is created (platform DRIFT-013).
 
 ## Context
 
