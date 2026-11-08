@@ -1,0 +1,59 @@
+$ agent-bot hook
+exit: 1
+stdout:
+stderr:
+agent-bot: hook requires a hook name
+
+$ agent-bot hook --x
+exit: 1
+stdout:
+stderr:
+agent-bot: hook requires a hook name
+
+$ agent-bot hook Bad_Name
+exit: 1
+stdout:
+stderr:
+agent-bot: invalid hook name: Bad_Name
+
+$ agent-bot hook chain-hook
+exit: 1
+stdout:
+stderr:
+agent-bot: unsupported hook: chain-hook
+
+$ agent-bot hook no-such-hook
+exit: 1
+stdout:
+stderr:
+agent-bot: unsupported hook: no-such-hook
+
+$ agent-bot agent-hook
+exit: 0
+stdout:
+stderr:
+agent-hook: --dialect is required
+
+$ agent-bot agent-hook --dialect claude
+exit: 0
+stdout:
+stderr:
+agent-hook: --event is required
+
+$ agent-bot agent-hook --dialect claude --event no-such-event
+exit: 0
+stdout:
+stderr:
+agent-hook: unknown event: no-such-event
+
+$ agent-bot agent-hook --dialect no-such-dialect --event session-start
+exit: 0
+stdout:
+stderr:
+agent-hook: unknown dialect: no-such-dialect
+
+$ agent-bot agent-hook --no-such-flag-golden
+exit: 0
+stdout:
+stderr:
+agent-hook: unknown argument: --no-such-flag-golden

@@ -1,0 +1,35 @@
+{
+  "names": [
+    "applypatch-msg",
+    "commit-msg",
+    "fsmonitor-watchman",
+    "p4-changelist",
+    "p4-post-changelist",
+    "p4-pre-submit",
+    "p4-prepare-changelist",
+    "post-applypatch",
+    "post-checkout",
+    "post-commit",
+    "post-index-change",
+    "post-merge",
+    "post-rewrite",
+    "pre-applypatch",
+    "pre-auto-gc",
+    "pre-commit",
+    "pre-merge-commit",
+    "pre-push",
+    "pre-rebase",
+    "prepare-commit-msg",
+    "reference-transaction",
+    "sendemail-validate"
+  ],
+  "installedIn": "<home>/.local/share/agent-bot/hooks",
+  "wrapper": "#!/bin/sh\n# Managed by agent-bot install.\nexec \"${HOME}/.local/bin/agent-bot\" hook <name> \"$@\"\n",
+  "installationPaths": {
+    "binDir": "<home>/.local/bin",
+    "executable": "<home>/.local/bin/agent-bot",
+    "agentHook": "<home>/.local/share/agent-bot/agent-hook",
+    "hooksDir": "<home>/.local/share/agent-bot/hooks"
+  },
+  "agentHookEntrypoint": "#!/bin/sh\n# Managed by agent-bot install.\n# Always invoke the runner: built-in identity and confinement guards must run\n# even when the checkout has no executable project-specific hooks.\nRUNNER=${AGENT_BOT_BIN:-\"$HOME/.local/bin/agent-bot\"}\nif [ ! -x \"$RUNNER\" ]; then\n  printf '%s\\n' \"agent-bot: security hook runner is missing or not executable\" >&2\n  exit 1\nfi\nexec \"$RUNNER\" agent-hook \"$@\"\n"
+}
