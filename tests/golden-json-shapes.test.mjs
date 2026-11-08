@@ -90,10 +90,25 @@ function template(box) {
   return dir;
 }
 
+// Empty stand-ins for the host tools `soul env` locates. Nothing runs them:
+// the fence lets no program but node start.
+function hostTools(box) {
+  const dir = path.join(box, 'tools');
+  mkdirSync(dir);
+  for (const name of ['agent-comms', 'git']) writeFileSync(path.join(dir, name), '', { mode: 0o755 });
+  return dir;
+}
+
 test('read-only --json shapes and exit codes against fixture state', async (t) => {
   // The bundled-template lookup reads two directories above the checkout;
   // naming the fixture as the Starter keeps `soul templates` to the box.
-  const sealed = sealedBox((box) => ({ AGENT_BOT_STARTER_TEMPLATE: path.join(box, 'Golden.soul') }));
+  // `soul env` reports where the host tools it names sit, searching
+  // AGENT_BOT_TOOL_PATH before PATH; empty stand-ins in the box make that
+  // answer the same whether or not this machine has them installed.
+  const sealed = sealedBox((box) => ({
+    AGENT_BOT_STARTER_TEMPLATE: path.join(box, 'Golden.soul'),
+    AGENT_BOT_TOOL_PATH: hostTools(box),
+  }));
   t.after(() => sealed.cleanup());
   const fixture = template(sealed.box);
 
