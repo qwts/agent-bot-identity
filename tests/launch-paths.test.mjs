@@ -37,7 +37,8 @@ const LAUNCH_PATHS = {
   'soul-join.mjs': [3, 'caller context: git for the owner\'s soul join; membership dispatch is classified in windows-git-shell'],
   'identity/uninstalled-identity-hook.mjs': [3, 'caller context: git config and gh in the user\'s session'],
   // First-party agent-bot code.
-  'agent-daemon.mjs': [3, 'first-party: the daemon re-executing its own module; the login shell probe for PATH; git'],
+  'agent-daemon.mjs': [2, 'first-party: the login shell probe for PATH; git'],
+  'daemon-state.mjs': [1, 'first-party: startDaemon re-executing agent-daemon.mjs run, detached (moved from agent-daemon.mjs, #1386)'],
   'bootstrap.mjs': [2, 'first-party: the installed agent-bot, through validated Node launcher metadata on Windows'],
   'install.mjs': [3, 'first-party: the installed agent-bot; git'],
   'identity/install-gh-shim.mjs': [1, 'owner-run: zsh-profile via ensureBlock, from the owner\'s install'],
