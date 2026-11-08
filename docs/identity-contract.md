@@ -2,9 +2,15 @@
 
 This is ADR-0645 migration step 7. It says what the rest of the runtime may
 call in identity, in which form, and what identity persists. Soul, host, cli
-and comms use only what is listed here. It stays the contract as identity
-becomes the agent-bot-identity plugin of the HQ daemon
+and comms use only what is listed here. It stays the contract while
+agent-bot splits into HQ and plugins
 ([ADR-1183](decisions/ADR-1183-agent-bot-splits-into-hq-and-plugins.md)).
+Identity's HQ authority (enrollment, the identity-service link, the signer,
+credential references, grants and approvals) moves into HQ core in
+agent-bot-daemon, not into a plugin; this repository's plugin registers
+member surfaces only
+([ADR-1381](decisions/ADR-1381-hq-runs-in-its-own-account-and-holds-identity-authority.md),
+platform [PDR-0027](https://github.com/true-line/agent-bot-platform/blob/main/docs/04-decisions/PDR-0027-hq-identity-authority-lives-in-agent-bot-daemon.md)).
 
 The earlier plan to extract identity into `qwts/agent-identity`
 ([identity-extraction-plan.md](identity-extraction-plan.md)) is retired.
