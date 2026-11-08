@@ -63,6 +63,11 @@ test('public commands and their dispatch modules', () => {
   });
 });
 
+test('top-level help lists every public command', () => {
+  const listed = new Set(cli(['--help']).stdout.split('\n').map((line) => /^  ([a-z][a-z-]*)\s/.exec(line)?.[1]).filter(Boolean));
+  assert.deepEqual([...PUBLIC_COMMANDS].filter((command) => !listed.has(command)), []);
+});
+
 for (const [name, args] of [['help.txt', ['--help']], ['soul-help.txt', ['soul', '--help']], ['broker-help.txt', ['broker', '--help']]]) {
   test(`agent-bot ${args.join(' ')} output and exit code`, () => {
     const result = cli(args);
