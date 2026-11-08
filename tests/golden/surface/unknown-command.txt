@@ -1,0 +1,4 @@
+stdout:
+
+stderr:
+agent-bot: unknown command: no-such-command-golden

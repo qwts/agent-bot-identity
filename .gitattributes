@@ -1,1 +1,2 @@
 RELEASE_COMMIT export-subst
+tests/golden/** text eol=lf

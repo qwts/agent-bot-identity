@@ -1,0 +1,5 @@
+usage: agent-bot broker <run [--single-account]|status|...> [options]
+
+Run or inspect the local agent-comms broker with a platform-appropriate
+AGENT_COMMS_SHARED_DIR default (macOS: /Users/Shared/Public/agent-comms;
+Linux: ${XDG_STATE_HOME:-~/.local/state}/agent-comms).

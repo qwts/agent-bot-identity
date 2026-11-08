@@ -1,0 +1,145 @@
+[
+  {
+    "name": "fetch_context",
+    "description": "Fetch the context of the invocation this session was driven for: the inbound message, attachment references (space:// refs resolved to paths when possible), and the bounded thread history of the originating adapter session. Call this first.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "invocation_id": {
+          "type": "string",
+          "description": "invocation to fetch; defaults to the injected AGENT_BOT_REACH_INVOCATION"
+        }
+      }
+    }
+  },
+  {
+    "name": "post_reply",
+    "description": "Deliver this session's answer to the adapter thread that originated the invocation. The reply lands as a durable event the adapter relays to its surface; post exactly one final reply per invocation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "the answer, plain text, at most 6 KiB"
+        },
+        "invocation_id": {
+          "type": "string",
+          "description": "invocation to reply to; defaults to the injected AGENT_BOT_REACH_INVOCATION"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "report_status",
+    "description": "Report interim progress to the originating adapter thread while the work is still running. Short note, not the answer.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string",
+          "description": "short progress note, at most 1 KiB"
+        },
+        "invocation_id": {
+          "type": "string",
+          "description": "invocation to report on; defaults to the injected AGENT_BOT_REACH_INVOCATION"
+        }
+      },
+      "required": [
+        "note"
+      ]
+    }
+  },
+  {
+    "name": "clock_in",
+    "description": "Identity heartbeat: report which agent soul is at the keyboard. With an invocation in scope the clock-in is a durable event on its stream; without one (registered placement, idle session) it is an ephemeral identity report.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "invocation_id": {
+          "type": "string",
+          "description": "invocation to clock in on; optional in the registered placement"
+        }
+      }
+    }
+  },
+  {
+    "name": "fleet",
+    "description": "List your teammates: the other agent souls you may message through agent-comms, with each one's name, address, and harness. Use it to find who to work with, then send_message to reach them.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "send_message",
+    "description": "Send an agent-comms message, as yourself, to a teammate (a name from fleet, an address, or an Agent ID) or to a person by principal name. Their answer arrives in your inbox later as a reply and wakes you; each message stands alone, so include the context they need.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "teammate name, account/agentId address, Agent ID, or principal name"
+        },
+        "body": {
+          "type": "string",
+          "description": "the message, plain text, at most 16 KiB"
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "message id you are answering, if this is a reply"
+        }
+      },
+      "required": [
+        "to",
+        "body"
+      ]
+    }
+  },
+  {
+    "name": "start_soul",
+    "description": "Start a new agent soul: a full soul of its own (its own folder, identity, and inbox), not a subagent in your session. By default it is your teammate (parent: \"self\"); pass parent \"none\" to start an independent root soul with no parent. Choose its harness, model and provider here: the daemon validates them before creating anything and refuses with the fix rather than starting a differently configured soul. It joins agent-comms and shows in fleet; pass brief to send it its first task from you. The result reports the effective {harness, model, provider, parent}. The host limits how many souls you may start.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "the new soul's name, e.g. \"Researcher\""
+        },
+        "harness": {
+          "type": "string",
+          "description": "harness to run it on (claude, codex, opencode, …); defaults to yours"
+        },
+        "model": {
+          "type": "string",
+          "description": "model id the harness should run, as `agent-bot soul model` stores it (e.g. \"claude-haiku-5-5\"); defaults to the harness default. An id the harness has listed as unavailable is refused with the list."
+        },
+        "provider": {
+          "type": "string",
+          "description": "provider id for the harness (claude: anthropic, anthropic-compatible; codex: openai, github, openai-compatible; opencode: openai, anthropic, github, openai-compatible). Providers come from the soul template's soul.json, so this confirms the template's (or the harness's built-in) provider; any other id is refused with the fix."
+        },
+        "parent": {
+          "type": "string",
+          "enum": [
+            "self",
+            "none"
+          ],
+          "description": "\"self\" (default): the new soul is your teammate, under you in fleet; \"none\": an independent root soul with no parent."
+        },
+        "template": {
+          "type": "string",
+          "description": "absolute path of a soul template; defaults to the host's Starter"
+        },
+        "brief": {
+          "type": "string",
+          "description": "first message to send it, from you, at most 16 KiB"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  }
+]

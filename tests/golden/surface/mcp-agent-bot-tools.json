@@ -1,0 +1,82 @@
+[
+  {
+    "name": "search_tools",
+    "description": "Find agent-bot tools by keyword; returns each match's name and a one-line description.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "what you need to do (omit to list every visible tool)"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "describe_tool",
+    "description": "Return a tool's input schema and its class (read or write).",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "call_tool",
+    "description": "Run a READ agent-bot tool (search_tools/describe_tool to discover names and schemas).",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "call_write_tool",
+    "description": "Run a WRITE agent-bot tool such as bind, take_notices, or request_grant.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  }
+]

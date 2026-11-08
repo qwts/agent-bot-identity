@@ -1,0 +1,52 @@
+agent-bot — standalone agent identity runtime
+
+Usage:
+  agent-bot <command> [options]
+  agent-bot --version
+
+Commands:
+  start              Check in this session, create or reuse a linked soul worktree on the target branch, and bind this conversation: [--branch <branch>] [--repo <path|owner/name>] [--json]
+  bootstrap          Bootstrap from source or repair installed machine setup
+  setup-worktree     Create or configure a soul worktree [deprecated: prefer 'agent-bot start' for task/worktree startup]
+  join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json] [deprecated: prefer 'agent-bot start' for task/worktree startup]
+  mint-token         Mint a GitHub App installation token (through the agent-bot server when AGENT_BOT_SERVER is set)
+  server             Connect to an agent-bot server: server enroll [--harness H]... | status [--json] | logout
+  events             Wait on, peek at, or ack relay messages from the agent-bot server: events wait|peek|ack [--ide] [--harness H] [--cursor C] [--timeout S]
+  doctor             Diagnose installation and identity state; --probe-inbox also checks the gh-app-hook inbox answers (network, bounded, no bearer sent)
+  identity           Manage execution identities and Apps (apps list; app create/connect/rotate-key/assign/remove; app migrate-key SLUG --to keyd [--dry-run]; addon github-identity on|off); migrate-credentials [--soul ID|--all] [--dry-run] [--json] moves App keys into each soul's key store and public metadata into config; reports removable legacy folders; --from-namespace OLD and/or --from-vault OLD copy credentials stored under an old credential namespace or pass-cli vault and keep the old items (owner only)
+  space              Manage durable per-soul Agent Spaces
+  population         List this account's census of souls
+  principal          Enroll and authorize messaging principals (owner ceremony)
+  binding            Revoke this worktree's soul binding
+  session            Bind this worktree to the current session without MCP: session bind [--transcript-id ID] [--provider NAME] [--json] [deprecated: prefer 'agent-bot start' for task/worktree startup]
+  soul               Turn cold wake on or off (owner only); build [PATH] [--check] [--json]; pack validate PATH; skill import PATH|list|show UUID|verify UUID|check UUID [--json]; skill install UUID|NAME --soul ID, skill uninstall NAME --soul ID [--trash] (trash owner only); skill status --soul ID [--json]; skill search --soul ID QUERY [--json] (settings.skillSearchAdapter; none: reports so); revision <command>; model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin]; mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin]; computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin]; tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin] (owner, or the soul itself; global asks the owner); stop <agentId|name> [--json]; pause|resume <agentId|name> [--json]; show <agentId|name> [--json]; profile <agentId|name> [--json] [--file RELATIVE_PATH]; env <agentId|name> [--json]; env history <agentId|name> [--json] [--limit N]; runtimes <agentId|name> [--json]; runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] (owner only); secret <agentId|name> set|clear <name> [--json] [--principal-stdin] (owner only, value on stdin); secret <agentId|name> status [--json]; revision prepare <agentId|name> [--json] [--dest PATH]; comms <soul> [show|on|off] [--json]; remove <soul> [--json] archives a soul (owner only); dir AGENT_ID; locate PATH; templates [--json]; spawn TEMPLATE_PATH --name NAME [--harness H]; template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin] (owner only); env migrate <agentId|name> --adopt-host-signin|--space-into-soul|--template-name|--harnesses-into-runtimes|--complete [--plan] [--json] [--principal-stdin] (owner only)
+                     confinement AGENT_ID off|warn|deny (owner only); confinement-report AGENT_ID [--json]
+  daemon             Run, supervise, or disable the loopback daemon; vouch-key prints the soul public key
+  broker             Run or inspect the local agent-comms broker with platform-resolved sharedDir (e.g. broker run --single-account)
+  keyd               Supervise agent-bot-keyd, the signed key holder the host app ships: install --bin PATH | uninstall | status [--json]
+  owner              Owner-signed statements (ADR-0753): verify <token|file|-> [--repo R --issue N] [--json] checks one against the pinned keys, and calls it owner approval only where agent-bot-keyd vouches for those pins on that call (otherwise NOT owner approval, owner-pins-unprotected, exit 1); sign "<text>" --repo R --issue N (--key PATH | --store keyd) [--expires 7d]; enroll --store keyd [--name N] or --store ssh --key PATH [--name N], and remove NAME (owner only, through agent-bot-keyd); keys [--json]
+  approvals          Tool-permission requests souls are waiting on: list [--json] | approve PROPOSAL_ID [--scope once|session] [--json] [--principal-stdin] | deny PROPOSAL_ID [--json] [--principal-stdin]
+  audit              Read audit receipts: list [--json] [--since ISO-8601|-P1D] [--agent ID] [--event KIND] [--limit N] | tail [--json] [--agent ID]
+  mcp                Serve the agent-bot MCP tools (bind, whoami, population, space_path, credential, take_notices, ack_notices)
+  machine            Pair, unpair, or inspect this account's agent-daemon pairing with agent-machine: machine pair [--repin] | unpair | status
+  pair               Pair this account's agent-daemon with agent-machine (alias for machine pair [--repin]); pair comms [--broker ACCOUNT] [--json] pairs with agent-comms
+  unpair             Revoke the agent-daemon peer and drop the daemon.pub pin (alias for machine unpair)
+  reach-mcp          Serve the daemon reach-back MCP tools (fetch_context, post_reply, fleet, send_message)
+  wake               Hold this session's socket at the daemon's wake plane
+  web                Pair a browser with the daemon's private web client
+  telegram           Long-poll Telegram as a thin transport over the daemon
+  install            Install the CLI and Git hooks
+  update             Refresh the CLI and global Git hooks from this checkout
+  install-gh-shim    Install the fail-closed gh shim and optional desktop adapter
+  ensure-private-key Restore an App key into its managed store and ID into config with pass-cli
+  signed-commit      Replay local commits with GitHub-verified signatures
+  secret             Read a password or API key from a secure-store provider
+  skill              Print one skill's SKILL.md (bundled, or from the fleet catalog at its pinned commit); agent-bot skill agent-bot --for <subcommand> prints one reference; path prints the bundle and source commit
+  sop                Resolve the configured SOP and report its pinned commits; persona [--json] records its persona mapping for the sandbox
+  workflow           Resolve deterministic workflows across soul, sop-cache, bundled, and remote tiers: workflow [list|show <name>|sync] [--soul ID] [--remote] [--source TIER] [--json]
+  metrics            Collect or show optional read-only runtime metrics
+  diagnostics        Export local diagnostics to a file you choose; never uploads
+
+Cold start:
+  ./agent-bot bootstrap --profile <path|-> [options]  Run from a fresh source checkout
+  agent-bot bootstrap [options]                       Use after installation
