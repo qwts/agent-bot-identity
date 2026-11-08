@@ -24,7 +24,7 @@ import { identityOp } from './daemon-client.mjs';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { isVersionName, npmHarnessRoot, writeNpmInstallStamp } from './soul-home.mjs';
 import { SPACE_STEP_ID, migrateSpaceIntoSoul, verifySpaceTree } from './soul-memory.mjs';
 import { MIGRATION_SCHEMA_VERSION, readMigrationJournal, readMigrationStep, recordMigrationStep } from './soul-migration-journal.mjs';

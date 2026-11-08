@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
 import { stateDirectory } from './state-paths.mjs';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { readManifestText, readSoulPackageEntries, validateMaintainedDeclaration } from './soul-package.mjs';
 import { discardRevisionStaging, editSoulRevision, prepareRevisionEdit } from './soul-revisions.mjs';
 import { knownTemplateName, resolveInstanceTemplate } from './soul-templates.mjs';

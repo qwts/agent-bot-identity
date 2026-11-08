@@ -34,8 +34,8 @@ import { isAgentId, validateAgentId } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { stateDirectory } from './state-paths.mjs';
 
-import { readSoulModes } from './soul-mode.mjs';
-import { readSoulModels } from './soul-model.mjs';
+import { readSoulModes } from './soul-mode-store.mjs';
+import { readSoulModels } from './soul-model-store.mjs';
 import { soulsHome } from './souls-root.mjs';
 import { readManifestText, validateAppearanceDeclaration } from './soul-package.mjs';
 

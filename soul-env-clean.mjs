@@ -20,7 +20,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent-population.mjs';
 import { appendAuditReceipt } from './identity-format.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { RETENTION, classifyPath, retentionOf } from './soul-env-contract.mjs';
 import { readMigrationStep } from './soul-migration-journal.mjs';
 import { SPACE_STEP_ID } from './soul-memory.mjs';

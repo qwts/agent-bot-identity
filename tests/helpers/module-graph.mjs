@@ -297,3 +297,46 @@ export function compareToBaseline(crossings, baseline) {
     duplicates: baseline.filter((key, index) => baseline.indexOf(key) !== index),
   };
 }
+
+// The import cycles: every strongly connected component of more than one file
+// (Tarjan's algorithm), each as a sorted list of files, the list sorted by its
+// first file. A cycle whose files belong to two modules ties those modules
+// together, whatever may_import allows (HQ plan §2.4).
+export function importCycles(edges) {
+  const next = new Map();
+  for (const { from, to } of edges) {
+    if (!next.has(from)) next.set(from, []);
+    if (!next.has(to)) next.set(to, []);
+    next.get(from).push(to);
+  }
+  const index = new Map();
+  const low = new Map();
+  const stack = [];
+  const onStack = new Set();
+  const cycles = [];
+  const visit = (file) => {
+    index.set(file, index.size);
+    low.set(file, index.get(file));
+    stack.push(file);
+    onStack.add(file);
+    for (const target of next.get(file)) {
+      if (!index.has(target)) {
+        visit(target);
+        low.set(file, Math.min(low.get(file), low.get(target)));
+      } else if (onStack.has(target)) {
+        low.set(file, Math.min(low.get(file), index.get(target)));
+      }
+    }
+    if (low.get(file) !== index.get(file)) return;
+    const component = [];
+    let member;
+    do {
+      member = stack.pop();
+      onStack.delete(member);
+      component.push(member);
+    } while (member !== file);
+    if (component.length > 1) cycles.push(component.sort());
+  };
+  for (const file of [...next.keys()].sort()) if (!index.has(file)) visit(file);
+  return cycles.sort((a, b) => a[0].localeCompare(b[0]));
+}

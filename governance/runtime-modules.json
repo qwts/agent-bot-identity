@@ -277,6 +277,7 @@
     "sop.mjs": "soul",
     "workflow.mjs": "cli",
     "soul-app-declarations.mjs": "soul",
+    "soul-approvals.mjs": "soul",
     "soul-asides.mjs": "soul",
     "soul-build.mjs": "soul",
     "soul-builder.mjs": "soul",
@@ -304,7 +305,9 @@
     "soul-memory.mjs": "soul",
     "soul-migration-journal.mjs": "soul",
     "soul-mode.mjs": "soul",
+    "soul-mode-store.mjs": "soul",
     "soul-model.mjs": "soul",
+    "soul-model-store.mjs": "soul",
     "soul-package.mjs": "soul",
     "soul-pause.mjs": "soul",
     "soul-profile.mjs": "soul",
@@ -472,7 +475,10 @@
     "identity/server-client.mjs": "Identity: opt-in agent-bot server mode (docs/server-mode.md) \u2014 device enrollment, DPoP-bound access tokens and server-minted installation tokens; identity/mint-token.mjs delegates to it when AGENT_BOT_SERVER is set.",
     "identity/action-ledger.mjs": "Identity: the durable action ledger for credential requests to the identity service (prepared, submitted, succeeded, rejected, unknown); an unknown outcome is reconciled by lookup, never re-sent blind (0.4 T06, #1184).",
     "identity/provider-key.mjs": "Identity: the pilot provider key (owner decision D2), fetched from the identity service at daemon start, held in memory only, dropped on device revocation, receipted as provider-key-exception (#1184).",
-    "identity/inference-proxy.mjs": "Identity: the loopback inference proxy (#1190); swaps a short-lived proxy token for the pilot provider key the daemon holds, so the key never reaches a member process."
+    "identity/inference-proxy.mjs": "Identity: the loopback inference proxy (#1190); swaps a short-lived proxy token for the pilot provider key the daemon holds, so the key never reaches a member process.",
+    "soul-approvals.mjs": "The approvals port every owner-only soul command asks before a change (#1384, HQ plan §2.4 C1 remedy 3). Backed today by assertOwnerAction with detect off, the gate cold-wake-settings.mjs used to hold; HQ approval records back it later. Kept apart from the settings modules so the census never reaches identity through the gate.",
+    "soul-mode-store.mjs": "The soul mode settings file and its readers, with no gate (#1384). The census reads modes here rather than from soul-mode.mjs, whose command imports the owner approvals port; that import tied the census into identity's credential cycle (C1). soul-mode.mjs re-exports these names.",
+    "soul-model-store.mjs": "The soul model settings file and its readers, with no gate (#1384). The census reads models here rather than from soul-model.mjs, whose command imports the owner approvals port (C1). soul-model.mjs re-exports the names it exported before."
   },
   "computed_imports": {},
   "contracts": {

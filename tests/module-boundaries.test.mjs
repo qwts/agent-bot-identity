@@ -16,6 +16,7 @@ import {
   crossingEdges,
   edgeKey,
   exportedNames,
+  importCycles,
   importSpecifiers,
   maskSource,
   moduleEdges,
@@ -125,6 +126,18 @@ test('the baseline is empty', () => {
 // contracts host may import (identity-host.mjs, plus the shared
 // identity-format.mjs and daemon-client.mjs), never through another
 // identity file. may_import still lists identity for host; this narrows it.
+// No import cycle ties two modules together (#1384, HQ plan §2.4). Cycle C1
+// joined identity's credential files to soul's census through the owner gate;
+// with the gate behind soul-approvals.mjs and the census reading the gate-free
+// settings stores, every remaining cycle stays inside one module. Cycles
+// inside a module are HQ plan rows 3b to 5 and are not counted here.
+test('no import cycle spans two modules', () => {
+  const spanning = importCycles(moduleEdges(ROOT, runtimeFiles()))
+    .map((files) => ({ modules: [...new Set(files.map((file) => MAP.files[file]))].sort(), files }))
+    .filter(({ modules }) => modules.length > 1);
+  assert.deepEqual(spanning, []);
+});
+
 test('host imports identity only through its listed contracts', () => {
   const reached = moduleEdges(ROOT, runtimeFiles())
     .filter(({ from, to }) => MAP.files[from] === 'host' && MAP.files[to] === 'identity')
@@ -485,6 +498,16 @@ test('compareToBaseline fails new crossings and stale baseline entries', () => {
   assert.deepEqual(compareToBaseline(crossings, ['a.mjs -> b.mjs']), { added: ['c.mjs -> a.mjs'], stale: [], duplicates: [] });
   assert.deepEqual(compareToBaseline([], ['a.mjs -> b.mjs']), { added: [], stale: ['a.mjs -> b.mjs'], duplicates: [] });
   assert.deepEqual(compareToBaseline(crossings.slice(0, 1), ['a.mjs -> b.mjs', 'a.mjs -> b.mjs']).duplicates, ['a.mjs -> b.mjs']);
+});
+
+test('importCycles finds each strongly connected component once, and no acyclic file', () => {
+  const edges = [
+    { from: 'a.mjs', to: 'b.mjs' }, { from: 'b.mjs', to: 'c.mjs' }, { from: 'c.mjs', to: 'a.mjs' },
+    { from: 'c.mjs', to: 'd.mjs' }, { from: 'd.mjs', to: 'e.mjs' }, { from: 'e.mjs', to: 'd.mjs' },
+    { from: 'e.mjs', to: 'f.mjs' },
+  ];
+  assert.deepEqual(importCycles(edges), [['a.mjs', 'b.mjs', 'c.mjs'], ['d.mjs', 'e.mjs']]);
+  assert.deepEqual(importCycles([{ from: 'a.mjs', to: 'b.mjs' }]), []);
 });
 
 test('moduleEdges ignores self-imports and files outside the map', () => {

@@ -29,7 +29,7 @@ import { populationFile, showSoul, showSoulByName, soulDirectory } from './agent
 import { appendAuditReceipt } from './identity-format.mjs';
 import { withLock } from './file-lock.mjs';
 import { ArchiveBudgetError, RUNTIME_ARCHIVE_LIMITS, checkArchiveBudget } from './archive-budget.mjs';
-import { ownerGate } from './cold-wake-settings.mjs';
+import { ownerGate } from './soul-approvals.mjs';
 import { PROVIDER_NAMES, RUNTIME_NAMES, SHA256_HEX, catalogPin, catalogReleaseHash, harnessInstallSource, isExactVersion, hostPlatform, newestPin, normalizeHarnessInstall, normalizeRuntimeDeclaration, normalizeRuntimeIntegrity, resolveCatalogPin, supportedMajors, versionMatches, uvToolRequirements } from './runtime-catalog.mjs';
 
 export const RUNTIMES_SCHEMA_VERSION = 1;
