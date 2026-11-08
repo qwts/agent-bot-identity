@@ -685,13 +685,13 @@ test('an agent account is agent context with no env markers at all', () => {
 test('the pass-through hints when a failed call targets a different repository', () => {
   const other = runShim({ agentEnv: {}, args: ['api', 'repos/another-org/other-repo'], realExit: 1 });
   assert.equal(other.status, 1);
-  assert.match(other.stderr, /token is scoped to qwts\/agent-bot-identity/);
+  assert.match(other.stderr, /token is scoped to true-line\/agent-bot-identity/);
   assert.match(other.stderr, /another-org\/other-repo is outside it/);
   assert.match(other.stderr, /agent-bot setup-worktree/);
 });
 
 test('the pass-through stays quiet for the worktree repo and for successful calls', () => {
-  const same = runShim({ agentEnv: {}, args: ['api', 'repos/QWTS/agent-bot-identity'], realExit: 1 });
+  const same = runShim({ agentEnv: {}, args: ['api', 'repos/TRUE-LINE/agent-bot-identity'], realExit: 1 });
   assert.equal(same.status, 1);
   assert.ok(!same.stderr.includes('token is scoped to'), 'same owner/name (any case) gets no hint');
   const ok = runShim({ agentEnv: {}, args: ['api', 'repos/another-org/other-repo'], realExit: 0 });
@@ -717,7 +717,7 @@ test('the same-repo path execs gh so signals reach it; only cross-repo calls kee
 // #1257 rework: TARGET reduces to owner/name — deeper same-repo paths and the
 // -R variants must not false-positive.
 test('the cross-repo hint ignores path segments beyond owner/name', () => {
-  const sameDeep = runShim({ agentEnv: {}, args: ['api', 'repos/qwts/agent-bot-identity/pulls/999'], realExit: 1 });
+  const sameDeep = runShim({ agentEnv: {}, args: ['api', 'repos/true-line/agent-bot-identity/pulls/999'], realExit: 1 });
   assert.ok(!sameDeep.stderr.includes('token is scoped to'), 'same-repo api path gets no hint');
   const leadingSlash = runShim({ agentEnv: {}, args: ['api', '/repos/other/repo/issues'], realExit: 1 });
   assert.match(leadingSlash.stderr, /other\/repo is outside it/);
