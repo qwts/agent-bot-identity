@@ -1,0 +1,718 @@
+$ agent-bot audit list --help
+exit: 1
+stdout:
+stderr:
+agent-bot audit: usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--agent AGENT_ID] [--event KIND] [--limit N] | audit tail [--json] [--agent ID]
+
+$ agent-bot audit list -h
+same as --help
+
+$ agent-bot audit list --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot audit: usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--agent AGENT_ID] [--event KIND] [--limit N] | audit tail [--json] [--agent ID]
+
+$ agent-bot audit tail --help
+exit: 1
+stdout:
+stderr:
+agent-bot audit: usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--agent AGENT_ID] [--event KIND] [--limit N] | audit tail [--json] [--agent ID]
+
+$ agent-bot audit tail -h
+same as --help
+
+$ agent-bot audit tail --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot audit: usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--agent AGENT_ID] [--event KIND] [--limit N] | audit tail [--json] [--agent ID]
+
+$ agent-bot identity addon --help
+exit: 1
+stdout:
+stderr:
+identity-app-invalid: identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | migrate-key SLUG --to keyd [--dry-run] [--json] | assign SLUG (--harness H|--soul AGENT_ID) | remove SLUG|APP_ID | identity addon github-identity on|off [--json] [--principal-stdin]
+
+$ agent-bot identity addon -h
+same as --help
+
+$ agent-bot identity addon --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+identity-app-invalid: identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | migrate-key SLUG --to keyd [--dry-run] [--json] | assign SLUG (--harness H|--soul AGENT_ID) | remove SLUG|APP_ID | identity addon github-identity on|off [--json] [--principal-stdin]
+
+$ agent-bot identity app --help
+exit: 1
+stdout:
+stderr:
+identity-app-disabled: Enable the github-identity add-on before managing Apps.
+
+$ agent-bot identity app -h
+same as --help
+
+$ agent-bot identity app --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+identity-app-disabled: Enable the github-identity add-on before managing Apps.
+
+$ agent-bot identity apps --help
+exit: 1
+stdout:
+stderr:
+identity-app-invalid: identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | migrate-key SLUG --to keyd [--dry-run] [--json] | assign SLUG (--harness H|--soul AGENT_ID) | remove SLUG|APP_ID | identity addon github-identity on|off [--json] [--principal-stdin]
+
+$ agent-bot identity apps -h
+same as --help
+
+$ agent-bot identity apps --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+identity-app-invalid: identity apps list [--json] | identity app create --manifest [--name NAME] [--org ORG] [--open] | connect --id ID (--key-file PATH|--pass-cli ITEM) | rotate-key SLUG (--key-file PATH|--pass-cli ITEM) | migrate-key SLUG --to keyd [--dry-run] [--json] | assign SLUG (--harness H|--soul AGENT_ID) | remove SLUG|APP_ID | identity addon github-identity on|off [--json] [--principal-stdin]
+
+$ agent-bot identity migrate-credentials --help
+exit: 1
+stdout:
+stderr:
+agent-bot identity migrate-credentials: usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli | --from-namespace OLD [--from-vault OLD] | --from-vault OLD] [--dry-run] [--json] [--principal-stdin]
+
+$ agent-bot identity migrate-credentials -h
+same as --help
+
+$ agent-bot identity migrate-credentials --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot identity migrate-credentials: usage: agent-bot identity migrate-credentials [--soul AGENT_ID|NAME | --all] [--to keyd|pass-cli | --from-namespace OLD [--from-vault OLD] | --from-vault OLD] [--dry-run] [--json] [--principal-stdin]
+
+$ agent-bot pair comms …
+not run: runs account pairing (mints a vouch key, writes a pairing proof to the comms directory) whatever its arguments
+
+$ agent-bot sandbox export --help
+exit: 1
+stdout:
+stderr:
+agent-bot sandbox export: usage: agent-bot sandbox export --for OWNER [--skip souls|workspaces|transcripts]... [--resume DIR] [--json] [--principal-stdin] | sandbox export --verify ACCOUNT [--dir DIR] [--json]
+
+$ agent-bot sandbox export -h
+same as --help
+
+$ agent-bot sandbox export --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot sandbox export: usage: agent-bot sandbox export --for OWNER [--skip souls|workspaces|transcripts]... [--resume DIR] [--json] [--principal-stdin] | sandbox export --verify ACCOUNT [--dir DIR] [--json]
+
+$ agent-bot soul asides --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul asides: usage: agent-bot soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json]
+
+$ agent-bot soul asides -h
+not run: takes -h as a soul name, and the owner gate then runs git to look for soul markers
+
+$ agent-bot soul asides --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul asides: usage: agent-bot soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json]
+
+$ agent-bot soul build --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul build: usage: agent-bot soul build [PATH] [--check] [--json]
+
+$ agent-bot soul build -h
+same as --help
+
+$ agent-bot soul build --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul build: usage: agent-bot soul build [PATH] [--check] [--json]
+
+$ agent-bot soul cold-wake --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul cold-wake: invalid Agent ID: "--help"
+
+$ agent-bot soul cold-wake -h
+exit: 1
+stdout:
+stderr:
+agent-bot soul cold-wake: invalid Agent ID: "-h"
+
+$ agent-bot soul cold-wake --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul cold-wake: invalid Agent ID: "--no-such-flag-golden"
+
+$ agent-bot soul comms --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul comms: no population record with that name
+
+$ agent-bot soul comms -h
+same as --help
+
+$ agent-bot soul comms --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul comms: no population record with that name
+
+$ agent-bot soul computer-use --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul computer-use: no population record with that name
+
+$ agent-bot soul computer-use -h
+same as --help
+
+$ agent-bot soul computer-use --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul computer-use: no population record with that name
+
+$ agent-bot soul confinement --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul confinement: usage: agent-bot soul confinement AGENT_ID off|warn|deny [--principal-stdin] | soul confinement-report AGENT_ID [--json]
+
+$ agent-bot soul confinement -h
+same as --help
+
+$ agent-bot soul confinement --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul confinement: usage: agent-bot soul confinement AGENT_ID off|warn|deny [--principal-stdin] | soul confinement-report AGENT_ID [--json]
+
+$ agent-bot soul confinement-report --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul confinement: invalid Agent ID: "--help"
+
+$ agent-bot soul confinement-report -h
+exit: 1
+stdout:
+stderr:
+agent-bot soul confinement: invalid Agent ID: "-h"
+
+$ agent-bot soul confinement-report --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul confinement: invalid Agent ID: "--no-such-flag-golden"
+
+$ agent-bot soul dir --help
+exit: 1
+stdout:
+stderr:
+soul dir: invalid Agent ID: "--help"
+
+$ agent-bot soul dir -h
+exit: 1
+stdout:
+stderr:
+soul dir: invalid Agent ID: "-h"
+
+$ agent-bot soul dir --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+soul dir: invalid Agent ID: "--no-such-flag-golden"
+
+$ agent-bot soul env --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul env: soul-env-failed: usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin] | soul env history <agentId|name> [--json] [--limit N]
+
+$ agent-bot soul env -h
+same as --help
+
+$ agent-bot soul env --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul env: soul-env-failed: usage: agent-bot soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin] | soul env history <agentId|name> [--json] [--limit N]
+
+$ agent-bot soul env clean --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul env clean: soul-env-clean-failed: usage: agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
+
+$ agent-bot soul env clean -h
+same as --help
+
+$ agent-bot soul env clean --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul env clean: soul-env-clean-failed: usage: agent-bot soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin]
+
+$ agent-bot soul env export --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul env export: soul-env-export-failed: usage: agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul env export -h
+same as --help
+
+$ agent-bot soul env export --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul env export: soul-env-export-failed: usage: agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul env history --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul env history: soul-env-history-failed: usage: agent-bot soul env history <agentId|name> [--json] [--limit N]
+
+$ agent-bot soul env history -h
+same as --help
+
+$ agent-bot soul env history --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul env history: soul-env-history-failed: usage: agent-bot soul env history <agentId|name> [--json] [--limit N]
+
+$ agent-bot soul env import --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul env import: soul-env-import-failed: usage: agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul env import -h
+same as --help
+
+$ agent-bot soul env import --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul env import: soul-env-import-failed: usage: agent-bot soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul env migrate --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul env migrate: soul-env-migrate-failed: usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul env migrate -h
+same as --help
+
+$ agent-bot soul env migrate --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul env migrate: soul-env-migrate-failed: usage: agent-bot soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul fork --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul fork: usage: agent-bot soul fork <copy-path> --name NAME [--harness H] [--role ROLE] [--json] [--principal-stdin]
+
+$ agent-bot soul fork -h
+same as --help
+
+$ agent-bot soul fork --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul fork: usage: agent-bot soul fork <copy-path> --name NAME [--harness H] [--role ROLE] [--json] [--principal-stdin]
+
+$ agent-bot soul locate …
+not run: locates its argument as a path, so every argument is work and the output is the sealed HOME
+
+$ agent-bot soul mode --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul mode: no population record with that name
+
+$ agent-bot soul mode -h
+same as --help
+
+$ agent-bot soul mode --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul mode: no population record with that name
+
+$ agent-bot soul model --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul model: no population record with that name
+
+$ agent-bot soul model -h
+same as --help
+
+$ agent-bot soul model --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul model: no population record with that name
+
+$ agent-bot soul pack --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul pack: usage: agent-bot soul pack validate PATH
+
+$ agent-bot soul pack -h
+same as --help
+
+$ agent-bot soul pack --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul pack: usage: agent-bot soul pack validate PATH
+
+$ agent-bot soul pause --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul pause: usage: agent-bot soul pause <agentId|name> [--json]
+
+$ agent-bot soul pause -h
+same as --help
+
+$ agent-bot soul pause --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul pause: usage: agent-bot soul pause <agentId|name> [--json]
+
+$ agent-bot soul profile --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul profile: soul-profile-failed: usage: agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
+
+$ agent-bot soul profile -h
+same as --help
+
+$ agent-bot soul profile --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul profile: soul-profile-failed: usage: agent-bot soul profile <agentId|name> [--json] [--file RELATIVE_PATH]
+
+$ agent-bot soul remove --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul remove: no population record with that name
+
+$ agent-bot soul remove -h
+same as --help
+
+$ agent-bot soul remove --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul remove: no population record with that name
+
+$ agent-bot soul resume --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul resume: usage: agent-bot soul resume <agentId|name> [--json]
+
+$ agent-bot soul resume -h
+same as --help
+
+$ agent-bot soul resume --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul resume: usage: agent-bot soul resume <agentId|name> [--json]
+
+$ agent-bot soul revision --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul revision: invalid Agent ID: undefined
+
+$ agent-bot soul revision -h
+same as --help
+
+$ agent-bot soul revision --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul revision: invalid Agent ID: undefined
+
+$ agent-bot soul runtimes --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul runtimes: soul-runtimes-failed: usage: agent-bot soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin] | soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable> [--json] [--principal-stdin] | soul runtimes override <agentId|name> <name> --clear [--json] [--principal-stdin]
+
+$ agent-bot soul runtimes -h
+same as --help
+
+$ agent-bot soul runtimes --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul runtimes: soul-runtimes-failed: usage: agent-bot soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin] | soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable> [--json] [--principal-stdin] | soul runtimes override <agentId|name> <name> --clear [--json] [--principal-stdin]
+
+$ agent-bot soul secret --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul secret: soul-secret-failed: usage: agent-bot soul secret <agentId|name> set <name> [--json] [--principal-stdin] | soul secret <agentId|name> clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json]
+
+$ agent-bot soul secret -h
+same as --help
+
+$ agent-bot soul secret --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul secret: soul-secret-failed: usage: agent-bot soul secret <agentId|name> set <name> [--json] [--principal-stdin] | soul secret <agentId|name> clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json]
+
+$ agent-bot soul show --help
+exit: 1
+stdout:
+stderr:
+agent-population: unknown option: --help
+
+$ agent-bot soul show -h
+exit: 1
+stdout:
+stderr:
+agent-population: no population record with that name
+
+$ agent-bot soul show --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-population: unknown option: --no-such-flag-golden
+
+$ agent-bot soul skill --help
+exit: 0
+stdout:
+usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT [--json]
+       agent-bot soul skill list [--json]
+       agent-bot soul skill show UUID [--json]
+       agent-bot soul skill verify UUID [--json]
+       agent-bot soul skill check UUID [--json]
+       agent-bot soul skill check UUID --soul AGENT_ID [--json]
+       agent-bot soul skill update UUID --check CHECK_ID [--json]
+       agent-bot soul skill update UUID --check CHECK_ID --apply --expected-accepted DIGEST --expected-local DIGEST [--json]
+       agent-bot soul skill update UUID --recover [--json]
+       agent-bot soul skill learn UUID --soul AGENT_ID [--json]
+       agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
+       agent-bot soul skill learn UUID --soul AGENT_ID --candidate DIGEST --package STAGING --outcome FILE --reason TEXT [--json]
+       agent-bot soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin]
+       agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin]
+       agent-bot soul skill status --soul AGENT_ID [--json]
+       agent-bot soul skill search --soul AGENT_ID QUERY [--json]
+       agent-bot soul skill load NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
+       agent-bot soul skill unload NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
+       agent-bot soul skill load NAME --soul AGENT_ID --global --reason TEXT [--harness claude] [--json] [--principal-stdin]
+       agent-bot soul skill unload NAME --soul AGENT_ID --global [--harness claude] [--json]
+       agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json]
+
+Local import preserves the selected directory; HTTPS import captures a skill
+document and supported inline instruction links. Public GitHub tree URLs preserve
+the selected directory at one resolved commit. Neither executes content.
+install copies the library's editable copy into the soul's skills/<name>/ with
+a file-hash record; uninstall archives it to archive/skills/<name>/ in the soul,
+or with --trash (owner only) moves it to the OS trash, and reports as drift
+any files changed since install. The owner's install or
+uninstall applies as an owner-approved revision edit; a soul's is a proposal
+under its revision policy.
+load copies an installed skill into one of the soul's worktrees at the
+harness's skills folder (.claude/skills/<name>/ by default) while the work
+needs it, keeping it out of commits through the repository's local
+info/exclude; unload removes that copy, refusing if it was edited there.
+load --global places it in the harness's user-level skills folder
+(~/.claude/skills/<name>/, or $CLAUDE_CONFIG_DIR/skills/), where every session
+sees it: opt-in, with a recorded --reason, and only after the owner approves
+(the owner gate; Touch ID through keyd when a soul asks for itself). unload
+--global removes it when unchanged, only for the soul the owner's record names,
+after the owner approves the same way.
+Other repository adapters remain unimplemented.
+check never replaces accepted snapshots or local edits. update previews a recorded
+check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
+recording outcomes proposes reviewed adaptations through the soul revision policy.
+check --soul reads accepted portable provenance without the local library and
+stages source bytes for review. learn --candidate refetches that reviewed digest
+and proposes it through the soul revision policy; nothing applies it directly.
+status reads a soul's skills and says how each fact is known: installed files
+rechecked now against their install record (verified or drifted), learning
+receipts (agent-reported), and knowledge coverage (unknown: no adapter yet).
+It writes nothing; a soul may read only its own.
+search matches words in the soul's own definition and skill files through
+the adapter the host's settings.skillSearchAdapter names (local-text); each
+result cites the soul revision, the file path, its sha256 and the line. With
+no adapter configured it says so and exits 1; no service is ever set up.
+dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
+Results carry notCaptured: only these commands capture and recheck instruction
+files; what a harness fetches or reads on its own (web fetch, MCP tools) is not.
+stderr:
+
+$ agent-bot soul skill -h
+same as --help
+
+$ agent-bot soul skill --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+usage: agent-bot soul skill import PATH_OR_HTTPS_DOCUMENT [--json]
+       agent-bot soul skill list [--json]
+       agent-bot soul skill show UUID [--json]
+       agent-bot soul skill verify UUID [--json]
+       agent-bot soul skill check UUID [--json]
+       agent-bot soul skill check UUID --soul AGENT_ID [--json]
+       agent-bot soul skill update UUID --check CHECK_ID [--json]
+       agent-bot soul skill update UUID --check CHECK_ID --apply --expected-accepted DIGEST --expected-local DIGEST [--json]
+       agent-bot soul skill update UUID --recover [--json]
+       agent-bot soul skill learn UUID --soul AGENT_ID [--json]
+       agent-bot soul skill learn UUID --soul AGENT_ID --package STAGING --outcome FILE --reason TEXT [--json]
+       agent-bot soul skill learn UUID --soul AGENT_ID --candidate DIGEST --package STAGING --outcome FILE --reason TEXT [--json]
+       agent-bot soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin]
+       agent-bot soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin]
+       agent-bot soul skill status --soul AGENT_ID [--json]
+       agent-bot soul skill search --soul AGENT_ID QUERY [--json]
+       agent-bot soul skill load NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
+       agent-bot soul skill unload NAME --soul AGENT_ID --workspace WORKTREE [--harness HARNESS] [--json]
+       agent-bot soul skill load NAME --soul AGENT_ID --global --reason TEXT [--harness claude] [--json] [--principal-stdin]
+       agent-bot soul skill unload NAME --soul AGENT_ID --global [--harness claude] [--json]
+       agent-bot soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json]
+
+Local import preserves the selected directory; HTTPS import captures a skill
+document and supported inline instruction links. Public GitHub tree URLs preserve
+the selected directory at one resolved commit. Neither executes content.
+install copies the library's editable copy into the soul's skills/<name>/ with
+a file-hash record; uninstall archives it to archive/skills/<name>/ in the soul,
+or with --trash (owner only) moves it to the OS trash, and reports as drift
+any files changed since install. The owner's install or
+uninstall applies as an owner-approved revision edit; a soul's is a proposal
+under its revision policy.
+load copies an installed skill into one of the soul's worktrees at the
+harness's skills folder (.claude/skills/<name>/ by default) while the work
+needs it, keeping it out of commits through the repository's local
+info/exclude; unload removes that copy, refusing if it was edited there.
+load --global places it in the harness's user-level skills folder
+(~/.claude/skills/<name>/, or $CLAUDE_CONFIG_DIR/skills/), where every session
+sees it: opt-in, with a recorded --reason, and only after the owner approves
+(the owner gate; Touch ID through keyd when a soul asks for itself). unload
+--global removes it when unchanged, only for the soul the owner's record names,
+after the owner approves the same way.
+Other repository adapters remain unimplemented.
+check never replaces accepted snapshots or local edits. update previews a recorded
+check; applying requires reviewed digests and preserves prior material. learn supplies guidance;
+recording outcomes proposes reviewed adaptations through the soul revision policy.
+check --soul reads accepted portable provenance without the local library and
+stages source bytes for review. learn --candidate refetches that reviewed digest
+and proposes it through the soul revision policy; nothing applies it directly.
+status reads a soul's skills and says how each fact is known: installed files
+rechecked now against their install record (verified or drifted), learning
+receipts (agent-reported), and knowledge coverage (unknown: no adapter yet).
+It writes nothing; a soul may read only its own.
+search matches words in the soul's own definition and skill files through
+the adapter the host's settings.skillSearchAdapter names (local-text); each
+result cites the soul revision, the file path, its sha256 and the line. With
+no adapter configured it says so and exits 1; no service is ever set up.
+dream manages daemon-run maintenance; see agent-bot soul skill dream --help.
+Results carry notCaptured: only these commands capture and recheck instruction
+files; what a harness fetches or reads on its own (web fetch, MCP tools) is not.
+
+$ agent-bot soul spawn --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul spawn: usage: agent-bot soul spawn TEMPLATE_PATH --name NAME [--harness H] [--role ROLE]
+
+$ agent-bot soul spawn -h
+same as --help
+
+$ agent-bot soul spawn --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul spawn: usage: agent-bot soul spawn TEMPLATE_PATH --name NAME [--harness H] [--role ROLE]
+
+$ agent-bot soul stop --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul stop: usage: agent-bot soul stop <agentId|name> [--json]
+
+$ agent-bot soul stop -h
+same as --help
+
+$ agent-bot soul stop --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul stop: usage: agent-bot soul stop <agentId|name> [--json]
+
+$ agent-bot soul template --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul template refresh: soul-template-refresh-failed: usage: agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul template -h
+same as --help
+
+$ agent-bot soul template --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul template refresh: soul-template-refresh-failed: usage: agent-bot soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin]
+
+$ agent-bot soul templates --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul templates: usage: agent-bot soul templates [--json]
+
+$ agent-bot soul templates -h
+same as --help
+
+$ agent-bot soul templates --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul templates: usage: agent-bot soul templates [--json]
+
+$ agent-bot soul tool-home --help
+exit: 1
+stdout:
+stderr:
+agent-bot soul tool-home: usage: agent-bot soul tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin]
+
+$ agent-bot soul tool-home -h
+same as --help
+
+$ agent-bot soul tool-home --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot soul tool-home: usage: agent-bot soul tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin]

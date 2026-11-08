@@ -1,0 +1,1092 @@
+$ agent-bot approvals --help
+exit: 0
+stdout:
+usage: agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--statement TOKEN] [--json] [--principal-stdin] | approvals deny <proposalId> [--statement TOKEN] [--json] [--principal-stdin]
+
+Tool-permission requests souls are waiting on.
+
+approve and deny echo the proposal's operation digest, so a decision lands
+only on the operation it names, and refuse a caller with a soul marker.
+Before any decision lands, the daemon asks for the owner's presence:
+keyd's Touch ID or login-password prompt naming the soul and tool, or the
+administrator dialog when keyd cannot ask. The daemon token alone never
+decides, and a --principal-stdin credential is checked as well, not instead.
+
+Signed owner challenges on this route count only where agent-bot-keyd
+vouches for the owner pins on that request. Then a decision keyd cannot
+confirm is answered with challenges for an enrolled SSH security key: sign one with
+`agent-bot owner sign --challenge '<JSON>' --key PATH` on a trusted machine
+within ten minutes, then repeat the same decision with --statement and the
+signed statement. A challenge answers only that decision, once.
+
+Approval scope defaults to once, which also allows the same tool for the
+rest of the current turn. --scope session allows the exact tool for that
+soul across turns in the same harness session. Grants live only in daemon
+memory and clear on a session change, soul stop, soul pause, or daemon
+restart. Policy deny and computer-use off still win.
+
+See README.md, “Approving a soul's tool call”.
+stderr:
+
+$ agent-bot approvals -h
+same as --help
+
+$ agent-bot approvals --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot approvals: usage: agent-bot approvals list [--json] | approvals approve <proposalId> [--scope once|session] [--statement TOKEN] [--json] [--principal-stdin] | approvals deny <proposalId> [--statement TOKEN] [--json] [--principal-stdin]
+
+$ agent-bot audit --help
+exit: 1
+stdout:
+stderr:
+agent-bot audit: usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--agent AGENT_ID] [--event KIND] [--limit N] | audit tail [--json] [--agent ID]
+
+$ agent-bot audit -h
+same as --help
+
+$ agent-bot audit --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot audit: usage: agent-bot audit list [--json] [--since ISO-8601|-P1D] [--agent AGENT_ID] [--event KIND] [--limit N] | audit tail [--json] [--agent ID]
+
+$ agent-bot binding --help
+exit: 1
+stdout:
+stderr:
+usage: agent-bot binding revoke
+
+$ agent-bot binding -h
+same as --help
+
+$ agent-bot binding --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+usage: agent-bot binding revoke
+
+$ agent-bot bootstrap --help
+exit: 0
+stdout:
+usage:
+  ./agent-bot bootstrap [options]  (source checkout)
+  agent-bot bootstrap [options]    (installed CLI)
+
+Options:
+  --profile <path|->
+                    Apply a versioned organization profile from a file or stdin
+  --config <path>   Install an explicit secret-free config file; never discovers organization policy
+  --app <slug>      Restore one App credential (repeatable)
+  --scope-app <slug>
+                    Scope this account's roster to the App (repeatable; with --profile or --repair)
+  --repair          Restore a deleted runtime config from the selected organization
+                    (~/.config/agent-sop/config.toml), then repair machine state
+  --features <list> Enable comma-separated add-on feature gates (e.g. github-identity;
+                    also reads AGENT_BOT_ENABLE_FEATURES; ignored with --worktree-only)
+  --with-gh-shim    Install the managed fail-closed gh shim
+  --machine-only    Install and verify machine state; do not bind this worktree
+  --worktree-only   Bind and verify this linked worktree; do not mutate machine setup
+                    (ignores AGENT_BOT_ENABLE_FEATURES)
+  --json            Emit readiness schema JSON only
+  --require-schema-version <n>
+                    Require at least readiness schema version n
+  -h, --help        Show this help
+stderr:
+
+$ agent-bot bootstrap -h
+same as --help
+
+$ agent-bot bootstrap --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+bootstrap: unknown option: --no-such-flag-golden
+
+$ agent-bot broker --help
+exit: 0
+stdout: see broker-help.txt
+stderr:
+
+$ agent-bot broker -h
+same as --help
+
+$ agent-bot broker --no-such-flag-golden
+not run: forwarded to agent-comms, whose surface agent-comms pins
+
+$ agent-bot daemon --help
+exit: 1
+stdout:
+stderr:
+agent-daemon: usage: agent-bot daemon <run|start|status|stop|install|disable|vouch-key|pair-comms> [--json]
+
+$ agent-bot daemon -h
+same as --help
+
+$ agent-bot daemon --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-daemon: usage: agent-bot daemon <run|start|status|stop|install|disable|vouch-key|pair-comms> [--json]
+
+$ agent-bot diagnostics --help
+exit: 0
+stdout:
+usage: agent-bot diagnostics export [--since ISO-8601|-P1D] (--output FILE | --preview)
+stderr:
+
+$ agent-bot diagnostics -h
+same as --help
+
+$ agent-bot diagnostics --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+agent-bot diagnostics: usage: agent-bot diagnostics export [--since ISO-8601|-P1D] (--output FILE | --preview)
+
+$ agent-bot doctor --help
+exit: 0
+stdout:
+usage: agent-bot doctor [options]
+
+Options:
+  --app <slug>                    Verify one additional App (repeatable)
+  --machine-only                  Skip current-worktree readiness
+  --json                          Emit readiness schema JSON only
+  --probe-inbox                   Also check the gh-app-hook inbox answers (network, bounded, no bearer sent)
+  --require-schema-version <n>    Require at least readiness schema version n
+  -h, --help                      Show this help
+stderr:
+
+$ agent-bot doctor -h
+same as --help
+
+$ agent-bot doctor --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+doctor: unknown option: --no-such-flag-golden
+
+$ agent-bot ensure-private-key --help
+exit: 1
+stdout:
+stderr:
+ensure-private-key: unknown flag: --help
+
+$ agent-bot ensure-private-key -h
+exit: 1
+stdout:
+stderr:
+ensure-private-key: invalid GitHub App slug: "-h"
+
+$ agent-bot ensure-private-key --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+ensure-private-key: unknown flag: --no-such-flag-golden
+
+$ agent-bot events --help
+exit: 2
+stdout:
+stderr:
+usage: agent-bot events <wait|peek|ack> [options]
+
+$ agent-bot events -h
+same as --help
+
+$ agent-bot events --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+usage: agent-bot events <wait|peek|ack> [options]
+
+$ agent-bot harness --help
+exit: 1
+stdout:
+{"error":{"code":"harness-auth-failed","message":"usage: agent-bot harness auth status|login HARNESS --soul AGENT_ID"}}
+stderr:
+
+$ agent-bot harness -h
+same as --help
+
+$ agent-bot harness --no-such-flag-golden
+exit: 1
+stdout:
+{"error":{"code":"harness-auth-failed","message":"usage: agent-bot harness auth status|login HARNESS --soul AGENT_ID"}}
+stderr:
+
+$ agent-bot identity --help
+exit: 1
+stdout:
+stderr:
+agent-identity: usage: agent-bot identity <ensure|spawn|bind|record|finalize|show|current|migrate-credentials>
+
+$ agent-bot identity -h
+same as --help
+
+$ agent-bot identity --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-identity: usage: agent-bot identity <ensure|spawn|bind|record|finalize|show|current|migrate-credentials>
+
+$ agent-bot install --help
+exit: 1
+stdout:
+stderr:
+install: unknown option: --help
+
+$ agent-bot install -h
+exit: 1
+stdout:
+stderr:
+install: unknown option: -h
+
+$ agent-bot install --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+install: unknown option: --no-such-flag-golden
+
+$ agent-bot install-gh-shim --help
+exit: 1
+stdout:
+stderr:
+install-gh-shim: usage: install-gh-shim [--codex-desktop-gh <absolute-gh-path> | --restore-codex-desktop-gh <absolute-gh-path>]
+
+$ agent-bot install-gh-shim -h
+same as --help
+
+$ agent-bot install-gh-shim --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+install-gh-shim: usage: install-gh-shim [--codex-desktop-gh <absolute-gh-path> | --restore-codex-desktop-gh <absolute-gh-path>]
+
+$ agent-bot join --help
+exit: 0
+stdout:
+usage: agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
+
+Note: [deprecated] Prefer `agent-bot start [--branch <branch>]` for routine task and worktree startup.
+Become a soul and join agent-comms. It needs no GitHub App.
+When github-identity is enabled, the configured harness markers resolve its
+App automatically. Rejoining fills a missing App on an active soul; an
+existing assignment or conflicting checkout/session identity is never changed.
+Then set AGENT_BOT_ID from the result and run setup-worktree in the linked
+worktree. No per-session identity app assign is needed.
+
+It reuses the soul already pinned in this checkout, or the soul whose binding
+the checkout holds. Otherwise it uses --soul, which must be an active soul.
+Otherwise it spawns a new instance of --template, with the same mechanism as
+agent-bot soul spawn. With no --template, it uses the Starter template the
+install ships, if any. Homebrew and source installs ship none, so they create
+a soul with no package.
+
+Running it again from the same checkout reuses the soul. A checkout already
+pinned to another soul is refused.
+
+Writes:
+  Soul directory: <soulsRoot>/<census-name>.soul. Named template instances
+  use their manifest display name instead. The root resolves from
+  AGENT_BOT_SOULS_HOME, then the absolute user setting settings.soulsRoot,
+  then ~/.agent-bot/souls.
+  Pin: agentBot.agentId in the checkout's worktree config.
+  The census row records the checkout, so a resume or webhook cold wake runs
+  there. The checkout is linked into the soul. A single-use bind token is
+  minted, so the MCP bind tool works in that checkout.
+  Outside a git checkout, the soul's own worktrees/workspace is created and
+  git init'ed on first join. No GitHub attribution (author, credential
+  helper, hooks) is written.
+  It runs agent-comms join --name NAME --harness H as the soul.
+
+--wake: with --wake only, new messages then wake the soul.
+  resume:read-only or resume:workspace resumes its own harness session for
+  one turn. acp runs an ACP turn through the soul's daemon binding.
+  Cold wake is owner only, so the owner gate runs before anything is created,
+  and a refusal changes nothing. The owner approves with --principal-stdin
+  (the agent-comms principal on stdin, accepted only from a broker in another
+  account) or the macOS approval dialog.
+--json prints { agentId, soulDir, worktree, address, created, bind, wake }.
+
+See docs/joining.md and docs/soul-homes.md.
+stderr:
+
+$ agent-bot join -h
+same as --help
+
+$ agent-bot join --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot join: usage: agent-bot join --name NAME --harness H [--template PATH] [--soul AGENT_ID] [--wake resume:read-only|resume:workspace|acp] [--principal-stdin] [--json]
+
+$ agent-bot keyd --help
+exit: 1
+stdout:
+stderr:
+agent-bot keyd: usage: agent-bot keyd install --bin PATH [--json] | uninstall [--json] | status [--json]
+
+$ agent-bot keyd -h
+same as --help
+
+$ agent-bot keyd --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot keyd: usage: agent-bot keyd install --bin PATH [--json] | uninstall [--json] | status [--json]
+
+$ agent-bot machine --help
+exit: 0
+stdout:
+usage: agent-bot machine <command> | agent-bot pair [--repin] | agent-bot unpair
+  pair [--repin]               trust this account's agent-daemon key with agent-machine and pin daemon.pub
+  pair comms [--broker NAME]   pair this daemon with the agent-comms broker (alias for daemon pair-comms)
+  unpair                       revoke the agent-daemon peer and drop the daemon.pub pin
+  status                       show pairing state, then a signed agent-machine status round trip when paired
+stderr:
+
+$ agent-bot machine -h
+same as --help
+
+$ agent-bot machine --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+usage: agent-bot machine <command> | agent-bot pair [--repin] | agent-bot unpair
+  pair [--repin]               trust this account's agent-daemon key with agent-machine and pin daemon.pub
+  pair comms [--broker NAME]   pair this daemon with the agent-comms broker (alias for daemon pair-comms)
+  unpair                       revoke the agent-daemon peer and drop the daemon.pub pin
+  status                       show pairing state, then a signed agent-machine status round trip when paired
+
+$ agent-bot mcp --help
+exit: 0
+stdout:
+usage: agent-bot mcp
+
+Run the agent-bot stdio JSON-RPC MCP server for the current worktree.
+stderr:
+
+$ agent-bot mcp -h
+same as --help
+
+$ agent-bot mcp --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-mcp: usage: agent-bot mcp
+
+Run the agent-bot stdio JSON-RPC MCP server for the current worktree.
+
+$ agent-bot metrics --help
+exit: 0
+stdout:
+usage: agent-bot metrics collect|show [--json]
+       agent-bot metrics record-session   (session-start hook)
+stderr:
+
+$ agent-bot metrics -h
+same as --help
+
+$ agent-bot metrics --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+usage: agent-bot metrics collect|show [--json]
+
+$ agent-bot mint-token --help
+exit: 0
+stdout:
+usage: agent-bot mint-token [--app <slug>] [--permissions <name>=<level>[,...]] [--json]
+
+Mints a short-lived GitHub App installation token and prints it to stdout.
+
+Options:
+  --app <slug>    Mint for this App (else GH_AGENT_APP, the checkout's pin,
+                  the agent account, or the detected harness)
+  --permissions <name>=<level>[,<name>=<level>...]
+                  Ask for only these permissions (level read, write or admin),
+                  each at or below what the installation grants; the mint is
+                  refused before any request when one is not granted
+  --json          Print { schema_version, token, expires_at, installation_id }
+  -h, --help      Show this help and mint nothing
+stderr:
+
+$ agent-bot mint-token -h
+same as --help
+
+$ agent-bot mint-token --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+mint-token: unknown option: --no-such-flag-golden
+
+$ agent-bot notices --help
+exit: 0
+stdout:
+usage: agent-bot notices take [--count N] [--type T[,T]] [--kind K] [--repo owner/name] [--since TIME] [--lease SECONDS] [--harness H] [--json]
+       agent-bot notices peek [same filters] [--json]
+       agent-bot notices ack LEASE_OR_ID... [--harness H]
+       agent-bot notices release LEASE_OR_ID... [--harness H]
+
+Types: discussion, issue, pr, review, comment (plurals ok). Kinds include mention, review_requested,
+issues.opened, pull_request.closed. Taken notices are leased (default 300s);
+ack the lease tokens when handled, or they come back. Needs AGENT_BOT_SERVER
+and an enrolled device (agent-bot server enroll).
+stderr:
+
+$ agent-bot notices -h
+same as --help
+
+$ agent-bot notices --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot notices: unknown notices command: --no-such-flag-golden
+usage: agent-bot notices take [--count N] [--type T[,T]] [--kind K] [--repo owner/name] [--since TIME] [--lease SECONDS] [--harness H] [--json]
+       agent-bot notices peek [same filters] [--json]
+       agent-bot notices ack LEASE_OR_ID... [--harness H]
+       agent-bot notices release LEASE_OR_ID... [--harness H]
+
+Types: discussion, issue, pr, review, comment (plurals ok). Kinds include mention, review_requested,
+issues.opened, pull_request.closed. Taken notices are leased (default 300s);
+ack the lease tokens when handled, or they come back. Needs AGENT_BOT_SERVER
+and an enrolled device (agent-bot server enroll).
+
+
+$ agent-bot owner --help
+exit: 2
+stdout:
+stderr:
+agent-bot owner: owner-usage: unknown owner subcommand --help
+usage: agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json] | owner sign "<text>" --repo OWNER/NAME --issue N (--key PATH | --store keyd) [--expires 7d] | owner sign --challenge <JSON> --key PATH | owner enroll --store keyd [--name NAME] | owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key] | owner keys [--json] | owner remove NAME
+
+$ agent-bot owner -h
+exit: 2
+stdout:
+stderr:
+agent-bot owner: owner-usage: unknown owner subcommand -h
+usage: agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json] | owner sign "<text>" --repo OWNER/NAME --issue N (--key PATH | --store keyd) [--expires 7d] | owner sign --challenge <JSON> --key PATH | owner enroll --store keyd [--name NAME] | owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key] | owner keys [--json] | owner remove NAME
+
+$ agent-bot owner --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+agent-bot owner: owner-usage: unknown owner subcommand --no-such-flag-golden
+usage: agent-bot owner verify <token|file|-> [--repo OWNER/NAME --issue N] [--json] | owner sign "<text>" --repo OWNER/NAME --issue N (--key PATH | --store keyd) [--expires 7d] | owner sign --challenge <JSON> --key PATH | owner enroll --store keyd [--name NAME] | owner enroll --store ssh --key PATH [--name NAME] [--verify-required] [--allow-software-key] | owner keys [--json] | owner remove NAME
+
+$ agent-bot pair --help
+exit: 0
+stdout:
+usage: agent-bot machine <command> | agent-bot pair [--repin] | agent-bot unpair
+  pair [--repin]               trust this account's agent-daemon key with agent-machine and pin daemon.pub
+  pair comms [--broker NAME]   pair this daemon with the agent-comms broker (alias for daemon pair-comms)
+  unpair                       revoke the agent-daemon peer and drop the daemon.pub pin
+  status                       show pairing state, then a signed agent-machine status round trip when paired
+stderr:
+
+$ agent-bot pair -h
+same as --help
+
+$ agent-bot pair --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+usage: agent-bot machine <command> | agent-bot pair [--repin] | agent-bot unpair
+  pair [--repin]               trust this account's agent-daemon key with agent-machine and pin daemon.pub
+  pair comms [--broker NAME]   pair this daemon with the agent-comms broker (alias for daemon pair-comms)
+  unpair                       revoke the agent-daemon peer and drop the daemon.pub pin
+  status                       show pairing state, then a signed agent-machine status round trip when paired
+
+$ agent-bot population --help
+exit: 1
+stdout:
+stderr:
+agent-population: unknown option: --help
+
+$ agent-bot population -h
+exit: 1
+stdout:
+stderr:
+agent-population: population list does not accept Agent IDs
+
+$ agent-bot population --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-population: unknown option: --no-such-flag-golden
+
+$ agent-bot principal --help
+exit: 1
+stdout:
+stderr:
+agent-principals: usage: agent-bot principal list [--json]
+       agent-bot principal show <principal-id>
+       agent-bot principal enroll --label <label>
+       agent-bot principal bind <principal-id> --transport <slug> --provider-id <id>
+       agent-bot principal allow <principal-id> [--soul <agent-id>]... [--all-souls]
+                                 [--operation <op>]... [--default-soul <agent-id>] [--clear-default]
+       agent-bot principal revoke <principal-id>
+       mutating commands accept --principal-stdin for explicit owner credential JSON
+
+
+$ agent-bot principal -h
+same as --help
+
+$ agent-bot principal --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-principals: usage: agent-bot principal list [--json]
+       agent-bot principal show <principal-id>
+       agent-bot principal enroll --label <label>
+       agent-bot principal bind <principal-id> --transport <slug> --provider-id <id>
+       agent-bot principal allow <principal-id> [--soul <agent-id>]... [--all-souls]
+                                 [--operation <op>]... [--default-soul <agent-id>] [--clear-default]
+       agent-bot principal revoke <principal-id>
+       mutating commands accept --principal-stdin for explicit owner credential JSON
+
+
+$ agent-bot reach-mcp --help
+exit: 0
+stdout:
+usage: agent-bot reach-mcp
+
+Run the agent-reach stdio JSON-RPC MCP server for the current soul turn.
+stderr:
+
+$ agent-bot reach-mcp -h
+same as --help
+
+$ agent-bot reach-mcp --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+daemon-mcp: usage: agent-bot reach-mcp
+
+Run the agent-reach stdio JSON-RPC MCP server for the current soul turn.
+
+$ agent-bot sandbox --help
+exit: 1
+stdout:
+stderr:
+agent-bot sandbox: usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json] | sandbox remove [ACCOUNT] [--dry-run] [--json] [--principal-stdin] | sandbox export --for OWNER [--skip CATEGORY]... [--resume DIR] [--json] [--principal-stdin] | sandbox export --verify ACCOUNT [--dir DIR] [--json]
+
+$ agent-bot sandbox -h
+same as --help
+
+$ agent-bot sandbox --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot sandbox: usage: agent-bot sandbox status [--json] | sandbox plan [--json] | sandbox on|off [--json] [--principal-stdin] | sandbox account NAME [--json] [--principal-stdin] | sandbox override <agentId|name> [show|inherit|sandboxed|unrestricted] [--json] [--principal-stdin] | sandbox resolve <agentId|name> [--json] | sandbox remove [ACCOUNT] [--dry-run] [--json] [--principal-stdin] | sandbox export --for OWNER [--skip CATEGORY]... [--resume DIR] [--json] [--principal-stdin] | sandbox export --verify ACCOUNT [--dir DIR] [--json]
+
+$ agent-bot secret --help
+exit: 0
+stdout:
+Usage: agent-bot secret get --provider <id> --collection <name> --item <title> --field <name> --reason <text>
+
+Reads one password or API-key field from an already-authorized secure store.
+The reason is sent to providers that audit agent access.
+Success writes only the exact field value to stdout, without a trailing newline.
+stderr:
+
+$ agent-bot secret -h
+same as --help
+
+$ agent-bot secret --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+secret: unsupported secret operation
+
+$ agent-bot server --help
+exit: 0
+stdout:
+usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--features LIST] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
+       agent-bot server status [--json]
+       agent-bot server logout
+       agent-bot server reconcile [--json]
+
+Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
+enroll uses the device grant (approve in the browser), or AGENT_BOT_ENROLL_TOKEN
+when set (cloud VMs). Pass --features github-identity (or set
+AGENT_BOT_ENABLE_FEATURES=github-identity) to enable the github-identity add-on
+and install the managed gh shim headlessly (#1350). Re-enrolling with --force, --add-harness, or
+--all-configured preserves existing device harnesses unless --replace-harnesses
+is passed. logout deletes
+this machine's device key and pins; revoke the device on <server>/devices as well.
+stderr:
+
+$ agent-bot server -h
+same as --help
+
+$ agent-bot server --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot server: unknown server command: --no-such-flag-golden
+usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--features LIST] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
+       agent-bot server status [--json]
+       agent-bot server logout
+       agent-bot server reconcile [--json]
+
+Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
+enroll uses the device grant (approve in the browser), or AGENT_BOT_ENROLL_TOKEN
+when set (cloud VMs). Pass --features github-identity (or set
+AGENT_BOT_ENABLE_FEATURES=github-identity) to enable the github-identity add-on
+and install the managed gh shim headlessly (#1350). Re-enrolling with --force, --add-harness, or
+--all-configured preserves existing device harnesses unless --replace-harnesses
+is passed. logout deletes
+this machine's device key and pins; revoke the device on <server>/devices as well.
+
+
+$ agent-bot session --help
+exit: 1
+stdout:
+stderr:
+session bind: usage: agent-bot session bind [--transcript-id ID] [--provider NAME] [--parent-agent-id ID] [--json]
+
+Establish (or verify) this worktree's live session binding without MCP.
+Note: [deprecated] Prefer `agent-bot start [--branch <branch>]` for routine task and worktree startup.
+With an existing binding this validates it at the daemon and needs no
+transcript id. Without one, the conversation is named by --transcript-id,
+else by the harness: CODEX_THREAD_ID, CLAUDE_SESSION_ID,
+CURSOR_CONVERSATION_ID, QWEN_CODE_SESSION_ID, OPENCODE_SESSION_ID, a
+lifecycle hook's session id, Antigravity's active brain transcript,
+OpenCode's active session database, or Devin's session list when it
+names exactly one session for this worktree.
+
+$ agent-bot session -h
+same as --help
+
+$ agent-bot session --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+session bind: usage: agent-bot session bind [--transcript-id ID] [--provider NAME] [--parent-agent-id ID] [--json]
+
+Establish (or verify) this worktree's live session binding without MCP.
+Note: [deprecated] Prefer `agent-bot start [--branch <branch>]` for routine task and worktree startup.
+With an existing binding this validates it at the daemon and needs no
+transcript id. Without one, the conversation is named by --transcript-id,
+else by the harness: CODEX_THREAD_ID, CLAUDE_SESSION_ID,
+CURSOR_CONVERSATION_ID, QWEN_CODE_SESSION_ID, OPENCODE_SESSION_ID, a
+lifecycle hook's session id, Antigravity's active brain transcript,
+OpenCode's active session database, or Devin's session list when it
+names exactly one session for this worktree.
+
+$ agent-bot setup-worktree --help
+exit: 0
+stdout:
+usage: agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
+
+Note: [deprecated] Prefer `agent-bot start [--branch <branch>]` for routine task and worktree startup.
+Check in first with agent-bot join --name NAME --harness HARNESS.
+Configure an existing checkout in the session soul's worktrees/<name>, or a
+checkout already linked from that soul. --name creates a linked git worktree
+there if absent (branch defaults to NAME), then configures it.
+Refuses primary checkouts outside the soul, arbitrary directories, conflicting
+pins, and cross-device placement. No TMPDIR fallback. With no session soul it
+leaves the checkout human and writes nothing (an error only with --name):
+an agent checks in with agent-bot join first, whatever its harness.
+A new worktree never keeps another soul's pin that git copied into it from
+the source checkout.
+stderr:
+
+$ agent-bot setup-worktree -h
+same as --help
+
+$ agent-bot setup-worktree --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+setup-worktree: usage: agent-bot setup-worktree [app-slug] [--name NAME [--branch BRANCH]]
+
+Note: [deprecated] Prefer `agent-bot start [--branch <branch>]` for routine task and worktree startup.
+Check in first with agent-bot join --name NAME --harness HARNESS.
+Configure an existing checkout in the session soul's worktrees/<name>, or a
+checkout already linked from that soul. --name creates a linked git worktree
+there if absent (branch defaults to NAME), then configures it.
+Refuses primary checkouts outside the soul, arbitrary directories, conflicting
+pins, and cross-device placement. No TMPDIR fallback. With no session soul it
+leaves the checkout human and writes nothing (an error only with --name):
+an agent checks in with agent-bot join first, whatever its harness.
+A new worktree never keeps another soul's pin that git copied into it from
+the source checkout.
+
+
+$ agent-bot signed-commit --help
+exit: 0
+stdout:
+Usage: agent-bot signed-commit [options]
+
+Options:
+  --base <ref>             First parent of the range; must be an ancestor of HEAD (default: merge-base with remote default)
+  --branch <name>          Remote branch (default: current branch)
+  --repo <owner/name>      Repository (default: origin URL)
+  --dry-run                Preview locally without minting or network access
+  --allow-default-branch   Permit rewriting the default branch
+stderr:
+
+$ agent-bot signed-commit -h
+same as --help
+
+$ agent-bot signed-commit --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+signed-commit: unknown option: --no-such-flag-golden
+
+$ agent-bot skill --help
+exit: 0
+stdout:
+usage: agent-bot skill path [--json]
+       agent-bot skill <name> [--json]
+       agent-bot skill agent-bot --for <subcommand> [--json]
+
+path: Print this release's agent skill bundle directory and its source commit.
+<name>: Print one skill's SKILL.md. Bundled skills (agent-bot, agent-space, thread-orders)
+  are read from this release with no network. Any other name is resolved
+  through the selected SOP catalog (skills/README.md, at its resolved commit) to exactly
+  one entry and fetched read-only at that entry's pinned commit; an absent,
+  ambiguous, or unpinned name is an error. Nothing is installed.
+--for <subcommand>: Print the one agent-bot reference file that covers that
+  agent-bot subcommand (static table; an unknown subcommand is an error).
+--json: Print {name, repository, commit, path, text} (plus "for" with --for).
+stderr:
+
+$ agent-bot skill -h
+same as --help
+
+$ agent-bot skill --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+agent-bot skill: invalid skill name --no-such-flag-golden
+
+$ agent-bot sop --help
+exit: 0
+stdout:
+usage: agent-bot sop [--json] [--config <path>] [--soul ID]
+       agent-bot sop list [--soul ID] [--workflow NAME] [--json]
+       agent-bot sop show PATH [--soul ID] [--workflow NAME]
+       agent-bot sop trust REPO [--soul ID]
+       agent-bot sop persona [--json]
+       agent-bot sop policy show [--json]
+       agent-bot sop policy activate|deactivate [--principal-stdin] [--json]
+
+Resolve the soul's agent-sop.toml, then ~/.config/agent-sop/config.toml
+(ENG-0355), then no SOP. The soul's sop/ documents override repository
+Markdown at the same path. workflows/NAME.toml lists sop = ["path.md"].
+Bare owner/name selects the current default branch; explicit @ref is preserved.
+The declared SOP follows its default branch; legacy org.json SOP refs are baselines.
+Foreign soul selections require explicit trust of the resolved repo + commit.
+Fetched documents are cached read-only and never executed or applied;
+reference documentation does not override harness or user instructions.
+With no config file, report that no SOP is in effect and exit 0.
+persona resolves the user's SOP, reads persona.toml at its commit (the
+pack's persona mapping: which souls run in their own macOS account) and
+records it for offline use by agent-bot sandbox and the daemon's launch.
+policy activate (owner only) reads policy-hooks.json at the user's SOP
+commit, validates it and pins it; the daemon's launches then apply its
+deny rules offline. show reports what is active and what it covers.
+stderr:
+
+$ agent-bot sop -h
+same as --help
+
+$ agent-bot sop --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+agent-bot sop: unexpected arguments: --no-such-flag-golden
+usage: agent-bot sop [--json] [--config <path>] [--soul ID]
+       agent-bot sop list [--soul ID] [--workflow NAME] [--json]
+       agent-bot sop show PATH [--soul ID] [--workflow NAME]
+       agent-bot sop trust REPO [--soul ID]
+       agent-bot sop persona [--json]
+       agent-bot sop policy show [--json]
+       agent-bot sop policy activate|deactivate [--principal-stdin] [--json]
+
+Resolve the soul's agent-sop.toml, then ~/.config/agent-sop/config.toml
+(ENG-0355), then no SOP. The soul's sop/ documents override repository
+Markdown at the same path. workflows/NAME.toml lists sop = ["path.md"].
+Bare owner/name selects the current default branch; explicit @ref is preserved.
+The declared SOP follows its default branch; legacy org.json SOP refs are baselines.
+Foreign soul selections require explicit trust of the resolved repo + commit.
+Fetched documents are cached read-only and never executed or applied;
+reference documentation does not override harness or user instructions.
+With no config file, report that no SOP is in effect and exit 0.
+persona resolves the user's SOP, reads persona.toml at its commit (the
+pack's persona mapping: which souls run in their own macOS account) and
+records it for offline use by agent-bot sandbox and the daemon's launch.
+policy activate (owner only) reads policy-hooks.json at the user's SOP
+commit, validates it and pins it; the daemon's launches then apply its
+deny rules offline. show reports what is active and what it covers.
+
+$ agent-bot soul --help
+exit: 0
+stdout: see soul-help.txt
+stderr:
+
+$ agent-bot soul -h
+same as --help
+
+$ agent-bot soul --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot: usage: agent-bot soul cold-wake <agentId> [on|off|show|resume read-only|workspace|webhook --url-file PATH --key-file PATH|-] | soul skill import PATH_OR_HTTPS_DOCUMENT|list|show UUID|verify UUID|check UUID [--json] | soul skill update UUID --check CHECK_ID [--apply --expected-accepted DIGEST --expected-local DIGEST] | soul skill update UUID --recover | soul skill learn UUID --soul AGENT_ID [--package STAGING --outcome FILE --reason TEXT] [--json] | soul skill install UUID|NAME --soul AGENT_ID [--json] [--principal-stdin] | soul skill uninstall NAME --soul AGENT_ID [--trash] [--json] [--principal-stdin] | soul skill status --soul AGENT_ID [--json] | soul skill search --soul AGENT_ID QUERY [--json] | soul skill dream --soul ID|NAME --schedule PT<N>H|--run-now|--pause|--unschedule|--cancel RUN_ID|--ack-notice NOTICE_ID|--status|--history [--json] [--principal-stdin] | soul build [PATH] [--check] [--json] | soul pack validate PATH | soul revision <command> | soul revision edit ID PATH REASON [--apply] [--json] [--principal-stdin] | soul revision prepare <agentId|name> [--json] [--dest PATH] | soul revision prepare --discard STAGING | soul model <agentId|name> [show|set <modelId>|clear] [--json] [--principal-stdin] | soul mode <agentId|name> [show|safe|autopilot] [--json] [--principal-stdin] | soul computer-use <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul tool-home <harness> [soul|global] --soul <agentId|name> [--fresh-session] [--json] [--principal-stdin] | soul stop <agentId|name> [--json] | soul pause|resume <agentId|name> [--json] | soul show <agentId|name> [--json] | soul profile <agentId|name> [--json] [--file RELATIVE_PATH] | soul env <agentId|name> [--json] | soul env migrate <agentId|name> --adopt-host-signin [--harness NAME] | --space-into-soul | --template-name [--plan] | --harnesses-into-runtimes [--plan] | --complete [--plan] [--json] [--principal-stdin] | soul env clean <agentId|name> [--plan] [--component cache|temp|runtimes] [--json] [--principal-stdin] | soul env export <agentId|name> --to FILE [--plan] [--json] [--principal-stdin] | soul env import FILE [--fork] [--replace] [--name NAME] [--plan] [--json] [--principal-stdin] | soul env history <agentId|name> [--json] [--limit N] | soul runtimes <agentId|name> [--json] | soul runtimes install <agentId|name> [--json] [--runtime NAME] [--principal-stdin] | soul runtimes upgrade <agentId|name> [--runtime NAME] [--apply] [--json] [--principal-stdin] | soul runtimes override <agentId|name> <node|npm|npx|go|gofmt|python3|uv|uvx> <absolute-executable>|--clear [--json] [--principal-stdin] | soul secret <agentId|name> set|clear <name> [--json] [--principal-stdin] | soul secret <agentId|name> status [--json] | soul comms <agentId|name> [show|on|off] [--json] [--principal-stdin] | soul remove <agentId|name> [--scope soul|team] [--plan] [--json] [--principal-stdin] | soul fork <copy-path> --name NAME [--harness H] [--json] [--principal-stdin] | soul asides <agentId|name> [--after ASIDE_ID] [--limit N] [--json] | soul dir AGENT_ID | soul locate PATH [--json] | soul templates [--json] | soul spawn TEMPLATE_PATH --name NAME [--harness H] | soul template refresh <agentId|name> [--from TEMPLATE_PATH] [--plan] [--json] [--principal-stdin] | soul confinement AGENT_ID off|warn|deny | soul confinement-report AGENT_ID [--json]
+
+$ agent-bot space --help
+exit: 1
+stdout:
+stderr:
+agent-space: usage: agent-bot space <init|path|show> [agent-id] [--json]
+       agent-bot space ensure [--json]
+       agent-bot space export [agent-id] [--out <path>] [--gist] [--json]
+       agent-bot space import <pack|gist:id|gist-url> [--force] [--json]
+       agent-bot space retire <agent-id> [--delete-space] [--json]
+
+$ agent-bot space -h
+same as --help
+
+$ agent-bot space --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-space: usage: agent-bot space <init|path|show> [agent-id] [--json]
+       agent-bot space ensure [--json]
+       agent-bot space export [agent-id] [--out <path>] [--gist] [--json]
+       agent-bot space import <pack|gist:id|gist-url> [--force] [--json]
+       agent-bot space retire <agent-id> [--delete-space] [--json]
+
+$ agent-bot start --help
+exit: 0
+stdout:
+usage: agent-bot start [--branch <branch>|-b <branch>] [--base <ref>] [--repo <path|owner/name>] [--name <worktree-name>] [--harness <harness>] [--soul <agent-id|name>] [--transcript-id <id>] [--provider <name>] [--json]
+
+Check in this agent session for a task: resolve the active harness's canonical
+soul, create or reuse a linked soul worktree on the target branch, bind this
+conversation (`session bind`), and verify GitHub identity readiness.
+
+What `agent-bot start` is NOT:
+  - Not machine/owner bootstrap (`agent-bot bootstrap --profile ...`)
+  - Not daemon process startup (`agent-bot daemon start`)
+  - Not project dependency or build setup (`npm install`, dev servers)
+
+Options:
+  -b, --branch <branch>     Create or switch to this task branch in a linked
+                            soul worktree (new branches start from --base, else
+                            origin/HEAD or origin/main)
+  --base <ref>              Base git ref when creating a new branch
+  --repo <path|owner/name>  Target repository path or owner/name (default: cwd)
+  --name <worktree-name>    Worktree directory name under <soulDir>/worktrees/
+                            (default: <repo>-<branch> or <repo>; aliases:
+                            --worktree, --worktree-dir)
+  --harness <harness>       Harness key override (default: auto-detected)
+  --soul <agent-id|name>    Soul Agent ID or census name override
+  --transcript-id <id>      Conversation/session ID override
+  --provider <name>         Transcript provider override
+  --no-enroll               Do not initiate device-grant enrollment when the
+                            device or harness is not yet enrolled in server mode
+  --json                    Print structured JSON receipt
+  -h, --help                Show this help and change nothing
+stderr:
+
+$ agent-bot start -h
+same as --help
+
+$ agent-bot start --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+start: unknown option: --no-such-flag-golden
+
+$ agent-bot telegram --help
+exit: 0
+stdout:
+usage: agent-bot telegram <run|status> [--json]
+
+Long-poll Telegram as a thin transport over the daemon.
+
+agent-bot telegram run long-polls the Telegram Bot API and projects the
+daemon's /v1 interaction contract into a chat: it is a thin transport, not
+an agent runtime. The local daemon must be running (agent-bot daemon start);
+there is no in-process fallback.
+
+The adapter keeps only a small restart-safe projection file
+($XDG_STATE_HOME/agent-bot/telegram/state.json, override
+AGENT_BOT_TELEGRAM_STATE_PATH) holding the update offset, per-chat soul
+selections, and session/invocation references — chat IDs map to daemon
+sessions, never the other way round.
+
+See README.md, “Telegram adapter (remote messaging)”, for enrollment,
+token provisioning, policy defaults, and trust and privacy limits.
+stderr:
+
+$ agent-bot telegram -h
+same as --help
+
+$ agent-bot telegram --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+telegram-adapter: usage: agent-bot telegram <run|status> [--json]
+
+$ agent-bot unpair --help
+exit: 0
+stdout:
+usage: agent-bot machine <command> | agent-bot pair [--repin] | agent-bot unpair
+  pair [--repin]               trust this account's agent-daemon key with agent-machine and pin daemon.pub
+  pair comms [--broker NAME]   pair this daemon with the agent-comms broker (alias for daemon pair-comms)
+  unpair                       revoke the agent-daemon peer and drop the daemon.pub pin
+  status                       show pairing state, then a signed agent-machine status round trip when paired
+stderr:
+
+$ agent-bot unpair -h
+same as --help
+
+$ agent-bot unpair --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+usage: agent-bot machine <command> | agent-bot pair [--repin] | agent-bot unpair
+  pair [--repin]               trust this account's agent-daemon key with agent-machine and pin daemon.pub
+  pair comms [--broker NAME]   pair this daemon with the agent-comms broker (alias for daemon pair-comms)
+  unpair                       revoke the agent-daemon peer and drop the daemon.pub pin
+  status                       show pairing state, then a signed agent-machine status round trip when paired
+
+$ agent-bot update --help
+exit: 1
+stdout:
+stderr:
+update: unknown option: --help
+
+$ agent-bot update -h
+exit: 1
+stdout:
+stderr:
+update: unknown option: -h
+
+$ agent-bot update --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+update: unknown option: --no-such-flag-golden
+
+$ agent-bot wake --help
+exit: 0
+stdout:
+Usage: agent-bot wake listen [options]
+       agent-bot wake session-context [--harness <key>]
+
+listen           Hold the session's socket at the daemon's wake plane and print
+                 one NDJSON line per frame: connected, each wake, disconnected.
+                 Run it under the harness's persistent watcher; the session is
+                 warm only while it runs. Reconnects with capped backoff, and
+                 exits nonzero when this worktree has no binding.
+session-context  Print the SessionStart hook line that tells a session in bot
+                 territory to arm the listener. Silent — exit 0 and no output —
+                 outside bot territory or without a binding.
+
+Options:
+  --harness <key>  Harness key that words the injected instruction
+                   (default: $AGENT_HOOK_HARNESS)
+  -h, --help       Show this help
+stderr:
+
+$ agent-bot wake -h
+same as --help
+
+$ agent-bot wake --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+wake: usage: agent-bot wake <listen|session-context> [--harness <key>]
+
+$ agent-bot web --help
+exit: 0
+stdout:
+usage: agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
+
+Pair a browser with the daemon's private web client.
+
+web open asks the running daemon (authenticated with the bearer token from
+the 0600 state file) to mint a one-time pairing code and prints/opens
+http://127.0.0.1:<port>/ui/#<code>. The page exchanges the code — single
+use, ~2 minute expiry — for a short-lived (~12 h) HttpOnly /
+SameSite=Strict cookie session held daemon-side in memory.
+
+Run agent-bot web open --no-browser on the daemon machine and open the
+printed link from the remote device, substituting the proxy host for
+127.0.0.1. Authorization stays with the local principal model.
+
+See README.md, “Remote access (explicit operator choice)”.
+stderr:
+
+$ agent-bot web -h
+same as --help
+
+$ agent-bot web --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-web: usage: agent-bot web open [--principal <principal-id>] [--no-browser] [--json]
+
+
+$ agent-bot workflow --help
+exit: 0
+stdout:
+usage: agent-bot workflow [--soul ID] [--remote] [--json]
+       agent-bot workflow list [--soul ID] [--remote] [--json]
+       agent-bot workflow show <name> [--soul ID] [--source soul|sop-cache|remote|bundled] [--json]
+       agent-bot workflow sync [--soul ID] [--json]
+
+Resolve deterministic workflows across local and remote tiers:
+  1. soul       <soul>/workflows/<name>.toml (durable per-soul override)
+  2. sop-cache  <state>/sop-cache/<commit>/workflows/<name>.toml (cached SOP commit)
+  3. bundled    workflows/<name>.toml shipped with this agent-bot release
+
+Default ('workflow', 'workflow list', 'workflow show <name>') is offline-first
+(read-only, zero network calls) and reports activeSource, shadowedSources,
+resolved SOP documents, and ordered deterministic steps.
+
+Options:
+  --soul <id|name>     Inspect workflows for a specific soul (defaults to current bound soul)
+  --remote             Query the live remote SOP repository and compare against local tiers
+  --source <tier>      Read a specific tier in 'show' (soul | sop-cache | remote | bundled)
+  --json               Print structured JSON output
+  -h, --help           Show this help message
+stderr:
+
+$ agent-bot workflow -h
+same as --help
+
+$ agent-bot workflow --no-such-flag-golden
+exit: 2
+stdout:
+stderr:
+agent-bot workflow: unexpected argument: --no-such-flag-golden
+usage: agent-bot workflow [--soul ID] [--remote] [--json]
+       agent-bot workflow list [--soul ID] [--remote] [--json]
+       agent-bot workflow show <name> [--soul ID] [--source soul|sop-cache|remote|bundled] [--json]
+       agent-bot workflow sync [--soul ID] [--json]
+
+Resolve deterministic workflows across local and remote tiers:
+  1. soul       <soul>/workflows/<name>.toml (durable per-soul override)
+  2. sop-cache  <state>/sop-cache/<commit>/workflows/<name>.toml (cached SOP commit)
+  3. bundled    workflows/<name>.toml shipped with this agent-bot release
+
+Default ('workflow', 'workflow list', 'workflow show <name>') is offline-first
+(read-only, zero network calls) and reports activeSource, shadowedSources,
+resolved SOP documents, and ordered deterministic steps.
+
+Options:
+  --soul <id|name>     Inspect workflows for a specific soul (defaults to current bound soul)
+  --remote             Query the live remote SOP repository and compare against local tiers
+  --source <tier>      Read a specific tier in 'show' (soul | sop-cache | remote | bundled)
+  --json               Print structured JSON output
+  -h, --help           Show this help message

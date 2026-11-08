@@ -1,0 +1,381 @@
+{
+  "canonicalEvents": [
+    "spawn",
+    "session-start",
+    "session-end",
+    "prompt-submit",
+    "pre-tool-use",
+    "pre-command",
+    "pre-file-write",
+    "post-tool-use",
+    "agent-stop",
+    "pre-commit",
+    "pre-push"
+  ],
+  "managedMarker": "agent-bot agent-hook",
+  "harnesses": {
+    "claude": {
+      "file": "<home>/.claude/settings.json",
+      "config": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event session-start; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "SessionEnd": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event session-end; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "UserPromptSubmit": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event prompt-submit; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event pre-tool-use; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            },
+            {
+              "matcher": "Bash",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event pre-command; <uninstalled fallback sha256:af1aa3cf724592b16bc0bb12dd5ceb529813b805e2720cbb327caee6070dcd6c> # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            },
+            {
+              "matcher": "Write|Edit|MultiEdit",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event pre-file-write; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "PostToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event post-tool-use; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "Stop": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect claude --event agent-stop; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "codex": {
+      "file": "<home>/.codex/hooks.json",
+      "config": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event session-start; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "SessionEnd": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event session-end; exit 0 # agent-bot agent-hook",
+                  "timeout": 3
+                }
+              ]
+            }
+          ],
+          "UserPromptSubmit": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event prompt-submit; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "PreToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event pre-tool-use; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            },
+            {
+              "matcher": "^Bash$",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event pre-command; <uninstalled fallback sha256:af1aa3cf724592b16bc0bb12dd5ceb529813b805e2720cbb327caee6070dcd6c> # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            },
+            {
+              "matcher": "^(Write|Edit)$",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event pre-file-write; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "PostToolUse": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event post-tool-use; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ],
+          "Stop": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect codex --event agent-stop; exit 0 # agent-bot agent-hook",
+                  "timeout": 60
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "cursor": {
+      "file": "<home>/.cursor/hooks.json",
+      "config": {
+        "hooks": {
+          "sessionStart": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event session-start; printf '%s' '{}'; exit 0 # agent-bot agent-hook"
+            }
+          ],
+          "sessionEnd": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event session-end; printf '%s' '{}'; exit 0 # agent-bot agent-hook"
+            }
+          ],
+          "beforeSubmitPrompt": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event prompt-submit; printf '%s' '{}'; exit 0 # agent-bot agent-hook",
+              "failClosed": true
+            }
+          ],
+          "preToolUse": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event pre-tool-use; printf '%s' '{}'; exit 0 # agent-bot agent-hook",
+              "failClosed": true
+            },
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event pre-file-write; printf '%s' '{}'; exit 0 # agent-bot agent-hook",
+              "failClosed": true
+            }
+          ],
+          "beforeShellExecution": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event pre-command; <uninstalled fallback sha256:e1b0effe2b26e601d2501e2226af80e79a5ed64d426e00b4597a04801f2aa753> # agent-bot agent-hook",
+              "failClosed": true
+            }
+          ],
+          "postToolUse": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event post-tool-use; printf '%s' '{}'; exit 0 # agent-bot agent-hook"
+            }
+          ],
+          "stop": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect cursor --event agent-stop; printf '%s' '{}'; exit 0 # agent-bot agent-hook",
+              "failClosed": true
+            }
+          ]
+        },
+        "version": 1
+      }
+    },
+    "copilot": {
+      "file": "<home>/.copilot/hooks/agent-bot.json",
+      "config": {
+        "hooks": {
+          "sessionStart": [
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event session-start; exit 0 # agent-bot agent-hook",
+              "timeoutSec": 30
+            }
+          ],
+          "sessionEnd": [
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event session-end; exit 0 # agent-bot agent-hook",
+              "timeoutSec": 30
+            }
+          ],
+          "userPromptSubmitted": [
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event prompt-submit; exit 0 # agent-bot agent-hook",
+              "timeoutSec": 30
+            }
+          ],
+          "preToolUse": [
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event pre-tool-use; exit 0 # agent-bot agent-hook",
+              "timeoutSec": 30
+            },
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event pre-command; <uninstalled fallback sha256:785194811eb1c86a92ead9c1b52a069afc56e36ec8edca16f51d30d1992d5780> # agent-bot agent-hook",
+              "matcher": "bash|powershell",
+              "timeoutSec": 30
+            },
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event pre-file-write; exit 0 # agent-bot agent-hook",
+              "matcher": "create|edit",
+              "timeoutSec": 30
+            }
+          ],
+          "postToolUse": [
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event post-tool-use; exit 0 # agent-bot agent-hook",
+              "timeoutSec": 30
+            }
+          ],
+          "agentStop": [
+            {
+              "type": "command",
+              "bash": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect copilot --event agent-stop; exit 0 # agent-bot agent-hook",
+              "timeoutSec": 30
+            }
+          ]
+        },
+        "version": 1
+      }
+    },
+    "devin-desktop": {
+      "file": "<home>/.windsurf/hooks.json",
+      "config": {
+        "hooks": {
+          "post_setup_worktree": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect devin-desktop --event session-start; exit 0 # agent-bot agent-hook",
+              "show_output": false
+            }
+          ],
+          "pre_run_command": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect devin-desktop --event pre-command; <uninstalled fallback sha256:c9ba93364fdab7a2312c537ef9cd6616e07a9b37843a556fbd05234dd7e89301> # agent-bot agent-hook",
+              "show_output": false
+            }
+          ],
+          "pre_write_code": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect devin-desktop --event pre-file-write; exit 0 # agent-bot agent-hook",
+              "show_output": false
+            }
+          ],
+          "post_run_command": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect devin-desktop --event post-tool-use; exit 0 # agent-bot agent-hook",
+              "show_output": false
+            }
+          ],
+          "post_cascade_response": [
+            {
+              "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect devin-desktop --event agent-stop; exit 0 # agent-bot agent-hook",
+              "show_output": false
+            }
+          ]
+        }
+      }
+    },
+    "qwen": {
+      "file": "<home>/.qwen/settings.json",
+      "config": {
+        "hooks": {
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "H=\"${AGENT_BOT_HOOK_BIN:-$HOME/.local/share/agent-bot/agent-hook}\"; [ -x \"$H\" ] && exec \"$H\" --dialect qwen --event session-start; exit 0 # agent-bot agent-hook",
+                  "timeout": 60,
+                  "shell": "bash"
+                }
+              ]
+            }
+          ]
+        },
+        "mcpServers": {
+          "agent-bot": {
+            "command": "<home>/.local/bin/agent-bot",
+            "args": [
+              "mcp"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,797 @@
+{
+  "agent-bot soul show <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "appSlug": "null",
+      "children": "number",
+      "comms": "boolean",
+      "computerUse": "boolean",
+      "description": "string",
+      "id": "string",
+      "lastSeen": "string",
+      "managed": "boolean",
+      "mode": "string",
+      "model": "null",
+      "name": "string",
+      "parentId": "null",
+      "paused": "boolean",
+      "presence": "null",
+      "role": "null",
+      "roleLine": "null",
+      "soulDir": "string",
+      "spacePath": "string",
+      "status": "string",
+      "transcriptLocator": "null",
+      "worktree": "null",
+      "worktrees": []
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul env <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "classification": {
+        "enum": [
+          "string"
+        ],
+        "rules": [
+          {
+            "classification": "string",
+            "match": "string",
+            "path": "string"
+          },
+          {
+            "classification": "string",
+            "match": "string"
+          }
+        ]
+      },
+      "components": [
+        {
+          "built": "boolean",
+          "classification": "string",
+          "git": "boolean",
+          "harnessInstall": "null",
+          "id": "string",
+          "path": "string",
+          "present": "boolean",
+          "retention": "string"
+        },
+        {
+          "classification": "string",
+          "confinementLog": "boolean",
+          "conversation": {
+            "path": "string",
+            "present": "boolean"
+          },
+          "external": [
+            {
+              "path": "string",
+              "present": "boolean",
+              "what": "string"
+            }
+          ],
+          "id": "string",
+          "mirror": "string",
+          "mirrored": "boolean",
+          "path": "string",
+          "present": "boolean",
+          "retention": "string",
+          "revisions": "number",
+          "turns": "number"
+        },
+        {
+          "classification": "string",
+          "contained": "boolean",
+          "id": "string",
+          "location": "string",
+          "path": "string",
+          "present": "boolean",
+          "retention": "string",
+          "spacePath": "string",
+          "status": "string",
+          "target": "null"
+        },
+        {
+          "classification": "string",
+          "declared": "null",
+          "exportable": "boolean",
+          "id": "string",
+          "path": "string",
+          "present": "boolean",
+          "retention": "string",
+          "secrets": []
+        },
+        {
+          "classification": "string",
+          "drift": [
+            "string"
+          ],
+          "id": "string",
+          "marker": "string",
+          "path": "null",
+          "paths": [
+            "string"
+          ],
+          "present": "boolean",
+          "retention": "string"
+        },
+        {
+          "classification": "string",
+          "entries": [],
+          "id": "string",
+          "imported": [],
+          "path": "string",
+          "present": "boolean",
+          "retention": "string"
+        },
+        {
+          "classification": "string",
+          "entries": [],
+          "id": "string",
+          "path": "string",
+          "present": "boolean",
+          "retention": "string"
+        },
+        {
+          "classification": "string",
+          "entries": [
+            {
+              "choice": "string",
+              "containment": "string",
+              "harness": "string",
+              "hostPath": "string",
+              "hostSignIn": "string",
+              "note": "null",
+              "path": "string",
+              "reason": "null",
+              "routing": [
+                "string"
+              ],
+              "signIn": "string"
+            }
+          ],
+          "id": "string",
+          "path": "string",
+          "present": "boolean",
+          "retention": "string"
+        },
+        {
+          "classification": "string",
+          "entries": [
+            {
+              "name": "string",
+              "path": "string",
+              "source": "string"
+            }
+          ],
+          "id": "string",
+          "path": "null",
+          "present": "boolean",
+          "retention": "null"
+        },
+        {
+          "classification": "string",
+          "id": "string",
+          "path": "string",
+          "present": "boolean",
+          "retention": "string"
+        }
+      ],
+      "engine": {
+        "capabilities": [
+          "string"
+        ],
+        "contractVersion": "number",
+        "version": "string"
+      },
+      "errors": [],
+      "harnesses": {
+        "declared": [],
+        "installed": [],
+        "launchable": "boolean",
+        "selected": "string"
+      },
+      "identity": {
+        "agentId": "string",
+        "displayName": "string",
+        "formatVersion": "number",
+        "genesis": {
+          "parentSoul": "null",
+          "revision": "string"
+        },
+        "harness": "null",
+        "name": "string",
+        "parentRevision": "string",
+        "revision": "string",
+        "status": "string",
+        "template": "boolean"
+      },
+      "launch": {
+        "cwd": "string",
+        "lane": "string",
+        "limitations": [],
+        "routing": {
+          "HOME": "string",
+          "PATH": "string",
+          "TMPDIR": "string",
+          "env": [
+            "string"
+          ],
+          "runtimes": {
+            "go": {
+              "bin": "null",
+              "source": "string",
+              "version": "null"
+            },
+            "node": {
+              "bin": "string",
+              "source": "string",
+              "version": "null"
+            },
+            "python": {
+              "bin": "null",
+              "source": "string",
+              "version": "null"
+            }
+          },
+          "toolHome": "string"
+        },
+        "supported": "boolean"
+      },
+      "migration": {
+        "journal": "string",
+        "status": "string",
+        "steps": []
+      },
+      "providers": {
+        "declared": [],
+        "invalid": [],
+        "secrets": []
+      },
+      "readiness": {
+        "problems": [
+          {
+            "action": "null",
+            "code": "string",
+            "component": "string",
+            "message": "string",
+            "severity": "string"
+          },
+          {
+            "action": "string",
+            "code": "string",
+            "component": "string",
+            "message": "string",
+            "severity": "string"
+          }
+        ],
+        "ready": "boolean"
+      },
+      "retention": {
+        "disposable": [
+          "string"
+        ],
+        "durable": [
+          "string"
+        ],
+        "reconstructible": [
+          "string"
+        ]
+      },
+      "root": {
+        "copies": [],
+        "device": "number",
+        "marker": "string",
+        "registered": "boolean",
+        "soulDir": "string",
+        "soulsRoot": "string",
+        "source": "string"
+      },
+      "runtimes": {
+        "declared": {},
+        "installed": [],
+        "missing": [],
+        "overrides": [],
+        "unsupported": []
+      },
+      "schemaVersion": "number"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul env history <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "mirror": "string",
+      "mirrored": "boolean",
+      "revisions": {
+        "limit": "number",
+        "listed": "number",
+        "records": [
+          {
+            "at": "string",
+            "id": "string",
+            "parent": "null",
+            "reason": "string"
+          },
+          {
+            "at": "string",
+            "id": "string",
+            "parent": "string",
+            "reason": "string"
+          }
+        ],
+        "skipped": "number",
+        "total": "number",
+        "truncated": "boolean"
+      },
+      "schemaVersion": "number",
+      "soulDir": "string",
+      "turns": {
+        "limit": "number",
+        "listed": "number",
+        "records": [],
+        "skipped": "number",
+        "total": "number",
+        "truncated": "boolean"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul profile <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "credentials": [],
+      "errors": [],
+      "files": [
+        {
+          "kind": "string",
+          "modifiedAt": "string",
+          "path": "string",
+          "size": "number",
+          "text": "boolean"
+        }
+      ],
+      "profile": {
+        "appearance": "null",
+        "description": "string",
+        "displayName": "string",
+        "harness": "null",
+        "name": "string",
+        "package": "string",
+        "parentId": "null",
+        "revision": "string",
+        "skillsDisabled": [],
+        "status": "string",
+        "template": "boolean"
+      },
+      "skills": [],
+      "sop": {
+        "override": "null",
+        "resolved": "null"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul runtimes <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "cache": "string",
+      "harnesses": [],
+      "integrity": "null",
+      "invalid": [],
+      "overrides": [],
+      "platform": "string",
+      "ready": "boolean",
+      "root": "string",
+      "runtimes": [],
+      "schemaVersion": "number",
+      "soulDir": "string"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul model <agent-id> show --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "available": "null",
+      "harness": "null",
+      "listedAt": "null",
+      "model": "null"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul mode <agent-id> show --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "mode": "string"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul computer-use <agent-id> show --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "computerUse": "boolean"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul comms <agent-id> show --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "comms": "boolean",
+      "handle": "string",
+      "managed": "boolean",
+      "name": "string",
+      "running": "boolean"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul secret <agent-id> status --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "invalid": [],
+      "providers": [],
+      "ready": "boolean",
+      "schemaVersion": "number",
+      "secrets": [],
+      "soulDir": "string"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul tool-home codex --soul <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "changed": "boolean",
+      "choice": "string",
+      "harness": "string"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul confinement-report <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "invalid": "number",
+      "prefixes": [],
+      "total": "number"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul revision list <agent-id> --json": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": "empty"
+  },
+  "agent-bot soul dir <agent-id>": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "copies": [],
+      "home": "string",
+      "soulDir": "string",
+      "soulsRoot": "string",
+      "source": "string"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot space show <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "createdAt": "string",
+      "path": "string",
+      "schemaVersion": "number"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot space path <agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "path": "string"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul show <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": "empty",
+    "stderr": "text"
+  },
+  "agent-bot soul env <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul env history <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "action": "null",
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul profile <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul runtimes <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "action": "null",
+        "code": "string",
+        "message": "string",
+        "runtime": "null"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul model <missing-agent-id> show --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul mode <missing-agent-id> show --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul computer-use <missing-agent-id> show --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul comms <missing-agent-id> show --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "text"
+  },
+  "agent-bot soul secret <missing-agent-id> status --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "action": "null",
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul tool-home codex --soul <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": {
+      "error": {
+        "code": "string",
+        "message": "string"
+      }
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul confinement-report <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": "empty",
+    "stderr": "text"
+  },
+  "agent-bot soul revision list <missing-agent-id> --json": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": "empty"
+  },
+  "agent-bot soul dir <missing-agent-id>": {
+    "exit": 1,
+    "stdout": "empty",
+    "stderr": "text"
+  },
+  "agent-bot space show <missing-agent-id> --json": {
+    "exit": 1,
+    "stdout": "empty",
+    "stderr": "text"
+  },
+  "agent-bot space path <missing-agent-id> --json": {
+    "exit": 0,
+    "stdout": {
+      "agentId": "string",
+      "path": "string"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot population list --json": {
+    "exit": 0,
+    "stdout": [
+      {
+        "appSlug": "null",
+        "children": "number",
+        "comms": "boolean",
+        "computerUse": "boolean",
+        "description": "string",
+        "id": "string",
+        "lastSeen": "string",
+        "managed": "boolean",
+        "mode": "string",
+        "model": "null",
+        "name": "string",
+        "parentId": "null",
+        "paused": "boolean",
+        "presence": "null",
+        "role": "null",
+        "roleLine": "null",
+        "soulDir": "string",
+        "spacePath": "string",
+        "status": "string",
+        "transcriptLocator": "null",
+        "worktree": "null",
+        "worktrees": []
+      }
+    ],
+    "stderr": "empty"
+  },
+  "agent-bot soul templates --json": {
+    "exit": 0,
+    "stdout": {
+      "errors": [],
+      "soulsRoot": "string",
+      "templates": [
+        {
+          "defaultHarness": "string",
+          "description": "string",
+          "name": "string",
+          "package": "string",
+          "preferredHarnesses": [
+            "string"
+          ],
+          "revision": "null",
+          "source": "string"
+        }
+      ]
+    },
+    "stderr": "empty"
+  },
+  "agent-bot soul skill list --json": {
+    "exit": 0,
+    "stdout": {
+      "notCaptured": "string",
+      "skills": []
+    },
+    "stderr": "empty"
+  },
+  "agent-bot principal list --json": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": "empty"
+  },
+  "agent-bot audit list --json": {
+    "exit": 0,
+    "stdout": {
+      "records": []
+    },
+    "stderr": "empty"
+  },
+  "agent-bot metrics show --json": {
+    "exit": 0,
+    "stdout": {
+      "collectedAt": "null",
+      "errors": [],
+      "missing": [],
+      "souls": {}
+    },
+    "stderr": "empty"
+  },
+  "agent-bot identity apps list --json": {
+    "exit": 0,
+    "stdout": {
+      "addons": {
+        "github-identity": "boolean"
+      },
+      "apps": [],
+      "schemaVersion": "number"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot daemon status --json": {
+    "exit": 1,
+    "stdout": {
+      "comms": {
+        "connected": "boolean",
+        "lastError": "null",
+        "lastWake": "null",
+        "lastWakeAt": "null",
+        "paired": "boolean",
+        "reconnects": "number"
+      },
+      "computerUse": [],
+      "reason": "string",
+      "running": "boolean"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot keyd status --json": {
+    "exit": 0,
+    "stdout": {
+      "bin": "null",
+      "expectedVersion": "string",
+      "pinned": "null",
+      "running": "boolean",
+      "version": "null",
+      "versionMatches": "null"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot telegram status --json": {
+    "exit": 0,
+    "stdout": {
+      "daemonRunning": "boolean",
+      "offset": "number",
+      "selections": "number",
+      "stateFile": "string",
+      "tokenConfigured": "boolean"
+    },
+    "stderr": "empty"
+  },
+  "agent-bot diagnostics export --preview": {
+    "exit": 0,
+    "stdout": {
+      "agentBot": "string",
+      "arch": "string",
+      "createdAt": "string",
+      "events": [],
+      "format": "string",
+      "node": "string",
+      "platform": "string",
+      "summary": {
+        "codes": {},
+        "components": {},
+        "events": "number",
+        "omitted": "number",
+        "outcomes": {}
+      },
+      "v": "number",
+      "window": {
+        "since": "string",
+        "until": "string"
+      }
+    },
+    "stderr": "text"
+  }
+}
