@@ -135,8 +135,9 @@ belongs to one class:
   (`principal-target-check`). Presence isn't accepted (see above).
 - **bearer**: bearer only. Reads, and infrastructure that bound sessions use.
 - **binding**: a soul's live binding (`x-agent-binding` or a proof), or a
-  single-use bind token. The binding names the caller; the bearer isn't
-  required and grants nothing.
+  single-use bind token. The binding names the caller, and the bearer grants
+  nothing. The bearer isn't checked, except on `POST /v0/bind` and the
+  `POST /v0/notices/*` routes, which take it as well.
 - **principal**: bearer plus an enrolled transport principal, authorized by the
   owner for the soul and operation (`agent-bot principals`).
 
@@ -145,9 +146,15 @@ invalid one) on any owner or owner-credential route is refused with
 `owner-credential-required` before anyone is asked. It is receipted as
 `owner-route`, or as `soul-revision` or `dream-control` on those routes.
 
+Each route source registers its routes, with the class of each, in the
+daemon's route registry (`route-registry.mjs`, #1392). The daemon's bearer
+check and the soul-binding refusal read the class from there.
+
 `tests/daemon-route-auth.test.mjs` checks this table and the daemon's
 handlers match in both directions. It also checks that a bearer-only caller,
 and a soul binding, are refused on each owner route.
+`tests/route-registry.test.mjs` checks that the registry holds exactly this
+table.
 
 | Route | Class | Notes |
 | --- | --- | --- |
