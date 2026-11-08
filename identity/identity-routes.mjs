@@ -1,13 +1,18 @@
 // Identity's daemon routes (#645, F9 step 2; owner decisions D5 and Q-F9-1).
 // The daemon (agent-daemon.mjs) still owns the HTTP server, the loopback
-// check, the bearer check and the bearer-free route list, and it keeps the
-// binding-proof checks: requireBinding, presentedCredential and grantBinding
-// come in as ports and are called exactly where the routes called them
-// before (Q-F9-2). What host and soul provide (the request helpers, the bind
-// and App-claim steps, the grant ledger, the spawn hook, the package hash and
-// the soul credential declaration) also comes in as ports, so identity
-// imports neither. handleIdentityRoute answers true when it handled the
-// route and false when the route is not identity's.
+// check and the bearer check, and it keeps the binding-proof checks:
+// requireBinding, presentedCredential and grantBinding come in as ports and
+// are called exactly where the routes called them before (Q-F9-2). What
+// host and soul provide (the request helpers, the bind and App-claim steps,
+// the grant ledger, the spawn hook, the package hash and the soul
+// credential declaration) also comes in as ports, so identity imports
+// neither. createIdentityRoutes returns identity's registration for
+// the daemon's route registry (route-registry.mjs, HQ plan Stage 0 row 8):
+// the routes below with the auth class of each (and which of them the
+// bearer check skips), and handleIdentityRoute, which answers true when it
+// handled the route and false when the route is not identity's. The
+// daemon's bearer and soul-binding checks read each route's class from the
+// registry; the handler still checks the binding itself, as before.
 //
 // POST /v0/spawn is split (D6, F9 step 4): the daemon keeps the route, its
 // binding check and the spawn hook, and spawnChildIdentity does identity's
@@ -76,6 +81,27 @@ function boundAppSlug(binding, identity, { env, home, config }) {
   return recorded;
 }
 
+// Identity's routes and their classes (docs/daemon-api.md). `bearer: false`
+// is the daemon's bearer-free list: the binding names the caller. A binding
+// route without it also takes the bearer.
+const IDENTITY_ROUTES = Object.freeze({
+  'POST /v0/bind': { auth: 'binding' },
+  'POST /v0/binding/app': { auth: 'binding', bearer: false },
+  'GET /v0/binding': { auth: 'binding', bearer: false },
+  'DELETE /v0/binding': { auth: 'binding', bearer: false },
+  'POST /v0/credential': { auth: 'binding', bearer: false },
+  'POST /v0/events/wait': { auth: 'binding', bearer: false },
+  'POST /v0/events/ack': { auth: 'binding', bearer: false },
+  'POST /v0/inbox/take': { auth: 'binding', bearer: false },
+  'POST /v0/notices/take': { auth: 'binding' },
+  'POST /v0/notices/peek': { auth: 'binding' },
+  'POST /v0/notices/ack': { auth: 'binding' },
+  'POST /v0/notices/release': { auth: 'binding' },
+  'POST /v0/grants/request': { auth: 'binding', bearer: false },
+  'POST /v0/grants/spend': { auth: 'binding', bearer: false },
+  'POST /v0/keyd/grant': { auth: 'binding', bearer: false },
+});
+
 export function createIdentityRoutes({
   bindings, env, home, config, now,
   readBody, parseJsonBody, sendJson,
@@ -100,7 +126,7 @@ export function createIdentityRoutes({
     keydCachedPairs.clear();
   });
 
-  return async function handleIdentityRoute(route, req, res) {
+  async function handleIdentityRoute(route, req, res) {
     switch (route) {
       case 'POST /v0/bind': {
         const body = parseJsonBody(await readBody(req));
@@ -620,7 +646,9 @@ export function createIdentityRoutes({
       default:
         return false;
     }
-  };
+  }
+
+  return { module: 'identity', routes: IDENTITY_ROUTES, handle: handleIdentityRoute };
 }
 
 // Identity's half of POST /v0/spawn: checks the request against the parent's

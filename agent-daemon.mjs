@@ -69,6 +69,7 @@ import {
 } from './identity-host.mjs';
 import { spacePath } from './agent-space.mjs';
 import { createSoulRoutes } from './soul-routes.mjs';
+import { createRouteRegistry } from './route-registry.mjs';
 import { createSoulHistory } from './soul-history.mjs';
 import { ensureSoulSpace, soulSpacePath } from './soul-memory.mjs';
 import { archiveSoulDirs, backfillManagedSouls, displayName, listSouls, locateSoulDir, populationFile, recordHarnessAuth, recordSoulSighting, recordSoulDisplayName, recordSoulLaunch, retireIdentityWithPopulation, setSoulApp, setSoulComms, setSoulComputerUse, soulComputerUse, setSoulPaused, soulPaused, showSoul, soulDirectory, upsertIdentitySoul, withRoles } from './agent-population.mjs';
@@ -253,18 +254,79 @@ function writeStateFile(file, state) {
   }
 }
 
-// Routes that need the owner, not just the bearer (#785, docs/daemon-api.md).
-// Revision writes and dream controls refuse a binding earlier, with their own
-// receipts; these are the rest. Returns the route's table name or null.
-const OWNER_ROUTES = new Set(['POST /v0/sandbox', 'POST /v0/sandbox/override', 'POST /v0/soul/computer-use',
-  'POST /v0/soul/resume', 'POST /v0/approvals/decide']);
-export function ownerRouteName(method, pathname) {
-  const route = `${method} ${pathname}`;
-  if (OWNER_ROUTES.has(route)) return route;
-  if (method !== 'POST') return null;
-  if (/^\/v0\/identity\/apps\/[a-z-]+$/.test(pathname)) return 'POST /v0/identity/apps/{action}';
-  if (/^\/v1\/proposals\/[^/]+\/decision$/.test(pathname)) return 'POST /v1/proposals/{id}/decision';
-  return null;
+// The daemon's own routes and their classes (docs/daemon-api.md, #785), for
+// the route registry (route-registry.mjs). Identity and soul declare theirs
+// beside their handlers. `bearer: false` is the bearer-free list: the binding
+// names the caller. A soul binding on an owner route is refused before anyone
+// is asked and receipted under the route's `receipt`, else owner-route.
+const DAEMON_ROUTES = Object.freeze({
+  'POST /v0/vouch': { auth: 'binding', bearer: false },
+  'POST /v0/machine': { auth: 'binding', bearer: false },
+  'POST /v0/asides/delivered': { auth: 'binding', bearer: false },
+  'GET /v0/health': { auth: 'bearer' },
+  'POST /v0/space/ensure': { auth: 'bearer' },
+  'GET /v0/space/path': { auth: 'bearer' },
+  'POST /v0/spawn': { auth: 'binding', bearer: false },
+  'POST /v0/team/start': { auth: 'binding', bearer: false },
+  'GET /v0/comms/status': { auth: 'bearer' },
+  'GET /v0/population': { auth: 'bearer' },
+  'GET /v0/soul/revisions': { auth: 'bearer' },
+  'POST /v0/soul/revisions/approve': { auth: 'owner-credential', receipt: 'soul-revision' },
+  'POST /v0/soul/revisions/reject': { auth: 'owner-credential', receipt: 'soul-revision' },
+  'POST /v0/soul/revisions/adopt': { auth: 'owner-credential', receipt: 'soul-revision' },
+  'POST /v0/soul/revisions/edit': { auth: 'owner-credential', receipt: 'soul-revision' },
+  'GET /v0/sandbox': { auth: 'bearer' },
+  'POST /v0/sandbox': { auth: 'owner' },
+  'POST /v0/sandbox/override': { auth: 'owner' },
+  'GET /v0/soul/profile': { auth: 'bearer' },
+  'GET /v0/soul/env': { auth: 'bearer' },
+  'POST /v0/soul/computer-use': { auth: 'owner' },
+  'POST /v0/soul/pause': { auth: 'bearer' },
+  'POST /v0/soul/resume': { auth: 'owner' },
+  'POST /v0/soul/stop': { auth: 'bearer' },
+  'GET /v0/approvals': { auth: 'bearer' },
+  'POST /v0/approvals/decide': { auth: 'owner' },
+});
+
+const DREAM_ROUTES = Object.freeze({
+  'GET /v0/soul/dream': { auth: 'bearer' },
+  'GET /v0/soul/dream/history': { auth: 'bearer' },
+  'POST /v0/soul/dream/{action}': { auth: 'owner', receipt: 'dream-control',
+    actions: ['register', 'pause', 'unschedule', 'run-now', 'cancel', 'ack-notice'] },
+});
+
+// Any App action is in the family, so a soul binding is refused on an
+// unknown one too; the handler then answers it identity-app-not-found.
+const IDENTITY_APP_ROUTES = Object.freeze({
+  'GET /v0/identity/apps': { auth: 'bearer' },
+  'GET /v0/identity/apps/jobs/{id}': { auth: 'bearer' },
+  'POST /v0/identity/apps/{action}': { auth: 'owner', actions: /^[a-z-]+$/ },
+});
+
+const INTERACTION_ROUTES = Object.freeze({
+  'POST /v1/sessions': { auth: 'principal' },
+  'POST /v1/sessions/{id}/messages': { auth: 'principal' },
+  'GET /v1/souls/{id}/asides': { auth: 'principal' },
+  'GET /v1/proposals': { auth: 'principal' },
+  'POST /v1/proposals/{id}/decision': { auth: 'owner' },
+  'GET /v1/invocations/{id}': { auth: 'principal' },
+  'GET /v1/invocations/{id}/events': { auth: 'principal' },
+  'POST /v1/invocations/{id}/cancel': { auth: 'principal' },
+  'GET /v1/invocations/{id}/artifacts': { auth: 'principal' },
+});
+
+// A soul binding on an owner route (#785): refused before the bearer is
+// checked or anyone is asked, and receipted. Revision writes and dream
+// controls keep their own receipts, naming the action.
+const BINDING_REFUSALS = new Map([
+  ['soul-revision', 'a soul binding cannot authorize an owner revision action'],
+  ['dream-control', 'a soul binding cannot authorize dream controls'],
+]);
+function refuseBinding(declared, pathname, { env, home, now }) {
+  const own = BINDING_REFUSALS.has(declared.receipt);
+  appendAuditReceipt({ event: own ? declared.receipt : 'owner-route', operation: own ? pathname.split('/').at(-1) : declared.route,
+    decision: 'owner-credential-required' }, { env, home, now });
+  throw ownerCredentialRequired(own ? BINDING_REFUSALS.get(declared.receipt) : `a soul binding cannot authorize ${declared.route}`);
 }
 
 function tokensMatch(expected, presented) {
@@ -626,15 +688,18 @@ export function createDaemonServer({
       throw error;
     }
   };
-  // Identity's routes (#645, F9 step 2). The daemon keeps its auth: the
-  // binding-proof checks are passed in and run where they always have.
-  // Soul's routes (#645, F9 step 3): POST /v0/register, behind the bearer.
-  const handleSoulRoute = createSoulRoutes({
-    env, home,
-    readBody, parseJsonBody, sendJson,
-    requireAgentId, populationOverride,
-  });
-  const handleIdentityRoute = createIdentityRoutes({
+  // The route registry (route-registry.mjs, HQ plan Stage 0 row 8): each
+  // source registers its routes with their auth classes, and the server
+  // below checks each class, then dispatches through it. Identity's routes
+  // (#645, F9 step 2) keep their binding-proof checks: those come in as
+  // ports and run where they always have. Soul's route (F9 step 3) is
+  // POST /v0/register, behind the bearer.
+  const routes = createRouteRegistry();
+  routes.register({ module: 'interaction', prefix: '/v1/', routes: INTERACTION_ROUTES,
+    handle: (route, req, res, url) => handleInteractionRequest({ req, res, url, interaction, env, home, confirmDecision }) });
+  routes.register({ module: 'identity-apps', prefix: '/v0/identity/apps', routes: IDENTITY_APP_ROUTES, handle: handleIdentityAppRoute });
+  routes.register({ module: 'dream', routes: DREAM_ROUTES, handle: handleDreamRoute });
+  const identityRoutes = createIdentityRoutes({
     bindings, env, home, config, now,
     readBody, parseJsonBody, sendJson,
     requireBinding, presentedCredential, grantBinding,
@@ -645,6 +710,27 @@ export function createDaemonServer({
     grantLedger, grantActor, grantView, grantFailure,
     soulCredentialsDeclaration, soulDirectory, populationFile,
   });
+  routes.register({ ...identityRoutes, handle: async (route, req, res) => {
+    if (route !== 'POST /v0/credential') return identityRoutes.handle(route, req, res);
+    // A credential refresh's outcome for diagnostics (#983); the route,
+    // its receipts and its response are unchanged.
+    const startedAt = Date.now();
+    try { await identityRoutes.handle(route, req, res); } catch (error) { recordCredentialRefresh(diagnostics, { startedAt, error }); throw error; }
+    recordCredentialRefresh(diagnostics, { startedAt });
+    return true;
+  } });
+  routes.register(createSoulRoutes({
+    env, home,
+    readBody, parseJsonBody, sendJson,
+    requireAgentId, populationOverride,
+  }));
+  routes.register({ module: 'daemon', routes: DAEMON_ROUTES, handle: handleDaemonRoute });
+  routes.close();
+  // A receipt the binding refusal does not know would fall back to
+  // owner-route silently; refuse it here instead.
+  for (const { route, receipt } of routes.entries()) {
+    if (receipt && !BINDING_REFUSALS.has(receipt)) throw new Error(`route registry: ${route} names an unknown binding refusal receipt ${receipt}`);
+  }
   let warmPool;
   const server = createServer(async (req, res) => {
     try {
@@ -666,112 +752,117 @@ export function createDaemonServer({
         await web.handle(req, res, url);
         return;
       }
-      // Binding-authenticated and bearer-free (#254). Every other route still
-      // requires the per-start bearer below.
-      if (req.method === 'POST' && url.pathname === '/v0/vouch') {
+      // Authorization reads each route's class from the route registry
+      // (docs/daemon-api.md, #785). A soul binding header, even an invalid or
+      // expired one, marks a soul request: on an owner route it is refused
+      // before bearer auth, parsing the body, or attempting principal
+      // verification.
+      const declared = routes.match(req.method, url.pathname);
+      if (declared && ['owner', 'owner-credential'].includes(declared.auth)
+        && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
+        refuseBinding(declared, url.pathname, { env, home, now });
+      }
+      // A route the registry marks bearer-free is binding-authenticated
+      // (#254); every other route requires the per-start bearer.
+      const authorization = req.headers.authorization ?? '';
+      const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+      if (declared?.bearer !== false && !tokensMatch(token, presented)) {
+        sendJson(res, 401, { error: 'missing or invalid daemon token' });
+        return;
+      }
+      if (await routes.dispatch(req, res, url)) return;
+      sendJson(res, 404, { error: 'unknown route' });
+    } catch (error) {
+      const failure = operationError(error);
+      // Dream, inbox and grant codes are fixed identifiers, so clients can act on them.
+      sendJson(res, failure.statusCode, { error: failure.message,
+        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES,
+          REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
+          // Identity-service outcomes a credential caller acts on (#1184 goal).
+          'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere', 'credential-no-repo'].includes(error.code)
+          || typeof error.code === 'string' && /^(dream|inbox|grant|human|notices|soul|transcript|agent-id)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
+        // The unsigned challenges a decision route asks the owner to sign (#753).
+        ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
+    }
+  });
+  // Same bearer and loopback checks as population; mutations also prove owner.
+  async function handleIdentityAppRoute(route, req, res, url) {
+    try {
+      if (req.method === 'GET' && url.pathname === '/v0/identity/apps') {
+        sendJson(res, 200, listIdentityApps(appOptions));
+      } else if (req.method === 'GET' && /^\/v0\/identity\/apps\/jobs\/[a-f0-9-]+$/.test(url.pathname)) {
+        sendJson(res, 200, appJobs.get(url.pathname.split('/').at(-1)));
+      } else if (req.method === 'POST' && /^\/v0\/identity\/apps\/(create|connect|rotate-key|assign|remove|addon)$/.test(url.pathname)) {
+        let body;
+        try { body = parseJsonBody(await readBody(req)); }
+        catch { sendJson(res, 400, { error: 'Invalid App request JSON.', code: 'identity-app-invalid' }); return; }
+        const action = url.pathname.split('/').at(-1);
+        sendJson(res, action === 'create' ? 202 : 200, action === 'create'
+          ? await appJobs.start(body) : await identityAppOperation(action, body, appOptions));
+      } else sendJson(res, 404, { error: 'Unknown App route.', code: 'identity-app-not-found' });
+    } catch (error) {
+      const failure = identityAppFailure(error);
+      sendJson(res, error.statusCode ?? 409, { error: failure.message, code: failure.code });
+    }
+  }
+  async function handleDreamRoute(route, req, res, url) {
+    const dreamAction = req.method === 'POST' && /^\/v0\/soul\/dream\/(register|pause|unschedule|run-now|cancel|ack-notice)$/.exec(url.pathname)?.[1];
+    if (!server.dream) throw Object.assign(new Error('Dream service is unavailable.'), { code: 'dream-service-unavailable', statusCode: 503 });
+    if (dreamAction) {
+      const request = dreamControlRequest(dreamAction, parseJsonBody(await readBody(req)));
+      const action = `soul dream ${request.agentId ?? request.runId} ${dreamAction}${request.schedule ? ` ${request.schedule}` : ''}${request.noticeId ? ` ${request.noticeId}` : ''}`;
+      try { await settingGate(action, { principal: request.principal }); }
+      catch (error) {
+        appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'owner-refused' }, { env, home, now });
+        throw Object.assign(new Error('The owner did not authorize this dream control.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
+      }
+      appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'authorized' }, { env, home, now });
+      // Authorization audit is required before execution. Its later outcome
+      // receipt must not turn an applied control into an apparent failure.
+      const outcomeAudit = decision => {
+        try {
+          appendAuditReceipt({ event: 'dream-control-outcome', agentId: request.agentId ?? null, operation: dreamAction, decision }, { env, home, now });
+          return {};
+        } catch {
+          return { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } };
+        }
+      };
+      let result;
+      try { result = server.dream.control(request); }
+      catch (error) {
+        const audit = outcomeAudit('failed'), failure = operationError(error);
+        sendJson(res, failure.statusCode, { error: failure.message,
+          ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code)
+            || typeof error.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}), ...audit });
+        return;
+      }
+      // A returned control may defer a run. This is not a maintenance result.
+      sendJson(res, result.status === 'started' ? 202 : 200, { schemaVersion: 1, result, ...outcomeAudit('returned') });
+    } else if (route === 'GET /v0/soul/dream/history') {
+      const query = {};
+      for (const [key, value] of url.searchParams) {
+        if (!['afterRevision', 'limit'].includes(key) || Object.hasOwn(query, key) || !/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) {
+          throw Object.assign(new Error('Invalid dream history query.'), { code: 'dream-history-query', statusCode: 400 });
+        }
+        query[key] = Number(value);
+      }
+      sendJson(res, 200, { schemaVersion: 1, ...server.dream.history(query) });
+    } else if (route === 'GET /v0/soul/dream') {
+      if (url.search) throw Object.assign(new Error('Dream status accepts no query fields.'), { statusCode: 400 });
+      sendJson(res, 200, server.dream.status());
+    } else return false;
+  }
+  // The daemon's own routes (DAEMON_ROUTES).
+  async function handleDaemonRoute(route, req, res, url) {
+    switch (route) {
+      // Binding-authenticated and bearer-free (#254).
+      case 'POST /v0/vouch': {
         await handleVouchRequest({
           req, res, findBinding, allowVouch, signingKey, soulTokenImpl: vouchSoulToken, env, home, now, config,
         });
         return;
       }
-      const authorization = req.headers.authorization ?? '';
-      const presented = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-      // Even an invalid/expired binding marks a soul request. Refuse before
-      // bearer auth, parsing the body, or attempting principal verification.
-      const revisionAction = req.method === 'POST' && /^\/v0\/soul\/revisions\/(approve|reject|adopt|edit)$/.exec(url.pathname)?.[1];
-      if (revisionAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
-        appendAuditReceipt({ event: 'soul-revision', operation: revisionAction, decision: 'owner-credential-required' }, { env, home, now });
-        throw ownerCredentialRequired('a soul binding cannot authorize an owner revision action');
-      }
-      const dreamAction = req.method === 'POST' && /^\/v0\/soul\/dream\/(register|pause|unschedule|run-now|cancel|ack-notice)$/.exec(url.pathname)?.[1];
-      if (dreamAction && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
-        appendAuditReceipt({ event: 'dream-control', operation: dreamAction, decision: 'owner-credential-required' }, { env, home, now });
-        throw ownerCredentialRequired('a soul binding cannot authorize dream controls');
-      }
-      // Every other owner route (#785): a soul binding never reaches the owner.
-      const ownerRoute = ownerRouteName(req.method, url.pathname);
-      if (ownerRoute && ('x-agent-binding' in req.headers || PROOF_HEADER in req.headers)) {
-        appendAuditReceipt({ event: 'owner-route', operation: ownerRoute, decision: 'owner-credential-required' }, { env, home, now });
-        throw ownerCredentialRequired(`a soul binding cannot authorize ${ownerRoute}`);
-      }
-      if (!['GET /v0/binding', 'DELETE /v0/binding', 'POST /v0/binding/app', 'POST /v0/credential', 'POST /v0/machine', 'POST /v0/inbox/take', 'POST /v0/grants/request', 'POST /v0/grants/spend', 'POST /v0/keyd/grant', 'POST /v0/spawn', 'POST /v0/team/start', 'POST /v0/asides/delivered', 'POST /v0/events/wait', 'POST /v0/events/ack'].includes(`${req.method} ${url.pathname}`) && !tokensMatch(token, presented)) {
-        sendJson(res, 401, { error: 'missing or invalid daemon token' });
-        return;
-      }
-      if (url.pathname.startsWith('/v1/')) {
-        await handleInteractionRequest({ req, res, url, interaction, env, home, confirmDecision });
-        return;
-      }
-      // Same bearer and loopback checks as population; mutations also prove owner.
-      if (url.pathname === '/v0/identity/apps' || url.pathname.startsWith('/v0/identity/apps/')) {
-        try {
-          if (req.method === 'GET' && url.pathname === '/v0/identity/apps') {
-            sendJson(res, 200, listIdentityApps(appOptions));
-          } else if (req.method === 'GET' && /^\/v0\/identity\/apps\/jobs\/[a-f0-9-]+$/.test(url.pathname)) {
-            sendJson(res, 200, appJobs.get(url.pathname.split('/').at(-1)));
-          } else if (req.method === 'POST' && /^\/v0\/identity\/apps\/(create|connect|rotate-key|assign|remove|addon)$/.test(url.pathname)) {
-            let body;
-            try { body = parseJsonBody(await readBody(req)); }
-            catch { sendJson(res, 400, { error: 'Invalid App request JSON.', code: 'identity-app-invalid' }); return; }
-            const action = url.pathname.split('/').at(-1);
-            sendJson(res, action === 'create' ? 202 : 200, action === 'create'
-              ? await appJobs.start(body) : await identityAppOperation(action, body, appOptions));
-          } else sendJson(res, 404, { error: 'Unknown App route.', code: 'identity-app-not-found' });
-        } catch (error) {
-          const failure = identityAppFailure(error);
-          sendJson(res, error.statusCode ?? 409, { error: failure.message, code: failure.code });
-        }
-        return;
-      }
-      const route = `${req.method} ${url.pathname}`;
-      if (dreamAction || route === 'GET /v0/soul/dream' || route === 'GET /v0/soul/dream/history') {
-        if (!server.dream) throw Object.assign(new Error('Dream service is unavailable.'), { code: 'dream-service-unavailable', statusCode: 503 });
-        if (dreamAction) {
-          const request = dreamControlRequest(dreamAction, parseJsonBody(await readBody(req)));
-          const action = `soul dream ${request.agentId ?? request.runId} ${dreamAction}${request.schedule ? ` ${request.schedule}` : ''}${request.noticeId ? ` ${request.noticeId}` : ''}`;
-          try { await settingGate(action, { principal: request.principal }); }
-          catch (error) {
-            appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'owner-refused' }, { env, home, now });
-            throw Object.assign(new Error('The owner did not authorize this dream control.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
-          }
-          appendAuditReceipt({ event: 'dream-control', agentId: request.agentId ?? null, operation: dreamAction, decision: 'authorized' }, { env, home, now });
-          // Authorization audit is required before execution. Its later outcome
-          // receipt must not turn an applied control into an apparent failure.
-          const outcomeAudit = decision => {
-            try {
-              appendAuditReceipt({ event: 'dream-control-outcome', agentId: request.agentId ?? null, operation: dreamAction, decision }, { env, home, now });
-              return {};
-            } catch {
-              return { audit: { status: 'unconfirmed', code: 'dream-control-audit-unconfirmed' } };
-            }
-          };
-          let result;
-          try { result = server.dream.control(request); }
-          catch (error) {
-            const audit = outcomeAudit('failed'), failure = operationError(error);
-            sendJson(res, failure.statusCode, { error: failure.message,
-              ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable'].includes(error.code)
-                || typeof error.code === 'string' && /^dream-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}), ...audit });
-            return;
-          }
-          // A returned control may defer a run. This is not a maintenance result.
-          sendJson(res, result.status === 'started' ? 202 : 200, { schemaVersion: 1, result, ...outcomeAudit('returned') });
-        } else if (route.endsWith('/history')) {
-          const query = {};
-          for (const [key, value] of url.searchParams) {
-            if (!['afterRevision', 'limit'].includes(key) || Object.hasOwn(query, key) || !/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) {
-              throw Object.assign(new Error('Invalid dream history query.'), { code: 'dream-history-query', statusCode: 400 });
-            }
-            query[key] = Number(value);
-          }
-          sendJson(res, 200, { schemaVersion: 1, ...server.dream.history(query) });
-        } else {
-          if (url.search) throw Object.assign(new Error('Dream status accepts no query fields.'), { statusCode: 400 });
-          sendJson(res, 200, server.dream.status());
-        }
-        return;
-      }
-      if (route === 'POST /v0/machine') {
+      case 'POST /v0/machine': {
         const binding = requireBinding(req, bindings);
         const body = parseJsonBody(await readBody(req));
         const unknown = Object.keys(body).filter((key) => !['verb', 'name', 'option', 'target', 'plan_id', 'soul', 'harness', 'session_id'].includes(key));
@@ -796,321 +887,299 @@ export function createDaemonServer({
         sendJson(res, 200, verifyResponse(line, pinned, { expectedNonce: request.nonce }));
         return;
       }
-      if (route === 'POST /v0/credential') {
-        // A credential refresh's outcome for diagnostics (#983); the route,
-        // its receipts and its response are unchanged.
-        const startedAt = Date.now();
-        try { await handleIdentityRoute(route, req, res); } catch (error) { recordCredentialRefresh(diagnostics, { startedAt, error }); throw error; }
-        recordCredentialRefresh(diagnostics, { startedAt });
+      case 'POST /v0/asides/delivered': {
+        const source = requireBinding(req, bindings);
+        const body = parseJsonBody(await readBody(req));
+        if (!Array.isArray(body.messageIds) || body.messageIds.length < 1 || body.messageIds.length > 200
+          || body.messageIds.some((id) => typeof id !== 'string' || !id.trim())
+          || new Set(body.messageIds).size !== body.messageIds.length
+          || !['inbox-read', 'hook-inject'].includes(body.via)
+          || (body.harnessSessionId !== undefined && (typeof body.harnessSessionId !== 'string' || !body.harnessSessionId.trim()))) {
+          throw Object.assign(new Error('invalid aside delivery fields'), { statusCode: 400 });
+        }
+        const binding = { worktree: source.worktree, file: source.spawnedBy
+          ? childBindingPath(source.gitDir, source.agentId) : path.join(source.gitDir, 'agent-binding.json') };
+        let messages;
+        try {
+          messages = await asideRelay.read({ agentId: source.agentId, binding });
+          if (!Array.isArray(messages)) throw new Error('invalid inbox');
+        } catch {
+          throw Object.assign(new Error('could not read soul mailbox'), { statusCode: 502 });
+        }
+        const mailbox = new Map(messages.filter((message) => message && typeof message.id === 'string').map((message) => [message.id, message]));
+        const recorded = [];
+        const skipped = [];
+        for (const id of body.messageIds) {
+          const message = mailbox.get(id);
+          if (!message) { skipped.push({ id, reason: 'not-in-mailbox' }); continue; }
+          if (message.to?.agentId !== source.agentId || message.to?.principal) {
+            skipped.push({ id, reason: 'not-addressed-to-soul' }); continue;
+          }
+          let peer;
+          try { peer = senderAddress(message.from); }
+          catch { skipped.push({ id, reason: 'invalid-message' }); continue; }
+          if (typeof message.body !== 'string') { skipped.push({ id, reason: 'invalid-message' }); continue; }
+          const result = recordDeliveredAside(source.agentId, {
+            via: body.via, peer, messageId: id, replyTo: message.replyTo, correlation: message.correlation,
+            harnessSessionId: body.harnessSessionId, body: message.body,
+          }, { env, home, now });
+          if (result?.recorded) recorded.push(id);
+          else skipped.push({ id, reason: result ? 'already-recorded' : 'record-failed' });
+        }
+        sendJson(res, 200, { recorded, skipped });
         return;
       }
-      if (await handleIdentityRoute(route, req, res)) return;
-      if (await handleSoulRoute(route, req, res)) return;
-      switch (route) {
-        case 'POST /v0/asides/delivered': {
-          const source = requireBinding(req, bindings);
-          const body = parseJsonBody(await readBody(req));
-          if (!Array.isArray(body.messageIds) || body.messageIds.length < 1 || body.messageIds.length > 200
-            || body.messageIds.some((id) => typeof id !== 'string' || !id.trim())
-            || new Set(body.messageIds).size !== body.messageIds.length
-            || !['inbox-read', 'hook-inject'].includes(body.via)
-            || (body.harnessSessionId !== undefined && (typeof body.harnessSessionId !== 'string' || !body.harnessSessionId.trim()))) {
-            throw Object.assign(new Error('invalid aside delivery fields'), { statusCode: 400 });
-          }
-          const binding = { worktree: source.worktree, file: source.spawnedBy
-            ? childBindingPath(source.gitDir, source.agentId) : path.join(source.gitDir, 'agent-binding.json') };
-          let messages;
-          try {
-            messages = await asideRelay.read({ agentId: source.agentId, binding });
-            if (!Array.isArray(messages)) throw new Error('invalid inbox');
-          } catch {
-            throw Object.assign(new Error('could not read soul mailbox'), { statusCode: 502 });
-          }
-          const mailbox = new Map(messages.filter((message) => message && typeof message.id === 'string').map((message) => [message.id, message]));
-          const recorded = [];
-          const skipped = [];
-          for (const id of body.messageIds) {
-            const message = mailbox.get(id);
-            if (!message) { skipped.push({ id, reason: 'not-in-mailbox' }); continue; }
-            if (message.to?.agentId !== source.agentId || message.to?.principal) {
-              skipped.push({ id, reason: 'not-addressed-to-soul' }); continue;
+      case 'GET /v0/health': {
+        // `busy`: souls with any daemon turn in flight, beside
+        // the warm pool's connected harnesses.
+        const soulTokens = soulTokensMode({ env, home, now, config });
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, version: runtimeVersion(),
+          // The enforcement profile in force (0.4 R8): never stronger than shown.
+          profile: enforcementProfile({ env, home, now }),
+          // Soul token signing in force (#1196): v2 means the identity
+          // service signs; `vouchKeyOnHost` is a stat, never a read.
+          soulTokens: typeof soulTokens === 'string' ? soulTokens : 'v2',
+          ...(typeof soulTokens === 'object'
+            ? { vouchKeyOnHost: existsSync(vouchKeyPath(vouchStateDir({ env, home }))) }
+            : {}),
+          warmPool: warmPool.list(),
+          busy: server.wakePlane?.busy?.() ?? turns.busy(),
+          souls: withRoles(listSouls({ file: populationFile({ env, home }) }), { file: populationFile({ env, home }), env, home }),
+          computerUse: computerUse.list().map(({ agentId, since }) => ({ agentId, since })) });
+        return;
+      }
+      case 'POST /v0/space/ensure': {
+        const body = parseJsonBody(await readBody(req));
+        const id = requireAgentId(body.agentId);
+        // The census space when the soul has one (ADR-0583 decision 8); the root only for a soul without.
+        const space = ensureSoulSpace(id, { env, home, config, file: populationOverride(env, home) });
+        sendJson(res, 200, { agentId: space.id, path: space.path, created: space.created });
+        return;
+      }
+      case 'GET /v0/space/path': {
+        // The census path when the census knows the soul (ADR-0583 decision 8).
+        const id = requireAgentId(url.searchParams.get('agentId'));
+        sendJson(res, 200, { agentId: id, path: soulSpacePath(id, { env, home, config, file: populationOverride(env, home) }) });
+        return;
+      }
+      // Split (D6, F9 step 4): identity mints the child and binds it; the
+      // daemon checks the parent's binding and runs the spawn hook.
+      case 'POST /v0/spawn': {
+        const source = requireBinding(req, bindings);
+        const body = parseJsonBody(await readBody(req));
+        const { result, name, harness } = spawnChildIdentity({
+          source, body, bindings, env, home, config, now, computePackageRevision,
+        });
+        let warning;
+        try { warning = await spawnHook({ ...result, name, harness, cwd: source.worktree, env }); }
+        catch { warning = 'spawn hook failed'; }
+        sendJson(res, 200, { ...result, ...(warning ? { warning } : {}) });
+        return;
+      }
+      // A soul starts a teammate as itself (#377): the binding is the
+      // caller, and the starter enforces the team limits and audits.
+      case 'POST /v0/team/start': {
+        let source;
+        try {
+          source = requireBinding(req, bindings);
+        } catch (error) {
+          appendAuditReceipt({ event: 'team-start', operation: 'start_soul', decision: 'denied' }, { env, home, now });
+          throw error;
+        }
+        if (!teamStarter) throw Object.assign(new Error('this daemon cannot start souls'), { statusCode: 503 });
+        const body = parseJsonBody(await readBody(req));
+        sendJson(res, 200, await teamStarter(source.agentId, body));
+        return;
+      }
+      // Comms pairing state (#255): who this daemon is paired as, and whether
+      // its account-watch stream to the agent-comms broker is connected.
+      case 'GET /v0/comms/status': {
+        sendJson(res, 200, {
+          schemaVersion: SCHEMA_VERSION,
+          comms: readCommsStatus({ env, home, live: comms?.getState() ?? null }),
+        });
+        return;
+      }
+      case 'GET /v0/population': {
+        const souls = listSouls({
+          status: url.searchParams.get('status'),
+          app: url.searchParams.get('app'),
+          file: populationOverride(env, home),
+        });
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
+        return;
+      }
+      case 'GET /v0/soul/revisions': {
+        const agentId = requireAgentId(url.searchParams.get('agentId'));
+        const proposals = listSoulProposals(agentId, { stateDir: stateDirectory({ env, home }) })
+          .filter((proposal) => proposal.status === 'pending')
+          .map(({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }) =>
+            ({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }));
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, proposals });
+        return;
+      }
+      case 'POST /v0/soul/revisions/approve':
+      case 'POST /v0/soul/revisions/reject':
+      case 'POST /v0/soul/revisions/adopt':
+      case 'POST /v0/soul/revisions/edit': {
+        const revisionAction = url.pathname.split('/').at(-1);
+        const body = parseJsonBody(await readBody(req));
+        const agentId = requireAgentId(body.agentId);
+        const target = ['approve', 'reject'].includes(revisionAction) ? body.proposalId : body.packagePath;
+        if (typeof target !== 'string' || !target.trim() || typeof body.reason !== 'string' || !body.reason.trim()
+          || (body.consent !== undefined && body.consent !== true) || (body.consent && body.principal != null)) {
+          throw Object.assign(new Error('provide a target and reason, and either principal or consent: true'), { statusCode: 400 });
+        }
+        const record = await revisionCommand([revisionAction, agentId, target, body.reason], {
+          env, home, now, stateDir: stateDirectory({ env, home }), principal: body.principal ?? null,
+          ...(body.expectedParent === undefined ? {} : { expectedParent: body.expectedParent }),
+          assertUser: async (_action, { principal, target }) => {
+            if (body.consent) {
+              // Reserved host ceremony contract: no client-supplied boolean
+              // or assertion grants consent, and this route raises no GUI.
+              throw Object.assign(new Error('daemon owner consent is not implemented; use the interactive CLI'), {
+                code: 'owner-consent-unavailable', statusCode: 501,
+              });
             }
-            let peer;
-            try { peer = senderAddress(message.from); }
-            catch { skipped.push({ id, reason: 'invalid-message' }); continue; }
-            if (typeof message.body !== 'string') { skipped.push({ id, reason: 'invalid-message' }); continue; }
-            const result = recordDeliveredAside(source.agentId, {
-              via: body.via, peer, messageId: id, replyTo: message.replyTo, correlation: message.correlation,
-              harnessSessionId: body.harnessSessionId, body: message.body,
-            }, { env, home, now });
-            if (result?.recorded) recorded.push(id);
-            else skipped.push({ id, reason: result ? 'already-recorded' : 'record-failed' });
-          }
-          sendJson(res, 200, { recorded, skipped });
+            if (!principal) throw ownerCredentialRequired();
+            return revisionPrincipal(principal, { target });
+          },
+        });
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, record });
+        return;
+      }
+      case 'GET /v0/sandbox': {
+        // Persona account status (#376): account facts, the owner's steps
+        // and each soul's resolution. Secret-free by construction.
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...readSandboxStatus({ env, home }) });
+        return;
+      }
+      case 'POST /v0/sandbox': {
+        const body = parseJsonBody(await readBody(req));
+        if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
+        if (body.account !== undefined) {
+          try { validateSandboxAccount(body.account); }
+          catch (error) { throw Object.assign(new Error(error.message), { statusCode: 400 }); }
+        }
+        if (body.enabled === undefined && body.account === undefined) throw Object.assign(new Error('provide enabled and/or account'), { statusCode: 400 });
+        const action = [body.enabled === undefined ? null : `sandbox ${body.enabled ? 'on' : 'off'}`, body.account === undefined ? null : `sandbox account ${body.account}`].filter(Boolean).join(', ');
+        await settingGate(action, { principal: body.principal ?? null });
+        if (body.account !== undefined) setSandboxAccount(body.account, { env, home });
+        if (body.enabled !== undefined) setSandboxEnabled(body.enabled, { env, home });
+        appendAuditReceipt({ event: 'sandbox', operation: 'set', decision: action }, { env, home, now });
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...readSandboxStatus({ env, home }) });
+        return;
+      }
+      case 'POST /v0/sandbox/override': {
+        const body = parseJsonBody(await readBody(req));
+        const agentId = requireAgentId(body.agentId);
+        if (!['inherit', 'sandboxed', 'unrestricted'].includes(body.override)) throw Object.assign(new Error('override must be inherit, sandboxed or unrestricted'), { statusCode: 400 });
+        const file = populationFile({ env, home });
+        try { showSoul(agentId, { file }); }
+        catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+        await settingGate(`sandbox override ${agentId} ${body.override}`, { principal: body.principal ?? null });
+        const result = setSandboxOverride(agentId, body.override, { env, home });
+        appendAuditReceipt({ event: 'sandbox', agentId, operation: 'override', decision: body.override }, { env, home, now });
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...result });
+        return;
+      }
+      case 'GET /v0/soul/profile':
+      case 'GET /v0/soul/env': {
+        const agentId = url.searchParams.get('agentId');
+        if (!agentId) {
+          sendJson(res, 400, { error: 'agentId is required' });
           return;
         }
-        case 'GET /v0/health': {
-          // `busy`: souls with any daemon turn in flight, beside
-          // the warm pool's connected harnesses.
-          const soulTokens = soulTokensMode({ env, home, now, config });
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, status: 'ok', pid: process.pid, version: runtimeVersion(),
-            // The enforcement profile in force (0.4 R8): never stronger than shown.
-            profile: enforcementProfile({ env, home, now }),
-            // Soul token signing in force (#1196): v2 means the identity
-            // service signs; `vouchKeyOnHost` is a stat, never a read.
-            soulTokens: typeof soulTokens === 'string' ? soulTokens : 'v2',
-            ...(typeof soulTokens === 'object'
-              ? { vouchKeyOnHost: existsSync(vouchKeyPath(vouchStateDir({ env, home }))) }
-              : {}),
-            warmPool: warmPool.list(),
-            busy: server.wakePlane?.busy?.() ?? turns.busy(),
-            souls: withRoles(listSouls({ file: populationFile({ env, home }) }), { file: populationFile({ env, home }), env, home }),
-            computerUse: computerUse.list().map(({ agentId, since }) => ({ agentId, since })) });
-          return;
+        // Both are read-only census-authenticated reads; env adds the
+        // environment descriptor (#583) beside the profile.
+        const read = url.pathname.endsWith('/env') ? readSoulEnvironment : readSoulProfile;
+        try { sendJson(res, 200, read(agentId, { env, home })); }
+        catch (error) {
+          if (error.code !== 'soul-not-found') throw error;
+          sendJson(res, 404, { error: error.message, code: error.code });
         }
-        case 'POST /v0/space/ensure': {
-          const body = parseJsonBody(await readBody(req));
-          const id = requireAgentId(body.agentId);
-          // The census space when the soul has one (ADR-0583 decision 8); the root only for a soul without.
-          const space = ensureSoulSpace(id, { env, home, config, file: populationOverride(env, home) });
-          sendJson(res, 200, { agentId: space.id, path: space.path, created: space.created });
-          return;
-        }
-        case 'GET /v0/space/path': {
-          // The census path when the census knows the soul (ADR-0583 decision 8).
-          const id = requireAgentId(url.searchParams.get('agentId'));
-          sendJson(res, 200, { agentId: id, path: soulSpacePath(id, { env, home, config, file: populationOverride(env, home) }) });
-          return;
-        }
-        // Split (D6, F9 step 4): identity mints the child and binds it; the
-        // daemon checks the parent's binding and runs the spawn hook.
-        case 'POST /v0/spawn': {
-          const source = requireBinding(req, bindings);
-          const body = parseJsonBody(await readBody(req));
-          const { result, name, harness } = spawnChildIdentity({
-            source, body, bindings, env, home, config, now, computePackageRevision,
-          });
-          let warning;
-          try { warning = await spawnHook({ ...result, name, harness, cwd: source.worktree, env }); }
-          catch { warning = 'spawn hook failed'; }
-          sendJson(res, 200, { ...result, ...(warning ? { warning } : {}) });
-          return;
-        }
-        // A soul starts a teammate as itself (#377): the binding is the
-        // caller, and the starter enforces the team limits and audits.
-        case 'POST /v0/team/start': {
-          let source;
+        return;
+      }
+      case 'POST /v0/soul/computer-use': {
+        const body = parseJsonBody(await readBody(req));
+        const agentId = requireAgentId(body.agentId);
+        if (typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
+        const file = populationFile({ env, home });
+        try { showSoul(agentId, { file }); }
+        catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+        await settingGate(`switch ${agentId} computer use ${body.enabled ? 'on' : 'off'}`, { principal: body.principal ?? null });
+        setSoulComputerUse(agentId, body.enabled, { file });
+        const stopped = !body.enabled && computerUse.list().some((row) => row.agentId === agentId)
+          ? (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId)) : false;
+        appendAuditReceipt({ event: 'computer-use', agentId, operation: 'set', decision: body.enabled ? 'on' : 'off' }, { env, home, now });
+        sendJson(res, 200, { agentId, computerUse: body.enabled, ...(stopped ? { stopped: true } : {}) });
+        return;
+      }
+      case 'POST /v0/soul/pause':
+      case 'POST /v0/soul/resume':
+      case 'POST /v0/soul/stop': {
+        const action = url.pathname.split('/').at(-1);
+        const body = parseJsonBody(await readBody(req));
+        const agentId = requireAgentId(body.agentId);
+        // Like approvals: the local owner presents the daemon token;
+        // adapters additionally identify their enrolled transport principal.
+        // Pausing and stopping grant no tool permission and need no
+        // presence dialog; the owner's resume does (below).
+        let principal = null;
+        const transport = body.transport ?? 'owner';
+        if (body.transport !== undefined || body.providerId !== undefined) {
           try {
-            source = requireBinding(req, bindings);
-          } catch (error) {
-            appendAuditReceipt({ event: 'team-start', operation: 'start_soul', decision: 'denied' }, { env, home, now });
+            principal = resolvePrincipal({ transport: body.transport, providerId: body.providerId }, { file: principalsFile({ env, home }) });
+          } catch {
+            throw Object.assign(new Error('invalid transport principal'), { statusCode: 400 });
+          }
+          try { assertAuthorized({ principal, agentId, operation: 'cancel' }); }
+          catch (error) {
+            appendAuditReceipt({ event: 'denied-request', agentId, transport, principalId: principal?.principalId ?? null,
+              operation: 'cancel', decision: 'denied' }, { env, home, now });
             throw error;
           }
-          if (!teamStarter) throw Object.assign(new Error('this daemon cannot start souls'), { statusCode: 503 });
-          const body = parseJsonBody(await readBody(req));
-          sendJson(res, 200, await teamStarter(source.agentId, body));
-          return;
         }
-        // Comms pairing state (#255): who this daemon is paired as, and whether
-        // its account-watch stream to the agent-comms broker is connected.
-        case 'GET /v0/comms/status': {
-          sendJson(res, 200, {
-            schemaVersion: SCHEMA_VERSION,
-            comms: readCommsStatus({ env, home, live: comms?.getState() ?? null }),
-          });
-          return;
-        }
-        case 'GET /v0/population': {
-          const souls = listSouls({
-            status: url.searchParams.get('status'),
-            app: url.searchParams.get('app'),
-            file: populationOverride(env, home),
-          });
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, souls: withRoles(souls, { file: populationOverride(env, home), env, home }) });
-          return;
-        }
-        case 'GET /v0/soul/revisions': {
-          const agentId = requireAgentId(url.searchParams.get('agentId'));
-          const proposals = listSoulProposals(agentId, { stateDir: stateDirectory({ env, home }) })
-            .filter((proposal) => proposal.status === 'pending')
-            .map(({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }) =>
-              ({ proposalId, revision, parentRevision, author, reason, diff, requiresUser, status, at }));
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, proposals });
-          return;
-        }
-        case 'POST /v0/soul/revisions/approve':
-        case 'POST /v0/soul/revisions/reject':
-        case 'POST /v0/soul/revisions/adopt':
-        case 'POST /v0/soul/revisions/edit': {
-          const body = parseJsonBody(await readBody(req));
-          const agentId = requireAgentId(body.agentId);
-          const target = ['approve', 'reject'].includes(revisionAction) ? body.proposalId : body.packagePath;
-          if (typeof target !== 'string' || !target.trim() || typeof body.reason !== 'string' || !body.reason.trim()
-            || (body.consent !== undefined && body.consent !== true) || (body.consent && body.principal != null)) {
-            throw Object.assign(new Error('provide a target and reason, and either principal or consent: true'), { statusCode: 400 });
-          }
-          const record = await revisionCommand([revisionAction, agentId, target, body.reason], {
-            env, home, now, stateDir: stateDirectory({ env, home }), principal: body.principal ?? null,
-            ...(body.expectedParent === undefined ? {} : { expectedParent: body.expectedParent }),
-            assertUser: async (_action, { principal, target }) => {
-              if (body.consent) {
-                // Reserved host ceremony contract: no client-supplied boolean
-                // or assertion grants consent, and this route raises no GUI.
-                throw Object.assign(new Error('daemon owner consent is not implemented; use the interactive CLI'), {
-                  code: 'owner-consent-unavailable', statusCode: 501,
-                });
-              }
-              if (!principal) throw ownerCredentialRequired();
-              return revisionPrincipal(principal, { target });
-            },
-          });
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, agentId, record });
-          return;
-        }
-        case 'GET /v0/sandbox': {
-          // Persona account status (#376): account facts, the owner's steps
-          // and each soul's resolution. Secret-free by construction.
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...readSandboxStatus({ env, home }) });
-          return;
-        }
-        case 'POST /v0/sandbox': {
-          const body = parseJsonBody(await readBody(req));
-          if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
-          if (body.account !== undefined) {
-            try { validateSandboxAccount(body.account); }
-            catch (error) { throw Object.assign(new Error(error.message), { statusCode: 400 }); }
-          }
-          if (body.enabled === undefined && body.account === undefined) throw Object.assign(new Error('provide enabled and/or account'), { statusCode: 400 });
-          const action = [body.enabled === undefined ? null : `sandbox ${body.enabled ? 'on' : 'off'}`, body.account === undefined ? null : `sandbox account ${body.account}`].filter(Boolean).join(', ');
-          await settingGate(action, { principal: body.principal ?? null });
-          if (body.account !== undefined) setSandboxAccount(body.account, { env, home });
-          if (body.enabled !== undefined) setSandboxEnabled(body.enabled, { env, home });
-          appendAuditReceipt({ event: 'sandbox', operation: 'set', decision: action }, { env, home, now });
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...readSandboxStatus({ env, home }) });
-          return;
-        }
-        case 'POST /v0/sandbox/override': {
-          const body = parseJsonBody(await readBody(req));
-          const agentId = requireAgentId(body.agentId);
-          if (!['inherit', 'sandboxed', 'unrestricted'].includes(body.override)) throw Object.assign(new Error('override must be inherit, sandboxed or unrestricted'), { statusCode: 400 });
-          const file = populationFile({ env, home });
-          try { showSoul(agentId, { file }); }
-          catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
-          await settingGate(`sandbox override ${agentId} ${body.override}`, { principal: body.principal ?? null });
-          const result = setSandboxOverride(agentId, body.override, { env, home });
-          appendAuditReceipt({ event: 'sandbox', agentId, operation: 'override', decision: body.override }, { env, home, now });
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...result });
-          return;
-        }
-        case 'GET /v0/soul/profile':
-        case 'GET /v0/soul/env': {
-          const agentId = url.searchParams.get('agentId');
-          if (!agentId) {
-            sendJson(res, 400, { error: 'agentId is required' });
-            return;
-          }
-          // Both are read-only census-authenticated reads; env adds the
-          // environment descriptor (#583) beside the profile.
-          const read = url.pathname.endsWith('/env') ? readSoulEnvironment : readSoulProfile;
-          try { sendJson(res, 200, read(agentId, { env, home })); }
+        try { showSoul(agentId, { file: populationFile({ env, home }) }); }
+        catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
+        // The daemon bearer alone proves only a process in this account, so
+        // a resume without an enrolled transport principal asks the owner
+        // (#785). Pause and stop only hold a soul back and stay prompt-free.
+        if (action === 'resume' && !principal) {
+          try { await settingGate(`soul resume ${agentId}`, { principal: body.principal ?? null }); }
           catch (error) {
-            if (error.code !== 'soul-not-found') throw error;
-            sendJson(res, 404, { error: error.message, code: error.code });
+            appendAuditReceipt({ event: 'resume', agentId, transport, operation: 'cancel', decision: 'owner-refused' }, { env, home, now });
+            throw Object.assign(new Error('The owner did not authorize resuming this soul.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
           }
-          return;
         }
-        case 'POST /v0/soul/computer-use': {
-          const body = parseJsonBody(await readBody(req));
-          const agentId = requireAgentId(body.agentId);
-          if (typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
-          const file = populationFile({ env, home });
-          try { showSoul(agentId, { file }); }
-          catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
-          await settingGate(`switch ${agentId} computer use ${body.enabled ? 'on' : 'off'}`, { principal: body.principal ?? null });
-          setSoulComputerUse(agentId, body.enabled, { file });
-          const stopped = !body.enabled && computerUse.list().some((row) => row.agentId === agentId)
-            ? (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId)) : false;
-          appendAuditReceipt({ event: 'computer-use', agentId, operation: 'set', decision: body.enabled ? 'on' : 'off' }, { env, home, now });
-          sendJson(res, 200, { agentId, computerUse: body.enabled, ...(stopped ? { stopped: true } : {}) });
-          return;
-        }
-        case 'POST /v0/soul/pause':
-        case 'POST /v0/soul/resume':
-        case 'POST /v0/soul/stop': {
-          const action = url.pathname.split('/').at(-1);
-          const body = parseJsonBody(await readBody(req));
-          const agentId = requireAgentId(body.agentId);
-          // Like approvals: the local owner presents the daemon token;
-          // adapters additionally identify their enrolled transport principal.
-          // Pausing and stopping grant no tool permission and need no
-          // presence dialog; the owner's resume does (below).
-          let principal = null;
-          const transport = body.transport ?? 'owner';
-          if (body.transport !== undefined || body.providerId !== undefined) {
-            try {
-              principal = resolvePrincipal({ transport: body.transport, providerId: body.providerId }, { file: principalsFile({ env, home }) });
-            } catch {
-              throw Object.assign(new Error('invalid transport principal'), { statusCode: 400 });
-            }
-            try { assertAuthorized({ principal, agentId, operation: 'cancel' }); }
-            catch (error) {
-              appendAuditReceipt({ event: 'denied-request', agentId, transport, principalId: principal?.principalId ?? null,
-                operation: 'cancel', decision: 'denied' }, { env, home, now });
-              throw error;
-            }
-          }
-          try { showSoul(agentId, { file: populationFile({ env, home }) }); }
-          catch { throw Object.assign(new Error('unknown soul'), { statusCode: 404 }); }
-          // The daemon bearer alone proves only a process in this account, so
-          // a resume without an enrolled transport principal asks the owner
-          // (#785). Pause and stop only hold a soul back and stay prompt-free.
-          if (action === 'resume' && !principal) {
-            try { await settingGate(`soul resume ${agentId}`, { principal: body.principal ?? null }); }
-            catch (error) {
-              appendAuditReceipt({ event: 'resume', agentId, transport, operation: 'cancel', decision: 'owner-refused' }, { env, home, now });
-              throw Object.assign(new Error('The owner did not authorize resuming this soul.'), { code: error.code ?? 'owner-credential-required', statusCode: 403 });
-            }
-          }
-          const stopped = action === 'resume' ? false : (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId));
-          if (action !== 'stop') setSoulPaused(agentId, action === 'pause', { file: populationFile({ env, home }) });
-          appendAuditReceipt({ event: action, agentId, transport, principalId: principal?.principalId ?? null,
-            operation: 'cancel', decision: action === 'stop' ? (stopped ? 'stopped' : 'idle') : (action === 'pause' ? 'paused' : 'resumed') }, { env, home, now });
-          sendJson(res, 200, action === 'stop' ? { agentId, stopped, ...(!stopped ? { reason: 'idle' } : {}) }
-            : { agentId, paused: action === 'pause', ...(action === 'pause' ? { stopped } : {}) });
-          return;
-        }
-        // The owner's approvals (#85). Listing needs the daemon token; deciding
-        // also needs the owner at the Mac (#438), asked here, not by the caller.
-        case 'GET /v0/approvals': {
-          sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...interaction.listProposalsForOwner() });
-          return;
-        }
-        case 'POST /v0/approvals/decide': {
-          const body = parseJsonBody(await readBody(req));
-          const authorization = await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null, statement: body.statement ?? null });
-          sendJson(res, 200, interaction.decideProposalAsOwner({
-            proposalId: body.proposalId,
-            decision: body.decision, scope: body.scope,
-            digest: body.digest, authorization,
-          }));
-          return;
-        }
-        default:
-          sendJson(res, 404, { error: 'unknown route' });
+        const stopped = action === 'resume' ? false : (server.wakePlane?.stop?.(agentId) ?? turns.stop(agentId));
+        if (action !== 'stop') setSoulPaused(agentId, action === 'pause', { file: populationFile({ env, home }) });
+        appendAuditReceipt({ event: action, agentId, transport, principalId: principal?.principalId ?? null,
+          operation: 'cancel', decision: action === 'stop' ? (stopped ? 'stopped' : 'idle') : (action === 'pause' ? 'paused' : 'resumed') }, { env, home, now });
+        sendJson(res, 200, action === 'stop' ? { agentId, stopped, ...(!stopped ? { reason: 'idle' } : {}) }
+          : { agentId, paused: action === 'pause', ...(action === 'pause' ? { stopped } : {}) });
+        return;
       }
-    } catch (error) {
-      const failure = operationError(error);
-      // Dream, inbox and grant codes are fixed identifiers, so clients can act on them.
-      sendJson(res, failure.statusCode, { error: failure.message,
-        ...(['soul-paused', 'owner-credential-required', 'owner-consent-unavailable', 'owner-challenge-required', ...GRANT_PRESENCE_CODES,
-          REVISION_STORAGE_FAILED, REVISION_PUBLICATION_UNCERTAIN,
-          // Identity-service outcomes a credential caller acts on (#1184 goal).
-          'credential-unavailable', 'device-revoked', 'outcome-unknown', 'operation-conflict', 'legacy-local-custody-off', 'soul-bound-elsewhere', 'credential-no-repo'].includes(error.code)
-          || typeof error.code === 'string' && /^(dream|inbox|grant|human|notices|soul|transcript|agent-id)-[a-z][a-z-]{0,63}$/.test(error.code) ? { code: error.code } : {}),
-        // The unsigned challenges a decision route asks the owner to sign (#753).
-        ...(error.code === 'owner-challenge-required' && Array.isArray(error.challenges) ? { challenges: error.challenges } : {}) });
+      // The owner's approvals (#85). Listing needs the daemon token; deciding
+      // also needs the owner at the Mac (#438), asked here, not by the caller.
+      case 'GET /v0/approvals': {
+        sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, ...interaction.listProposalsForOwner() });
+        return;
+      }
+      case 'POST /v0/approvals/decide': {
+        const body = parseJsonBody(await readBody(req));
+        const authorization = await confirmDecision({ proposalId: body.proposalId, decision: body.decision, scope: body.scope, credential: body.principal ?? null, statement: body.statement ?? null });
+        sendJson(res, 200, interaction.decideProposalAsOwner({
+          proposalId: body.proposalId,
+          decision: body.decision, scope: body.scope,
+          digest: body.digest, authorization,
+        }));
+        return;
+      }
+      default:
+        sendJson(res, 404, { error: 'unknown route' });
     }
-  });
+  }
   server.once('close', () => { clearInterval(digestTimer); appJobs.close(); web.close?.(); });
   server.on('listening', () => {
     const address = server.address();
@@ -1124,6 +1193,7 @@ export function createDaemonServer({
     },
   });
   server.token = token;
+  server.routes = routes;
   server.warmPool = warmPool;
   server.bindings = bindings;
   server.interaction = interaction;
