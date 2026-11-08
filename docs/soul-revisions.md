@@ -229,6 +229,10 @@ for embedding/testing. `createRevisionAppender(packagePath, { reason, ...options
 implements the `recordAgentPackageRevision` append port; it verifies the complete
 prepared package's hash and current parent before appending. This low-level port
 is for authenticated user edits. Soul callers use `proposeSoulRevision`.
+The read side (`revisionJournalRoot`, `revisionHistory` and
+`revisionPackagePath`) is the RevisionStore port, `soul-revision-store.mjs`,
+which `soul-revisions.mjs` re-exports. Readers that need only stored
+revisions, such as `skill-manifest.mjs`, import the port (#1388).
 
 Each `objects/<64-hex>.soul` holds a full validated package. Package formats 1
 and 2 are supported; format 2 snapshots and diffs exclude working state and
