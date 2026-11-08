@@ -1,17 +1,37 @@
 // The MCP tool registry (tool-registry.mjs, #1394; HQ plan Stage 0 row 9).
 // Both MCP servers register each tool once, with its schema, class, handler
 // and listing conditions. This file checks the registry refuses what it does
-// not know and lists what it holds in order.
+// not know, keeps each server's registry equal to the README's tables, and
+// pins the classes and listing sets the servers had before the registry.
+// tests/golden-surface.test.mjs pins what tools/list shows.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { createToolRegistry, TOOL_CLASSES } from '../tool-registry.mjs';
+import { MEMBER_TOOLS } from '../agent-mcp.mjs';
+import { REACH_TOOL_NAMES, REACH_TOOLS } from '../daemon-mcp.mjs';
 
+const root = path.join(import.meta.dirname, '..');
 const handler = () => ({});
 const tool = (overrides = {}) => ({
   name: 't', description: 'A tool.', inputSchema: { type: 'object', properties: {} }, class: 'read', handler, ...overrides,
 });
+
+// The README table that follows `marker`, as rows of cells.
+function readmeTable(marker) {
+  const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
+  const start = readme.indexOf(marker);
+  assert.ok(start >= 0, `README has no ${marker}`);
+  const rows = [];
+  for (const line of readme.slice(readme.indexOf('\n| ', start) + 1).split('\n')) {
+    if (!line.startsWith('| ')) break;
+    rows.push(line.slice(2, -2).split(' | ').map((cell) => cell.replace(/^`|`$/g, '')));
+  }
+  return rows.slice(2);
+}
 
 test('a registry needs a server name and known options', () => {
   for (const options of [undefined, {}, { server: 'Bad Name' }, { server: 's', extra: 1 }, { server: 's', conditions: 'comms' },
@@ -73,4 +93,43 @@ test('list keeps registration order, shows only the MCP fields, and filters by c
   assert.deepEqual(Object.keys(tools.list()[1]), ['name', 'description', 'inputSchema']);
   assert.deepEqual(tools.list((condition) => condition === 'comms').map(({ name }) => name), ['z', 'a']);
   assert.deepEqual(tools.list(() => false).map(({ name }) => name), ['z']);
+});
+
+test('agent-bot mcp: the member tools equal the README table, in order', () => {
+  assert.equal(MEMBER_TOOLS.server, 'agent-bot');
+  assert.deepEqual(MEMBER_TOOLS.entries().map((entry) => [entry.name, entry.class]),
+    readmeTable('`tests/tool-registry.test.mjs` keeps this table equal to\nthe registry, in its order'));
+  assert.throws(() => MEMBER_TOOLS.register(tool({ name: 'late' })), /registration is closed/);
+});
+
+// The classes agent-mcp.mjs's TOOL_CLASS table gave before the registry.
+// Its other names (the meta tools) were never in the table: they are the
+// server's own, not registered.
+const CLASSES_BEFORE = {
+  whoami: 'read', population: 'read', space_path: 'read', peek_notices: 'read',
+  doctor: 'read', server_status: 'read', guide: 'read',
+  bind: 'write', credential: 'write', take_notices: 'write', ack_notices: 'write',
+  release_notices: 'write', take_inbox: 'write', request_grant: 'write', spend_grant: 'write',
+  machine_status: 'read', machine_receipts: 'read',
+  machine_plan: 'write', machine_apply: 'write', machine_update: 'write',
+};
+
+test('agent-bot mcp: every member tool keeps the class it had', () => {
+  assert.deepEqual(Object.fromEntries(MEMBER_TOOLS.entries().map((entry) => [entry.name, entry.class])), CLASSES_BEFORE);
+  assert.deepEqual(MEMBER_TOOLS.entries().map((entry) => entry.when), MEMBER_TOOLS.names().map(() => []));
+});
+
+test('agent-reach: the reach tools equal the README table, in order', () => {
+  assert.equal(REACH_TOOLS.server, 'agent-reach');
+  assert.deepEqual(REACH_TOOLS.entries().map((entry) => [entry.name, entry.class, entry.when.join(', ') || 'always']),
+    readmeTable('`tests/tool-registry.test.mjs` keeps this table equal to the registry, in the\norder `tools/list` shows them'));
+  assert.throws(() => REACH_TOOLS.register(tool({ name: 'late' })), /registration is closed/);
+});
+
+test('agent-reach: the names, and the comms and invocation sets, are the ones it had', () => {
+  assert.deepEqual(REACH_TOOL_NAMES, ['fetch_context', 'post_reply', 'report_status', 'clock_in', 'fleet', 'send_message', 'start_soul']);
+  assert.ok(Object.isFrozen(REACH_TOOL_NAMES));
+  const withCondition = (condition) => REACH_TOOLS.entries().filter((entry) => entry.when.includes(condition)).map((entry) => entry.name);
+  assert.deepEqual(withCondition('comms'), ['fleet', 'send_message', 'start_soul']);
+  assert.deepEqual(withCondition('invocation'), ['fetch_context', 'post_reply', 'report_status']);
 });
