@@ -20,7 +20,13 @@ import { loadOrCreateVouchKey, loadVouchKey, vouchKeyPath, vouchStateDir } from 
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 const REQUEST_FIELDS = ['verb', 'name', 'option', 'target', 'plan_id', 'soul', 'harness', 'session_id'];
-const VERBS = new Set(['status', 'receipts', 'plan', 'apply', 'update', 'catalog']);
+const VERBS = new Set(['status', 'receipts', 'plan', 'apply', 'update', 'catalog', 'approve-members']);
+// approve-members (#1401) records the owner's approval of one member accounts
+// plan. It carries plan_id and plan_digest and nothing else (membersFields in
+// managed-machine internal/daemon/protocol.go).
+const APPROVE_MEMBERS = 'approve-members';
+const MEMBERS_PLAN_ID = /^plan-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}$/;
+const MEMBERS_PLAN_DIGEST = /^[0-9a-f]{64}$/;
 const SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 30000;
 const SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,127}$/;
@@ -108,6 +114,9 @@ export function requestCanonical(r) {
     const env = r.envelope ? [r.envelope.format, r.envelope.key_id, String(r.envelope.version), String(r.envelope.issued_at), r.envelope.catalog, r.envelope.sig].join('\n') : '';
     return Buffer.from(`${base}\n${[key, floor, env].join('\n')}`);
   }
+  // approve-members: the digest is two more lines, its name and its value
+  // (canonical in protocol.go). A request without it signs as before.
+  if (r.plan_digest) return Buffer.from(`${base}\nplan_digest\n${r.plan_digest}`);
   return Buffer.from(base);
 }
 
@@ -115,7 +124,7 @@ export function requestCanonical(r) {
 // catalog_key, floor and envelope — no soul/harness/session or op fields —
 // and its canonical signature gains one more line-joined part
 // (catalogCanonical in managed-machine internal/daemon/protocol.go).
-export function buildRequest({ verb, name, option, target, plan_id, soul, harness, session_id, catalog_key = null, floor = null, envelope = null }, signer, { now = Math.floor(Date.now() / 1000), nonce = randomBytes(16).toString('base64url') } = {}) {
+export function buildRequest({ verb, name, option, target, plan_id, plan_digest, soul, harness, session_id, catalog_key = null, floor = null, envelope = null }, signer, { now = Math.floor(Date.now() / 1000), nonce = randomBytes(16).toString('base64url') } = {}) {
   if (!VERBS.has(verb)) throw mcError('machine-verb-unknown', `verb is not one of ${[...VERBS].join(', ')}`);
   const catalogFields = { catalog_key, floor, envelope };
   const hasCatalog = catalog_key !== null || floor !== null || envelope !== null;
@@ -124,6 +133,16 @@ export function buildRequest({ verb, name, option, target, plan_id, soul, harnes
   }
   if (verb !== 'catalog' && hasCatalog) {
     throw mcError('machine-field-invalid', 'catalog fields belong only to the catalog verb');
+  }
+  if (verb === APPROVE_MEMBERS) {
+    if (hasCatalog || [name, option, target, soul, harness, session_id].some((v) => v !== undefined && v !== null)) {
+      throw mcError('machine-field-invalid', 'approve-members carries only plan_id and plan_digest');
+    }
+    if (typeof plan_id !== 'string' || !MEMBERS_PLAN_ID.test(plan_id) || typeof plan_digest !== 'string' || !MEMBERS_PLAN_DIGEST.test(plan_digest)) {
+      throw mcError('machine-field-invalid', 'approve-members needs a plan id and a sha-256 plan digest');
+    }
+  } else if (plan_digest !== undefined) {
+    throw mcError('machine-field-invalid', 'plan_digest belongs only to the approve-members verb');
   }
   for (const [field, value] of Object.entries({ name, option, target, plan_id })) {
     if (value !== undefined && (typeof value !== 'string' || !SHAPE.test(value))) {
@@ -135,6 +154,7 @@ export function buildRequest({ verb, name, option, target, plan_id, soul, harnes
     const v = { name, option, target, plan_id, soul, harness, session_id }[f];
     if (v) request[f] = v;
   }
+  if (verb === APPROVE_MEMBERS) request.plan_digest = plan_digest;
   if (hasCatalog) {
     // Never send raw nulls: a null catalog field is refused on any verb.
     if (catalog_key !== null) request.catalog_key = catalog_key;

@@ -47,6 +47,7 @@ import {
   pairedPublicKey, pinDaemonPub, pinPath, unpairAgentDaemon, verifyResponse,
   writeAgentDaemonPeer,
 } from './machine-client.mjs';
+import { listMembersPlans, MEMBERS_PLAN_DIGEST, readMembersPlan } from './machine-members.mjs';
 import { daemonStateFile } from './daemon-client.mjs';
 import { wrongAccountWarning } from './daemon-state.mjs';
 import { daemonStatus } from './daemon-status.mjs';
@@ -557,11 +558,56 @@ const enrollChildren = new Set();
       sendJson(res, 200, { ok: res2.ok, state: res2.state, plan_id: res2.message, diagnostic: res2.diagnostic, message: res2.message });
       return;
     }
+    if (req.method === 'GET' && pathname === '/ui/api/machine/agent-machine/members/plans') {
+      // The saved member accounts plans (#1401). Each is verified against
+      // its own digest on read; one that fails is listed with the reason.
+      requireMachineView(principal);
+      sendJson(res, 200, { plans: listMembersPlans({ home }) });
+      return;
+    }
     if (req.method === 'POST' && pathname === '/ui/api/machine/agent-machine/proposals') {
       try { assertMachineAuthorized({ principal, operation: 'approve' }); }
       catch { throw failure(403, 'principal is not authorized for this operation'); }
-      const allowed = ['verb', 'name', 'option', 'target', 'plan_id', 'repin'];
+      const allowed = ['verb', 'name', 'option', 'target', 'plan_id', 'plan_digest', 'repin'];
       for (const key of Object.keys(body)) if (!allowed.includes(key)) throw failure(400, 'unknown field');
+      if (body.verb === 'approve-members') {
+        // The owner's approval of one member accounts plan (#1401). The
+        // operation carries the digest and every step, so the proposal
+        // digest covers, and the card shows, exactly what agent-machine is
+        // told was approved. Approval records a digest; it runs nothing.
+        if (Object.keys(body).some((k) => !['verb', 'plan_id', 'plan_digest'].includes(k))) throw failure(400, 'unknown field');
+        if (body.plan_digest !== undefined && (typeof body.plan_digest !== 'string' || !MEMBERS_PLAN_DIGEST.test(body.plan_digest))) {
+          throw failure(400, 'plan_digest must be a sha-256 digest');
+        }
+        let saved;
+        try { saved = readMembersPlan({ home, planId: body.plan_id }); }
+        catch (error) { throw failure(error?.code === 'members-plan-missing' ? 404 : 400, error?.message ?? 'the saved plan cannot be read'); }
+        if (body.plan_digest !== undefined && body.plan_digest !== saved.plan_digest) {
+          throw failure(409, 'the saved plan has another digest; it was planned again');
+        }
+        const operation = {
+          verb: 'approve-members',
+          plan_id: saved.plan_id,
+          plan_digest: saved.plan_digest,
+          hq_account: saved.plan.hq_account,
+          dir: saved.plan.dir,
+          members: saved.plan.members,
+          steps: saved.plan.steps,
+        };
+        const { proposal } = interaction.requestMachineApproval({
+          principal: caller.principal,
+          transport: WEB_TRANSPORT,
+          operation,
+          summary: `Member accounts for ${operation.hq_account}: ${operation.members.join(', ') || 'none'} (${operation.plan_id}). Approving lets one sudo apply of this exact plan run within 10 minutes.`,
+          execute: async () => {
+            const result = await machineVerb('approve-members', { plan_id: operation.plan_id, plan_digest: operation.plan_digest });
+            return { ...result, next: result?.ok === true ? `sudo managed-machine members apply ${operation.plan_id}` : null };
+          },
+        });
+        sendJson(res, 200, { proposal });
+        return;
+      }
+      if (body.plan_digest !== undefined) throw failure(400, 'unknown field');
       if (body.verb === 'pair' || body.verb === 'unpair') {
         const extra = Object.keys(body).filter((k) => k !== 'verb' && !(body.verb === 'pair' && k === 'repin'));
         if (extra.length > 0) throw failure(400, 'unknown field');
@@ -633,7 +679,7 @@ const enrollChildren = new Set();
       for (const f of ['name', 'option', 'target', 'plan_id']) {
         if (body[f] !== undefined && (typeof body[f] !== 'string' || body[f].length > 128)) throw failure(400, `${f} must be a string of at most 128 characters`);
       }
-      if (body.verb !== 'apply' && body.verb !== 'update') throw failure(400, 'verb must be apply, update, pair, or unpair');
+      if (body.verb !== 'apply' && body.verb !== 'update') throw failure(400, 'verb must be apply, update, pair, unpair, or approve-members');
       if (body.verb === 'apply' && (typeof body.plan_id !== 'string' || body.plan_id === '')) {
         throw failure(400, 'apply requires plan_id');
       }

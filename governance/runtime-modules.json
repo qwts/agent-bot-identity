@@ -90,6 +90,7 @@
     "agent-mcp.mjs": "host",
     "tool-registry.mjs": "host",
     "machine-client.mjs": "host",
+    "machine-members.mjs": "host",
     "server-status.mjs": "host",
     "agent-population.mjs": "soul",
     "agent-principals.mjs": "identity",

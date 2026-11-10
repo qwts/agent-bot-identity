@@ -232,7 +232,7 @@ the owner:
   soul, observe it, cancel. Owner presence on each message would break remote
   transports.
 
-The `POST /v0/machine` body is `{verb, name?, option?, target?, plan_id?}` — verbs `status`, `receipts`, `plan`, `apply`, `update`; other keys refuse. The daemon fills `soul`, `harness`, `session_id` from the binding; a supplied value that disagrees is `derived-field-mismatch`. Returns `{ok, state, diagnostic, message, body}`; agent-machine's own refusals surface in `diagnostic`.
+The `POST /v0/machine` body is `{verb, name?, option?, target?, plan_id?}` — verbs `status`, `receipts`, `plan`, `apply`, `update`; other keys refuse. `approve-members` refuses with `machine-verb-owner-only`: only an owner approval in the local web UI sends it (#1401). The daemon fills `soul`, `harness`, `session_id` from the binding; a supplied value that disagrees is `derived-field-mismatch`. Returns `{ok, state, diagnostic, message, body}`; agent-machine's own refusals surface in `diagnostic`.
 
 ## POST /v0/machine detail
 

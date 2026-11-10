@@ -857,6 +857,30 @@
       "kind": "refusal",
       "registered": "0.15.11",
       "summary": "The soul removal plan changed between proposal and approval; nothing was removed."
+    },
+    {
+      "n": 108,
+      "code": "machine-verb-owner-only",
+      "component": "host",
+      "kind": "refusal",
+      "registered": "0.15.18",
+      "summary": "POST /v0/machine named approve-members, which only an owner approval in the local web UI sends."
+    },
+    {
+      "n": 109,
+      "code": "members-plan-invalid",
+      "component": "web",
+      "kind": "refusal",
+      "registered": "0.15.18",
+      "summary": "A saved member accounts plan is malformed or does not match its stated digest."
+    },
+    {
+      "n": 110,
+      "code": "members-plan-missing",
+      "component": "web",
+      "kind": "refusal",
+      "registered": "0.15.18",
+      "summary": "No saved member accounts plan has the named plan id."
     }
   ]
 }

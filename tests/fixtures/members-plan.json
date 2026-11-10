@@ -1,0 +1,81 @@
+{
+  "plan_id": "plan-20261110T040000Z-abcd",
+  "plan_digest": "eb55f9eaf3df2069d2fb418b13a69f37fb59d22514eb5739bbd9c92cab9e5c58",
+  "created_at": "2026-11-10T04:00:00Z",
+  "plan": {
+    "version": 1,
+    "hq_account": "agent-bot-hq",
+    "dir": "/run/agent-bot-hq/members",
+    "members": [
+      "abm-lead",
+      "abm-spec"
+    ],
+    "steps": [
+      {
+        "kind": "account",
+        "target": "abm-lead",
+        "action": "repair",
+        "group": "abm-lead",
+        "mode": "0700",
+        "detail": "exists; home /home/abm-lead has mode 0755 and is set to 0700; its password is checked at apply"
+      },
+      {
+        "kind": "account",
+        "target": "abm-spec",
+        "action": "create",
+        "group": "abm-spec",
+        "mode": "0700",
+        "detail": "home /home/abm-spec, shell /usr/sbin/nologin, private group, no password, no other groups"
+      },
+      {
+        "kind": "directory",
+        "target": "/run/agent-bot-hq/members",
+        "action": "none",
+        "owner": "root",
+        "group": "root",
+        "mode": "0755"
+      },
+      {
+        "kind": "directory",
+        "target": "/run/agent-bot-hq/members/abm-lead",
+        "action": "none",
+        "owner": "agent-bot-hq",
+        "group": "abm-lead",
+        "mode": "2750"
+      },
+      {
+        "kind": "directory",
+        "target": "/run/agent-bot-hq/members/abm-spec",
+        "action": "none",
+        "owner": "agent-bot-hq",
+        "group": "abm-spec",
+        "mode": "2750"
+      },
+      {
+        "kind": "directory",
+        "target": "/run/agent-bot-hq/members/abm-old",
+        "action": "remove",
+        "detail": "no longer a member; the account and its home are kept"
+      },
+      {
+        "kind": "file",
+        "target": "/etc/tmpfiles.d/agent-bot-hq-members.conf",
+        "action": "none",
+        "owner": "root",
+        "group": "root",
+        "mode": "0644",
+        "content": "# Managed by managed-machine (members). Do not edit: it is rewritten.\nd /run/agent-bot-hq/members 0755 root root -\nd /run/agent-bot-hq/members/abm-lead 2750 agent-bot-hq abm-lead -\nd /run/agent-bot-hq/members/abm-spec 2750 agent-bot-hq abm-spec -\n"
+      },
+      {
+        "kind": "file",
+        "target": "/etc/sudoers.d/agent-bot-hq-members",
+        "action": "write",
+        "owner": "root",
+        "group": "root",
+        "mode": "0440",
+        "content": "# Managed by managed-machine (members). Do not edit: it is rewritten.\nRunas_Alias ABHQ_MEMBERS = abm-lead, abm-spec\nDefaults:agent-bot-hq env_reset, !setenv\nDefaults:agent-bot-hq env_keep = \"AGENT_BOT_SOULS_SOCKET AGENT_BOT_SOULS_MEMBER_TOKEN AGENT_BOT_SOULS_MEMBER_ID AGENT_BOT_SOULS_ROLE AGENT_BOT_SOULS_BROKER\"\nagent-bot-hq ALL = (ABHQ_MEMBERS) NOPASSWD: NOSETENV: ALL\n",
+        "detail": "checked with visudo before it is moved into place"
+      }
+    ]
+  }
+}
