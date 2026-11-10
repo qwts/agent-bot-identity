@@ -265,10 +265,11 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
   }
   // Removing the registry entry is what revokes; deleting the file is
   // cleanup, so an unreadable file or a moved worktree never blocks it.
-  function remove(key, entry) {
+  function remove(key, entry, onRemove) {
     bindings.delete(key);
+    onRemove?.(entry);
     for (const [childKey, child] of bindings) {
-      if (child.spawnedBy === key) remove(childKey, child);
+      if (child.spawnedBy === key) remove(childKey, child, onRemove);
     }
     if (!entry.gitDir) return;
     try {
@@ -279,10 +280,28 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       }
     } catch { /* left for the owner; the secret no longer authenticates */ }
   }
+  function pathMissing(target) {
+    try {
+      statSync(target);
+      return false;
+    } catch (error) {
+      return error.code === 'ENOENT' || error.code === 'ENOTDIR';
+    }
+  }
+  function isDeadOnDisk(entry) {
+    if (!file || !daemon) return false;
+    const bindingFile = entry.spawnedBy
+      ? childBindingPath(entry.gitDir, entry.agentId)
+      : path.join(entry.gitDir, 'agent-binding.json');
+    return pathMissing(entry.worktree) || pathMissing(bindingFile);
+  }
   function expire() {
     let removed = false;
     for (const [key, entry] of bindings) {
-      if (Date.parse(entry.lastUsedAt) <= now().getTime() - MAX_BINDING_IDLE_MS) { remove(key, entry); removed = true; }
+      if (Date.parse(entry.lastUsedAt) <= now().getTime() - MAX_BINDING_IDLE_MS || isDeadOnDisk(entry)) {
+        remove(key, entry);
+        removed = true;
+      }
     }
     if (removed) save();
   }
@@ -297,10 +316,10 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
     if (now().getTime() - previous >= 60_000) save();
     return { ...entry, bindingHash: key };
   }
-  function releaseKey(key) {
+  function releaseKey(key, onRelease) {
     const entry = bindings.get(key);
     if (!entry) return false;
-    remove(key, entry);
+    remove(key, entry, onRelease);
     save();
     return true;
   }
@@ -387,13 +406,13 @@ export function createBindingRegistry({ now = () => new Date(), file, account = 
       const key = keyForProof(header, request);
       return key ? touch(key) : null;
     },
-    release(secret) {
+    release(secret, onRelease) {
       if (typeof secret !== 'string') return false;
-      return releaseKey(hash(secret));
+      return releaseKey(hash(secret), onRelease);
     },
-    releaseProof(header, request) {
+    releaseProof(header, request, onRelease) {
       const key = keyForProof(header, request);
-      return key ? releaseKey(key) : false;
+      return key ? releaseKey(key, onRelease) : false;
     },
     // The cold path (#259) starts a turn for a soul, not for a secret: the
     // most recently used binding names its worktree and the file the turn

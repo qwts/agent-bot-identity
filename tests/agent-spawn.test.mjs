@@ -101,7 +101,9 @@ test('restart rewrites child URLs; parent revoke cascades through grandchildren 
   const registry = createBindingRegistry({ file: f.file });
   registry.rewrite('http://127.0.0.1:4321');
   assert.equal(readBinding({ env: { AGENT_BOT_BINDING: grandchild.binding } }).daemon, 'http://127.0.0.1:4321');
-  assert.equal(registry.release(childSecret), true);
+  const releasedIds = [];
+  assert.equal(registry.release(childSecret, (entry) => releasedIds.push(entry.agentId)), true);
+  assert.deepEqual(releasedIds, [child.agentId, grandchild.agentId]);
   assert.ok(registry.resolve(f.secret));
   assert.equal(registry.resolve(grandSecret), null);
   assert.equal(existsSync(grandchild.binding), false);

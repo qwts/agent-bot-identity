@@ -161,31 +161,38 @@ export function createIdentityRoutes({
       // Explicit revocation invalidates the secret and removes its file.
       case 'DELETE /v0/binding': {
         const presented = presentedCredential(req);
-        const existing = typeof presented === 'string'
-          ? bindings.resolve(presented)
-          : bindings.resolveProof(presented.proof, presented.request);
+        const removed = [];
+        const capture = (entry) => { removed.push(entry); };
         const released = typeof presented === 'string'
-          ? bindings.release(presented)
-          : bindings.releaseProof(presented.proof, presented.request);
+          ? bindings.release(presented, capture)
+          : bindings.releaseProof(presented.proof, presented.request, capture);
         if (!released) {
           throw Object.assign(new Error('missing or invalid agent binding'), { statusCode: 401 });
         }
-        if (existing?.agentId && !bindings.findAgent(existing.agentId)) {
-          const appsToEvict = new Set();
-          if (existing.app) appsToEvict.add(existing.app);
+        const appsByAgent = new Map();
+        for (const existing of removed) {
+          if (!existing?.agentId || bindings.findAgent(existing.agentId)) continue;
+          let apps = appsByAgent.get(existing.agentId);
+          if (!apps) {
+            apps = new Set();
+            appsByAgent.set(existing.agentId, apps);
+          }
+          if (existing.app) apps.add(existing.app);
+        }
+        for (const [agentId, appsToEvict] of appsByAgent) {
           for (const pair of [...keydCachedPairs]) {
             const [aid, app] = pair.split('\0');
-            if (aid === existing.agentId) {
+            if (aid === agentId) {
               appsToEvict.add(app);
               keydCachedPairs.delete(pair);
             }
           }
           try {
-            const identity = readAgentIdentity(existing.agentId, { stateDir: stateDirectory({ env, home }) });
+            const identity = readAgentIdentity(agentId, { stateDir: stateDirectory({ env, home }) });
             if (identity?.github?.appSlug) appsToEvict.add(identity.github.appSlug);
           } catch { /* best-effort eviction */ }
           for (const app of appsToEvict) {
-            await evictKeydCachedTokens({ agentId: existing.agentId, app, env, home, now, request: keydCall });
+            await evictKeydCachedTokens({ agentId, app, env, home, now, request: keydCall });
           }
         }
         sendJson(res, 200, { schemaVersion: SCHEMA_VERSION, released: true });
