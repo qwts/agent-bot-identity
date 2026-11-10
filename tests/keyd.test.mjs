@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import { ensureAgentIdentity, retireAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
-import { mintBindToken } from '../agent-binding.mjs';
+import { mintBindToken, revokeBinding } from '../agent-binding.mjs';
 import { auditFile } from '../identity-format.mjs';
 import { registerSoulDir, upsertSoul } from '../agent-population.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
@@ -626,4 +626,14 @@ test('/v0/credential caches minted tokens in keyd Keychain, reuses them across c
   assert.equal(released.status, 200);
   assert.equal(cachedByScope.size, 0, 'releasing the binding evicts the cached token from keyd');
   assert.deepEqual(keydTools, ['token_cache_put', 'token_cache_get', 'token_cache_evict']);
+
+  // Proof-authenticated release (`agent-bot binding revoke`) also evicts cached tokens.
+  const reboundToken = mintBindToken({ gitDir, worktree, agentId: AGENT });
+  const rebound = await (await call('/v0/bind', { body: { gitDir, token: reboundToken.token, transcript: { provider: 'codex', id: 'thread-keyd-cache-proof' } } })).json();
+  const third = await (await call('/v0/credential', { headers: { 'x-agent-binding': rebound.secret }, bearer: false })).json();
+  assert.equal(third.token, 'ghs_fresh_2');
+  assert.equal(cachedByScope.size, 1);
+  await revokeBinding({ env, cwd: worktree });
+  assert.equal(cachedByScope.size, 0, 'revoking the binding via proof evicts the cached token from keyd');
+  assert.deepEqual(keydTools, ['token_cache_put', 'token_cache_get', 'token_cache_evict', 'token_cache_put', 'token_cache_evict']);
 });

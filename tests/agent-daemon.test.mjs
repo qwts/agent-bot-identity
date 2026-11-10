@@ -27,7 +27,7 @@ import { initSoulSpace } from '../agent-space.mjs';
 import { verifySoulToken, vouchKeyPath, vouchStateDir } from '../vouch.mjs';
 import { ensureAgentIdentity, mintAgentIdentity, readAgentIdentity, retireAgentIdentity } from '../agent-identity.mjs';
 import { stateDirectory } from '../state-paths.mjs';
-import { mintBindToken, readBinding } from '../agent-binding.mjs';
+import { mintBindToken, readBinding, revokeBinding } from '../agent-binding.mjs';
 import { RUNTIME_PROFILE_INTERFACE_VERSION, organizationProfileToConfig } from '../organization-profile.mjs';
 import { PROOF_HEADER, signBindingProof } from '../binding-proof.mjs';
 import {
@@ -746,8 +746,8 @@ test('bind refuses an unknown parent and leaves the token in place', async () =>
 
 test('releasing a binding hands the slot back and invalidates the secret', async () => {
   const { root, env } = scratchEnv();
-  const { gitDir, record } = mintWorktreeToken(env, root);
-  await withServer(env, async ({ call }) => {
+  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
+  await withServer(env, async ({ call, port }) => {
     const bound = await (await call('/v0/bind', {
       method: 'POST',
       body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-daemon' } },
@@ -774,6 +774,32 @@ test('releasing a binding hands the slot back and invalidates the secret', async
       headers: { 'x-agent-binding': bound.secret },
     });
     assert.equal(again.status, 401);
+
+    // Proof-authenticated release (`agent-bot binding revoke`) succeeds on a
+    // single one-time proof without tripping self-replay detection, and a
+    // repeat DELETE with the spent proof is refused.
+    const { record: nextRecord } = mintWorktreeToken(env, root);
+    await call('/v0/bind', {
+      method: 'POST',
+      body: { gitDir, token: nextRecord.token, transcript: { provider: 'codex', id: 'thread-daemon-proof' } },
+    });
+    let capturedProof = null;
+    await revokeBinding({
+      env,
+      cwd: worktree,
+      fetchImpl: (url, init) => {
+        capturedProof = init.headers[PROOF_HEADER];
+        return fetch(url, init);
+      },
+    });
+    assert.equal(typeof capturedProof, 'string');
+    assert.equal(readBinding({ env, cwd: worktree }), null);
+    const replayedDelete = await call('/v0/binding', {
+      method: 'DELETE',
+      token: null,
+      headers: { [PROOF_HEADER]: capturedProof },
+    });
+    assert.equal(replayedDelete.status, 401);
   });
 });
 

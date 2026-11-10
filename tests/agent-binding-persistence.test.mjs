@@ -69,8 +69,22 @@ test('expiry is thirty idle days and successful use persists the idle clock', (t
   assert.equal(readBinding({ cwd: f.root, env: {} }), null);
 });
 
-test('startup prunes missing private git dirs', (t) => {
+test('startup prunes missing private git dirs, and live operations prune deleted worktrees without a restart', (t) => {
   const f = fixture(t);
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'fixture'], { cwd: f.root, env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null' } });
+  const linked = path.join(f.root, 'linked-deleted');
+  execFileSync('git', ['worktree', 'add', '-qb', 'linked-deleted', linked], { cwd: f.root });
+  const linkedGitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: linked, encoding: 'utf8' }).trim();
+  const linkedSecret = f.store.bind({ agentId, gitDir: linkedGitDir, worktree: linked });
+  assert.equal(f.store.size(), 2);
+  // Deleting the worktree (or its git dir) while the daemon is running prunes it on the next registry check.
+  rmSync(linked, { recursive: true, force: true });
+  rmSync(linkedGitDir, { recursive: true, force: true });
+  assert.equal(f.store.resolve(linkedSecret), null);
+  assert.equal(f.store.list(agentId).length, 1);
+  assert.equal(f.store.findAgent(agentId).worktree, f.root);
+  assert.equal(f.store.size(), 1);
+
   rmSync(f.gitDir, { recursive: true });
   const restarted = createBindingRegistry(f.options);
   restarted.rewrite('http://127.0.0.1:9999');
