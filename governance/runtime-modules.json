@@ -1003,6 +1003,7 @@
       "keyd-client.mjs": { "target": "daemon", "domain": "HQ" },
       "keyd-supervisor.mjs": { "target": "daemon", "domain": "HQ" },
       "machine-client.mjs": { "target": "daemon", "domain": "HQ", "note": "Not in Appendix A. HQ's client of the agent-bot-machine admin sandbox (agent-bot-daemon D4)." },
+      "machine-members.mjs": { "target": "daemon", "domain": "HQ", "note": "Not in Appendix A. Reads the member accounts plans agent-bot-machine saves and recomputes their digest for the approve-members proposal (#1401); beside machine-client.mjs, HQ's client of agent-machine." },
       "metrics.mjs": { "target": "daemon", "domain": "HQ" },
       "mint-token.mjs": { "target": "daemon", "domain": "HQ" },
       "muse-acp.mjs": { "target": "soul-runtime/entry-point", "domain": "Soul" },
