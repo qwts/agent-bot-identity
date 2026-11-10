@@ -2184,5 +2184,8 @@ test('approve-members: the saved plan becomes a proposal; only an approval sends
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /operationLines\(proposal\.operation\)/);
     assert.match(app, /members\/plans/);
+    // The approved card leaves the list, so the page shows the result and the command to run.
+    assert.match(app, /approvals-result/);
+    assert.match(app, /outcome\.result\.next/);
   }, { home: root });
 });

@@ -705,7 +705,10 @@ async function loadApprovals() {
       // Every digest-covered field is rendered — the owner approves the
       // exact operation, not just the prose summary.
       el('div', { class: 'mono hint', text: operationLines(proposal.operation) }),
-      el('div', { class: 'mono hint', text: `${proposal.invocationId} · ${proposal.agentId}` }),
+      // Machine proposals belong to no invocation or soul.
+      ...(proposal.invocationId || proposal.agentId
+        ? [el('div', { class: 'mono hint', text: [proposal.invocationId, proposal.agentId].filter(Boolean).join(' · ') })]
+        : []),
       el('div', { class: 'mono digest', text: `sha256 ${proposal.operationDigest}` }),
       el('div', { class: 'hint', text: `expires ${proposal.expiresAt}` }),
     ]);
@@ -734,6 +737,33 @@ async function decide(proposal, decision) {
     body: { decision, digest: proposal.operationDigest },
   });
   await refresh();
+  if (decision === 'approve') await showOutcome(proposal);
+}
+
+// An approved proposal leaves the list as soon as it is decided, so what it
+// did, and any command the owner still has to run, is shown here.
+async function showOutcome(proposal) {
+  const box = $('approvals-result');
+  if (!box) return;
+  box.replaceChildren(el('div', { text: `Approved: ${proposal.summary}` }), el('div', { class: 'hint', text: 'waiting for the result…' }));
+  box.hidden = false;
+  let outcome = null;
+  for (let i = 0; i < 40; i += 1) {
+    try { outcome = await api(`/ui/api/proposals/${encodeURIComponent(proposal.proposalId)}`); } catch { outcome = null; break; }
+    if (outcome.status !== 'open' && outcome.status !== 'approved') break;
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+  }
+  const lines = [el('div', { text: `Approved: ${proposal.summary}` })];
+  if (!outcome) lines.push(el('div', { class: 'hint', text: 'The result could not be read.' }));
+  else if (outcome.status === 'executed') {
+    lines.push(el('div', { class: 'hint', text: 'Done.' }));
+    if (typeof outcome.result?.next === 'string') {
+      lines.push(el('div', { class: 'hint', text: 'Next, in your own terminal:' }), el('div', { class: 'mono', text: outcome.result.next }));
+    }
+  } else {
+    lines.push(el('div', { class: 'error', text: `${outcome.status}${outcome.error ? `: ${outcome.error}` : ''}` }));
+  }
+  box.replaceChildren(...lines);
 }
 
 // --- Boot / refresh loop ----------------------------------------------------------
