@@ -41,15 +41,20 @@ the configured API base.
 
 ## CI and outside pull requests
 
-Self-hosted runners are meant only for pushes to this repository, manual runs
-by maintainers, and pull requests whose branch lives in this repository. A pull
-request from a fork runs on GitHub-hosted runners and receives no secrets, and
-no workflow uses `pull_request_target`. One gap remains: if the fork behind an
-open pull request is deleted, GitHub no longer marks the head as a fork, and a
-rerun takes the runner the repository variables name. The `Action Policy` job
-then refuses any actor not on its allow list before other jobs run or check
-out code. The changelog fragment check runs outside that policy job, so it
-always uses a GitHub-hosted runner (#1066).
+Every CI job runs on a GitHub-hosted runner. This repository is public, so
+the runner variables `LINUX_RUNNER`, `LINUX_ARM_RUNNER` and `CODEQL_RUNNER`
+stay unset, and the workflows fall back to GitHub-hosted runners (#1404).
+
+The workflows still read those variables. Setting one would send pushes,
+manual runs and pull requests whose branch lives in this repository to the
+runner it names, so none is set while the repository is public. Even then, a
+pull request from a fork runs on GitHub-hosted runners and receives no secrets,
+and no workflow uses `pull_request_target`. One gap would remain with a
+variable set: if the fork behind an open pull request is deleted, GitHub no
+longer marks the head as a fork, and a rerun takes the runner the variable
+names. The `Action Policy` job then refuses any actor not on its allow list
+before other jobs run or check out code. The changelog fragment check runs
+outside that policy job, so it always uses a GitHub-hosted runner (#1066).
 
 Approval for outside contributors' workflows is required repository
 configuration, not something the workflow files enforce: the owner turns on
