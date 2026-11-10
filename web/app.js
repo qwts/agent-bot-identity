@@ -258,6 +258,7 @@ async function loadServer() {
 
 async function loadAgentMachine() {
   const data = await api('/ui/api/machine/agent-machine');
+  void loadMembersPlans();
   const pairing = data.pairing ?? {};
   const rows = $('am-pairing');
   rows.textContent = '';
@@ -294,6 +295,65 @@ async function loadAgentMachine() {
       receipts.append(tr);
     }
   }
+}
+
+// --- Member accounts plans: listed here, approved in the Approvals tab (#1401)
+
+async function loadMembersPlans() {
+  const body = $('am-members-plans');
+  const err = $('am-members-error');
+  if (!body) return;
+  let plans;
+  try { ({ plans } = await api('/ui/api/machine/agent-machine/members/plans')); }
+  catch (error) { err.hidden = false; err.textContent = error.message; body.replaceChildren(); return; }
+  err.hidden = plans.length !== 0;
+  err.textContent = plans.length === 0 ? 'no saved plans' : '';
+  const canApprove = state.me?.operations.includes('approve');
+  body.replaceChildren(...plans.map((plan) => {
+    const tr = el('tr');
+    tr.append(el('td', { class: 'mono', text: plan.plan_id }));
+    if (plan.error) {
+      tr.append(el('td', { class: 'hint', text: plan.error }));
+      return tr;
+    }
+    tr.append(el('td', { text: `${plan.hq_account} → ${plan.members.join(', ') || 'no members'} · ${plan.changes} changes` }));
+    const cell = el('td');
+    if (canApprove) {
+      cell.append(button('Review', 'action', async () => {
+        try {
+          const res = await api('/ui/api/machine/agent-machine/proposals', {
+            method: 'POST', body: { verb: 'approve-members', plan_id: plan.plan_id, plan_digest: plan.plan_digest } });
+          $('am-proposal-status').textContent = `proposal ${res.proposal.proposalId} — read it and decide in the Approvals tab; after approving, run: sudo managed-machine members apply ${plan.plan_id}`;
+          state.amProposalId = res.proposal.proposalId;
+          showView('approvals');
+        } catch (error) {
+          $('am-proposal-status').textContent = error.message;
+        }
+      }));
+    }
+    tr.append(cell);
+    return tr;
+  }));
+}
+
+// One line per digest-covered field of a proposal's operation. A member
+// accounts plan lists each step on its own line and each file's exact
+// content beneath it, so nothing the digest covers is folded into JSON.
+function operationLines(operation) {
+  const lines = [];
+  for (const [k, v] of Object.entries(operation ?? {})) {
+    if (k === 'steps' && Array.isArray(v)) {
+      lines.push('steps:');
+      for (const s of v) {
+        const who = s.owner || s.group ? ` ${s.owner ?? ''}:${s.group ?? ''}` : '';
+        lines.push(`  ${s.action} ${s.kind} ${s.target}${who}${s.mode ? ` ${s.mode}` : ''}${s.detail ? ` (${s.detail})` : ''}`);
+        if (s.content) for (const line of s.content.replace(/\n$/, '').split('\n')) lines.push(`    | ${line}`);
+      }
+    } else {
+      lines.push(`${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 // --- Agent machine writes: plan now, apply/update via proposals (#1295) ----
@@ -644,8 +704,7 @@ async function loadApprovals() {
       el('div', { text: proposal.summary }),
       // Every digest-covered field is rendered — the owner approves the
       // exact operation, not just the prose summary.
-      el('div', { class: 'mono hint', text: Object.entries(proposal.operation ?? {})
-        .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n') }),
+      el('div', { class: 'mono hint', text: operationLines(proposal.operation) }),
       el('div', { class: 'mono hint', text: `${proposal.invocationId} · ${proposal.agentId}` }),
       el('div', { class: 'mono digest', text: `sha256 ${proposal.operationDigest}` }),
       el('div', { class: 'hint', text: `expires ${proposal.expiresAt}` }),

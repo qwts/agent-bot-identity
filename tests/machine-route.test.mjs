@@ -84,6 +84,17 @@ onPosix('POST /v0/machine: an unbound caller is refused before any socket call',
   assert.equal(f.received.length, 0);
 });
 
+onPosix('POST /v0/machine: approve-members is the owner\'s alone; no binding can send it (#1401)', async (t) => {
+  const f = await daemon(t);
+  const plan_id = 'plan-20261110T040000Z-abcd';
+  const res = await f.call({ verb: 'approve-members', plan_id });
+  assert.equal(res.status, 403);
+  assert.match(JSON.stringify(res.body), /machine-verb-owner-only/);
+  // The digest is not a field this route accepts at all.
+  assert.equal((await f.call({ verb: 'approve-members', plan_id, plan_digest: '0'.repeat(64) })).status, 400);
+  assert.equal(f.received.length, 0);
+});
+
 onPosix('POST /v0/machine: unknown body keys refuse with 400', async (t) => {
   const f = await daemon(t);
   const res = await f.call({ verb: 'status', bogus: true });

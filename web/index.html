@@ -120,6 +120,12 @@
       <button id="am-update" type="button">Update</button>
     </div>
     <p id="am-proposal-status" class="hint"></p>
+    <h3>Member accounts</h3>
+    <p class="hint">Plans saved by <span class="mono">managed-machine members plan</span>.
+    Approving one records its digest with agent-machine for 10 minutes. It runs
+    nothing: you then run the apply with sudo in your own terminal.</p>
+    <p id="am-members-error" class="hint" hidden></p>
+    <div class="scroll"><table><tbody id="am-members-plans"></tbody></table></div>
     <h3>Status</h3>
     <p id="am-status-error" class="hint" hidden></p>
     <div class="scroll"><table><tbody id="am-status"></tbody></table></div>

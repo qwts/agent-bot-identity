@@ -872,6 +872,11 @@ export function createDaemonServer({
         if (unknown.length || typeof body.verb !== 'string') {
           throw Object.assign(new Error(`POST /v0/machine takes {verb, name?, option?, target?, plan_id?} only`), { statusCode: 400 });
         }
+        // approve-members is the owner's decision in the Approvals tab
+        // (#1401). No agent binding may send it, with or without a digest.
+        if (body.verb === 'approve-members') {
+          throw Object.assign(new Error('approve-members is sent only by an owner approval in the local web UI [machine-verb-owner-only]'), { statusCode: 403, code: 'machine-verb-owner-only' });
+        }
         // Derived fields are the daemon's to set: a caller that states one
         // must state the value this binding already has (#1254 principle).
         const stated = { soul: binding.agentId, harness: binding.harness ?? null, session_id: binding.sessionId ?? null };

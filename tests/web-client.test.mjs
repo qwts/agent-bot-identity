@@ -2097,3 +2097,92 @@ test('serverStatusReport and GET /ui/api/machine/server include last_mint_outcom
     },
   });
 });
+
+// --- Member accounts plans: approve-members through the Approvals tab (#1401)
+
+test('approve-members: the saved plan becomes a proposal; only an approval sends plan_id and plan_digest', { skip: process.platform === 'win32' }, async () => {
+  const { root, env } = scratch();
+  const fixture = readFileSync(new URL('./fixtures/members-plan.json', import.meta.url), 'utf8');
+  const saved = JSON.parse(fixture);
+  const plans = path.join(root, '.local', 'share', 'managed-machine', 'members', 'plans');
+  mkdirSync(plans, { recursive: true });
+  writeFileSync(path.join(plans, `${saved.plan_id}.json`), fixture);
+  const approval = { plan_id: saved.plan_id, plan_digest: saved.plan_digest, approved_at: '2026-11-10T04:00:00Z', expires_at: '2026-11-10T04:10:00Z' };
+  const fm = await fakeAgentMachine(root, { replies: { 'approve-members': { ok: true, state: 'approved', message: saved.plan_id, body: approval } } });
+  pinDaemonPub({ env, home: root });
+  loadOrCreateMachineKey({ env, home: root });
+  const writer = seedPrincipal(env, { label: 'w', souls: ['*'], operations: ['observe', 'approve'] });
+  const viewer = seedPrincipal(env, { label: 'v', souls: ['*'], operations: ['observe'] });
+  const scoped = seedPrincipal(env, { label: 's', souls: [AGENT_ID], operations: ['observe', 'approve'] });
+  await withServer(env, async ({ ui, pairCookie }) => {
+    const w = await pairCookie(writer.principalId);
+    const v = await pairCookie(viewer.principalId);
+    const s = await pairCookie(scoped.principalId);
+    const url = '/ui/api/machine/agent-machine/proposals';
+    const propose = (body, cookie = w) => ui(url, { method: 'POST', body: { verb: 'approve-members', ...body }, cookie });
+
+    // The list: machine view only; each plan verified against its digest.
+    assert.equal((await ui('/ui/api/machine/agent-machine/members/plans', { cookie: s })).status, 403);
+    const listed = await (await ui('/ui/api/machine/agent-machine/members/plans', { cookie: v })).json();
+    assert.deepEqual(listed.plans.map((p) => [p.plan_id, p.plan_digest]), [[saved.plan_id, saved.plan_digest]]);
+
+    // Who may propose, and what a proposal may name.
+    assert.equal((await propose({ plan_id: saved.plan_id }, v)).status, 403);
+    assert.equal((await propose({ plan_id: saved.plan_id }, s)).status, 403);
+    assert.equal((await propose({})).status, 400);
+    assert.equal((await propose({ plan_id: '../../etc/passwd' })).status, 400);
+    assert.equal((await propose({ plan_id: 'plan-20261110T040000Z-0000' })).status, 404);
+    assert.equal((await propose({ plan_id: saved.plan_id, name: 'jq' })).status, 400);
+    assert.equal((await propose({ plan_id: saved.plan_id, plan_digest: 'nope' })).status, 400);
+    assert.equal((await propose({ plan_id: saved.plan_id, plan_digest: '0'.repeat(64) })).status, 409);
+    assert.equal((await ui(url, { method: 'POST', body: { verb: 'apply', plan_id: 'p-1', plan_digest: saved.plan_digest }, cookie: w })).status, 400);
+    assert.equal(fm.received.length, 0, 'nothing reaches agent-machine before a decision');
+
+    // The proposal carries, and its digest covers, everything the plan digest covers.
+    const { proposal } = await (await propose({ plan_id: saved.plan_id, plan_digest: saved.plan_digest })).json();
+    assert.equal(proposal.tool, 'machine.approve-members');
+    assert.equal(proposal.agentId, null);
+    assert.deepEqual(proposal.operation, {
+      verb: 'approve-members', plan_id: saved.plan_id, plan_digest: saved.plan_digest,
+      hq_account: saved.plan.hq_account, dir: saved.plan.dir, members: saved.plan.members, steps: saved.plan.steps,
+    });
+    assert.equal(proposal.operationDigest, operationDigest(proposal.operation));
+    assert.match(proposal.summary, /abm-lead, abm-spec/);
+
+    // Deny: nothing is sent.
+    await ui(`/ui/api/approvals/${proposal.proposalId}/decision`, { method: 'POST', body: { decision: 'deny', digest: proposal.operationDigest }, cookie: w });
+    assert.equal((await (await ui(`${url}/${proposal.proposalId}`, { cookie: w })).json()).status, 'denied');
+    assert.equal(fm.received.length, 0);
+
+    // A plan edited after planning cannot be proposed.
+    writeFileSync(path.join(plans, `${saved.plan_id}.json`), fixture.replace('(ABHQ_MEMBERS)', '(ALL)'));
+    assert.equal((await propose({ plan_id: saved.plan_id })).status, 400);
+    writeFileSync(path.join(plans, `${saved.plan_id}.json`), fixture);
+
+    // Approve with the wrong digest: refused, nothing sent. With the right
+    // one: exactly plan_id and plan_digest go out, with no attribution.
+    const { proposal: p2 } = await (await propose({ plan_id: saved.plan_id })).json();
+    assert.equal((await ui(`/ui/api/approvals/${p2.proposalId}/decision`, {
+      method: 'POST', body: { decision: 'approve', digest: createHash('sha256').update('x').digest('hex') }, cookie: w })).status, 409);
+    assert.equal(fm.received.length, 0);
+    const decided = await ui(`/ui/api/approvals/${p2.proposalId}/decision`, { method: 'POST', body: { decision: 'approve', digest: p2.operationDigest }, cookie: w });
+    assert.equal(decided.status, 200);
+    const outcome = await waitFor(async () => {
+      const o = await (await ui(`${url}/${p2.proposalId}`, { cookie: w })).json();
+      return o.status === 'open' ? null : o;
+    });
+    assert.equal(outcome.status, 'executed', JSON.stringify(outcome));
+    assert.equal(outcome.result.next, `sudo managed-machine members apply ${saved.plan_id}`);
+    assert.equal(fm.received.length, 1);
+    const sent = fm.received[0];
+    assert.deepEqual(Object.keys(sent).sort(), ['nonce', 'plan_digest', 'plan_id', 'public_key', 'signature', 'timestamp', 'verb']);
+    assert.equal(sent.verb, 'approve-members');
+    assert.equal(sent.plan_id, saved.plan_id);
+    assert.equal(sent.plan_digest, saved.plan_digest);
+
+    // The card lists steps and file content line by line.
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    assert.match(app, /operationLines\(proposal\.operation\)/);
+    assert.match(app, /members\/plans/);
+  }, { home: root });
+});
