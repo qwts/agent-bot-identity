@@ -38,6 +38,7 @@ import {
   setOperations,
 } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
+import { membersPlansDir } from '../machine-members.mjs';
 
 const AGENT_ID = 'agent_44444444-4444-4444-8444-444444444444';
 const OTHER_ID = 'agent_55555555-5555-4555-8555-555555555555';
@@ -2104,7 +2105,7 @@ test('approve-members: the saved plan becomes a proposal; only an approval sends
   const { root, env } = scratch();
   const fixture = readFileSync(new URL('./fixtures/members-plan.json', import.meta.url), 'utf8');
   const saved = JSON.parse(fixture);
-  const plans = path.join(root, '.local', 'share', 'managed-machine', 'members', 'plans');
+  const plans = membersPlansDir({ home: root });
   mkdirSync(plans, { recursive: true });
   writeFileSync(path.join(plans, `${saved.plan_id}.json`), fixture);
   const approval = { plan_id: saved.plan_id, plan_digest: saved.plan_digest, approved_at: '2026-11-10T04:00:00Z', expires_at: '2026-11-10T04:10:00Z' };
