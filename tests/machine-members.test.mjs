@@ -106,3 +106,8 @@ test('approve-members signs plan_id and plan_digest as agent-machine verifies th
   ];
   for (const fields of bad) assert.throws(() => buildRequest(fields, signer), /machine-field-invalid/, JSON.stringify(fields));
 });
+
+test('plans are read from managed-machine\'s state directory on each platform', () => {
+  assert.equal(membersPlansDir({ home: '/home/owner', platform: 'linux' }), path.join('/home/owner', '.local', 'share', 'managed-machine', 'members', 'plans'));
+  assert.equal(membersPlansDir({ home: '/Users/owner', platform: 'darwin' }), path.join('/Users/owner', 'Library', 'Application Support', 'managed-machine', 'members', 'plans'));
+});
