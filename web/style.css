@@ -57,17 +57,6 @@ nav button.active { color: var(--text); border-color: var(--accent); }
   font-size: 0.85rem;
 }
 
-#host-warning {
-  background: #5a1f1f;
-  color: #ffe3e0;
-  border-bottom: 2px solid var(--bad);
-  padding: 0.9rem 1rem;
-}
-
-#host-warning strong { display: block; font-size: 1.15rem; }
-
-#host-warning p { margin: 0.3rem 0 0; max-width: 75ch; }
-
 [hidden] { display: none !important; }
 
 #approvals-badge {

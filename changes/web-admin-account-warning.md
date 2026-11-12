@@ -1,1 +1,0 @@
-- The local web UI shows a prominent warning when HQ runs in an administrator account (root, or a member of `admin` on macOS or `sudo`, `wheel` or `admin` on Linux): anything that takes over such an account is one password prompt from root. `/ui/api/me` reports the check as `host`; no warning is shown when the host cannot be asked (#1408).

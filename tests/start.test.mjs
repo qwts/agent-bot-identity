@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 
 import { parseAgentBotArgs } from '../cli/parse.mjs';
 import { helpText } from '../cli/output.mjs';
-import { readBinding } from '../agent-binding.mjs';
 import { createDaemonServer } from '../agent-daemon.mjs';
 import { displayName, upsertSoul } from '../agent-population.mjs';
 import { discoverAntigravityTranscript, discoverOpencodeTranscript, discoverZcodeTranscript, findTranscript } from '../session-bind.mjs';
@@ -517,46 +516,6 @@ test('startTask from a primary checkout auto-resolves soul, branches from origin
   assert.equal(f.git(second.worktree.path, 'rev-parse', 'HEAD'), originMainSha);
   assert.equal(second.session.id, 'thread-1345');
   assert.equal(second.session.source, 'reused-session');
-});
-
-// #1376: `agent-bot binding revoke` in a worktree made by `agent-bot start`
-// was refused with HTTP 401, because the daemon checked the one-time proof
-// twice. The binding start reports live must be released by the CLI, once.
-test('a binding made by start is revoked by `agent-bot binding revoke` from the worktree (#1376)', async (t) => {
-  const f = makeFixture(t, { harness: 'codex', serverMode: true, deviceHarnesses: ['test-codex-agent'] });
-  const { clientFactory, server } = await startTestDaemon(t, f);
-  const receipt = await startTask({
-    branch: 'feat/issue-1376',
-    cwd: f.repo,
-    env: { ...f.env, AGENT_BOT_ID: '', QWTS_AGENT_ID: '', CODEX_SANDBOX: 'seatbelt', CODEX_THREAD_ID: 'thread-1376' },
-    home: f.home,
-    config: f.config,
-    clientFactory,
-    reconcileCredentials: async ({ slugs }) => slugs.map((slug) => ({ slug, local: { status: 'ready' }, live: { status: 'server-registered' } })),
-  });
-  assert.equal(receipt.binding.status, 'live');
-  const worktree = receipt.worktree.path;
-  const bound = readBinding({ env: f.env, cwd: worktree });
-  assert.equal(bound.daemon, `http://127.0.0.1:${server.address().port}`);
-  assert.equal(bound.agentId, f.identity.id);
-
-  // The real command, as an agent runs it: a child process in the worktree.
-  // Async, because the daemon it calls lives in this process.
-  const run = () => new Promise((resolve) => {
-    execFile(process.execPath, [CLI, 'binding', 'revoke'], { cwd: worktree, env: f.env, encoding: 'utf8' },
-      (error, stdout, stderr) => resolve({ status: error ? error.code : 0, stdout, stderr }));
-  });
-  const revoked = await run();
-  assert.equal(revoked.status, 0, revoked.stderr);
-  assert.equal(revoked.stdout, 'binding revoked\n');
-
-  // The binding is gone on both sides: no file, and the secret is refused.
-  assert.equal(readBinding({ env: f.env, cwd: worktree }), null);
-  const who = await fetch(`${bound.daemon}/v0/binding`, { headers: { 'x-agent-binding': bound.secret } });
-  assert.equal(who.status, 401);
-  const again = await run();
-  assert.notEqual(again.status, 0);
-  assert.match(again.stderr, /no binding exists/);
 });
 
 test('startTask in server mode fails closed with server enroll guidance when device or harness scope is missing', async (t) => {

@@ -38,7 +38,6 @@ import {
   setOperations,
 } from '../agent-principals.mjs';
 import { upsertSoul } from '../agent-population.mjs';
-import { membersPlansDir } from '../machine-members.mjs';
 
 const AGENT_ID = 'agent_44444444-4444-4444-8444-444444444444';
 const OTHER_ID = 'agent_55555555-5555-4555-8555-555555555555';
@@ -310,9 +309,6 @@ test('cookie sessions authenticate the API, expire, and never expose the bearer 
     const body = await me.json();
     assert.equal(body.principal.principalId, principal.principalId);
     assert.deepEqual(body.principal.souls, [AGENT_ID]);
-    // The administrator-account check rides along for the banner (#1408).
-    assert.equal(typeof body.host.checked, 'boolean');
-    assert.equal(typeof body.host.admin, 'boolean');
     assert.ok(!JSON.stringify(body).includes(server.token));
 
     // ~12h expiry, enforced daemon-side.
@@ -2108,7 +2104,7 @@ test('approve-members: the saved plan becomes a proposal; only an approval sends
   const { root, env } = scratch();
   const fixture = readFileSync(new URL('./fixtures/members-plan.json', import.meta.url), 'utf8');
   const saved = JSON.parse(fixture);
-  const plans = membersPlansDir({ home: root });
+  const plans = path.join(root, '.local', 'share', 'managed-machine', 'members', 'plans');
   mkdirSync(plans, { recursive: true });
   writeFileSync(path.join(plans, `${saved.plan_id}.json`), fixture);
   const approval = { plan_id: saved.plan_id, plan_digest: saved.plan_digest, approved_at: '2026-11-10T04:00:00Z', expires_at: '2026-11-10T04:10:00Z' };

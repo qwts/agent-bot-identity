@@ -55,7 +55,6 @@ const LAUNCH_PATHS = {
   'server-status.mjs': [5, 'git, doctor (sync + async)'],
   'identity/identity-apps.mjs': [1, 'browser open'],
   // OS tools.
-  'host-account.mjs': [1, '/usr/bin/id with an empty env, for the administrator-account check'],
   'daemon-supervisor.mjs': [1, 'OS tool: launchctl/systemctl/schtasks'],
   'keyd-supervisor.mjs': [1, 'OS tool: launchctl'],
   'identity/owner-approval.mjs': [1, 'OS tool: osascript'],

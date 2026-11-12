@@ -3,7 +3,6 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commsSharedDirInfo } from '../comms-client.mjs';
-import { bundledCommsEntry } from '../state-paths.mjs';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
 import { windowsGitShell, gitShellEnvironment } from '../windows-git-shell.mjs';
 import { createCommandRegistry } from './command-registry.mjs';
@@ -98,7 +97,11 @@ Linux: \${XDG_STATE_HOME:-~/.local/state}/agent-comms).
 `;
 
 function resolveBundledCommsEntry(env = process.env) {
-  return bundledCommsEntry({ env, root: ROOT });
+  const candidates = [
+    ...(env.AGENT_BOT_BUNDLE_ROOT ? [join(env.AGENT_BOT_BUNDLE_ROOT, 'lib', 'agent-comms', 'bin', 'agent-comms.mjs')] : []),
+    join(ROOT, '..', 'agent-comms', 'bin', 'agent-comms.mjs'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 function run(executable, args, env = process.env) {

@@ -48,7 +48,6 @@ import {
   writeAgentDaemonPeer,
 } from './machine-client.mjs';
 import { listMembersPlans, MEMBERS_PLAN_DIGEST, readMembersPlan } from './machine-members.mjs';
-import { hostAccount } from './host-account.mjs';
 import { daemonStateFile } from './daemon-client.mjs';
 import { wrongAccountWarning } from './daemon-state.mjs';
 import { daemonStatus } from './daemon-status.mjs';
@@ -251,8 +250,6 @@ export function createWebLayer({
   // Injectable for tests: the shared server/doctor probes (#1295).
   serverStatus = serverStatusReport,
   doctor = doctorReportAsync,
-  // Injectable for tests: whether this account is an administrator (#1408).
-  hostAccountImpl = hostAccount,
 } = {}) {
   void config; // reserved; the web layer holds no policy of its own
   const root = path.resolve(webRoot);
@@ -260,7 +257,6 @@ export function createWebLayer({
   // they die with the daemon, are never written to disk, and are therefore
   // never available to another local account or a later process.
   let doctorInFlight = null;
-  let hostAccountResult = null;
   const machineInFlight = new Map();
 let enrollInFlight = false;
 const enrollChildren = new Set();
@@ -470,10 +466,7 @@ const enrollChildren = new Set();
     const pathname = url.pathname;
     let match;
     if (req.method === 'GET' && pathname === '/ui/api/me') {
-      // Asked once: an account's groups do not change under a running
-      // process in a way the daemon would act on before a restart.
-      hostAccountResult ??= hostAccountImpl();
-      sendJson(res, 200, { principal: publicPrincipal(principal), host: hostAccountResult });
+      sendJson(res, 200, { principal: publicPrincipal(principal) });
       return;
     }
     if (req.method === 'POST' && pathname === '/ui/api/logout') {

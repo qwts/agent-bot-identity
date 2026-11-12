@@ -28,15 +28,11 @@ function refuse(message) {
   return Object.assign(new Error(`${message} [members-plan-invalid]`), { code: 'members-plan-invalid' });
 }
 
-// Where managed-machine saves a plan when no state directory is configured:
-// its state directory, which is in Application Support on macOS.
-// `members apply` reads the same fixed place under sudo, so a plan saved
-// anywhere else could be approved here but never applied.
-export function membersPlansDir({ home = homedir(), platform = process.platform } = {}) {
-  const state = platform === 'darwin'
-    ? path.join(home, 'Library', 'Application Support', 'managed-machine')
-    : path.join(home, '.local', 'share', 'managed-machine');
-  return path.join(state, 'members', 'plans');
+// Where managed-machine saves a plan on Linux when no state directory is
+// configured. `members apply` reads the same fixed place under sudo, so a
+// plan saved anywhere else could be approved here but never applied.
+export function membersPlansDir({ home = homedir() } = {}) {
+  return path.join(home, '.local', 'share', 'managed-machine', 'members', 'plans');
 }
 
 function plain(value, what) {

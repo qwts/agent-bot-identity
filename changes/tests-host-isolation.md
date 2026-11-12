@@ -1,1 +1,0 @@
-- Three CLI tests no longer read the developer's machine: the broker test supplies its own bundled agent-comms instead of meeting a sibling checkout, and the pair-comms tests point the child at a scratch config (#1410).

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -249,40 +249,19 @@ test('agent-bot broker --help prints usage without spawning and broker forwards 
     '#!/bin/sh\nprintf "%s|%s\\n" "$*" "${AGENT_COMMS_SHARED_DIR:-}"\n',
     { mode: 0o755 },
   );
-  // The CLI prefers a bundled agent-comms, and takes a sibling checkout for
-  // one. Give it a bundle of our own so the same fake answers on every
-  // layout; the PATH lookup is checked below where no sibling exists.
-  const bundle = join(root, 'bundle');
-  const bundledEntry = join(bundle, 'lib', 'agent-comms', 'bin', 'agent-comms.mjs');
-  mkdirSync(dirname(bundledEntry), { recursive: true });
-  writeFileSync(
-    bundledEntry,
-    "process.stdout.write(`${process.argv.slice(2).join(' ')}|${process.env.AGENT_COMMS_SHARED_DIR ?? ''}\\n`);\n",
-  );
   const expectedDefault = process.platform === 'darwin'
     ? '/Users/Shared/Public/agent-comms'
     : join(root, 'xdg-state', 'agent-comms');
   const statusRun = spawnSync(process.execPath, [CLI, 'broker', 'status'], {
     encoding: 'utf8',
-    env: { HOME: root, XDG_STATE_HOME: join(root, 'xdg-state'), AGENT_BOT_BUNDLE_ROOT: bundle, PATH: '/usr/bin:/bin' },
+    env: { HOME: root, XDG_STATE_HOME: join(root, 'xdg-state'), PATH: `${fakeBin}:/usr/bin:/bin` },
   });
   assert.equal(statusRun.status, 0, statusRun.stderr);
   assert.equal(statusRun.stdout.trim(), `broker status|${expectedDefault}`);
 
-  // Without a bundle the CLI runs agent-comms from PATH. A sibling
-  // agent-comms checkout counts as a bundle, so this holds only without one.
-  if (!existsSync(join(dirname(CLI), '..', 'agent-comms', 'bin', 'agent-comms.mjs'))) {
-    const pathRun = spawnSync(process.execPath, [CLI, 'broker', 'status'], {
-      encoding: 'utf8',
-      env: { HOME: root, XDG_STATE_HOME: join(root, 'xdg-state'), PATH: `${fakeBin}:/usr/bin:/bin` },
-    });
-    assert.equal(pathRun.status, 0, pathRun.stderr);
-    assert.equal(pathRun.stdout.trim(), `broker status|${expectedDefault}`);
-  }
-
   const runSub = spawnSync(process.execPath, [CLI, 'broker', 'run', '--single-account'], {
     encoding: 'utf8',
-    env: { HOME: root, AGENT_COMMS_SHARED_DIR: '/custom/shared', AGENT_BOT_BUNDLE_ROOT: bundle, PATH: '/usr/bin:/bin' },
+    env: { HOME: root, AGENT_COMMS_SHARED_DIR: '/custom/shared', PATH: `${fakeBin}:/usr/bin:/bin` },
   });
   assert.equal(runSub.status, 0, runSub.stderr);
   assert.equal(runSub.stdout.trim(), 'broker run --single-account|/custom/shared');
