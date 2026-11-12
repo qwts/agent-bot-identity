@@ -213,6 +213,16 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
 
 A Claude Code cloud container starts empty and is reclaimed when the session goes idle, so its enrollment does not outlive it. Treat each container as a short-lived device: enroll it at the start of the session and run `agent-bot server logout` at the end. For a container that is reclaimed before it can log out, the device's own lifetime is the backstop, so keep it short.
 
+**A reusable environment.** Everything a container needs is in `scripts/cloud/setup.sh`, so an environment's setup script is one line, and no step is done by hand. Attach `true-line/agent-bot-identity` to the environment, then:
+
+```sh
+# The environment's setup script. Runs in the directory that holds the checkouts.
+sh agent-bot-identity/scripts/cloud/setup.sh \
+  --profile https://raw.githubusercontent.com/<org>/<org-repo>/main/governance/organization-profile.json
+```
+
+The script installs the latest release (or `--version vX.Y.Z`, or `--from-checkout agent-bot-identity` for a change that is not released yet), applies the organization profile, and registers the session hooks. It needs no root, reads no secret, and can run again. Set one non-secret environment variable, `AGENT_BOT_SERVER=https://agents.true-line.ai`. Each session then runs `agent-bot cloud up` when it starts: the first message carries the approval link, and the session works as the bot once you approve.
+
 **One command each way.** `agent-bot cloud up` gets the container ready and `agent-bot cloud down` takes it down:
 
 ```sh
