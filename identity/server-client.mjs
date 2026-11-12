@@ -751,6 +751,23 @@ export class ServerSession {
 
   whoami() { return this.call('GET', '/api/daemon/whoami'); }
 
+  // Unenroll at the identity service: POST /api/daemon/revoke deletes this
+  // device's record and stops every token it holds. A device the service
+  // already revoked, expired or no longer knows is gone too, so those settle
+  // as `already` instead of failing; anything else (unreachable, unsigned)
+  // throws and the caller reports that the server still holds the device.
+  async revokeSelf() {
+    try {
+      const answer = await this.call('POST', '/api/daemon/revoke');
+      this.revoked('revoked by this device');
+      return { revoked: true, already: false, device: answer?.device ?? null };
+    } catch (error) {
+      if (error?.code === 'device-revoked') return { revoked: true, already: true, device: null };
+      if (error?.code === 'invalid_grant') return { revoked: true, already: true, device: null, expired: true };
+      throw error;
+    }
+  }
+
   // Which Apps the enrolled device may use, each with the owner account/org it
   // is private to. Cached per session — the roster changes on enrollment only.
   harnessApps() {
@@ -1023,7 +1040,7 @@ export async function mintViaServer({ base, harness, repo, env = process.env, ho
 
 export const SERVER_USAGE = `usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--features LIST] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
        agent-bot server status [--json]
-       agent-bot server logout
+       agent-bot server logout [--local-only] [--json]
        agent-bot server reconcile [--json]
 
 Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
@@ -1032,18 +1049,21 @@ when set (cloud VMs). Pass --features github-identity (or set
 AGENT_BOT_ENABLE_FEATURES=github-identity) to enable the github-identity add-on
 and install the managed gh shim headlessly (#1350). Re-enrolling with --force, --add-harness, or
 --all-configured preserves existing device harnesses unless --replace-harnesses
-is passed. logout deletes
-this machine's device key and pins; revoke the device on <server>/devices as well.
+is passed. logout revokes this device at the server (POST /api/daemon/revoke)
+and then deletes its device key and pins; --local-only skips the revoke. When
+the server cannot be reached the local files are still removed and logout exits
+1: revoke the device on <server>/devices then.
 `;
 
 export function parseServerArgs(argv) {
   const [sub, ...rest] = argv;
-  const out = { sub, harnesses: [], addHarnesses: [], allConfigured: false, replaceHarnesses: false, tags: [], features: [], json: false, force: false };
+  const out = { sub, harnesses: [], addHarnesses: [], allConfigured: false, replaceHarnesses: false, tags: [], features: [], json: false, force: false, localOnly: false };
   for (let i = 0; i < rest.length; i += 1) {
     const a = rest[i];
     const val = () => { const v = rest[++i]; if (!v || v.startsWith('--')) throw new Error(`${a} requires a value`); return v; };
     if (a === '--json') out.json = true;
     else if (a === '--force') out.force = true;
+    else if (a === '--local-only') out.localOnly = true;
     else if (a === '--replace-harnesses') out.replaceHarnesses = true;
     else if (a === '--all-configured') { out.allConfigured = true; out.force = true; }
     else if (a === '--harness') out.harnesses.push(serverHarness(val()));
@@ -1075,8 +1095,34 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
       return results.some((r) => r.state === 'unknown') ? 1 : 0;
     }
     if (a.sub === 'logout') {
+      // Revoke against the server this device enrolled with, so logout works
+      // even after AGENT_BOT_SERVER is unset.
+      const dev = loadDevice({ env }, { includeOutcomes: false });
+      let remote = dev ? 'skipped' : 'not-enrolled';
+      let detail = null;
+      if (dev && !a.localOnly) {
+        if (dev.revoked_at) remote = 'already-revoked';
+        else {
+          try {
+            const result = await new ServerSession({ base: dev.server, env, fetchImpl }).revokeSelf();
+            remote = result.already ? 'already-revoked' : 'revoked';
+          } catch (error) {
+            remote = 'failed';
+            detail = error?.message ?? String(error);
+          }
+        }
+      }
       logout({ env });
-      out.write('removed local server enrollment; also revoke this device on the server\'s /devices page\n');
+      const device = dev?.device_id ?? null;
+      if (a.json) out.write(`${JSON.stringify({ device, server: dev?.server ?? null, remote, ...(detail ? { error: detail } : {}) })}\n`);
+      else if (remote === 'revoked') out.write(`revoked ${device} at ${dev.server} and removed the local enrollment\n`);
+      else if (remote === 'already-revoked') out.write(`${device} was already revoked or expired at ${dev.server}; removed the local enrollment\n`);
+      else if (remote === 'skipped') out.write(`removed the local enrollment of ${device}; it is still enrolled at ${dev.server} (revoke it on /devices)\n`);
+      else if (remote === 'not-enrolled') out.write('this machine is not enrolled; nothing to remove\n');
+      if (remote === 'failed') {
+        err.write(`agent-bot server: removed the local enrollment, but could not revoke ${device} at ${dev.server}: ${detail}; revoke it on ${dev.server}/devices\n`);
+        return 1;
+      }
       return 0;
     }
     const base = serverUrl({ env });

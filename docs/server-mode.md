@@ -25,7 +25,7 @@ The environment wins over config. The URL must be `https` (plain `http` is accep
 ```sh
 agent-bot server enroll --harness grok [--harness claude] [--add-harness <name>] [--replace-harnesses] [--name "Chris MBP"] [--platform macos] [--tag laptop] [--force] [--json]
 agent-bot server status [--json]
-agent-bot server logout
+agent-bot server logout [--local-only] [--json]
 agent-bot server reconcile [--json]
 ```
 
@@ -34,7 +34,8 @@ agent-bot server reconcile [--json]
 - **`--force`** replaces the device key and `device.json` for an already-enrolled machine. On the same server origin, existing enrolled harnesses are preserved and unioned with any new `--harness` / `--add-harness` entries unless `--replace-harnesses` is passed; `--add-harness <name>` implies `--force`. The new enrollment is staged until the grant is approved — an expired or denied code leaves the existing enrollment, the `actions/` ledger and `event-cursors.json` untouched. When the device id changes, the old id's cursors are moved to `event-cursors.<old-id>.json`, never deleted.
 - `--harness` defaults to `AGENT_BOT_SERVER_HARNESS`, or to `grok` when `GROK_AGENT=1`.
 - **status** shows the local enrollment, then makes a signed `whoami` round trip. It exits 1 when the round trip fails.
-- **logout** deletes the local device key, the device record and the pinned key. Also revoke the device on the server's `/devices` page.
+- **logout** unenrolls the device. It calls `POST /api/daemon/revoke` on the server the device enrolled with (even when `AGENT_BOT_SERVER` is unset now), which deletes the device record there and stops every token it holds, then deletes the local device key, device record and pinned key. A device the server already revoked or expired counts as done. If the server cannot be reached, the local files are still removed and logout exits 1: revoke the device on `/devices` then. `--local-only` skips the server and only removes the local files.
+- **`--harness` takes the App slug** the server knows the App by (for example `trueline-claude-agent`), not the harness name.
 - **reconcile** settles credential requests whose outcome went missing, by lookup only (see [Unknown outcomes](#unknown-outcomes)). It exits 1 while any is still unknown.
 - **Approve only the identities the machine needs.** The device can mint only for the harnesses the owner approves at enrollment, and the server enforces that.
 
@@ -206,7 +207,30 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
 2. Run `agent-bot server enroll --harness <app-slug> [--harness <app-slug>]`. In the browser, approve only those identities.
 3. Run `agent-bot server status`, which should show `auth: ok`. Then check `/v0/health`, whose `profile` should read `managed cooperative`.
 4. Run `agent-bot mint-token` in a checkout of a repository the App is installed on. The receipt in `audit.jsonl` carries `issuanceId`, `taskId`, `operationId` and `profile`.
-5. To retire the machine, revoke it on `/devices`. Its next call reports `device-revoked`.
+5. To retire the machine, run `agent-bot server logout`, or revoke it on `/devices`. Its next call reports `device-revoked`.
+
+## Cloud sessions (Claude Code on the web)
+
+A Claude Code cloud container starts empty and is reclaimed when the session goes idle, so its enrollment does not outlive it. Treat each container as a short-lived device: enroll it at the start of the session and run `agent-bot server logout` at the end. For a container that is reclaimed before it can log out, the device's own lifetime is the backstop, so keep it short.
+
+**Enrolling.** `agent-bot server enroll --harness <app-slug>` prints an approval link (`https://agents.true-line.ai/device?user_code=…`) and the device key thumbprint, and you approve it in the browser. For no browser step, create an enrollment token under **Enrollment tokens** on `/devices` (1 use, 1 hour, the App slug as harness, a short device lifetime such as 24 hours) and set it as `AGENT_BOT_ENROLL_TOKEN`. A token lives at most 24 hours, so it does not carry over to the next day's containers.
+
+**GitHub writes go through the server.** The container's egress proxy attaches the session's own GitHub credential to every github.com and api.github.com request and ignores the client's `Authorization` header. A local `git push`, `gh` or REST call from the container therefore never acts as the bot, whatever token it carries. The agent-bot server mints the App token on its side and makes the GitHub call itself, so writes made through it are the bot's. Add the server as an MCP connector (`https://agents.true-line.ai/mcp`) and use its tools, with local git as the fallback only where the proxy is not in the way:
+
+| Tool | What it does |
+|---|---|
+| `github_pull_request` | Open a pull request (draft by default) or edit one: title, body, base, state, draft/ready, reviewers. |
+| `sign_commit` | Commit file changes to a branch as the App; GitHub shows it Verified. An existing branch needs `parent` and is only fast-forwarded; a new one needs `base`. At most 100 files and 700 KiB per call. |
+| `github_read` | Read-only REST reads on any repo the App is installed on: contents, trees, commits, compare, PRs and their files/reviews, issues, check runs, workflow runs and job logs. `params` values are strings. |
+| `list_pr_findings` / `resolve_pr_findings` | List a PR's review threads, then answer and resolve them as `fixed` (with a commit already on the PR head) or `wont_fix` (with a reason). |
+| `review_pull_request` | Submit a review: approve, request changes or comment, with inline comments. |
+| `github_comment` | Comment on an issue, PR or discussion, or reply to a review comment. |
+| `github_issue` | Create an issue or edit title, state, body and labels. |
+| `github_workflow` | Re-run the failed jobs of an Actions run, or cancel it. |
+| `delete_branch` | Delete a merged branch; refuses the default branch and the head of an open PR. |
+| `get_commit_identity` / `list_commit_identities` | Show which bot and soul authored a commit. |
+
+Each write tool takes `harness` (the App slug) and `repo`, runs with a token narrowed to that repository and operation, and is audit-logged. The agent never holds the token. `agent-bot signed-commit` publishes a local branch through the REST API and also works in a cloud container, but through the proxy, so the commit's creator is the session's credential.
 
 ## ## Live-session events
 

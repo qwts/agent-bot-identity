@@ -606,7 +606,7 @@ exit: 0
 stdout:
 usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--features LIST] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
        agent-bot server status [--json]
-       agent-bot server logout
+       agent-bot server logout [--local-only] [--json]
        agent-bot server reconcile [--json]
 
 Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
@@ -615,8 +615,10 @@ when set (cloud VMs). Pass --features github-identity (or set
 AGENT_BOT_ENABLE_FEATURES=github-identity) to enable the github-identity add-on
 and install the managed gh shim headlessly (#1350). Re-enrolling with --force, --add-harness, or
 --all-configured preserves existing device harnesses unless --replace-harnesses
-is passed. logout deletes
-this machine's device key and pins; revoke the device on <server>/devices as well.
+is passed. logout revokes this device at the server (POST /api/daemon/revoke)
+and then deletes its device key and pins; --local-only skips the revoke. When
+the server cannot be reached the local files are still removed and logout exits
+1: revoke the device on <server>/devices then.
 stderr:
 
 $ agent-bot server -h
@@ -629,7 +631,7 @@ stderr:
 agent-bot server: unknown server command: --no-such-flag-golden
 usage: agent-bot server enroll [--harness NAME]... [--add-harness NAME]... [--all-configured] [--replace-harnesses] [--features LIST] [--name DEVICE] [--platform P] [--tag T]... [--force] [--json]
        agent-bot server status [--json]
-       agent-bot server logout
+       agent-bot server logout [--local-only] [--json]
        agent-bot server reconcile [--json]
 
 Server mode is on when AGENT_BOT_SERVER (or settings.agentBotServer) is set.
@@ -638,8 +640,10 @@ when set (cloud VMs). Pass --features github-identity (or set
 AGENT_BOT_ENABLE_FEATURES=github-identity) to enable the github-identity add-on
 and install the managed gh shim headlessly (#1350). Re-enrolling with --force, --add-harness, or
 --all-configured preserves existing device harnesses unless --replace-harnesses
-is passed. logout deletes
-this machine's device key and pins; revoke the device on <server>/devices as well.
+is passed. logout revokes this device at the server (POST /api/daemon/revoke)
+and then deletes its device key and pins; --local-only skips the revoke. When
+the server cannot be reached the local files are still removed and logout exits
+1: revoke the device on <server>/devices then.
 
 
 $ agent-bot session --help

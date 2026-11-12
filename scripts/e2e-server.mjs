@@ -255,7 +255,9 @@ export async function run({
       },
       async revoke() {
         if (!includeRevoke) return outcome(null, 'needs --include-revoke');
-        await device.session.call('DELETE', '/api/daemon/device');
+        // The raw call, not revokeSelf(): that marks the device revoked
+        // locally, and the whoami below must be refused by the server.
+        await device.session.call('POST', '/api/daemon/revoke');
         device.revoked = true;
         try {
           await device.session.call('GET', '/api/daemon/whoami');
@@ -283,14 +285,14 @@ export async function run({
     }
   } finally {
     // The throwaway device is revoked best-effort once it enrolled — the
-    // same DELETE the `revoke` scenario proves. --keep-device opts out; an
+    // same POST /api/daemon/revoke the `revoke` scenario proves. --keep-device opts out; an
     // explicit `revoke` that already ran sets device.revoked.
     if (device.enrolled && !device.revoked) {
       if (keepDevice) {
         results.push(record('cleanup', outcome(null, 'keep-device')));
       } else {
         try {
-          await device.session.call('DELETE', '/api/daemon/device');
+          await device.session.revokeSelf();
           results.push(record('cleanup', outcome(true, 'revoked')));
         } catch (error) {
           results.push(record('cleanup', outcome(error?.code === 'device-revoked',
