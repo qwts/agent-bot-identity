@@ -115,6 +115,51 @@ same as --help
 $ agent-bot broker --no-such-flag-golden
 not run: forwarded to agent-comms, whose surface agent-comms pins
 
+$ agent-bot cloud --help
+exit: 0
+stdout:
+usage: agent-bot cloud up [--harness APP_SLUG] [--hook] [--json]
+       agent-bot cloud down [--hook] [--json]
+       agent-bot cloud install-hooks [--settings PATH] [--json]
+
+Bring a short-lived machine to a working state and take it down again.
+up starts the identity daemon if it is not running and enrolls the device
+with the agent-bot server (AGENT_BOT_SERVER) if it is not enrolled. With
+AGENT_BOT_ENROLL_TOKEN set it enrolls without a browser; otherwise it starts
+the device grant in the background and prints the approval link. Run it again
+at any time: it repairs only what is down. --harness defaults to
+AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
+down stops the daemon and unenrolls the device (server logout).
+install-hooks adds `cloud up --hook` and `cloud down --hook` to the Claude
+Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook
+prints Claude Code hook JSON and always exits 0, so a hook never blocks.
+stderr:
+
+$ agent-bot cloud -h
+same as --help
+
+$ agent-bot cloud --no-such-flag-golden
+exit: 1
+stdout:
+stderr:
+agent-bot cloud: unknown cloud command: --no-such-flag-golden
+usage: agent-bot cloud up [--harness APP_SLUG] [--hook] [--json]
+       agent-bot cloud down [--hook] [--json]
+       agent-bot cloud install-hooks [--settings PATH] [--json]
+
+Bring a short-lived machine to a working state and take it down again.
+up starts the identity daemon if it is not running and enrolls the device
+with the agent-bot server (AGENT_BOT_SERVER) if it is not enrolled. With
+AGENT_BOT_ENROLL_TOKEN set it enrolls without a browser; otherwise it starts
+the device grant in the background and prints the approval link. Run it again
+at any time: it repairs only what is down. --harness defaults to
+AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
+down stops the daemon and unenrolls the device (server logout).
+install-hooks adds `cloud up --hook` and `cloud down --hook` to the Claude
+Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook
+prints Claude Code hook JSON and always exits 0, so a hook never blocks.
+
+
 $ agent-bot daemon --help
 exit: 1
 stdout:

@@ -213,7 +213,20 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
 
 A Claude Code cloud container starts empty and is reclaimed when the session goes idle, so its enrollment does not outlive it. Treat each container as a short-lived device: enroll it at the start of the session and run `agent-bot server logout` at the end. For a container that is reclaimed before it can log out, the device's own lifetime is the backstop, so keep it short.
 
-**Enrolling.** `agent-bot server enroll --harness <app-slug>` prints an approval link (`https://agents.true-line.ai/device?user_code=…`) and the device key thumbprint, and you approve it in the browser. For no browser step, create an enrollment token under **Enrollment tokens** on `/devices` (1 use, 1 hour, the App slug as harness, a short device lifetime such as 24 hours) and set it as `AGENT_BOT_ENROLL_TOKEN`. A token lives at most 24 hours, so it does not carry over to the next day's containers.
+**One command each way.** `agent-bot cloud up` gets the container ready and `agent-bot cloud down` takes it down:
+
+```sh
+agent-bot cloud install-hooks          # once, from the environment's setup script
+agent-bot cloud up [--harness <app-slug>] [--hook] [--json]
+agent-bot cloud down [--hook] [--json]
+```
+
+- **up** is safe to run any number of times and repairs only what is down. It starts the identity daemon when it is not running, and enrolls the device for the App the detected harness maps to (or `--harness`, or `AGENT_BOT_SERVER_HARNESS`) when it is not enrolled. With `AGENT_BOT_ENROLL_TOKEN` set it enrolls at once; otherwise it starts the device grant in the background, prints the approval link straight away, and restarts the daemon once you approve. A container's processes do not survive the container being paused while its disk does, so run `up` again whenever the session resumes.
+- **down** stops the daemon and runs `server logout`, which revokes the device at the server.
+- **install-hooks** adds `cloud up --hook` as a Claude Code `SessionStart` hook and `cloud down --hook` as a `SessionEnd` hook in `~/.claude/settings.json`, keeping every other setting. With `--hook`, `up` prints hook JSON whose context carries the approval link, so the session's first message can show it, and neither command ever fails the session. `SessionEnd` does not run when an idle container is reclaimed, so keep the device lifetime short as the backstop.
+- `AGENT_BOT_SERVER` must be set in the environment (a non-secret environment variable).
+
+**Enrolling by hand.** `agent-bot server enroll --harness <app-slug>` prints an approval link (`https://agents.true-line.ai/device?user_code=…`) and the device key thumbprint, and you approve it in the browser. For no browser step, create an enrollment token under **Enrollment tokens** on `/devices` (1 use, 1 hour, the App slug as harness, a short device lifetime such as 24 hours) and set it as `AGENT_BOT_ENROLL_TOKEN`. A token lives at most 24 hours, so it does not carry over to the next day's containers.
 
 **GitHub writes go through the server.** The container's egress proxy attaches the session's own GitHub credential to every github.com and api.github.com request and ignores the client's `Authorization` header. A local `git push`, `gh` or REST call from the container therefore never acts as the bot, whatever token it carries. The agent-bot server mints the App token on its side and makes the GitHub call itself, so writes made through it are the bot's. Add the server as an MCP connector (`https://agents.true-line.ai/mcp`) and use its tools, with local git as the fallback only where the proxy is not in the way:
 

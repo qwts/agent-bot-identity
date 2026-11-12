@@ -201,7 +201,7 @@ export function joinComms({ agentId, worktree, name, harness }, { env = process.
 export async function joinSoul({
   name, harness, template, soul = null, cwd = process.cwd(), ownWorkspace = false, wake = null, principal = null,
   env = process.env, home = homedir(), config, daemon = null, comms = joinComms, spawn = spawnSoulTemplate, gate = ownerGate,
-  installHarness = installSoulHarnesses, leave = null, fetchImpl = fetch,
+  installHarness = installSoulHarnesses, leave = null, fetchImpl = fetch, commsOptional = false,
 } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw new Error('--name must be a nonempty string');
   if (typeof harness !== 'string' || !HARNESS_KEY_PATTERN.test(harness)) throw new Error('--harness must be a harness key');
@@ -376,23 +376,31 @@ export async function joinSoul({
 
   // 5. agent-comms.
   let address;
+  let commsError = null;
   try {
     address = await comms({ agentId, worktree, name, harness }, { env });
     joined = true;
   } catch (error) {
-    if (wake !== null) {
-      // A webhook's key is gone once another lane is set, so it is not restored.
-      const restore = wakeSetting(previous);
-      setColdWake(agentId, restore === null || restore.lane === 'webhook' ? false : restore.lane === 'acp' ? true : restore, { env, home });
+    // A caller that only needs the soul (agent-bot start) goes on without
+    // messaging when agent-comms is absent or unpaired. A wake needs
+    // agent-comms to deliver anything, so it still refuses.
+    if (!(commsOptional && wake === null)) {
+      if (wake !== null) {
+        // A webhook's key is gone once another lane is set, so it is not restored.
+        const restore = wakeSetting(previous);
+        setColdWake(agentId, restore === null || restore.lane === 'webhook' ? false : restore.lane === 'acp' ? true : restore, { env, home });
+      }
+      throw error;
     }
-    throw error;
+    address = null;
+    commsError = error?.message ?? String(error);
   }
   // The census now shows this name; every command shows the same one (#429).
   try { recordSoulDisplayName(agentId, name, { file }); }
   catch (error) { process.stderr.write(`agent-bot join: display name not recorded: ${error.message}\n`); }
   const state = describeSetting(readColdWakeSettings({ env, home })[agentId]);
   return { agentId, soulDir: soulDirectory(agentId, { ...options, file }), worktree, address, created, bind,
-    wake: state, ...(adapter ? { adapter } : {}), ...(authorization ? { authorization: authorization.method } : {}) };
+    ...(commsError ? { comms: { joined: false, error: commsError } } : {}), wake: state, ...(adapter ? { adapter } : {}), ...(authorization ? { authorization: authorization.method } : {}) };
   } catch (error) {
     // Roll back a newly created soul on any failure after creation (#435),
     // exactly like the failed-launch path from #421.

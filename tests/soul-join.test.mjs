@@ -419,6 +419,19 @@ test('join --wake turns the wake on before agent-comms registers the soul, and p
     'a soul whose registration failed is left with its wake off');
 });
 
+test('commsOptional: join creates the soul without agent-comms and reports it; a wake still refuses', async (t) => {
+  const a = account(t);
+  const base = { harness: 'codex', template: null, cwd: a.outside, env: a.env, home: a.home, config: {}, gate: async () => ({ method: 'consent' }) };
+  const down = async () => { throw new Error('agent-comms join failed: this account is not paired'); };
+  const joined = await joinSoul({ ...base, name: 'quiet', comms: down, commsOptional: true });
+  assert.ok(joined.agentId);
+  assert.equal(joined.address, null);
+  assert.deepEqual(joined.comms, { joined: false, error: 'agent-comms join failed: this account is not paired' });
+  await assert.rejects(joinSoul({ ...base, name: 'quiet', comms: down }), /not paired/, 'without commsOptional join still refuses');
+  await assert.rejects(joinSoul({ ...base, name: 'woken', wake: 'resume:workspace', comms: down, commsOptional: true }), /not paired/,
+    'a wake needs agent-comms to deliver anything');
+});
+
 test('join --wake acp installs the pinned adapter under the soul\'s own runtimes, never in the checkout (#417, #583 slice 8)', async (t) => {
   const a = account(t);
   const daemon = await startDaemon(t, a);

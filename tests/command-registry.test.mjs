@@ -129,7 +129,7 @@ const MODULES_BEFORE = [
   ['install-gh-shim', 'install-gh-shim.mjs'], ['ensure-private-key', 'ensure-private-key.mjs'],
   ['signed-commit', 'signed-commit.mjs'], ['secret', 'secret.mjs'], ['skill', 'skill.mjs'], ['sop', 'sop.mjs'],
   ['workflow', 'workflow.mjs'], ['sandbox', 'sandbox.mjs'], ['metrics', 'metrics.mjs'], ['diagnostics', 'diagnostics-cli.mjs'],
-  ['server', 'identity/server-client.mjs'], ['notices', 'identity/server-notices.mjs'], ['credential', 'git-credential-bot.mjs'],
+  ['server', 'identity/server-client.mjs'], ['cloud', 'cloud.mjs'], ['notices', 'identity/server-notices.mjs'], ['credential', 'git-credential-bot.mjs'],
   ['worktree-token', 'worktree-token.mjs'], ['gh-inbox-query', 'gh-inbox-query.mjs'], ['gh-pr-view-json', 'gh-pr-view-json.mjs'],
   ['claude-worktree-create', 'claude-worktree-create.mjs'], ['agent-hook', 'agent-hook.mjs'],
 ];

@@ -723,6 +723,39 @@ test('startTask fails closed before creating soul or worktree when transcript is
   );
 });
 
+test('startTask creates the soul and its worktree when agent-comms is unavailable, and says so', async (t) => {
+  const f = makeFixture(t, { harness: 'qwen', serverMode: true, deviceHarnesses: ['test-qwen-agent', 'test-zcode-agent'] });
+  f.config.apps.zcode = 'test-zcode-agent';
+  f.config.identityApps['test-zcode-agent'] = { id: '123457', botUid: '999002', botAvatarUrl: 'https://avatars.githubusercontent.com/u/999002?v=4' };
+  writeFileSync(f.env.AGENT_BOT_CONFIG, `${JSON.stringify(f.config, null, 2)}\n`);
+  const { clientFactory } = await startTestDaemon(t, f);
+  const projectDir = path.join(f.home, 'project');
+  mkdirSync(projectDir, { recursive: true });
+  const env = {
+    ...f.env, AGENT_BOT_ID: '', QWTS_AGENT_ID: '',
+    ZCODE_SESSION_ID: 'sess_comms_down', ZCODE_PROJECT_DIR: projectDir,
+    CLAUDE_SESSION_ID: 'sess_comms_down', CLAUDE_CODE_SESSION_ID: 'sess_comms_down', CLAUDE_PROJECT_DIR: projectDir,
+  };
+  const reconcileCredentials = async ({ slugs }) => slugs.map((slug) => ({ slug, local: { status: 'ready' }, live: { status: 'server-registered' } }));
+  const stderr = [];
+  const write = process.stderr.write;
+  process.stderr.write = (chunk, ...rest) => { stderr.push(String(chunk)); return true; };
+  let receipt;
+  try {
+    receipt = await startTask({
+      branch: 'feat/comms-down', cwd: f.repo, env, home: f.home, config: f.config, clientFactory, reconcileCredentials,
+      comms: async () => { throw new Error('agent-comms join failed: this account is not paired; run `agent-comms account pair`'); },
+    });
+  } finally {
+    process.stderr.write = write;
+  }
+  assert.equal(receipt.soul.resolution, 'created');
+  assert.equal(receipt.soul.harness, 'zcode');
+  assert.equal(receipt.worktree.created, true);
+  assert.equal(receipt.binding.status, 'live');
+  assert.match(stderr.join(''), /agent-comms is unavailable \(agent-comms join failed: this account is not paired.*\); continuing without messaging/);
+});
+
 test('startTask from a ZCode session targeting --repo on an empty repo with a foreign Qwen-bound checkout never hijacks Qwen soul or credentials and creates an orphan ZCode soul worktree', async (t) => {
   const f = makeFixture(t, {
     harness: 'qwen',
