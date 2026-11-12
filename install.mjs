@@ -16,6 +16,7 @@ import {
   readFileSync,
   readlinkSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -120,7 +121,11 @@ export function isManagedExecutable(path, stat, entrypoint, readlink = readlinkS
   if (process.platform === 'win32' && stat?.isFile()) {
     return readWindowsLauncher(path)?.entry === join(dirname(resolve(entrypoint)), 'agent-bot.mjs');
   }
-  if (!stat?.isSymbolicLink()) return false;
+  // The Linux bundle's install.sh writes a wrapper file, not a link;
+  // isLinuxBundleWrapper checks the type itself without following a link.
+  if (!stat?.isSymbolicLink()) {
+    return Boolean(stat) && isLinuxBundleWrapper(path, linuxBundleRoot(dirname(resolve(entrypoint))));
+  }
   const linked = readlink(path);
   const target = resolve(dirname(path), linked);
   const current = resolve(entrypoint);
@@ -157,25 +162,79 @@ function hostAppCliToolText(app) {
 // following a link (or blocking on a FIFO), and the type, the size bound and
 // the text all come from that handle, so a swap between checking and reading
 // cannot change what is judged.
-const HOST_APP_CLI_TOOL_MAX_BYTES = 4096;
+const CLI_TOOL_MAX_BYTES = 4096;
 
-export function isHostAppCliTool(path, app, { open = openSync } = {}) {
-  if (!app) return false;
+function readSmallRegularFile(path, open) {
   let fd;
   try {
     fd = open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
-    return false;
+    return null;
   }
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size >= HOST_APP_CLI_TOOL_MAX_BYTES) return false;
-    return readFileSync(fd, 'utf8') === hostAppCliToolText(app);
+    if (!stat.isFile() || stat.size >= CLI_TOOL_MAX_BYTES) return null;
+    return readFileSync(fd, 'utf8');
   } catch {
-    return false;
+    return null;
   } finally {
     closeSync(fd);
   }
+}
+
+export function isHostAppCliTool(path, app, { open = openSync } = {}) {
+  if (!app) return false;
+  return readSmallRegularFile(path, open) === hostAppCliToolText(app);
+}
+
+// The headless-Linux bundle (scripts/linux-bundle, ADR-0332) ships this runtime
+// as <bundle>/lib/agent-bot beside <bundle>/bin/agent-bot, the entry build.mjs
+// writes, and its install.sh writes ~/.local/bin/agent-bot as a marked wrapper
+// file, not a symlink, that execs that entry on the bundled Node. That wrapper
+// is the bundle's: bootstrap leaves it in place, and uninstall.sh removes it.
+// Both markers are pinned against build.mjs and lib/common.sh by the tests.
+export const LINUX_BUNDLE_ENTRY_MARKER = '# agent-bot-linux-bundle-entry';
+export const LINUX_BUNDLE_WRAPPER_MARKER = '# agent-bot-linux-cli-tool';
+
+function canonicalPath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+// Returns <bundle> when runtimeRoot is a Linux bundle's lib/agent-bot, or null
+// for a source checkout, Homebrew keg or app-embedded runtime.
+export function linuxBundleRoot(runtimeRoot, { read = readFileSync } = {}) {
+  const root = resolve(runtimeRoot);
+  if (basename(root) !== 'agent-bot' || basename(dirname(root)) !== 'lib') return null;
+  const bundle = dirname(dirname(root));
+  try {
+    const [shebang, marker] = read(join(bundle, 'bin', 'agent-bot'), 'utf8').split('\n', 2);
+    return shebang === '#!/bin/sh' && marker === LINUX_BUNDLE_ENTRY_MARKER ? bundle : null;
+  } catch {
+    return null;
+  }
+}
+
+// Only a wrapper bound to this bundle counts: the marker is the ownership
+// contract every wrapper install shares, and the root and exec lines tie it
+// to this runtime, so a wrapper from another bundle install is still foreign.
+// The rest of the text is install.sh's to change between releases.
+export function isLinuxBundleWrapper(path, bundle, { open = openSync } = {}) {
+  if (!bundle) return false;
+  const text = readSmallRegularFile(path, open);
+  if (text === null) return false;
+  const lines = text.split('\n');
+  if (lines[0] !== '#!/bin/sh' || lines[1] !== LINUX_BUNDLE_WRAPPER_MARKER) return false;
+  const roots = lines.filter((line) => line.startsWith('AGENT_BOT_BUNDLE_ROOT='));
+  if (roots.length !== 1) return false;
+  const wrapperRoot = roots[0].slice('AGENT_BOT_BUNDLE_ROOT='.length);
+  if (!wrapperRoot.startsWith('/') || canonicalPath(wrapperRoot) !== canonicalPath(bundle)) return false;
+  const execs = lines.filter((line) => line.startsWith('exec '));
+  const target = execs.length === 1 ? execs[0].match(/^exec "([^"]+)" "\$@"$/u)?.[1] : null;
+  return Boolean(target) && canonicalPath(target) === canonicalPath(join(bundle, 'bin', 'agent-bot'));
 }
 
 export function inspectExecutableLink(path, stat, { readlink = readlinkSync, statFile = statSync } = {}) {
@@ -207,6 +266,7 @@ export function installExecutable({
   rename = renameSync,
   openFile = openSync,
   embeddingApp = embeddingAppBundle(ROOT),
+  linuxBundle = linuxBundleRoot(dirname(resolve(entrypoint))),
 } = {}) {
   const paths = installationPaths(home);
   if (platform === 'win32') {
@@ -227,6 +287,9 @@ export function installExecutable({
   // The embedding app's wrapper runs this runtime; it stays the CLI.
   if (stat && isHostAppCliTool(paths.executable, embeddingApp, { open: openFile })) return paths.executable;
   ensureExecutableMode(entrypoint, { stat: statFile, chmod });
+  // The Linux bundle's install.sh wrapper runs this runtime on the bundled
+  // Node; it stays the CLI, so uninstall.sh still finds what it wrote.
+  if (stat && isLinuxBundleWrapper(paths.executable, linuxBundle, { open: openFile })) return paths.executable;
   if (stat) {
     const link = inspectExecutableLink(paths.executable, stat, { readlink, statFile });
     if (link?.dangling) {

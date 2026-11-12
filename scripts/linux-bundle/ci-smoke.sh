@@ -144,6 +144,15 @@ echo "a foreign agent-comms"' ] || fail "$platform: --replace did not preserve t
   if [ "$platform" = "$(host_platform)" ]; then
     "$home/.local/bin/agent-bot" --version > "$box/version.log" 2>&1 \
       || fail "$platform: the installed wrapper could not run agent-bot"
+    # bootstrap installs the CLI through installExecutable; it must keep the
+    # wrapper install.sh wrote rather than refuse it as a foreign entrypoint.
+    wrapper_before=$(cat "$home/.local/bin/agent-bot")
+    HOME="$home" "$home/.local/bin/node" --input-type=module \
+      -e "const m = await import('$home/.local/share/agent-bot/bundle/lib/agent-bot/install.mjs'); m.installExecutable();" \
+      > "$box/install-cli.log" 2>&1 \
+      || { cat "$box/install-cli.log" >&2; fail "$platform: bootstrap's CLI install refused the bundle wrapper"; }
+    [ "$(cat "$home/.local/bin/agent-bot")" = "$wrapper_before" ] \
+      || fail "$platform: bootstrap's CLI install rewrote the bundle wrapper"
   fi
 
   run_uninstall || { cat "$box/uninstall.log" >&2; fail "$platform: uninstall.sh failed"; }

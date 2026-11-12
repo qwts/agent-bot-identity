@@ -15,6 +15,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -28,6 +29,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  installExecutable,
+  isLinuxBundleWrapper,
+  isManagedExecutable,
+  LINUX_BUNDLE_ENTRY_MARKER,
+  LINUX_BUNDLE_WRAPPER_MARKER,
+  linuxBundleRoot,
+} from '../install.mjs';
+import {
+  ENTRY_MARKER,
   buildPlatform,
   commsKeepSet,
   parseArgs,
@@ -1183,4 +1193,98 @@ test('#1348: patchCommsSharedDirDefault rewrites hardcoded macOS sharedDir in st
 
   const commonSh = readFileSync(join(BUNDLE, 'lib', 'common.sh'), 'utf8');
   assert.match(commonSh, /AGENT_COMMS_SHARED_DIR="\$\{XDG_STATE_HOME:-\$HOME\/\.local\/state\}\/agent-comms"/u);
+});
+
+// ------------------------------------------------- bootstrap after install.sh
+
+// The real archive's bin/agent-bot carries the entry marker and lib/agent-bot
+// holds the runtime; the stand-in adds both so the installed tree is a bundle.
+function bundleMachine(label) {
+  const box = machine(label);
+  const bundle = join(box.archive, 'bundle');
+  writeFileSync(join(bundle, 'bin', 'agent-bot'), `#!/bin/sh\n${ENTRY_MARKER}\necho "agent-bot $*"\n`, { mode: 0o755 });
+  mkdirSync(join(bundle, 'lib', 'agent-bot'), { recursive: true });
+  writeFileSync(join(bundle, 'lib', 'agent-bot', 'agent-bot'), '#!/bin/sh\necho runtime\n', { mode: 0o755 });
+  const result = box.install(['--no-services']);
+  assert.equal(result.status, 0, result.stderr);
+  box.bundle = join(box.home, '.local', 'share', 'agent-bot', 'bundle');
+  box.entrypoint = join(box.bundle, 'lib', 'agent-bot', 'agent-bot');
+  box.wrapper = join(box.home, '.local', 'bin', 'agent-bot');
+  return box;
+}
+
+test('bundle wrapper: the runtime pins the same markers build.mjs and install.sh write', () => {
+  assert.equal(LINUX_BUNDLE_ENTRY_MARKER, ENTRY_MARKER);
+  assert.equal(LINUX_BUNDLE_WRAPPER_MARKER, WRAPPER_MARKER);
+  const common = readFileSync(join(BUNDLE, 'lib', 'common.sh'), 'utf8');
+  assert.ok(common.includes(`WRAPPER_MARKER='${LINUX_BUNDLE_WRAPPER_MARKER}'`));
+});
+
+test('bundle wrapper: bootstrap keeps the wrapper install.sh wrote for this bundle', () => {
+  const box = bundleMachine('bootstrap-keeps-wrapper');
+  try {
+    const before = readFileSync(box.wrapper, 'utf8');
+    assert.equal(linuxBundleRoot(dirname(box.entrypoint)), box.bundle);
+    assert.equal(isLinuxBundleWrapper(box.wrapper, box.bundle), true);
+    assert.equal(isManagedExecutable(box.wrapper, lstatSync(box.wrapper), box.entrypoint), true);
+    assert.equal(installExecutable({ home: box.home, entrypoint: box.entrypoint }), box.wrapper);
+    assert.equal(lstatSync(box.wrapper).isFile(), true);
+    assert.equal(readFileSync(box.wrapper, 'utf8'), before);
+    // uninstall.sh still owns and removes it.
+    assert.equal(box.uninstall().status, 0);
+    assert.equal(existsSync(box.wrapper), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('bundle wrapper: a checkout or another bundle still refuses the wrapper', () => {
+  const box = bundleMachine('bootstrap-foreign-wrapper');
+  try {
+    // A source checkout is no bundle, so the wrapper is foreign to it.
+    const checkout = join(box.root, 'checkout');
+    mkdirSync(checkout, { recursive: true });
+    writeFileSync(join(checkout, 'agent-bot'), '#!/bin/sh\n', { mode: 0o755 });
+    assert.equal(linuxBundleRoot(checkout), null);
+    assert.throws(
+      () => installExecutable({ home: box.home, entrypoint: join(checkout, 'agent-bot') }),
+      /is not an agent-bot symlink/u,
+    );
+    // A second bundle elsewhere does not own this install's wrapper.
+    const other = join(box.root, 'other', 'bundle');
+    cpSync(box.bundle, other, { recursive: true });
+    assert.equal(isLinuxBundleWrapper(box.wrapper, other), false);
+    assert.throws(
+      () => installExecutable({ home: box.home, entrypoint: join(other, 'lib', 'agent-bot', 'agent-bot') }),
+      /is not an agent-bot symlink/u,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('bundle wrapper: only a marked wrapper bound to the bundle by root and exec counts', () => {
+  const box = bundleMachine('bootstrap-wrapper-shape');
+  try {
+    const body = readFileSync(box.wrapper, 'utf8');
+    const variants = {
+      'no marker': body.replace(`${WRAPPER_MARKER}\n`, ''),
+      'other root': body.replace(/^AGENT_BOT_BUNDLE_ROOT=.*$/mu, 'AGENT_BOT_BUNDLE_ROOT=/elsewhere/bundle'),
+      'relative root': body.replace(/^AGENT_BOT_BUNDLE_ROOT=.*$/mu, 'AGENT_BOT_BUNDLE_ROOT=bundle'),
+      'other exec': body.replace(/^exec .*$/mu, 'exec "/usr/bin/env" "$@"'),
+      'two execs': `${body}exec "/usr/bin/env" "$@"\n`,
+    };
+    for (const [name, text] of Object.entries(variants)) {
+      writeFileSync(box.wrapper, text);
+      assert.equal(isLinuxBundleWrapper(box.wrapper, box.bundle), false, name);
+    }
+    // A symlink to a genuine wrapper is not the wrapper.
+    const real = join(box.root, 'real-wrapper');
+    writeFileSync(real, body, { mode: 0o755 });
+    rmSync(box.wrapper);
+    symlinkSync(real, box.wrapper);
+    assert.equal(isLinuxBundleWrapper(box.wrapper, box.bundle), false);
+  } finally {
+    box.cleanup();
+  }
 });
