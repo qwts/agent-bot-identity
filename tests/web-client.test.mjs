@@ -310,6 +310,9 @@ test('cookie sessions authenticate the API, expire, and never expose the bearer 
     const body = await me.json();
     assert.equal(body.principal.principalId, principal.principalId);
     assert.deepEqual(body.principal.souls, [AGENT_ID]);
+    // The administrator-account check rides along for the banner (#1408).
+    assert.equal(typeof body.host.checked, 'boolean');
+    assert.equal(typeof body.host.admin, 'boolean');
     assert.ok(!JSON.stringify(body).includes(server.token));
 
     // ~12h expiry, enforced daemon-side.
