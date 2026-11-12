@@ -1,0 +1,1 @@
+- In server mode the daemon lets concurrent `/v0/credential` requests for the same task and repository mint one at a time, so several worktrees of one repository no longer fail with `operation_conflict`. Each request is still its own operation, and a failed one does not hold up the next (#1414).

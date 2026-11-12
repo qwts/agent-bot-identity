@@ -118,6 +118,20 @@ export function createIdentityRoutes({
   // Track (agentId, appSlug) pairs stored in keyd's token cache so a device
   // revocation can evict them at once (#1340).
   const keydCachedPairs = new Set();
+  // The identity service allows one credential operation in flight per
+  // (device, task, kind, repo) and answers a second one operation_conflict.
+  // Sessions of one soul share its task, so two worktrees of one repository
+  // asking at the same moment collided. Requests for the same key now wait
+  // their turn here; a failed turn does not hold up the next.
+  const serverMintTurns = new Map();
+  const inServerMintTurn = (key, work) => {
+    const before = serverMintTurns.get(key) ?? Promise.resolve();
+    const turn = before.then(work, work);
+    const settled = turn.then(() => {}, () => {});
+    serverMintTurns.set(key, settled);
+    settled.then(() => { if (serverMintTurns.get(key) === settled) serverMintTurns.delete(key); });
+    return turn;
+  };
   onDeviceRevoked(() => {
     for (const pair of keydCachedPairs) {
       const [agentId, app] = pair.split('\0');
@@ -368,7 +382,7 @@ export function createIdentityRoutes({
           }
           if (!grant) {
             let mintedViaKeyd = false;
-            grant = await mintImpl({
+            const mintOnce = () => mintImpl({
               slug: appSlug, env, agentId: binding.agentId, permissions, taskId, operationId, repo, sessionId: binding.sessionId ?? null,
               fetchImpl: serverFetch,
               viaKeyd: (soul) => {
@@ -376,6 +390,9 @@ export function createIdentityRoutes({
                 return mintViaKeyd({ ...soul, env, home, now, request: keydCall });
               },
             });
+            grant = isServerMode
+              ? await inServerMintTurn(`${taskId}\0${repo}`, mintOnce)
+              : await mintOnce();
             if (!isServerMode && !mintedViaKeyd) {
               const stored = await putKeydCachedToken({
                 agentId: binding.agentId, app: appSlug, repo, permissions, grant, env, home, now, request: keydCall,
