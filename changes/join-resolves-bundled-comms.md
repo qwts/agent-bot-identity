@@ -1,0 +1,1 @@
+- `agent-bot start` and `join` run the agent-comms that ships with agent-bot when none is on PATH, and with neither say what to install instead of `spawn agent-comms ENOENT`. An agent-comms on PATH is still preferred (#1372).

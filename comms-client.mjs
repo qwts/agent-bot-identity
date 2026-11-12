@@ -30,6 +30,7 @@ import {
   chmodSync,
   closeSync,
   constants as fsConstants,
+  existsSync,
   fstatSync,
   openSync,
   lstatSync,
@@ -44,6 +45,7 @@ import net from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import {
   createWindowsCommsTransport,
   createWindowsTransportCustody,
@@ -83,6 +85,17 @@ export function defaultCommsSharedDir({ env = process.env, home = homedir(), pla
     return path.join(localAppData, 'agent-comms');
   }
   return path.join(state, 'agent-comms');
+}
+
+// The agent-comms entry point that ships with this agent-bot: the bundle a
+// packaged install names, or the sibling checkout of a source layout. Null
+// when there is neither; the caller then relies on PATH.
+export function bundledCommsEntry({ env = process.env, root = path.dirname(fileURLToPath(import.meta.url)) } = {}) {
+  const candidates = [
+    ...(env.AGENT_BOT_BUNDLE_ROOT ? [path.join(env.AGENT_BOT_BUNDLE_ROOT, 'lib', 'agent-comms', 'bin', 'agent-comms.mjs')] : []),
+    path.join(root, '..', 'agent-comms', 'bin', 'agent-comms.mjs'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 // Per the XDG Base Directory Specification, XDG_STATE_HOME is an absolute path;
