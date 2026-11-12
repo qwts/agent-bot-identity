@@ -42,6 +42,9 @@ function scratchWorld() {
     AGENT_BOT_INTERACTION_HOME: path.join(root, 'interaction'),
     AGENT_COMMS_SHARED_DIR: shared,
     AGENT_BOT_COMMS_DAEMON_PATH: path.join(root, 'comms-daemon.json'),
+    // The developer's own config must not reach the child: an opt-in there
+    // (soul tokens v2, say) changes what pair-comms does.
+    AGENT_BOT_CONFIG: path.join(root, 'config.json'),
   };
   return { root, shared, env, socket: path.join(shared, 'broker.sock') };
 }
