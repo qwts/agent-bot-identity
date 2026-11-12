@@ -1992,55 +1992,6 @@ test('server-mode /v0/credential mints per the bound worktree origin, never the 
   }
 });
 
-test('server-mode /v0/credential requests for one task and repository mint one at a time', async () => {
-  const { root, env } = scratchEnv();
-  env.AGENT_BOT_SERVER = 'https://identity.example.test';
-  const { gitDir, worktree, record } = mintWorktreeToken(env, root);
-  execFileSync('git', ['-C', worktree, 'remote', 'add', 'origin', 'https://github.com/acme/repo.git']);
-  // The service refuses a second operation in flight for the same task,
-  // kind and repository, so this stand-in does too.
-  let inFlight = 0;
-  let calls = 0;
-  const operations = new Set();
-  const server = createDaemonServer({
-    env,
-    home: '/nonexistent',
-    config: { features: { 'github-identity': true } },
-    mintImpl: async ({ operationId }) => {
-      calls += 1;
-      const mine = calls;
-      operations.add(operationId);
-      if (inFlight > 0) throw Object.assign(new Error('identity service answered operation_conflict'), { code: 'operation-conflict' });
-      inFlight += 1;
-      try {
-        await new Promise((resolve) => { setTimeout(resolve, 25); });
-        // A turn that fails must not hold up the ones behind it.
-        if (mine === 1) throw Object.assign(new Error('identity service is down'), { code: 'credential-unavailable' });
-        return { token: `ghs_${mine}`, expires_at: '2026-08-12T09:00:00.000Z', issuance_id: `iss_${mine}` };
-      } finally {
-        inFlight -= 1;
-      }
-    },
-  });
-  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
-  const port = server.address().port;
-  const call = (pathname, { method = 'GET', body, headers = {} } = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
-    method, headers: { authorization: `Bearer ${server.token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  try {
-    const bound = await (await call('/v0/bind', { method: 'POST', body: { gitDir, token: record.token, transcript: { provider: 'codex', id: 'thread-turns' } } })).json();
-    const ask = () => call('/v0/credential', { method: 'POST', body: {}, headers: { 'x-agent-binding': bound.secret } });
-    const answers = await Promise.all([ask(), ask(), ask(), ask()]);
-    const statuses = answers.map((res) => res.status).sort();
-    assert.deepEqual(statuses, [200, 200, 200, 503], 'one outage, and no operation_conflict among the rest');
-    assert.equal(calls, 4);
-    assert.equal(operations.size, 4, 'each request is still its own operation');
-  } finally {
-    await new Promise((resolve) => { server.close(resolve); });
-  }
-});
-
 test('server-mode /v0/credential without a worktree origin fails closed with credential-no-repo', async () => {
   const { root, env } = scratchEnv();
   env.AGENT_BOT_SERVER = 'https://identity.example.test';

@@ -39,18 +39,6 @@ function setBanner(message) {
   if (message) banner.textContent = message;
 }
 
-// The account HQ runs in is an administrator account (#1408). Stays up for
-// the whole session: it describes the host, not a request.
-function showHostWarning(host) {
-  const warn = Boolean(host?.checked && host.admin);
-  $('host-warning').hidden = !warn;
-  if (!warn) return;
-  const why = host.reason === 'root' ? 'the root account' : `in the ${host.reason.replace(/^group /, '')} group`;
-  $('host-warning-detail').textContent = `HQ is running as ${host.account}, which is ${why}. `
-    + 'Anything that takes over this account is one password prompt from root. '
-    + 'Use a standard account for daily work and HQ, and keep a separate administrator account for installs.';
-}
-
 async function api(pathname, { method = 'GET', body } = {}) {
   let response;
   try {
@@ -825,9 +813,8 @@ async function boot() {
   }
 
   try {
-    const { principal, host } = await api('/ui/api/me');
+    const { principal } = await api('/ui/api/me');
     state.me = principal;
-    showHostWarning(host);
   } catch {
     return; // api() already routed to the pairing screen or offline banner
   }

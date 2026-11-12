@@ -75,8 +75,6 @@ The 15-minute access token is this machine's session with the server, and it is 
 
 Any other `invalid_grant` means the device expired or is unknown. Re-enroll with `agent-bot server enroll --force`.
 
-A request that cannot connect names its cause: a DNS lookup, TLS, a timeout, a refused connection, no route, or a reset, with the system error code. Node does not read `HTTPS_PROXY` or `HTTP_PROXY` unless told to. When one is set and the process is not using it, the message says so and names the fix: set `NODE_USE_ENV_PROXY=1`, on Node 22.21 or later, or 24. agent-bot does not set it for you. A proxy URL is shown without its credentials.
-
 ## Server authenticity
 
 Every `/api/daemon/*` response is checked against the pinned key before it is used:

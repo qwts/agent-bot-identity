@@ -1,1 +1,0 @@
-- HQ reads saved `managed-machine members` plans from `~/Library/Application Support/managed-machine/members/plans` on macOS, where managed-machine saves them, so a macOS HQ account plan appears in the Approvals tab (#1406).
