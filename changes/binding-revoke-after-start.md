@@ -1,0 +1,1 @@
+- A test now covers `agent-bot start` followed by `agent-bot binding revoke` from the created worktree, run as the real command. The HTTP 401 it guards against was the daemon checking a one-time binding proof twice, fixed with the proof-once revoke change (#1376).
