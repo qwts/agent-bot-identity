@@ -145,7 +145,7 @@ export function fakeServer({ approveAfter = 1, tokenTtl = 900, tamper = false } 
       assert.equal(proof.payload.ath, crypto.createHash('sha256').update(tok).digest('base64url'));
       if (s.revokedDevice === t.device) return signed(401, { error: 'device_revoked' }, proof.payload.jti);
       if (u.pathname === '/api/daemon/whoami') return signed(200, { device: { id: t.device, management: 'managed' } }, proof.payload.jti);
-      if (u.pathname === '/api/daemon/device' && init.method === 'DELETE') { s.revokedDevice = t.device; return signed(200, { revoked: true }, proof.payload.jti); }
+      if (u.pathname === '/api/daemon/revoke' && init.method === 'POST') { s.revokedDevice = t.device; s.revokeCalls = (s.revokeCalls ?? 0) + 1; return signed(200, { revoked: true, device: t.device }, proof.payload.jti); }
       if (u.pathname === '/api/daemon/provider-key') {
         if (s.providerMissing) return signed(404, { error: 'provider_key_not_configured' }, proof.payload.jti);
         const op = new URL(url).searchParams.get('operation_id');

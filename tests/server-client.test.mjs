@@ -454,8 +454,77 @@ test('CLI: enroll, status --json, logout', async () => {
   assert.equal(st.ok, true);
   assert.equal(st.remote.management, 'managed');
   assert.equal(await main(['logout'], io), 0);
+  assert.match(out.pop(), /^revoked dev_1 at .* and removed the local enrollment/);
+  assert.equal(srv.revokedDevice, 'dev_1', 'logout revoked the device at the server');
   assert.equal(await main(['status', '--json'], { ...io, env: { ...env, AGENT_BOT_SERVER: '' , AGENT_BOT_CONFIG: env.AGENT_BOT_CONFIG } }), 1);
   assert.match(err.pop(), /server mode is off/);
+});
+
+test('CLI logout: revokes against the enrolled server even with server mode unset, and settles a device that is already gone', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, GROK_AGENT: '1' };
+  const srv = fakeServer();
+  const out = []; const err = [];
+  const io = { env, fetchImpl: srv.fetch, sleep, out: { write: (s) => out.push(s) }, err: { write: (s) => err.push(s) } };
+  assert.equal(await main(['enroll'], io), 0);
+  out.length = 0;
+  assert.equal(await main(['logout', '--json'], { ...io, env: { ...env, AGENT_BOT_SERVER: '' } }), 0);
+  assert.deepEqual(JSON.parse(out.pop()), { device: 'dev_1', server: BASE, remote: 'revoked' });
+  assert.equal(srv.revokeCalls, 1);
+  assert.equal(loadDevice({ env }), null, 'the local enrollment is gone');
+
+  // The server already revoked it (from /devices): logout succeeds without a second revoke.
+  assert.equal(await main(['enroll', '--force'], io), 0);
+  srv.revokedDevice = loadDevice({ env }).device_id;
+  assert.equal(await main(['logout', '--json'], io), 0);
+  assert.equal(JSON.parse(out.pop()).remote, 'already-revoked');
+  assert.equal(srv.revokeCalls, 1);
+
+  // Not enrolled at all: nothing to do.
+  assert.equal(await main(['logout', '--json'], io), 0);
+  assert.equal(JSON.parse(out.pop()).remote, 'not-enrolled');
+});
+
+test('CLI logout: an unreadable device record never blocks local cleanup (#1421 review)', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, GROK_AGENT: '1' };
+  const srv = fakeServer();
+  const out = []; const err = [];
+  const io = { env, fetchImpl: srv.fetch, sleep, out: { write: (s) => out.push(s) }, err: { write: (s) => err.push(s) } };
+  for (const [name, body, args, code] of [
+    ['truncated JSON', '{"device_id": "dev_', ['logout'], 1],
+    ['no server field', '{"device_id": "dev_1"}\n', ['logout'], 1],
+    ['truncated JSON, --local-only', '{"device_id": "dev_', ['logout', '--local-only'], 0],
+  ]) {
+    assert.equal(await main(['enroll', '--force'], io), 0);
+    writeFileSync(statePaths({ env }).device, body);
+    const calls = srv.revokeCalls ?? 0;
+    err.length = 0;
+    assert.equal(await main(args, io), code, name);
+    assert.ok(!existsSync(statePaths({ env }).key), `${name}: the device key is removed`);
+    assert.equal(srv.revokeCalls ?? 0, calls, `${name}: nothing is revoked without a readable record`);
+    if (code === 1) assert.match(err.join(''), /could not be read .*so the server was not told; revoke the device on .*\/devices/, name);
+  }
+});
+
+test('CLI logout: an unreachable server still removes local state but exits 1 naming /devices; --local-only never calls it', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, GROK_AGENT: '1' };
+  const srv = fakeServer();
+  const out = []; const err = [];
+  const io = { env, fetchImpl: srv.fetch, sleep, out: { write: (s) => out.push(s) }, err: { write: (s) => err.push(s) } };
+  assert.equal(await main(['enroll'], io), 0);
+  const down = async (url, init) => {
+    if (new URL(url).pathname.startsWith('/api/daemon/revoke')) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    return srv.fetch(url, init);
+  };
+  assert.equal(await main(['logout'], { ...io, fetchImpl: down }), 1);
+  assert.match(err.pop(), /removed the local enrollment, but could not revoke dev_1 .*\/devices/);
+  assert.equal(loadDevice({ env }), null);
+
+  assert.equal(await main(['enroll', '--force'], io), 0);
+  const calls = srv.revokeCalls ?? 0;
+  assert.equal(await main(['logout', '--local-only'], io), 0);
+  assert.match(out.pop(), /still enrolled at .*revoke it on \/devices/);
+  assert.equal(srv.revokeCalls ?? 0, calls, '--local-only never contacts the server');
+  assert.equal(loadDevice({ env }), null);
 });
 
 test('mint() in server mode never reads a local App key, refuses standalone calls, and refuses --permissions', async () => {
