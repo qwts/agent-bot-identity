@@ -1097,9 +1097,25 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
     if (a.sub === 'logout') {
       // Revoke against the server this device enrolled with, so logout works
       // even after AGENT_BOT_SERVER is unset.
-      const dev = loadDevice({ env }, { includeOutcomes: false });
-      let remote = dev ? 'skipped' : 'not-enrolled';
-      let detail = null;
+      // A record that cannot be read never blocks the local cleanup: the
+      // server just cannot be told, which is reported (#1421 review).
+      let dev = null;
+      let unreadable = null;
+      if (!a.localOnly) {
+        try {
+          dev = loadDevice({ env }, { includeOutcomes: false });
+          if (dev && (typeof dev !== 'object' || typeof dev.server !== 'string' || typeof dev.device_id !== 'string')) throw new Error('device.json is missing its server or device id');
+        } catch (error) {
+          dev = null;
+          unreadable = error?.message ?? String(error);
+        }
+      } else {
+        try { dev = loadDevice({ env }, { includeOutcomes: false }); } catch { dev = null; }
+        if (dev && (typeof dev !== 'object' || typeof dev.server !== 'string')) dev = null;
+      }
+      let remote = unreadable ? 'unreadable' : (dev ? 'skipped' : 'not-enrolled');
+      let detail = unreadable;
+      if (a.localOnly && !dev && existsSync(statePaths({ env }).dir)) remote = 'skipped';
       if (dev && !a.localOnly) {
         if (dev.revoked_at) remote = 'already-revoked';
         else {
@@ -1117,8 +1133,14 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
       if (a.json) out.write(`${JSON.stringify({ device, server: dev?.server ?? null, remote, ...(detail ? { error: detail } : {}) })}\n`);
       else if (remote === 'revoked') out.write(`revoked ${device} at ${dev.server} and removed the local enrollment\n`);
       else if (remote === 'already-revoked') out.write(`${device} was already revoked or expired at ${dev.server}; removed the local enrollment\n`);
-      else if (remote === 'skipped') out.write(`removed the local enrollment of ${device}; it is still enrolled at ${dev.server} (revoke it on /devices)\n`);
+      else if (remote === 'skipped' && dev) out.write(`removed the local enrollment of ${device}; it is still enrolled at ${dev.server} (revoke it on /devices)\n`);
+      else if (remote === 'skipped') out.write('removed the local enrollment; revoke the device on /devices if it is still listed\n');
       else if (remote === 'not-enrolled') out.write('this machine is not enrolled; nothing to remove\n');
+      if (remote === 'unreadable') {
+        const hint = serverUrl({ env });
+        err.write(`agent-bot server: removed the local enrollment, but its device record could not be read (${detail}), so the server was not told; revoke the device on ${hint ? `${hint}/devices` : 'the server\'s /devices page'}\n`);
+        return 1;
+      }
       if (remote === 'failed') {
         err.write(`agent-bot server: removed the local enrollment, but could not revoke ${device} at ${dev.server}: ${detail}; revoke it on ${dev.server}/devices\n`);
         return 1;
