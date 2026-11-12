@@ -269,7 +269,11 @@ test('soul secret set|clear|status take the value on stdin, pass the owner gate,
   assert.deepEqual([set.action, set.name, set.store, set.status, set.ready], ['set', 'github-models', 'file', 'present', true]);
   assert.equal(set.providers[0].status, 'ready');
   assert.deepEqual(gates, [[`set ${ID}'s provider secret "github-models" in its file store`, null]]);
-  assert.ok(!out.includes(SECRET) && !out.includes(String(SECRET.length)), 'neither the value nor its length is printed');
+  // The length check walks the printed JSON's values: a substring match on
+  // "37" also hit the random digits of the temporary soul directory's name.
+  const printedValues = (value) => (value && typeof value === 'object' ? Object.values(value).flatMap(printedValues) : [value]);
+  assert.ok(!out.includes(SECRET), 'the value is not printed');
+  assert.ok(!printedValues(JSON.parse(out)).includes(SECRET.length), 'the length is not printed');
   const receipts = readFileSync(auditFile({ env: f.env, home: f.home }), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((r) => r.event === 'soul-secret');
   assert.equal(receipts.length, 1);
   assert.deepEqual([receipts[0].agentId, receipts[0].operation, receipts[0].decision, receipts[0].detail], [ID, 'set', 'stored', 'secret: github-models (file)']);
