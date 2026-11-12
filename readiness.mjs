@@ -46,7 +46,7 @@ import {
   supervisorSkipLoad,
   supervisorUnitCredentialNames,
 } from './daemon-supervisor.mjs';
-import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isManagedExecutable } from './install.mjs';
+import { embeddingAppBundle, homebrewRuntimeRoot, inspectExecutableLink, installationPaths, isLinuxBundleWrapper, isManagedExecutable, linuxBundleRoot } from './install.mjs';
 import { readWindowsLauncher } from './windows-cli-launcher.mjs';
 import {
   OrganizationProfileError,
@@ -2352,7 +2352,7 @@ function codexDesktopGhCheck({ home, inspect }) {
   });
 }
 
-function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null, app = null }) {
+function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null, app = null, linuxBundle = linuxBundleRoot(ROOT) }) {
   const executable = installationPaths(home).executable;
   // An app-embedded runtime carries its skill bundle in place (#428).
   let runtimeRoot = embeddedRoot;
@@ -2366,6 +2366,9 @@ function runtimeSkillCheck({ home, lstat, readlink, access, embeddedRoot = null,
       runtimeRoot = homebrewRuntimeRoot(target) ?? dirname(target);
     } else if (stat && process.platform === 'win32' && readWindowsLauncher(executable)) {
       runtimeRoot = dirname(readWindowsLauncher(executable).entry);
+    } else if (stat && isLinuxBundleWrapper(executable, linuxBundle)) {
+      // The Linux bundle's wrapper names its bundle, which carries this runtime.
+      runtimeRoot = join(linuxBundle, 'lib', 'agent-bot');
     } else if (stat) {
       foreign = true;
     }
