@@ -119,6 +119,7 @@ $ agent-bot cloud --help
 exit: 0
 stdout:
 usage: agent-bot cloud up [--harness APP_SLUG] [--hook] [--json]
+       agent-bot cloud status [--harness APP_SLUG] [--json]
        agent-bot cloud down [--hook] [--json]
        agent-bot cloud install-hooks [--settings PATH] [--json]
 
@@ -129,6 +130,9 @@ AGENT_BOT_ENROLL_TOKEN set it enrolls without a browser; otherwise it starts
 the device grant in the background and prints the approval link. Run it again
 at any time: it repairs only what is down. --harness defaults to
 AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
+status reports the same things without changing any: whether the server
+confirms the enrollment, the daemon, the gh shim and a pending approval. It
+exits 1 until the device is enrolled and the daemon runs.
 down stops the daemon and unenrolls the device (server logout).
 install-hooks adds `cloud up --hook` and `cloud down --hook` to the Claude
 Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook
@@ -144,6 +148,7 @@ stdout:
 stderr:
 agent-bot cloud: unknown cloud command: --no-such-flag-golden
 usage: agent-bot cloud up [--harness APP_SLUG] [--hook] [--json]
+       agent-bot cloud status [--harness APP_SLUG] [--json]
        agent-bot cloud down [--hook] [--json]
        agent-bot cloud install-hooks [--settings PATH] [--json]
 
@@ -154,6 +159,9 @@ AGENT_BOT_ENROLL_TOKEN set it enrolls without a browser; otherwise it starts
 the device grant in the background and prints the approval link. Run it again
 at any time: it repairs only what is down. --harness defaults to
 AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
+status reports the same things without changing any: whether the server
+confirms the enrollment, the daemon, the gh shim and a pending approval. It
+exits 1 until the device is enrolled and the daemon runs.
 down stops the daemon and unenrolls the device (server logout).
 install-hooks adds `cloud up --hook` and `cloud down --hook` to the Claude
 Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook

@@ -32,6 +32,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 
 export const CLOUD_USAGE = `usage: agent-bot cloud up [--harness APP_SLUG] [--hook] [--json]
+       agent-bot cloud status [--harness APP_SLUG] [--json]
        agent-bot cloud down [--hook] [--json]
        agent-bot cloud install-hooks [--settings PATH] [--json]
 
@@ -42,6 +43,9 @@ AGENT_BOT_ENROLL_TOKEN set it enrolls without a browser; otherwise it starts
 the device grant in the background and prints the approval link. Run it again
 at any time: it repairs only what is down. --harness defaults to
 AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
+status reports the same things without changing any: whether the server
+confirms the enrollment, the daemon, the gh shim and a pending approval. It
+exits 1 until the device is enrolled and the daemon runs.
 down stops the daemon and unenrolls the device (server logout).
 install-hooks adds \`cloud up --hook\` and \`cloud down --hook\` to the Claude
 Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook
@@ -70,7 +74,7 @@ export function parseCloudArgs(argv) {
     else if (a === '--settings') out.settings = val();
     else throw new Error(`unknown option: ${a}\n${CLOUD_USAGE}`);
   }
-  if (!['up', 'down', 'install-hooks', undefined, 'help', '--help', '-h'].includes(sub)) throw new Error(`unknown cloud command: ${sub}\n${CLOUD_USAGE}`);
+  if (!['up', 'status', 'down', 'install-hooks', undefined, 'help', '--help', '-h'].includes(sub)) throw new Error(`unknown cloud command: ${sub}\n${CLOUD_USAGE}`);
   return out;
 }
 
@@ -265,6 +269,55 @@ export async function cloudUp({ harness = null, env = process.env, run = runAgen
   return result;
 }
 
+// The state `up` would act on, read only: nothing is started, enrolled or
+// installed. The enrollment is confirmed with the server when it looks
+// enrolled locally.
+export async function cloudStatus({ harness = null, env = process.env, run = runAgentBot, verify = verifyEnrollment, gateOn = () => isGateEnabled('github-identity', { env }), now = Date.now } = {}) {
+  const base = serverUrl({ env });
+  const slug = resolveAppSlug({ flag: harness, env });
+  const result = { server: base, app: slug, enrollment: null, daemon: null, shim: null, pending: null };
+  if (!base) {
+    result.enrollment = { state: 'server-mode-off', detail: 'set AGENT_BOT_SERVER=https://… in the environment' };
+  } else {
+    const current = enrollmentState({ base, slug, env, now });
+    if (current.state === 'enrolled') {
+      const live = await verify({ base, env: { ...env, AGENT_BOT_SERVER: base } });
+      result.enrollment = !live.ok
+        ? { state: live.reason === 'device-revoked' ? 'revoked' : 'expired', device: current.device.device_id }
+        : { state: live.unverified ? 'enrolled-unconfirmed' : 'enrolled', device: current.device.device_id, ...(live.unverified ? { detail: live.unverified } : {}) };
+    } else {
+      result.enrollment = { state: current.state, ...(current.device?.device_id ? { device: current.device.device_id } : {}) };
+    }
+  }
+  const daemon = run(['daemon', 'status'], { env });
+  result.daemon = daemon.status === 0 && /^running\b/m.test(daemon.stdout)
+    ? { state: 'running', detail: daemon.stdout.trim().split('\n')[0] }
+    : { state: 'not-running', detail: (daemon.stdout || daemon.stderr).trim().split('\n')[0] || null };
+  let enabled = false;
+  try { enabled = gateOn(); } catch { enabled = false; }
+  result.shim = { state: !enabled ? 'not-enabled' : existsSync(join(env.HOME || homedir(), '.config', 'agent-bot', 'bin', 'gh')) ? 'present' : 'missing' };
+  const pending = readPending({ env });
+  if (pending && groupAlive(pending.pid) && pending.prompt && Date.parse(pending.prompt.expires_at ?? 0) > now()) {
+    result.pending = { url: pending.prompt.verification_uri_complete, user_code: pending.prompt.user_code, key_thumbprint: pending.prompt.jkt, expires_at: pending.prompt.expires_at };
+  }
+  result.ready = result.enrollment.state === 'enrolled' && result.daemon.state === 'running';
+  return result;
+}
+
+export function formatStatus(r) {
+  const e = r.enrollment ?? {};
+  const lines = [
+    `server:     ${r.server ?? 'off (AGENT_BOT_SERVER is not set)'}`,
+    `app:        ${r.app ?? 'unknown'}`,
+    `enrollment: ${e.state}${e.device ? ` (${e.device})` : ''}${e.detail ? ` — ${e.detail}` : ''}`,
+    `daemon:     ${r.daemon.state}${r.daemon.detail ? ` — ${r.daemon.detail}` : ''}`,
+    `gh shim:    ${r.shim.state}`,
+  ];
+  if (r.pending) lines.push(`pending:    approve at ${r.pending.url} (code ${r.pending.user_code}, public key thumbprint ${r.pending.key_thumbprint})`);
+  if (!r.ready) lines.push(r.pending ? 'not ready: waiting for the approval above' : 'not ready: run `agent-bot cloud up` to repair');
+  return `${lines.join('\n')}\n`;
+}
+
 export function cloudDown({ env = process.env, run = runAgentBot } = {}) {
   const opts = { env };
   const pending = readPending(opts);
@@ -287,7 +340,7 @@ export function formatUp(r) {
   const lines = [];
   const e = r.enrollment ?? {};
   if (e.state === 'pending') {
-    lines.push(`approve this device: ${e.prompt.verification_uri_complete}`, `  code: ${e.prompt.user_code}`, `  key:  ${e.prompt.jkt}`);
+    lines.push(`approve this device: ${e.prompt.verification_uri_complete}`, `  code: ${e.prompt.user_code}`, `  public key thumbprint (compare it on the approval page): ${e.prompt.jkt}`);
     lines.push(`  (enrolling for ${r.app}; the daemon restarts once it is approved)`);
   } else if (e.state === 'enrolled') lines.push(`enrolled: ${e.device ?? 'yes'} (${r.app ?? 'unknown app'}) at ${r.server}`);
   else lines.push(`enrollment: ${e.state ?? 'unknown'}${e.detail ? ` — ${e.detail}` : ''}`);
@@ -297,6 +350,10 @@ export function formatUp(r) {
   lines.push(`daemon: ${d.state ?? 'unknown'}${d.detail ? ` — ${d.detail}` : ''}`);
   return `${lines.join('\n')}\n`;
 }
+
+// Told to the session at start, so a later "is agent-bot ready?" is answered
+// by the command that knows, not by reading files and ports.
+const STATUS_HINT = 'To check agent-bot at any point, run `agent-bot cloud status` (read-only; add --json). To repair what is down, run `agent-bot cloud up`.\n';
 
 function hookContext(text, event) {
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } })}\n`;
@@ -338,13 +395,18 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
       const r = await cloudUp({ harness: a.harness, env, run, background });
       if (a.hook) {
         const text = r.enrollment?.state === 'pending'
-          ? `agent-bot cloud: this container is not enrolled yet. Tell the user to approve it: ${r.enrollment.prompt.verification_uri_complete} (code ${r.enrollment.prompt.user_code}, key ${r.enrollment.prompt.jkt}).\n${formatUp(r)}`
-          : `agent-bot cloud:\n${formatUp(r)}`;
+          ? `agent-bot cloud: this container is not enrolled yet. Tell the user to approve it: ${r.enrollment.prompt.verification_uri_complete} (code ${r.enrollment.prompt.user_code}; public key thumbprint ${r.enrollment.prompt.jkt}, not a secret, for the user to compare on the approval page). Once approved, the daemon restarts and the gh shim is installed by themselves.\n${formatUp(r)}${STATUS_HINT}`
+          : `agent-bot cloud:\n${formatUp(r)}${STATUS_HINT}`;
         out.write(hookContext(text, 'SessionStart'));
         return 0;
       }
       out.write(a.json ? `${JSON.stringify(r)}\n` : formatUp(r));
       return r.enrollment?.state === 'failed' || r.daemon?.state === 'failed' ? 1 : 0;
+    }
+    if (a.sub === 'status') {
+      const r = await cloudStatus({ harness: a.harness, env, run });
+      out.write(a.json ? `${JSON.stringify(r)}\n` : formatStatus(r));
+      return r.ready ? 0 : 1;
     }
     if (a.sub === 'down') {
       const r = cloudDown({ env, run });
@@ -373,6 +435,9 @@ async function enrollWorker(argv, { env = process.env } = {}) {
   if (enrolled.status !== 0) return enrolled.status ?? 1;
   runAgentBot(['daemon', 'stop'], { env });
   runAgentBot(['daemon', 'start'], { env });
+  // `up` ran before the approval, so it could not install the gh shim then.
+  const shim = ensureGhShim({ env });
+  process.stdout.write(`gh shim: ${shim.state}${shim.detail ? ` — ${shim.detail}` : ''}\n`);
   return 0;
 }
 

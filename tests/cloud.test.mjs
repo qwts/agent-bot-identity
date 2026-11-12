@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { BASE, fakeServer, sandbox, sleep } from './helpers/fake-identity-server.mjs';
 import { enroll } from '../identity/server-client.mjs';
 import {
-  cloudDown, cloudStateDir, cloudUp, ensureDaemon, ensureGhShim, installHooks, main, parseCloudArgs, promptFromLog, resolveAppSlug, startBackgroundEnroll,
+  cloudDown, cloudStateDir, cloudStatus, cloudUp, ensureDaemon, ensureGhShim, installHooks, main, parseCloudArgs, promptFromLog, resolveAppSlug, startBackgroundEnroll,
 } from '../cloud.mjs';
 
 const PROMPT = { user_code: 'ABCD-EFGH', verification_uri: `${BASE}/device`, verification_uri_complete: `${BASE}/device?user_code=ABCD-EFGH`, expires_in: 900, jkt: 'thumb' };
@@ -155,7 +155,8 @@ test('--hook prints Claude Code hook JSON carrying the approval link and never f
   assert.equal(await main(['up', '--hook'], io), 0);
   const hook = JSON.parse(out.pop());
   assert.equal(hook.hookSpecificOutput.hookEventName, 'SessionStart');
-  assert.match(hook.hookSpecificOutput.additionalContext, /Tell the user to approve it: https:\/\/agent-bot\.test\/device\?user_code=ABCD-EFGH \(code ABCD-EFGH, key thumb\)/);
+  assert.match(hook.hookSpecificOutput.additionalContext, /Tell the user to approve it: https:\/\/agent-bot\.test\/device\?user_code=ABCD-EFGH \(code ABCD-EFGH; public key thumbprint thumb, not a secret/);
+  assert.match(hook.hookSpecificOutput.additionalContext, /run `agent-bot cloud status` \(read-only/, 'the session learns how to check later');
 
   const failing = { ...io, background: async () => { throw new Error('disk full'); } };
   assert.equal(await main(['up', '--hook'], failing), 0, 'a hook never blocks the session');
@@ -265,4 +266,45 @@ test('once enrolled, cloud up installs the gh shim bootstrap withheld, and only 
   const enrolled = await cloudUp({ env: upEnv, run: fakeCli().run, verify: async () => ({ ok: true }), shim: () => { shims.push('enrolled'); return { state: 'installed' }; } });
   assert.deepEqual(enrolled.shim, { state: 'installed' });
   assert.deepEqual(shims, ['enrolled']);
+});
+
+test('cloud status reports enrollment, daemon, shim and a pending approval without changing anything', async (t) => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_HARNESS: 'grok' };
+  const running = { 'daemon status': { status: 0, stdout: 'running (pid 1, port 2)\n', stderr: '' } };
+  const stopped = { 'daemon status': { status: 0, stdout: 'not running: daemon state file is stale\n', stderr: '' } };
+
+  // Not enrolled, approval pending: the link is reported, nothing is started.
+  const worker = spawnChild(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
+  worker.unref();
+  t.after(() => { try { process.kill(-worker.pid, 'SIGKILL'); } catch { /* stopped */ } });
+  mkdirSync(cloudStateDir({ env }), { recursive: true });
+  writeFileSync(join(cloudStateDir({ env }), 'enroll-pending.json'), JSON.stringify({ pid: worker.pid, slug: 'grok', server: BASE, prompt: { ...PROMPT, expires_at: new Date(Date.now() + 600_000).toISOString() } }));
+  const cli = fakeCli(stopped);
+  const pending = await cloudStatus({ env, run: cli.run, verify: async () => assert.fail('nothing to confirm'), gateOn: () => true });
+  assert.deepEqual(cli.calls, ['daemon status'], 'status only reads');
+  assert.equal(pending.enrollment.state, 'none');
+  assert.deepEqual(pending.pending, { url: PROMPT.verification_uri_complete, user_code: 'ABCD-EFGH', key_thumbprint: 'thumb', expires_at: pending.pending.expires_at });
+  assert.equal(pending.shim.state, 'missing');
+  assert.equal(pending.ready, false);
+
+  // Enrolled and confirmed, daemon running: ready.
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const ready = await cloudStatus({ env, run: fakeCli(running).run, verify: async () => ({ ok: true }), gateOn: () => false });
+  assert.equal(ready.enrollment.state, 'enrolled');
+  assert.equal(ready.daemon.state, 'running');
+  assert.equal(ready.shim.state, 'not-enabled');
+  assert.equal(ready.ready, true);
+
+  // Refused by the server, or not reachable.
+  assert.equal((await cloudStatus({ env, run: fakeCli(running).run, verify: async () => ({ ok: false, reason: 'invalid_grant' }) })).enrollment.state, 'expired');
+  const unconfirmed = await cloudStatus({ env, run: fakeCli(running).run, verify: async () => ({ ok: true, unverified: 'fetch failed' }) });
+  assert.deepEqual([unconfirmed.enrollment.state, unconfirmed.ready], ['enrolled-unconfirmed', false]);
+  assert.equal((await cloudStatus({ env: { ...sandbox() }, run: fakeCli(running).run })).enrollment.state, 'server-mode-off');
+
+  // The command: exit 0 only when ready.
+  const out = [];
+  const io = { env, out: { write: (s) => out.push(s) }, err: { write: () => {} }, run: fakeCli(stopped).run };
+  assert.equal(await main(['status'], io), 1);
+  assert.match(out.join(''), /daemon: {5}not-running/);
 });
