@@ -40,6 +40,7 @@ import { canonicalJson } from '../canonical-json.mjs';
 import { enforcementProfile } from './identity-format.mjs';
 import { installGhShim } from './install-gh-shim.mjs';
 import { listActions, readAction, transition, writeAction } from './action-ledger.mjs';
+import { describeFetchFailure } from './fetch-diagnosis.mjs';
 
 export const GRANT_DEVICE_CODE = 'urn:ietf:params:oauth:grant-type:device_code';
 export const GRANT_JWT_BEARER = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
@@ -386,8 +387,20 @@ export function saveSoulTokenIssuer(opts = {}, issuer) {
 
 // Never follow redirects: a 3xx could forward device-key assertions or DPoP
 // headers to another origin, or get a foreign key pinned on first use.
-function noRedirect(fetchImpl) {
-  return (url, init = {}) => fetchImpl(url, { ...init, redirect: 'error' });
+//
+// A connection-level failure reaches the operator as Node's bare
+// `fetch failed`; the reason is in `cause`. Name it here, once, for every
+// server-mode request, with the proxy sentence when that is the likely
+// reason (#1373). The cause is kept, so callers that read its code still do.
+function noRedirect(fetchImpl, env = process.env) {
+  return async (url, init = {}) => {
+    try {
+      return await fetchImpl(url, { ...init, redirect: 'error' });
+    } catch (error) {
+      if (!(error instanceof TypeError) || error.message !== 'fetch failed') throw error;
+      throw new TypeError(`fetch failed: ${describeFetchFailure(error, { url, env })}`, { cause: error.cause });
+    }
+  };
 }
 
 async function readJson(res) {
@@ -408,7 +421,7 @@ function oauthError(prefix, body) {
 }
 
 export async function pinServerKey(base, opts = {}, { fetchImpl: rawFetch = fetch } = {}) {
-  const fetchImpl = noRedirect(rawFetch);
+  const fetchImpl = noRedirect(rawFetch, opts.env);
   const pinned = loadPinnedServerKey(opts);
   if (pinned) return pinned;
   const res = await fetchImpl(`${base}/.well-known/agent-bot-server-key`);
@@ -440,7 +453,7 @@ export async function enroll({
   fetchImpl: rawFetch = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onPrompt = () => {},
 } = {}) {
   const requestedFeatures = parseFeatureList([...enabledFeaturesFromEnv(env), ...parseFeatureList(features)]);
-  const fetchImpl = noRedirect(rawFetch);
+  const fetchImpl = noRedirect(rawFetch, env);
   if (enrollToken && (addHarnesses.length > 0 || replaceHarnesses)) {
     throw new Error('--add-harness and --replace-harnesses cannot be used with AGENT_BOT_ENROLL_TOKEN (enrollment token scope is fixed on the server)');
   }
@@ -612,7 +625,7 @@ export class ServerSession {
   constructor({ base, env = process.env, home, fetchImpl = fetch } = {}) {
     this.opts = { env, home };
     this.base = base ?? serverUrl({ env });
-    this.fetch = noRedirect(fetchImpl);
+    this.fetch = noRedirect(fetchImpl, env);
     this.token = null;
     this.tokenInFlight = null;
     this.revokedAt = false;
@@ -648,7 +661,7 @@ export class ServerSession {
       // reached the service. A timeout or reset after connecting might have.
       const code = error?.cause?.code ?? error?.code;
       const neverSent = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
-      throw serverError('credential-unavailable', `the identity service is unreachable (${error?.name === 'TimeoutError' ? 'timed out' : code ?? 'network error'})`, { neverSent });
+      throw serverError('credential-unavailable', `the identity service is unreachable: ${describeFetchFailure(error, { url, env: this.opts.env })}`, { neverSent });
     }
   }
 
