@@ -812,8 +812,14 @@ export async function startTask({
       env,
       home,
       config,
+      // The soul and its worktree do not depend on messaging: an absent or
+      // unpaired agent-comms is reported, not fatal.
+      commsOptional: true,
       ...(comms ? { comms } : {}),
     });
+    if (joined.comms?.joined === false) {
+      process.stderr.write(`start: agent-comms is unavailable (${joined.comms.error}); continuing without messaging\n`);
+    }
     identity = activeIdentity(joined.agentId, stateDir);
     row = showSoul(joined.agentId, popOptions);
     soulResolution = 'created';

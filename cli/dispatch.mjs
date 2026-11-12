@@ -257,6 +257,7 @@ for (const command of [
   { name: 'metrics', visibility: 'public', module: 'metrics.mjs' },
   { name: 'diagnostics', visibility: 'public', module: 'diagnostics-cli.mjs' },
   { name: 'server', visibility: 'public', module: 'identity/server-client.mjs' },
+  { name: 'cloud', visibility: 'public', module: 'cloud.mjs' },
   { name: 'notices', visibility: 'public', module: 'identity/server-notices.mjs' },
   { name: 'credential', visibility: 'internal', module: 'git-credential-bot.mjs' },
   { name: 'worktree-token', visibility: 'internal', module: 'worktree-token.mjs' },

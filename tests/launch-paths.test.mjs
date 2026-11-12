@@ -78,6 +78,7 @@ const LAUNCH_PATHS = {
   'identity/resolve-agent.mjs': [1, 'git'],
   'setup-worktree.mjs': [2, 'git'],
   'start.mjs': [1, 'git'],
+  'cloud.mjs': [3, 'first-party: this runtime\'s own agent-bot (daemon status/start/stop, server enroll/logout) and the detached device-grant worker, cloud.mjs itself'],
   'identity/server-client.mjs': [1, 'git; reads the checkout\'s origin remote for server-mode minting'],
   'session-bind.mjs': [4, 'git; first-party: the installed agent-bot under the caller\'s own env; devin list, the Devin session lookup (#1275)'],
   'identity/signed-commit.mjs': [1, 'git'],
