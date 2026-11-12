@@ -26,7 +26,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadConfig, slugForHarness } from './config.mjs';
 import { detectHarness } from './detect-harness.mjs';
 import { installationPaths } from './install.mjs';
-import { ServerSession, loadDevice, serverHarness, serverStateDir, serverUrl } from './identity/server-client.mjs';
+import { ServerSession, loadDevice, serverHarness, serverStateDir, serverUrl } from './identity-cli.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
