@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { BASE, fakeServer, sandbox, sleep } from './helpers/fake-identity-server.mjs';
 import { enroll } from '../identity/server-client.mjs';
 import {
-  cloudDown, cloudStateDir, cloudUp, ensureDaemon, installHooks, main, parseCloudArgs, promptFromLog, resolveAppSlug, startBackgroundEnroll,
+  cloudDown, cloudStateDir, cloudUp, ensureDaemon, ensureGhShim, installHooks, main, parseCloudArgs, promptFromLog, resolveAppSlug, startBackgroundEnroll,
 } from '../cloud.mjs';
 
 const PROMPT = { user_code: 'ABCD-EFGH', verification_uri: `${BASE}/device`, verification_uri_complete: `${BASE}/device?user_code=ABCD-EFGH`, expires_in: 900, jkt: 'thumb' };
@@ -240,4 +240,29 @@ test('a worker that never shows a prompt is recorded at once, and stopped when t
   assert.deepEqual([recordedWhileWaiting.pid, recordedWhileWaiting.slug, recordedWhileWaiting.prompt], [worker.pid, 'grok', null]);
   assert.ok(await worker.exited(), 'the silent worker group was stopped');
   assert.ok(!existsSync(join(cloudStateDir({ env }), 'enroll-pending.json')));
+});
+
+test('once enrolled, cloud up installs the gh shim bootstrap withheld, and only with github-identity on (#1430 review)', async () => {
+  const env = { ...sandbox() };
+  const cli = fakeCli();
+  assert.deepEqual(ensureGhShim({ env, run: cli.run, gateOn: () => false }), { state: 'not-enabled' });
+  assert.deepEqual(ensureGhShim({ env, run: cli.run, gateOn: () => true }), { state: 'installed' });
+  assert.deepEqual(cli.calls, ['install-gh-shim']);
+  mkdirSync(join(env.HOME, '.config', 'agent-bot', 'bin'), { recursive: true });
+  writeFileSync(join(env.HOME, '.config', 'agent-bot', 'bin', 'gh'), '#!/bin/sh\n');
+  assert.deepEqual(ensureGhShim({ env, run: cli.run, gateOn: () => true }), { state: 'present' });
+  assert.equal(cli.calls.length, 1);
+  const failing = fakeCli({ 'install-gh-shim': { status: 1, stdout: '', stderr: 'no gh on PATH\n' } });
+  assert.deepEqual(ensureGhShim({ env: { ...sandbox() }, run: failing.run, gateOn: () => true }), { state: 'failed', detail: 'no gh on PATH' });
+
+  // cloud up asks for it only once the device is enrolled, never while a grant is pending.
+  const upEnv = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_HARNESS: 'grok' };
+  const shims = [];
+  const pending = await cloudUp({ env: upEnv, run: fakeCli().run, shim: () => { shims.push('pending'); return { state: 'installed' }; }, background: async () => ({ state: 'pending', prompt: PROMPT }) });
+  assert.equal(pending.shim, undefined);
+  const srv = fakeServer();
+  await enroll({ base: BASE, env: upEnv, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const enrolled = await cloudUp({ env: upEnv, run: fakeCli().run, verify: async () => ({ ok: true }), shim: () => { shims.push('enrolled'); return { state: 'installed' }; } });
+  assert.deepEqual(enrolled.shim, { state: 'installed' });
+  assert.deepEqual(shims, ['enrolled']);
 });

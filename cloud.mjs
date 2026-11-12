@@ -23,7 +23,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, r
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadConfig, slugForHarness } from './config.mjs';
+import { isGateEnabled, loadConfig, slugForHarness } from './config.mjs';
 import { detectHarness } from './detect-harness.mjs';
 import { installationPaths } from './install.mjs';
 import { ServerSession, loadDevice, serverHarness, serverStateDir, serverUrl } from './identity-cli.mjs';
@@ -213,7 +213,21 @@ export async function verifyEnrollment({ base, env = process.env, fetchImpl = fe
   }
 }
 
-export async function cloudUp({ harness = null, env = process.env, run = runAgentBot, background = startBackgroundEnroll, verify = verifyEnrollment } = {}) {
+// Bootstrap withholds the fail-closed gh shim until credentials are ready,
+// which on a fresh host means until the device is enrolled; once it is, the
+// shim goes in when the github-identity gate is on.
+export function ensureGhShim({ env = process.env, run = runAgentBot, gateOn = () => isGateEnabled('github-identity', { env }) } = {}) {
+  let enabled = false;
+  try { enabled = gateOn(); } catch { enabled = false; }
+  if (!enabled) return { state: 'not-enabled' };
+  if (existsSync(join(env.HOME || homedir(), '.config', 'agent-bot', 'bin', 'gh'))) return { state: 'present' };
+  const installed = run(['install-gh-shim'], { env });
+  return installed.status === 0
+    ? { state: 'installed' }
+    : { state: 'failed', detail: (installed.stderr || installed.stdout).trim().split('\n').pop() };
+}
+
+export async function cloudUp({ harness = null, env = process.env, run = runAgentBot, background = startBackgroundEnroll, verify = verifyEnrollment, shim = ensureGhShim } = {}) {
   const base = serverUrl({ env });
   const result = { server: base, daemon: null, enrollment: null, app: null };
   if (!base) {
@@ -247,6 +261,7 @@ export async function cloudUp({ harness = null, env = process.env, run = runAgen
     }
   }
   result.daemon = ensureDaemon({ run, env: serverEnv });
+  if (result.enrollment?.state === 'enrolled') result.shim = shim({ env: serverEnv, run });
   return result;
 }
 
@@ -277,6 +292,7 @@ export function formatUp(r) {
   } else if (e.state === 'enrolled') lines.push(`enrolled: ${e.device ?? 'yes'} (${r.app ?? 'unknown app'}) at ${r.server}`);
   else lines.push(`enrollment: ${e.state ?? 'unknown'}${e.detail ? ` — ${e.detail}` : ''}`);
   if (r.warning) lines.push(`warning: ${r.warning}`);
+  if (r.shim && r.shim.state !== 'not-enabled') lines.push(`gh shim: ${r.shim.state}${r.shim.detail ? ` — ${r.shim.detail}` : ''}`);
   const d = r.daemon ?? {};
   lines.push(`daemon: ${d.state ?? 'unknown'}${d.detail ? ` — ${d.detail}` : ''}`);
   return `${lines.join('\n')}\n`;

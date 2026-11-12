@@ -11,10 +11,25 @@ const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const SETUP = join(REPO, 'scripts', 'cloud', 'setup.sh');
 const PLATFORM = `linux-${arch() === 'arm64' ? 'arm64' : 'x64'}`;
 
+const READY_CHECKS = [
+  { id: 'config.profile', status: 'ready' },
+  { id: 'config.feature_gates', status: 'ready' },
+  { id: 'runtime.installed_cli', status: 'ready' },
+];
+// A fresh host before enrollment: every App's credential check waits, and so
+// does the gh shim, which bootstrap installs only once credentials are ready.
+const PENDING = {
+  ready: false,
+  machine: {
+    checks: [...READY_CHECKS, { id: 'shim.gh', status: 'failed', code: 'gh-shim-missing' }],
+    apps: [{ slug: 'acme-claude-agent', credential: { id: 'credential.local', status: 'failed', code: 'provider-unavailable' }, live_mint: { id: 'credential.live_mint', status: 'skipped' } }],
+  },
+};
+
 // A release-shaped archive: the real install.sh beside a bundle whose
 // agent-bot only records what it was asked. `cloud` and `bootstrap` answer as
 // the case needs.
-function fakeDist(t, { cloud = true, bootstrapExit = 0, bootstrapOutput = '', corrupt = false } = {}) {
+function fakeDist(t, { cloud = true, bootstrapExit = 0, readiness = null, corrupt = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'cloud-setup-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const src = join(root, 'src');
@@ -30,12 +45,14 @@ case "$1 $2" in
   "--version "*) echo 0.0.0-test ;;
   "cloud --help") ${cloud ? 'exit 0' : 'exit 1'} ;;
   "cloud install-hooks") echo "added SessionStart and SessionEnd hooks" ;;
-  "bootstrap "*) printf '%s\\n' ${JSON.stringify(bootstrapOutput)}; exit ${bootstrapExit} ;;
+  "bootstrap "*) cat "$(dirname "$0")/../readiness.json"; exit ${bootstrapExit} ;;
 esac
 exit 0
 `, { mode: 0o755 });
   writeFileSync(join(src, 'bundle', 'bin', 'agent-comms'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  writeFileSync(join(src, 'bundle', 'node', 'bin', 'node'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  // The readiness check runs on the bundled Node, so the stand-in is a real one.
+  writeFileSync(join(src, 'bundle', 'node', 'bin', 'node'), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(src, 'bundle', 'readiness.json'), JSON.stringify(readiness ?? { ready: true, machine: { checks: READY_CHECKS, apps: [] } }));
   writeFileSync(join(src, 'bundle', 'lib', 'agent-comms', 'bin', 'agent-comms.mjs'), '');
   const dist = join(root, 'dist');
   mkdirSync(dist);
@@ -67,21 +84,33 @@ test('setup installs the bundle for this user and registers the session hooks', 
   assert.equal(setup(box).status, 0);
 });
 
-test('a profile is applied with the systemd load skipped; failed credential checks before enrollment are fine, a failed profile is not', (t) => {
+test('a profile is applied with github-identity on; only the checks that wait for enrollment may fail (#1430 review)', (t) => {
   const profile = join(mkdtempSync(join(tmpdir(), 'cloud-setup-profile-')), 'org.json');
   writeFileSync(profile, '{}');
-  const ready = fakeDist(t, { bootstrapExit: 1, bootstrapOutput: '  ok    organization profile acme schema v1\n  FAIL  [acme-claude-agent] not enrolled' });
-  const r = setup(ready, ['--profile', profile]);
+  const pending = fakeDist(t, { bootstrapExit: 1, readiness: PENDING });
+  const r = setup(pending, ['--profile', profile]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /credential checks wait for enrollment/);
-  assert.ok(ready.calls().includes(`1|bootstrap --profile ${profile} --with-gh-shim --machine-only`));
+  assert.match(r.stdout, /credentials and the gh shim follow enrollment/);
+  assert.ok(pending.calls().includes(`1|bootstrap --profile ${profile} --features github-identity --with-gh-shim --machine-only --json`));
 
-  const broken = fakeDist(t, { bootstrapExit: 1, bootstrapOutput: '  FAIL  organization profile is not compatible' });
-  const failed = setup(broken, ['--profile', profile]);
-  assert.equal(failed.status, 1);
-  assert.match(failed.stderr, /did not apply the organization profile/);
-  assert.ok(!broken.calls().includes('|cloud install-hooks'), 'nothing past a failed profile');
+  const ready = fakeDist(t);
+  assert.match(setup(ready, ['--profile', profile]).stdout, /machine readiness passes/);
 
+  const refused = {
+    'a failed runtime install, profile applied or not': { ...PENDING, machine: { ...PENDING.machine, checks: [...PENDING.machine.checks, { id: 'bootstrap.runtime', status: 'failed', code: 'runtime-install-failed', message: 'bootstrap could not install the managed CLI and hooks' }] } },
+    'a profile that did not apply': { ...PENDING, machine: { ...PENDING.machine, checks: PENDING.machine.checks.filter((c) => c.id !== 'config.profile') } },
+    'the github-identity gate off': { ...PENDING, machine: { ...PENDING.machine, checks: PENDING.machine.checks.map((c) => (c.id === 'config.feature_gates' ? { ...c, status: 'warning' } : c)) } },
+    'a credential failure that enrollment does not fix': { ...PENDING, machine: { ...PENDING.machine, apps: [{ slug: 'acme-claude-agent', credential: { id: 'credential.local', status: 'failed', code: 'app-key-mismatch' } }] } },
+    'a shim that failed to install': { ...PENDING, machine: { ...PENDING.machine, checks: [...READY_CHECKS, { id: 'bootstrap.gh_shim', status: 'failed', code: 'gh-shim-install-failed' }] } },
+    'no readiness at all': {},
+  };
+  for (const [name, readiness] of Object.entries(refused)) {
+    const box = fakeDist(t, { bootstrapExit: 1, readiness });
+    const failed = setup(box, ['--profile', profile]);
+    assert.equal(failed.status, 1, name);
+    assert.match(failed.stderr, /bootstrap failed beyond the credential checks that wait for enrollment/, name);
+    assert.ok(!box.calls().includes('|cloud install-hooks'), `${name}: nothing past a failed bootstrap`);
+  }
   assert.match(setup(ready, ['--profile', 'http://example.invalid/p.json']).stderr, /must be https/);
 });
 

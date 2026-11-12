@@ -10,9 +10,9 @@
 #    release's SHA256SUMS), or a bundle built from a source checkout
 #    (--from-checkout) for a change that is not released yet.
 # 2. Apply the organization profile when one is given (agent-bot bootstrap
-#    --machine-only). Its credential checks fail until the device is
-#    enrolled, which is expected at this point; the profile itself must
-#    apply.
+#    --machine-only, github-identity on). Before the device is enrolled only
+#    the per-App credential checks may fail, and the gh shim waits for them;
+#    any other failed readiness check fails this script.
 # 3. Register `agent-bot cloud up` and `cloud down` as the Claude Code
 #    SessionStart and SessionEnd hooks. They start the daemon and enroll the
 #    device when a session starts, and unenroll it when the session ends.
@@ -101,6 +101,31 @@ BIN=$HOME/.local/bin/agent-bot
 say "installed $NAME ($("$BIN" --version 2>/dev/null || echo 'version unknown'))"
 
 # ---------------------------------------------------------------- profile
+# Readiness, check by check. Before the device is enrolled (at session start)
+# two things are expected to fail and nothing else may: each App's credential
+# check, with a "not enrolled yet" code, and the gh shim, which bootstrap
+# installs only once credentials are ready so gh is never fail-closed with
+# nothing behind it (`agent-bot cloud up` installs it after enrolling).
+READINESS='
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const checks = r.machine?.checks ?? [];
+const status = (id) => checks.find((c) => c.id === id)?.status;
+const problems = [];
+for (const id of ["config.profile", "config.feature_gates"]) {
+  if (status(id) !== "ready") problems.push(`${id} is ${status(id) ?? "missing"}`);
+}
+for (const c of checks) {
+  if (c.status === "failed" && !(c.id === "shim.gh" && c.code === "gh-shim-missing")) problems.push(`${c.id}: ${c.code ?? ""} ${c.message ?? ""}`);
+}
+const pending = new Set(["provider-unavailable", "server-device-not-enrolled", "server-harness-not-enrolled"]);
+for (const app of r.machine?.apps ?? []) {
+  for (const c of [app.credential, app.live_mint]) {
+    if (c?.status === "failed" && !pending.has(c.code)) problems.push(`${app.slug} ${c.id}: ${c.code ?? ""} ${c.message ?? ""}`);
+  }
+}
+if (problems.length) { console.error(problems.join("\n")); process.exit(1); }
+console.log(r.ready ? "ready" : "pending");
+'
 if [ -n "$PROFILE" ]; then
   case "$PROFILE" in
     https://*) curl -fsSL -o "$WORK/profile.json" "$PROFILE" || die "could not fetch the profile at $PROFILE"; PROFILE_FILE=$WORK/profile.json ;;
@@ -109,13 +134,18 @@ if [ -n "$PROFILE" ]; then
   esac
   # No systemd user session here: the unit is written but not loaded, and
   # `agent-bot cloud up` starts the daemon when a session starts.
-  if AGENT_BOT_SUPERVISOR_SKIP_LOAD=1 "$BIN" bootstrap --profile "$PROFILE_FILE" --with-gh-shim --machine-only > "$WORK/bootstrap.log" 2>&1; then
-    say "applied the organization profile; machine readiness passes"
-  elif grep -Eq '^[[:space:]]+ok[[:space:]]+organization profile' "$WORK/bootstrap.log"; then
-    say "applied the organization profile; credential checks wait for enrollment at session start"
+  AGENT_BOT_SUPERVISOR_SKIP_LOAD=1 "$BIN" bootstrap --profile "$PROFILE_FILE" --features github-identity --with-gh-shim \
+    --machine-only --json > "$WORK/bootstrap.json" 2> "$WORK/bootstrap.err" || true
+  verdict=$("$HOME/.local/bin/node" -e "$READINESS" "$WORK/bootstrap.json" 2> "$WORK/readiness.err") || verdict=failed
+  if [ "$verdict" = ready ] || [ "$verdict" = pending ]; then
+    if [ "$verdict" = ready ]; then
+      say "applied the organization profile; machine readiness passes"
+    else
+      say "applied the organization profile with github-identity on; credentials and the gh shim follow enrollment at session start"
+    fi
   else
-    cat "$WORK/bootstrap.log" >&2
-    die "bootstrap did not apply the organization profile"
+    cat "$WORK/readiness.err" "$WORK/bootstrap.err" >&2
+    die "bootstrap failed beyond the credential checks that wait for enrollment"
   fi
 fi
 
