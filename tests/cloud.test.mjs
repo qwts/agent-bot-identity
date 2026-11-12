@@ -51,7 +51,7 @@ test('cloud up on an enrolled device only repairs the daemon', async () => {
   const srv = fakeServer();
   await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
   const cli = fakeCli({ 'daemon status': { status: 0, stdout: 'not running\n', stderr: '' } });
-  const r = await cloudUp({ env, run: cli.run, background: async () => assert.fail('no enrollment is started') });
+  const r = await cloudUp({ env, run: cli.run, verify: async () => ({ ok: true }), background: async () => assert.fail('no enrollment is started') });
   assert.equal(r.enrollment.state, 'enrolled');
   assert.equal(r.app, 'grok');
   assert.equal(r.daemon.state, 'started');
@@ -81,7 +81,7 @@ test('cloud up re-enrolls with --force a device the server revoked, and reports 
   const device = JSON.parse(readFileSync(join(env.AGENT_BOT_SERVER_STATE, 'device.json'), 'utf8'));
   writeFileSync(join(env.AGENT_BOT_SERVER_STATE, 'device.json'), JSON.stringify({ ...device, revoked_at: '2026-01-01T00:00:00Z' }));
   const seen = [];
-  await cloudUp({ env, run: fakeCli().run, background: async (o) => { seen.push(o); return { state: 'pending', prompt: PROMPT }; } });
+  await cloudUp({ env, run: fakeCli().run, verify: async () => assert.fail('a revoked record needs no live check'), background: async (o) => { seen.push(o); return { state: 'pending', prompt: PROMPT }; } });
   assert.equal(seen[0].force, true);
 
   const off = await cloudUp({ env: { ...sandbox() }, run: fakeCli().run });
@@ -162,4 +162,82 @@ test('--hook prints Claude Code hook JSON carrying the approval link and never f
   assert.equal(await main(['up'], failing), 1);
   assert.match(err.pop(), /disk full/);
   assert.equal(await main(['down', '--hook'], { ...io, run: () => ({ status: 1, stdout: '', stderr: 'x' }) }), 0);
+});
+
+test('cloud up re-enrolls a device past its recorded expiry, or one the server refuses, and keeps one it cannot reach (#1423 review)', async () => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE, AGENT_BOT_SERVER_HARNESS: 'grok' };
+  const srv = fakeServer();
+  await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
+  const file = join(env.AGENT_BOT_SERVER_STATE, 'device.json');
+  const device = JSON.parse(readFileSync(file, 'utf8'));
+  const grant = async (o) => { grants.push(o); return { state: 'pending', prompt: PROMPT }; };
+  let grants = [];
+
+  writeFileSync(file, JSON.stringify({ ...device, expires_at: '2020-01-01T00:00:00Z' }));
+  await cloudUp({ env, run: fakeCli().run, verify: async () => assert.fail('an expired record needs no live check'), background: grant });
+  assert.deepEqual(grants.map((g) => g.force), [true], 'past its expires_at: forced re-enrollment');
+
+  writeFileSync(file, JSON.stringify(device));
+  grants = [];
+  await cloudUp({ env, run: fakeCli().run, verify: async () => ({ ok: false, reason: 'invalid_grant' }), background: grant });
+  assert.deepEqual(grants.map((g) => g.force), [true], 'refused by the server (idle expiry): forced re-enrollment');
+
+  grants = [];
+  const kept = await cloudUp({ env, run: fakeCli().run, verify: async () => ({ ok: true, unverified: 'fetch failed' }), background: grant });
+  assert.equal(grants.length, 0, 'an unreachable server never throws the enrollment away');
+  assert.equal(kept.enrollment.state, 'enrolled');
+  assert.match(kept.warning, /could not confirm .*fetch failed/);
+
+  // The real check against the fake server: refused once the server revoked it.
+  srv.revokedDevice = device.device_id;
+  const { verifyEnrollment } = await import('../cloud.mjs');
+  assert.deepEqual(await verifyEnrollment({ base: BASE, env, fetchImpl: srv.fetch }), { ok: false, reason: 'device-revoked' });
+});
+
+function detachedSleeper(t) {
+  const child = spawnChild(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
+  child.unref();
+  t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* stopped */ } });
+  child.exited = () => new Promise((resolve) => { if (child.exitCode !== null || child.signalCode) resolve(true); child.once('exit', () => resolve(true)); setTimeout(() => resolve(false), 2000); });
+  return child;
+}
+
+test('a pending grant is reused only for the same App and server; another target stops it and starts anew (#1423 review)', async (t) => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const first = detachedSleeper(t);
+  const second = detachedSleeper(t);
+  const workers = [first, second];
+  const spawned = [];
+  const spawn = (cmd, args) => {
+    spawned.push(args[args.indexOf('--harness') + 1]);
+    writeFileSync(join(cloudStateDir({ env }), 'enroll.log'), `${JSON.stringify({ prompt: PROMPT })}\n`);
+    return { pid: workers[spawned.length - 1].pid, unref() {} };
+  };
+  await startBackgroundEnroll({ slug: 'grok', force: false, env, spawn, sleep: async () => {} });
+  assert.equal((await startBackgroundEnroll({ slug: 'grok', force: false, env, spawn, sleep: async () => {} })).reused, true);
+  const other = await startBackgroundEnroll({ slug: 'claude', force: false, env, spawn, sleep: async () => {} });
+  assert.equal(other.reused, false);
+  assert.deepEqual(spawned, ['grok', 'claude']);
+  assert.ok(await first.exited(), 'the grant for the old App was stopped');
+  const pending = JSON.parse(readFileSync(join(cloudStateDir({ env }), 'enroll-pending.json'), 'utf8'));
+  assert.deepEqual([pending.slug, pending.server, pending.pid], ['claude', BASE, second.pid]);
+});
+
+test('a worker that never shows a prompt is recorded at once, and stopped when the wait runs out (#1423 review)', async (t) => {
+  const env = { ...sandbox(), AGENT_BOT_SERVER: BASE };
+  const worker = detachedSleeper(t);
+  let clock = 0;
+  let recordedWhileWaiting = null;
+  const result = await startBackgroundEnroll({
+    slug: 'grok', force: false, env, wait: 50, now: () => clock,
+    spawn: () => ({ pid: worker.pid, unref() {} }),
+    sleep: async () => {
+      recordedWhileWaiting ??= JSON.parse(readFileSync(join(cloudStateDir({ env }), 'enroll-pending.json'), 'utf8'));
+      clock += 100;
+    },
+  });
+  assert.equal(result.state, 'failed');
+  assert.deepEqual([recordedWhileWaiting.pid, recordedWhileWaiting.slug, recordedWhileWaiting.prompt], [worker.pid, 'grok', null]);
+  assert.ok(await worker.exited(), 'the silent worker group was stopped');
+  assert.ok(!existsSync(join(cloudStateDir({ env }), 'enroll-pending.json')));
 });

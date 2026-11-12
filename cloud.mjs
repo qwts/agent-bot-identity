@@ -26,7 +26,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadConfig, slugForHarness } from './config.mjs';
 import { detectHarness } from './detect-harness.mjs';
 import { installationPaths } from './install.mjs';
-import { loadDevice, serverHarness, serverStateDir, serverUrl } from './identity/server-client.mjs';
+import { ServerSession, loadDevice, serverHarness, serverStateDir, serverUrl } from './identity/server-client.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
@@ -132,8 +132,12 @@ export function promptFromLog(text) {
 // new enrollment. Returns the approval prompt as soon as the worker logs it.
 export async function startBackgroundEnroll({ slug, force, env = process.env, spawn = spawnChild, wait = PROMPT_WAIT_MS, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
   const opts = { env };
+  const server = serverUrl({ env });
   const pending = readPending(opts);
-  if (pending && groupAlive(pending.pid) && pending.prompt && Date.parse(pending.prompt.expires_at ?? 0) > now()) {
+  // Reused only for the same App and server: a grant for another target
+  // would show the owner an approval for something this run did not ask for.
+  if (pending && pending.slug === slug && pending.server === server && groupAlive(pending.pid)
+    && pending.prompt && Date.parse(pending.prompt.expires_at ?? 0) > now()) {
     return { state: 'pending', prompt: pending.prompt, reused: true };
   }
   if (pending) stopGroup(pending.pid);
@@ -150,18 +154,27 @@ export async function startBackgroundEnroll({ slug, force, env = process.env, sp
     closeSync(fd);
   }
   child.unref?.();
+  // Recorded before waiting, so `cloud down` finds the worker even when no
+  // prompt ever appears.
+  writePrivateJson(pendingPath(opts), { pid: child.pid, slug, server, prompt: null });
   const deadline = now() + wait;
   for (;;) {
     let text = '';
     try { text = readFileSync(log, 'utf8'); } catch { /* not written yet */ }
     const prompt = promptFromLog(text);
     if (prompt) {
-      const record = { pid: child.pid, slug, prompt: { ...prompt, expires_at: new Date(now() + (Number(prompt.expires_in) || 900) * 1000).toISOString() } };
+      const record = { pid: child.pid, slug, server, prompt: { ...prompt, expires_at: new Date(now() + (Number(prompt.expires_in) || 900) * 1000).toISOString() } };
       writePrivateJson(pendingPath(opts), record);
       return { state: 'pending', prompt: record.prompt, reused: false };
     }
     if (/^enrolled\b/m.test(text) || /"device_id"/.test(text)) return { state: 'enrolled' };
-    if (now() >= deadline) return { state: 'failed', detail: text.trim().split('\n').pop() || 'no approval prompt within the wait' };
+    if (now() >= deadline) {
+      // A worker that never showed a prompt is stopped, not left to enroll
+      // and restart the daemon after the caller has moved on.
+      stopGroup(child.pid);
+      try { rmSync(pendingPath(opts), { force: true }); } catch { /* already gone */ }
+      return { state: 'failed', detail: text.trim().split('\n').pop() || 'no approval prompt within the wait' };
+    }
     await sleep(250);
   }
 }
@@ -176,17 +189,31 @@ function writePrivateJson(path, value) {
 // Enrolled for this server and App, and not known to be revoked. A device the
 // server since revoked or expired is found by its first call and re-enrolled
 // by `up` run again with that knowledge (enroll --force).
-export function enrollmentState({ base, slug, env = process.env } = {}) {
+export function enrollmentState({ base, slug, env = process.env, now = Date.now } = {}) {
   let device = null;
   try { device = loadDevice({ env }, { includeOutcomes: false }); } catch { return { state: 'unreadable' }; }
   if (!device) return { state: 'none' };
   if (device.server !== base) return { state: 'other-server', device };
   if (device.revoked_at) return { state: 'revoked', device };
+  if (device.expires_at && Date.parse(device.expires_at) <= now()) return { state: 'expired', device };
   if (slug && Array.isArray(device.harnesses) && !device.harnesses.includes(slug)) return { state: 'other-app', device };
   return { state: 'enrolled', device };
 }
 
-export async function cloudUp({ harness = null, env = process.env, run = runAgentBot, background = startBackgroundEnroll } = {}) {
+// The server's own answer for a device that looks enrolled locally: an idle
+// expiry or a revoke from /devices leaves no local trace. Only a refusal
+// re-enrolls; an unreachable server leaves the enrollment as it is.
+export async function verifyEnrollment({ base, env = process.env, fetchImpl = fetch } = {}) {
+  try {
+    await new ServerSession({ base, env, fetchImpl }).whoami();
+    return { ok: true };
+  } catch (error) {
+    if (error?.code === 'device-revoked' || error?.code === 'invalid_grant') return { ok: false, reason: error.code };
+    return { ok: true, unverified: error?.message ?? String(error) };
+  }
+}
+
+export async function cloudUp({ harness = null, env = process.env, run = runAgentBot, background = startBackgroundEnroll, verify = verifyEnrollment } = {}) {
   const base = serverUrl({ env });
   const result = { server: base, daemon: null, enrollment: null, app: null };
   if (!base) {
@@ -197,7 +224,12 @@ export async function cloudUp({ harness = null, env = process.env, run = runAgen
   const serverEnv = { ...env, AGENT_BOT_SERVER: base };
   const slug = resolveAppSlug({ flag: harness, env });
   result.app = slug;
-  const current = enrollmentState({ base, slug, env });
+  let current = enrollmentState({ base, slug, env });
+  if (current.state === 'enrolled') {
+    const live = await verify({ base, env: serverEnv });
+    if (!live.ok) current = { state: live.reason === 'device-revoked' ? 'revoked' : 'expired', device: current.device };
+    else if (live.unverified) result.warning = `could not confirm the enrollment with the server: ${live.unverified}`;
+  }
   if (current.state === 'enrolled') {
     result.enrollment = { state: 'enrolled', device: current.device.device_id };
     try { rmSync(pendingPath({ env }), { force: true }); } catch { /* nothing pending */ }
@@ -244,6 +276,7 @@ export function formatUp(r) {
     lines.push(`  (enrolling for ${r.app}; the daemon restarts once it is approved)`);
   } else if (e.state === 'enrolled') lines.push(`enrolled: ${e.device ?? 'yes'} (${r.app ?? 'unknown app'}) at ${r.server}`);
   else lines.push(`enrollment: ${e.state ?? 'unknown'}${e.detail ? ` — ${e.detail}` : ''}`);
+  if (r.warning) lines.push(`warning: ${r.warning}`);
   const d = r.daemon ?? {};
   lines.push(`daemon: ${d.state ?? 'unknown'}${d.detail ? ` — ${d.detail}` : ''}`);
   return `${lines.join('\n')}\n`;
