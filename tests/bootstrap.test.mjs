@@ -1393,3 +1393,34 @@ test('bootstrap --features and AGENT_BOT_ENABLE_FEATURES persist feature gates t
   });
   assert.equal(existsSync(bootstrapConfigPath(wtHome)), false);
 });
+
+test('an unwritable Codex gh override is a warning of its own, not a failed gh shim (#1374)', async () => {
+  const deps = {
+    home: '/home/test', env: { HOME: '/home/test' },
+    installConfig: () => ({ config: { apps: { codex: 'codex-agent' }, features: { 'github-identity': true } }, updated: true }),
+    installRuntime: () => ({ executable: '/home/test/.local/bin/agent-bot' }),
+    reconcileCredentials: () => [],
+    run: () => {},
+    collect: (options) => readyReport(options.scope),
+  };
+  const dir = '/home/test/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override';
+  const report = await bootstrap(parseBootstrapArgs(['--config', '/profile.json', '--with-gh-shim', '--machine-only']), {
+    ...deps,
+    installShim: () => ({ codexShim: null, codexOverride: { status: 'unwritable', dir, code: 'EACCES', ownerUid: 0 } }),
+  });
+  assert.equal(report.ready, true);
+  assert.equal(report.machine.status, 'ready');
+  const check = report.machine.checks.find((entry) => entry.id === 'bootstrap.codex_gh_override');
+  assert.equal(check.status, 'warning');
+  assert.equal(check.code, 'codex-gh-override-unwritable');
+  assert.ok(check.message.includes(dir));
+  assert.match(check.message, /owned by uid 0/);
+  assert.equal(report.machine.checks.some((entry) => entry.id === 'bootstrap.gh_shim'), false);
+
+  // An installed override adds nothing, and a failed primary shim is still a failure.
+  const clean = await bootstrap(parseBootstrapArgs(['--config', '/profile.json', '--with-gh-shim', '--machine-only']), {
+    ...deps,
+    installShim: () => ({ codexOverride: { status: 'installed', dir } }),
+  });
+  assert.equal(clean.machine.checks.some((entry) => entry.id === 'bootstrap.codex_gh_override'), false);
+});

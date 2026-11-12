@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync,
-  writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync,
+  statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  codexDesktopGhStatePath, inspectConfiguredCodexDesktopGh, inspectGhInterposer,
+  codexDesktopGhStatePath, codexOverrideNotice, inspectConfiguredCodexDesktopGh, inspectGhInterposer,
   inspectShellGhShim,
   installGhInterposer, installGhShim, restoreGhInterposer,
 } from '../install-gh-shim.mjs';
@@ -390,4 +390,51 @@ test('gh shim installer preserves foreign files and symlinks', () => {
   writeFileSync(join(otherHome, 'foreign-gh'), 'foreign\n');
   symlinkSync(join(otherHome, 'foreign-gh'), join(otherHome, '.local', 'bin', 'gh'));
   assert.throws(() => installGhShim({ home: otherHome }), /foreign symlink/);
+});
+
+test('an unwritable Codex runtime override is reported and does not fail the primary shim (#1374)', (t) => {
+  if (process.platform === 'win32' || process.getuid() === 0) {
+    t.skip('needs a directory the test account cannot write to');
+    return;
+  }
+  const home = homeFixture();
+  const codexOverrideDir = join(home, 'codex-runtime', 'bin', 'override');
+  mkdirSync(codexOverrideDir, { recursive: true });
+  chmodSync(codexOverrideDir, 0o555);
+  t.after(() => chmodSync(codexOverrideDir, 0o755));
+
+  const installed = installGhShim({ home, codexOverrideDir });
+
+  // The primary shim and its PATH link are in place and inspect as ready.
+  assert.ok(readFileSync(installed.shimPath, 'utf8').includes(GH_SHIM_MARKER));
+  assert.equal(readlinkSync(installed.localShim), installed.shimPath);
+  // The override is a distinct result, and the directory is left as it was.
+  assert.equal(installed.codexShim, null);
+  assert.equal(installed.codexOverride.status, 'unwritable');
+  assert.equal(installed.codexOverride.code, 'EACCES');
+  assert.equal(installed.codexOverride.dir, codexOverrideDir);
+  assert.equal(statSync(codexOverrideDir).mode & 0o777, 0o555);
+  assert.deepEqual(readdirSync(codexOverrideDir), []);
+  const notice = codexOverrideNotice(installed.codexOverride);
+  assert.match(notice, /Codex runtime gh override was not installed/);
+  assert.match(notice, /managed gh shim is installed/);
+  assert.ok(notice.includes(codexOverrideDir));
+});
+
+test('a writable Codex runtime override reports installed and has no notice', () => {
+  const home = homeFixture();
+  const codexOverrideDir = join(home, 'codex-runtime', 'bin', 'override');
+  mkdirSync(codexOverrideDir, { recursive: true });
+  const installed = installGhShim({ home, codexOverrideDir });
+  assert.deepEqual(installed.codexOverride, { status: 'installed', dir: codexOverrideDir });
+  assert.equal(codexOverrideNotice(installed.codexOverride), null);
+  assert.equal(codexOverrideNotice(null), null);
+});
+
+test('a real file at the Codex override path still fails: only an unwritable directory is optional', () => {
+  const home = homeFixture();
+  const codexOverrideDir = join(home, 'codex-runtime', 'bin', 'override');
+  mkdirSync(codexOverrideDir, { recursive: true });
+  writeFileSync(join(codexOverrideDir, 'gh'), '#!/bin/sh\n', { mode: 0o755 });
+  assert.throws(() => installGhShim({ home, codexOverrideDir }), /real file/);
 });

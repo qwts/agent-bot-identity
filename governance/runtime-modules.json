@@ -651,6 +651,7 @@
         "appOwnerMismatch",
         "attestedOwnerKeys",
         "cacheAppDoctorRows",
+        "codexOverrideNotice",
         "createSecretProviderRegistry",
         "discoverTranscript",
         "enroll",
