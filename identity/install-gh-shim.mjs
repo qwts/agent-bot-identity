@@ -66,6 +66,21 @@ function installManagedShimLink({ path, shimPath, binDir, lstat, readlink, remov
   return path;
 }
 
+// The errors that mean "this account may not write here", as opposed to a
+// path that holds something unexpected.
+const UNWRITABLE = new Set(['EACCES', 'EPERM', 'EROFS']);
+
+// What to tell the operator when the optional Codex runtime override could
+// not be written (#1374). One sentence, no secrets: a directory and its owner.
+export function codexOverrideNotice(codexOverride) {
+  if (codexOverride?.status !== 'unwritable') return null;
+  const owner = codexOverride.ownerUid == null ? 'another account' : `uid ${codexOverride.ownerUid}`;
+  return `the Codex runtime gh override was not installed: ${codexOverride.dir} is not writable `
+    + `(${codexOverride.code}, owned by ${owner}). The managed gh shim is installed and is not affected. `
+    + 'Have the owner of that directory make it writable for this account, then run the install again; '
+    + 'agent-bot does not change its mode or owner.';
+}
+
 export const GH_INTERPOSER_BACKUP_SUFFIX = '.agent-bot-real';
 export const GH_INTERPOSER_LEGACY_BACKUP_SUFFIX = '.bak';
 const CODEX_DESKTOP_GH_STATE_FILE = 'codex-desktop-gh.json';
@@ -458,17 +473,32 @@ export function installGhShim({
     path: localShim, shimPath, binDir, lstat, readlink, remove, symlink,
   });
 
+  // The Codex runtime override is optional and found, not asked for (#1374).
+  // A directory this account cannot write to (another owner, a read-only
+  // mount) is reported and left alone: its mode and owner are never changed,
+  // and the primary shim above is already installed and stays usable. Any
+  // other refusal, such as a real file or a foreign symlink at the path,
+  // still fails the install.
   let codexShim = null;
+  let codexOverride = null;
   if (optionalStat(codexOverrideDir, lstat)?.isDirectory()) {
-    codexShim = installManagedShimLink({
-      path: join(codexOverrideDir, 'gh'),
-      shimPath,
-      binDir,
-      lstat,
-      readlink,
-      remove,
-      symlink,
-    });
+    try {
+      codexShim = installManagedShimLink({
+        path: join(codexOverrideDir, 'gh'),
+        shimPath,
+        binDir,
+        lstat,
+        readlink,
+        remove,
+        symlink,
+      });
+      codexOverride = { status: 'installed', dir: codexOverrideDir };
+    } catch (error) {
+      if (!UNWRITABLE.has(error?.code)) throw error;
+      let ownerUid = null;
+      try { ownerUid = lstat(codexOverrideDir).uid; } catch { /* unknown */ }
+      codexOverride = { status: 'unwritable', dir: codexOverrideDir, code: error.code, ownerUid };
+    }
   }
   const codexInterposer = codexGhPath == null ? null : installGhInterposer({
     path: codexGhPath,
@@ -517,7 +547,7 @@ export function installGhShim({
     execFile,
   });
   return {
-    shimPath, localShim, codexShim, codexInterposer, codexStatePath, zshenv, zprofile,
+    shimPath, localShim, codexShim, codexOverride, codexInterposer, codexStatePath, zshenv, zprofile,
   };
 }
 
@@ -555,6 +585,8 @@ export function main(argv = process.argv.slice(2), { home = homedir() } = {}) {
   if (result.codexShim) {
     process.stdout.write(`Codex runtime shim -> ${result.codexShim}\n`);
   }
+  const notice = codexOverrideNotice(result.codexOverride);
+  if (notice) process.stderr.write(`install-gh-shim: ${notice}\n`);
   if (result.codexInterposer) {
     process.stdout.write(`Codex desktop gh shim -> ${result.codexInterposer.path}\n`);
     process.stdout.write(`Original gh preserved -> ${result.codexInterposer.backupPath}\n`);

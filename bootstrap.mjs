@@ -23,7 +23,7 @@ import {
   scopeConfigToApps,
   writeEnabledFeaturesToConfig,
 } from './config.mjs';
-import { installGhShim, reconcileAppCredentials } from './identity-cli.mjs';
+import { codexOverrideNotice, installGhShim, reconcileAppCredentials } from './identity-cli.mjs';
 import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { installAgentBot, installationPaths, isManagedExecutable } from './install.mjs';
 import { readWindowsLauncher } from './windows-cli-launcher.mjs';
@@ -632,6 +632,7 @@ export async function bootstrap(options, {
   let githubIdentityEnabled = false;
   let requestedFeatures = [];
   let repaired = null;
+  let codexOverrideWarning = null;
 
   const fail = (failureScope, id, code, message, action, evidence = {}) => {
     operationFailure = {
@@ -775,7 +776,19 @@ export async function bootstrap(options, {
     const shouldInstallGhShim = options.withGhShim || requestedFeatures.includes('github-identity');
     if (!operationFailure && !credentialsFailed && githubIdentityEnabled && shouldInstallGhShim) {
       try {
-        installShim({ home, env });
+        // The primary shim is in place when this returns. An optional Codex
+        // runtime override that could not be written is its own warning,
+        // not a failed shim (#1374).
+        const notice = codexOverrideNotice(installShim({ home, env })?.codexOverride);
+        if (notice) {
+          codexOverrideWarning = readinessCheck({
+            id: 'bootstrap.codex_gh_override',
+            status: 'warning',
+            code: 'codex-gh-override-unwritable',
+            message: notice,
+            action: 'make the Codex runtime override directory writable for this account, then retry bootstrap',
+          });
+        }
       } catch {
         fail(
           'machine',
@@ -830,11 +843,12 @@ export async function bootstrap(options, {
         || credentialResults !== null
         || (reachedCredentialPhase && !operationFailure),
     });
+    const added = [repaired, codexOverrideWarning].filter(Boolean);
     if (repaired) {
       return buildReadinessReport({
         command: 'bootstrap',
         scope,
-        machineChecks: [repaired, ...report.machine.checks],
+        machineChecks: [...added, ...report.machine.checks],
         apps: report.machine.apps,
         worktreeStatus: report.worktree.status,
         worktreeChecks: report.worktree.checks,
@@ -845,10 +859,20 @@ export async function bootstrap(options, {
       return buildReadinessReport({
         command: 'bootstrap',
         scope,
-        machineChecks: report.machine.checks,
+        machineChecks: [...added, ...report.machine.checks],
         apps: report.machine.apps,
         worktreeStatus: 'not_ready',
         worktreeChecks: [check, ...report.worktree.checks],
+      });
+    }
+    if (added.length > 0) {
+      return buildReadinessReport({
+        command: 'bootstrap',
+        scope,
+        machineChecks: [...added, ...report.machine.checks],
+        apps: report.machine.apps,
+        worktreeStatus: report.worktree.status,
+        worktreeChecks: report.worktree.checks,
       });
     }
     return report;
