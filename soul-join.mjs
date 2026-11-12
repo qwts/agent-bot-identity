@@ -33,7 +33,7 @@ import { pathToFileURL } from 'node:url';
 import { ACP_SPAWN_REGISTRY, HARNESS_KEY_PATTERN, resolveSpawn } from './acp-registry.mjs';
 import { identityOp } from './daemon-client.mjs';
 import { AGENT_ID_KEYS, validateAgentId } from './identity-format.mjs';
-import { stateDirectory } from './state-paths.mjs';
+import { bundledCommsEntry, stateDirectory } from './state-paths.mjs';
 import { archiveSoulDirs, listSouls, populationFile, recordSoulDisplayName, setSoulAppThen, retireIdentityWithPopulation, soulDirectory, upsertIdentitySoul } from './agent-population.mjs';
 import { describeSetting, readColdWakeSettings, setColdWake, wakeSetting } from './cold-wake-settings.mjs';
 import { ownerGate } from './soul-approvals.mjs';
@@ -179,22 +179,37 @@ function soulWorkspace(agentId, options) {
 /**
  * Runs `agent-comms join` as the soul in its checkout. The tools path a
  * GeniusBar install names (AGENT_BOT_TOOL_PATH) comes first, so the bundled
- * agent-comms answers even when a stale copy is on PATH.
+ * agent-comms answers even when a stale copy is on PATH. When no agent-comms
+ * is on PATH at all, the copy that ships with this agent-bot is run instead
+ * (#1372); with neither, the refusal says what to install.
  */
-export function joinComms({ agentId, worktree, name, harness }, { env = process.env, run = execCliFile } = {}) {
+export function joinComms({ agentId, worktree, name, harness }, { env = process.env, run = execCliFile, bundled = bundledCommsEntry } = {}) {
   const { AGENT_BOT_BINDING: _ignored, ...hostEnv } = env;
   const tools = env.AGENT_BOT_TOOL_PATH && path.isAbsolute(env.AGENT_BOT_TOOL_PATH) ? env.AGENT_BOT_TOOL_PATH : null;
   const soulEnv = { ...hostEnv, ...(tools ? { PATH: [tools, env.PATH].filter(Boolean).join(path.delimiter) } : {}),
     AGENT_BOT_ID: agentId, QWTS_AGENT_ID: agentId };
+  const args = ['join', '--name', name, '--harness', harness];
+  const options = { cwd: worktree, env: soulEnv, timeout: cliCommandTimeout() };
+  // Not found: the spawn itself fails, or the shell that runs it on Windows
+  // exits 127.
+  const missing = (error) => error?.code === 'ENOENT' || error?.code === 127;
   return new Promise((resolve, reject) => {
-    run('agent-comms', ['join', '--name', name, '--harness', harness], { cwd: worktree, env: soulEnv, timeout: cliCommandTimeout() },
-      (error, stdout = '', stderr = '') => {
-        let result = null;
-        try { result = JSON.parse(String(stdout)); } catch { /* not JSON */ }
-        if (!error && result?.ok !== false && typeof result?.address === 'string') return resolve(result.address);
-        const detail = result?.error?.message ?? (String(stderr).trim().split('\n').pop() || error?.message || 'no result');
-        reject(new Error(`agent-comms join failed: ${detail}`));
-      });
+    const settle = (error, stdout = '', stderr = '') => {
+      let result = null;
+      try { result = JSON.parse(String(stdout)); } catch { /* not JSON */ }
+      if (!error && result?.ok !== false && typeof result?.address === 'string') return resolve(result.address);
+      const detail = result?.error?.message ?? (String(stderr).trim().split('\n').pop() || error?.message || 'no result');
+      reject(new Error(`agent-comms join failed: ${detail}`));
+    };
+    run('agent-comms', args, options, (error, stdout, stderr) => {
+      if (!missing(error)) return settle(error, stdout, stderr);
+      const entry = bundled({ env });
+      if (!entry) {
+        return reject(new Error('agent-comms join failed: agent-comms is not on PATH and this agent-bot has no bundled copy; '
+          + 'install agent-comms, or set AGENT_BOT_TOOL_PATH to the directory that holds it'));
+      }
+      run(process.execPath, [entry, ...args], options, settle);
+    });
   });
 }
 

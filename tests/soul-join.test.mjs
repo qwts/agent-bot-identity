@@ -19,6 +19,7 @@ import { BASE, fakeServer } from './helpers/fake-identity-server.mjs';
 import { INSTALL_STAMP } from '../soul-runtimes.mjs';
 import { PACKAGE_IGNORE_LIST, computePackageRevision } from '../soul-package.mjs';
 import { createWebhookWaker } from '../wake-webhook.mjs';
+import { joinComms as joinCommsUnderTest } from '../soul-join.mjs';
 
 const FAKE_COMMS = fileURLToPath(new URL('./fixtures/fake-agent-comms.mjs', import.meta.url));
 const CLI = fileURLToPath(new URL('../agent-bot.mjs', import.meta.url));
@@ -894,3 +895,53 @@ test('join clears an inherited config.worktree pin on a fresh linked worktree wh
   );
 });
 
+
+// agent-comms may not be on PATH in a source checkout or a fresh cloud
+// machine; the copy that ships with agent-bot answers instead (#1372).
+const JOIN_SOUL = { agentId: 'agent_44444444-4444-4444-8444-444444444444', worktree: '/nonexistent', name: 'fixture', harness: 'fixture' };
+const notFound = () => Object.assign(new Error('spawn agent-comms ENOENT'), { code: 'ENOENT' });
+const joined = JSON.stringify({ ok: true, address: 'fixture/soul' });
+
+test('joinComms uses agent-comms from PATH when it is there, and never the bundled copy', async () => {
+  const calls = [];
+  const run = (file, args, options, callback) => { calls.push(file); callback(null, joined); };
+  const address = await joinCommsUnderTest(JOIN_SOUL, { env: {}, run, bundled: () => { throw new Error('not asked'); } });
+  assert.equal(address, 'fixture/soul');
+  assert.deepEqual(calls, ['agent-comms']);
+});
+
+test('joinComms falls back to the bundled agent-comms when none is on PATH', async () => {
+  const calls = [];
+  const run = (file, args, options, callback) => {
+    calls.push([file, ...args]);
+    if (file === 'agent-comms') return callback(notFound());
+    callback(null, joined);
+  };
+  const address = await joinCommsUnderTest(JOIN_SOUL, { env: {}, run, bundled: () => '/bundle/agent-comms.mjs' });
+  assert.equal(address, 'fixture/soul');
+  assert.deepEqual(calls, [
+    ['agent-comms', 'join', '--name', 'fixture', '--harness', 'fixture'],
+    [process.execPath, '/bundle/agent-comms.mjs', 'join', '--name', 'fixture', '--harness', 'fixture'],
+  ]);
+});
+
+test('joinComms with no agent-comms anywhere says what to install', async () => {
+  const run = (file, args, options, callback) => callback(notFound());
+  await assert.rejects(
+    joinCommsUnderTest(JOIN_SOUL, { env: {}, run, bundled: () => null }),
+    /agent-comms is not on PATH and this agent-bot has no bundled copy; install agent-comms, or set AGENT_BOT_TOOL_PATH/,
+  );
+});
+
+test('joinComms does not fall back when agent-comms ran and refused', async () => {
+  const calls = [];
+  const run = (file, args, options, callback) => {
+    calls.push(file);
+    callback(Object.assign(new Error('exit 1'), { code: 1 }), JSON.stringify({ ok: false, error: { message: 'broker is not paired' } }));
+  };
+  await assert.rejects(
+    joinCommsUnderTest(JOIN_SOUL, { env: {}, run, bundled: () => '/bundle/agent-comms.mjs' }),
+    /agent-comms join failed: broker is not paired/,
+  );
+  assert.deepEqual(calls, ['agent-comms']);
+});
