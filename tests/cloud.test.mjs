@@ -192,7 +192,10 @@ test('cloud up re-enrolls a device past its recorded expiry, or one the server r
   // The real check against the fake server: refused once the server revoked it.
   srv.revokedDevice = device.device_id;
   const { verifyEnrollment } = await import('../cloud.mjs');
+  assert.deepEqual(await verifyEnrollment({ base: BASE, env, fetchImpl: srv.fetch, readOnly: true }), { ok: false, reason: 'device-revoked' });
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).revoked_at, undefined, 'a read-only check records nothing (#1431 review)');
   assert.deepEqual(await verifyEnrollment({ base: BASE, env, fetchImpl: srv.fetch }), { ok: false, reason: 'device-revoked' });
+  assert.ok(JSON.parse(readFileSync(file, 'utf8')).revoked_at, 'cloud up records the revocation');
 });
 
 function detachedSleeper(t) {
@@ -286,11 +289,14 @@ test('cloud status reports enrollment, daemon, shim and a pending approval witho
   assert.deepEqual(pending.pending, { url: PROMPT.verification_uri_complete, user_code: 'ABCD-EFGH', key_thumbprint: 'thumb', expires_at: pending.pending.expires_at });
   assert.equal(pending.shim.state, 'missing');
   assert.equal(pending.ready, false);
+  // A grant for another App or server is not this status (#1431 review).
+  assert.equal((await cloudStatus({ env: { ...env, AGENT_BOT_SERVER_HARNESS: 'other-app' }, run: fakeCli(stopped).run, gateOn: () => true })).pending, null);
+  assert.equal((await cloudStatus({ env: { ...env, AGENT_BOT_SERVER: 'https://elsewhere.test' }, run: fakeCli(stopped).run, gateOn: () => true })).pending, null);
 
   // Enrolled and confirmed, daemon running: ready.
   const srv = fakeServer();
   await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep });
-  const ready = await cloudStatus({ env, run: fakeCli(running).run, verify: async () => ({ ok: true }), gateOn: () => false });
+  const ready = await cloudStatus({ env, run: fakeCli(running).run, verify: async (o) => { assert.equal(o.readOnly, true, 'status verifies read-only'); return { ok: true }; }, gateOn: () => false });
   assert.equal(ready.enrollment.state, 'enrolled');
   assert.equal(ready.daemon.state, 'running');
   assert.equal(ready.shim.state, 'not-enabled');

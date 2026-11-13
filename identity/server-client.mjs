@@ -609,8 +609,11 @@ export function logout(opts = {}) {
 // A long-lived authenticated session: re-mints its 15-minute DPoP token on
 // demand, so a daemon can hold one forever across sleep/wake.
 export class ServerSession {
-  constructor({ base, env = process.env, home, fetchImpl = fetch } = {}) {
+  // persistRevocation false: a read-only check (cloud status) learns of a
+  // revocation without recording it in device.json.
+  constructor({ base, env = process.env, home, fetchImpl = fetch, persistRevocation = true } = {}) {
     this.opts = { env, home };
+    this.persistRevocation = persistRevocation;
     this.base = base ?? serverUrl({ env });
     this.fetch = noRedirect(fetchImpl);
     this.token = null;
@@ -633,7 +636,7 @@ export class ServerSession {
     this.tokenInFlight = null;
     this.revokedAt = true;
     const d = loadDevice(this.opts, { includeOutcomes: false });
-    if (d && !d.revoked_at) saveDevice(this.opts, { ...d, revoked_at: new Date().toISOString() });
+    if (this.persistRevocation && d && !d.revoked_at) saveDevice(this.opts, { ...d, revoked_at: new Date().toISOString() });
     for (const listener of revokedListeners) { try { listener(); } catch { /* a listener never blocks revocation */ } }
     return serverError('device-revoked', `the identity service revoked this device (${detail}); cached credentials were dropped; re-enroll with \`agent-bot server enroll --force\``);
   }

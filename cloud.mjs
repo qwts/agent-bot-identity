@@ -206,10 +206,11 @@ export function enrollmentState({ base, slug, env = process.env, now = Date.now 
 
 // The server's own answer for a device that looks enrolled locally: an idle
 // expiry or a revoke from /devices leaves no local trace. Only a refusal
-// re-enrolls; an unreachable server leaves the enrollment as it is.
-export async function verifyEnrollment({ base, env = process.env, fetchImpl = fetch } = {}) {
+// re-enrolls; an unreachable server leaves the enrollment as it is. readOnly
+// leaves a revocation unrecorded, for `cloud status`.
+export async function verifyEnrollment({ base, env = process.env, fetchImpl = fetch, readOnly = false } = {}) {
   try {
-    await new ServerSession({ base, env, fetchImpl }).whoami();
+    await new ServerSession({ base, env, fetchImpl, persistRevocation: !readOnly }).whoami();
     return { ok: true };
   } catch (error) {
     if (error?.code === 'device-revoked' || error?.code === 'invalid_grant') return { ok: false, reason: error.code };
@@ -281,7 +282,7 @@ export async function cloudStatus({ harness = null, env = process.env, run = run
   } else {
     const current = enrollmentState({ base, slug, env, now });
     if (current.state === 'enrolled') {
-      const live = await verify({ base, env: { ...env, AGENT_BOT_SERVER: base } });
+      const live = await verify({ base, env: { ...env, AGENT_BOT_SERVER: base }, readOnly: true });
       result.enrollment = !live.ok
         ? { state: live.reason === 'device-revoked' ? 'revoked' : 'expired', device: current.device.device_id }
         : { state: live.unverified ? 'enrolled-unconfirmed' : 'enrolled', device: current.device.device_id, ...(live.unverified ? { detail: live.unverified } : {}) };
@@ -297,7 +298,7 @@ export async function cloudStatus({ harness = null, env = process.env, run = run
   try { enabled = gateOn(); } catch { enabled = false; }
   result.shim = { state: !enabled ? 'not-enabled' : existsSync(join(env.HOME || homedir(), '.config', 'agent-bot', 'bin', 'gh')) ? 'present' : 'missing' };
   const pending = readPending({ env });
-  if (pending && groupAlive(pending.pid) && pending.prompt && Date.parse(pending.prompt.expires_at ?? 0) > now()) {
+  if (pending && pending.server === base && pending.slug === slug && groupAlive(pending.pid) && pending.prompt && Date.parse(pending.prompt.expires_at ?? 0) > now()) {
     result.pending = { url: pending.prompt.verification_uri_complete, user_code: pending.prompt.user_code, key_thumbprint: pending.prompt.jkt, expires_at: pending.prompt.expires_at };
   }
   result.ready = result.enrollment.state === 'enrolled' && result.daemon.state === 'running';
