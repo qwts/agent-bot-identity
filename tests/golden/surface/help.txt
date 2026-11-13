@@ -11,7 +11,7 @@ Commands:
   join               Join agent-comms as a soul from here, with or without a GitHub App: --name N --harness H [--template PATH] [--soul ID] [--json] [deprecated: prefer 'agent-bot start' for task/worktree startup]
   mint-token         Mint a GitHub App installation token (through the agent-bot server when AGENT_BOT_SERVER is set)
   server             Connect to an agent-bot server: server enroll [--harness H]... | status [--json] | logout [--local-only]
-  cloud              Bring a short-lived machine up or down: cloud up [--harness APP_SLUG] [--hook] [--json] | down | install-hooks
+  cloud              Bring a short-lived machine up or down: cloud up [--harness APP_SLUG] [--hook] [--json] | status | down | install-hooks
   events             Wait on, peek at, or ack relay messages from the agent-bot server: events wait|peek|ack [--ide] [--harness H] [--cursor C] [--timeout S]
   notices            Lease, peek at, ack or release GitHub notices from the agent-bot server: notices take|peek|ack|release [--harness H] [--json]
   doctor             Diagnose installation and identity state; --probe-inbox also checks the gh-app-hook inbox answers (network, bounded, no bearer sent)
