@@ -212,6 +212,9 @@ AGENT_BOT_ENROLL_TOKEN="$AGENT_BOT_ENROLL_TOKEN" \
 agent-bot start --branch <branch>
 ```
 
+If the checkout has no local default-branch reference, fetch the default branch
+or pass an existing base explicitly, for example `agent-bot start --base work`.
+
 See [docs/server-mode.md](docs/server-mode.md) for the full `agent-bot server`
 contract (`status`, `reconcile`, `logout`, and `--add-harness` scope expansion).
 
