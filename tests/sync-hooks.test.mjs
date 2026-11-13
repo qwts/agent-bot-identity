@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CANONICAL_EVENTS, DIALECTS, isBlocking, purposeFor, vendorEvent } from '../hook-dialects.mjs';
-import { MANAGED_MARKER, adapterFiles, eventsFor, hookAdapterDir, hookHomePath, renderConfig, syncHooks, ensureClaudeWorktreeAdapter, inspectClaudeWorktreeAdapter } from '../sync-hooks.mjs';
+import { MANAGED_MARKER, eventsFor, hookAdapterDir, hookHomePath, renderConfig, syncHooks, ensureClaudeWorktreeAdapter, inspectClaudeWorktreeAdapter } from '../sync-hooks.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
 import { accountSlug } from '../worktree-token.mjs';
 
