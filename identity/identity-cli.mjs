@@ -25,7 +25,7 @@ export { pinnedSlug, readGitConfig, resolveAgentSlug, territoryHarness } from '.
 export { createSecretProviderRegistry, probeSecretStore } from './secret-store.mjs';
 export { BUILTIN_SECRET_PROVIDERS } from './secret.mjs';
 export { appKeyStores } from './soul-credentials.mjs';
-export { adapterFallback } from './uninstalled-identity-hook.mjs';
+export { UNINSTALLED_OPAQUE_REASON, UNINSTALLED_REASON } from './uninstalled-policy.mjs';
 
 // Server-mode App-owner roster for the doctor's worktree.app_owner check and start's device enrollment.
 export { ServerSession, appOwnerMismatch, enroll, loadDevice, repoFromCheckout, serverHarness, serverStateDir, serverUrl } from './server-client.mjs';

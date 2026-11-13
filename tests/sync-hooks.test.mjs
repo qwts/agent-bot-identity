@@ -1,13 +1,13 @@
 import { test } from 'node:test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CANONICAL_EVENTS, DIALECTS, isBlocking, vendorEvent } from '../hook-dialects.mjs';
-import { MANAGED_MARKER, hookHomePath, renderConfig, syncHooks, ensureClaudeWorktreeAdapter, inspectClaudeWorktreeAdapter } from '../sync-hooks.mjs';
+import { CANONICAL_EVENTS, DIALECTS, isBlocking, purposeFor, vendorEvent } from '../hook-dialects.mjs';
+import { MANAGED_MARKER, adapterFiles, eventsFor, hookAdapterDir, hookHomePath, renderConfig, syncHooks, ensureClaudeWorktreeAdapter, inspectClaudeWorktreeAdapter } from '../sync-hooks.mjs';
 import { organizationProfileToConfig } from '../organization-profile.mjs';
 import { accountSlug } from '../worktree-token.mjs';
 
@@ -128,7 +128,7 @@ test('every supported harness adapter is generated from the dialect table', () =
       if (!mapped) continue;
       const entries = config.hooks[mapped.event];
       assert.ok(entries.some((entry) => (
-        JSON.stringify(entry).includes(`${row.key} --event ${event}`)
+        JSON.stringify(entry).includes(`${row.key} ${purposeFor(event)} ||`)
       )), `${row.key}/${event} is not generated`);
     }
   }
@@ -205,24 +205,94 @@ test('existing hook event key order is preserved when a foreign entry sits mid-f
   assert.equal(renderConfig(row, rendered), rendered, 'generation must stay byte-stable');
 });
 
-test('generated adapters exec the installed hook or run explicit uninstalled mode', () => {
+test('generated entries are one readable line that fails closed without the adapter', () => {
   for (const row of DIALECTS.filter((candidate) => candidate.file)) {
     const config = JSON.parse(renderConfig(row));
     for (const event of CANONICAL_EVENTS) {
       const mapped = vendorEvent(row.key, event);
       if (!mapped) continue;
       const entry = config.hooks[mapped.event].find((candidate) => (
-        JSON.stringify(candidate).includes(`${row.key} --event ${event}`)
+        JSON.stringify(candidate).includes(`${row.key} ${purposeFor(event)} ||`)
       ));
       const command = entry.command ?? entry.bash ?? entry.hooks?.[0]?.command ?? '';
-      assert.equal(command.includes('[ -x "$H" ] || exit 0'), false, `${row.key}/${event} still fails open`);
-      assert.match(command, /\[ -x "\$H" \] && exec "\$H"/);
-      // No compiled allowlist rides in the wrapper: only an operator's env reaches the fallback (#675).
+      assert.match(command, /^"\$HOME\/[^"]+\/hook" /, `${row.key}/${event} names the co-located dispatcher`);
+      assert.ok(command.length < 200, `${row.key}/${event} stays readable`);
+      assert.equal(command.includes('uninstalledDecision'), false, `${row.key}/${event} carries no inline program`);
+      // No compiled allowlist rides in the entry: only an operator's env reaches the policy (#675).
       assert.doesNotMatch(command, /export AGENT_BOT_UNMANAGED_AUTHORS|UNMANAGED_AUTHORS-|ai9d/);
-      if (event === 'pre-command' || event === 'pre-commit' || event === 'pre-push') {
-        assert.match(command, /uninstalledDecision/);
+      assert.match(command, new RegExp(`\\|\\| exit ${isBlocking(event) ? 2 : 0} # ${MANAGED_MARKER} \\(${event}\\)$`), `${row.key}/${event} guard`);
+    }
+  }
+});
+
+test('a blocking entry refuses when the co-located dispatcher is absent', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-hook-absent-'));
+  try {
+    const row = DIALECTS.find((candidate) => candidate.key === 'claude');
+    const config = JSON.parse(renderConfig(row, '{}', undefined, { adapterDir: '$HOME/.claude/agent-bot' }));
+    const entry = config.hooks.PreToolUse.find((candidate) => candidate.matcher === 'Bash');
+    const run = spawnSync('sh', ['-c', entry.hooks[0].command], {
+      input: '{}', encoding: 'utf8', env: { HOME: home, PATH: process.env.PATH },
+    });
+    assert.equal(run.status, 2, 'a missing dispatcher must refuse, not fail open');
+    const advisory = config.hooks.SessionStart[0];
+    const quiet = spawnSync('sh', ['-c', advisory.hooks[0].command], {
+      input: '{}', encoding: 'utf8', env: { HOME: home, PATH: process.env.PATH },
+    });
+    assert.equal(quiet.status, 0, 'an advisory event stays silent when absent');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('sync writes the co-located dispatcher and policy beside each harness config', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-hook-files-'));
+  try {
+    syncHooks({ home, env: { HOME: home } });
+    for (const row of DIALECTS.filter((candidate) => candidate.homeFile)) {
+      const dir = hookAdapterDir(row, home, { HOME: home });
+      const dispatcher = readFileSync(join(dir, 'hook'), 'utf8');
+      const policy = readFileSync(join(dir, 'uninstalled-policy.mjs'), 'utf8');
+      assert.match(dispatcher, /exec "\$R" --dialect "\$1" --event "\$E"/, `${row.key} runs the installed runner`);
+      assert.match(dispatcher, /exec node "\$D\/uninstalled-policy\.mjs" "\$1" "\$E"/, `${row.key} falls back to the policy`);
+      assert.match(policy, /uninstalledDecision/, `${row.key} policy carries the decision program`);
+      assert.ok(statSync(join(dir, 'hook')).mode & 0o111, `${row.key} dispatcher is executable`);
+      for (const event of eventsFor(row, true)) {
+        if (purposeFor(event) !== event) {
+          assert.match(dispatcher, new RegExp(`${purposeFor(event)}\\) E=${event} ;;`), `${row.key} maps ${purposeFor(event)}`);
+        }
       }
     }
+    // The entry runs the files end to end: uninstalled, a human publish is
+    // refused and a read-only command proceeds.
+    const row = DIALECTS.find((candidate) => candidate.key === 'claude');
+    const settings = JSON.parse(readFileSync(hookHomePath(row, home), 'utf8'));
+    const entry = settings.hooks.PreToolUse.find((candidate) => candidate.matcher === 'Bash');
+    const run = (command) => spawnSync('sh', ['-c', entry.hooks[0].command], {
+      input: JSON.stringify({ tool_input: { command } }), encoding: 'utf8',
+      env: { ...process.env, HOME: home, AGENT_BOT_HOOK_BIN: join(home, 'no-such'), GIT_AUTHOR_NAME: 'qwts', GIT_AUTHOR_EMAIL: 'qwts@example.com' },
+    });
+    const deny = run('git commit -m x');
+    assert.match(deny.stdout, /"permissionDecision":"deny"/);
+    assert.equal(run('ls').status, 0);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('sync refuses a symlinked adapter file', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-hook-link-file-'));
+  const outside = mkdtempSync(join(tmpdir(), 'agent-hook-link-file-target-'));
+  try {
+    const target = join(outside, 'hook');
+    writeFileSync(target, '#!/bin/sh\nexit 0\n');
+    mkdirSync(join(home, '.claude', 'agent-bot'), { recursive: true });
+    symlinkSync(target, join(home, '.claude', 'agent-bot', 'hook'));
+    assert.throws(() => syncHooks({ home }), /must be a regular file/);
+    assert.equal(readFileSync(target, 'utf8'), '#!/bin/sh\nexit 0\n');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
@@ -233,7 +303,7 @@ test('Cursor blocking events are generated fail-closed', () => {
     const mapped = vendorEvent(row.key, event);
     if (!mapped) continue;
     const entry = config.hooks[mapped.event].find((candidate) => (
-      JSON.stringify(candidate).includes(`--event ${event}`)
+      JSON.stringify(candidate).includes(`cursor ${purposeFor(event)} ||`)
     ));
     assert.equal(entry.failClosed, true, `${event} is not fail-closed`);
   }
@@ -247,9 +317,10 @@ test('--check reports drift without writing and apply repairs it', () => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, '{}\n');
   }
-  assert.equal(syncHooks({ home, check: true }).length, 7);
+  // 6 harness configs + 2 co-located adapter files each + the Codex policy.
+  assert.equal(syncHooks({ home, check: true }).length, 19);
   assert.equal(readFileSync(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home), 'utf8'), '{}\n');
-  assert.equal(syncHooks({ home }).length, 7);
+  assert.equal(syncHooks({ home }).length, 19);
   assert.deepEqual(syncHooks({ home, check: true }), []);
   assert.equal(existsSync(join(repo, '.cursor', 'hooks.json')), false);
   assert.equal(existsSync(join(home, '.github', 'hooks', 'agent-bot.json')), false);
@@ -275,7 +346,7 @@ test('the user-level Qwen adapter carries SessionStart and registers agent-bot m
   assert.deepEqual(settings.hooks.Stop, [ownStop]);
   const managed = Object.entries(settings.hooks).filter(([, entries]) => entries.some((entry) => JSON.stringify(entry).includes(MANAGED_MARKER)));
   assert.deepEqual(managed.map(([event]) => event), ['SessionStart']);
-  assert.match(JSON.stringify(settings.hooks.SessionStart), /--dialect qwen --event session-start/);
+  assert.match(JSON.stringify(settings.hooks.SessionStart), /qwen bind-soul \|\| exit 0 # agent-bot agent-hook \(session-start\)/);
   assert.deepEqual(syncHooks({ home, check: true }), []);
 
   const own = { command: '/opt/agent-bot', args: ['mcp'], trust: false };
@@ -284,23 +355,23 @@ test('the user-level Qwen adapter carries SessionStart and registers agent-bot m
   assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).mcpServers['agent-bot'], own);
 });
 
-// The uninstalled fallback carries the allowlist the shared resolver granted
-// for the config bytes at sync time (#675); a config edit is hook drift.
+// The co-located policy carries the allowlist the shared resolver granted
+// for the config bytes at sync time (#675); a config edit is adapter drift.
 test('sync embeds the validated allowlist snapshot and reports a config edit as drift', () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-hook-snapshot-'));
   const config = join(home, '.config', 'agent-bot', 'config.json');
   mkdirSync(dirname(config), { recursive: true });
   writeFileSync(config, JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] } }));
   const env = { HOME: home };
+  const claudeRow = DIALECTS.find((row) => row.key === 'claude');
+  const policyPath = join(hookAdapterDir(claudeRow, home, env), 'uninstalled-policy.mjs');
   syncHooks({ home, env });
-  const claude = readFileSync(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home), 'utf8');
-  assert.match(claude, /"authors\\":\[\\"ai9d\\"\]/);
+  assert.match(readFileSync(policyPath, 'utf8'), /"authors":\["ai9d"\]/);
   assert.deepEqual(syncHooks({ home, env, check: true }), []);
   writeFileSync(config, JSON.stringify({ settings: { unmanagedAuthors: ['ai9d'] }, features: { 'github-identity': 'false' } }));
-  assert.ok(syncHooks({ home, env, check: true }).includes(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home)), 'stale snapshots are reported, not silently trusted');
+  assert.ok(syncHooks({ home, env, check: true }).includes(policyPath), 'stale snapshots are reported, not silently trusted');
   syncHooks({ home, env });
-  const refused = readFileSync(hookHomePath(DIALECTS.find((row) => row.key === 'claude'), home), 'utf8');
-  assert.match(refused, /"authors\\":\[\]/, 'a config the shared resolver refuses snapshots no authors');
+  assert.match(readFileSync(policyPath, 'utf8'), /"authors":\[\]/, 'a config the shared resolver refuses snapshots no authors');
 });
 
 test('user-level sync keeps a foreign WorktreeCreate hook and does not write the repo', () => {
@@ -325,7 +396,11 @@ test('a relative CLAUDE_CONFIG_DIR stays inside the supplied home', () => {
   const repo = mkdtempSync(join(tmpdir(), 'agent-hook-relative-repo-'));
   syncHooks({ home, env: { CLAUDE_CONFIG_DIR: '.custom-claude' } });
   assert.equal(existsSync(join(home, '.custom-claude', 'settings.json')), true);
+  assert.equal(existsSync(join(home, '.custom-claude', 'agent-bot', 'hook')), true);
+  assert.equal(existsSync(join(home, '.claude')), false);
   assert.equal(existsSync(join(repo, '.custom-claude', 'settings.json')), false);
+  const settings = JSON.parse(readFileSync(join(home, '.custom-claude', 'settings.json'), 'utf8'));
+  assert.match(settings.hooks.SessionStart[0].hooks[0].command, /"\$HOME\/\.custom-claude\/agent-bot\/hook"/);
 });
 
 test('sync refuses a symlinked Claude settings file', () => {

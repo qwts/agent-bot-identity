@@ -6,10 +6,11 @@
 //     installed, that `agent-bot hook <name>` runs hooks/<name> with its
 //     arguments, and how a bad hook name is refused.
 //   - Harness hooks: the agent-hook entrypoint, and the hook config agent-bot
-//     writes into each harness's user file, every entry of which runs
-//     `agent-hook --dialect <harness> --event <event>`. The fail-closed
-//     fallback an entry runs while agent-bot is not installed is pinned by
-//     digest; it is behaviour, not the path, but a change still shows.
+//     writes into each harness's user file. Every entry is one readable line
+//     naming the co-located dispatcher by purpose, with a fail-closed guard;
+//     the dispatcher and the uninstalled policy it falls back to are pinned
+//     beside the config (the policy by digest — it is behaviour, not the
+//     path, but a change still shows).
 //   - Environment: every AGENT_BOT_* and QWTS_* name the runtime reads or
 //     writes.
 //
@@ -25,7 +26,7 @@ import path from 'node:path';
 import { GIT_HOOK_NAMES } from '../identity-format.mjs';
 import { CANONICAL_EVENTS, DIALECTS } from '../hook-dialects.mjs';
 import { agentHookFastPath, installationPaths, installHookWrappers } from '../install.mjs';
-import { MANAGED_MARKER, renderConfig, withHomeMcpServer } from '../sync-hooks.mjs';
+import { MANAGED_MARKER, eventsFor, renderConfig, renderHookDispatcher, renderUninstalledPolicy, withHomeMcpServer } from '../sync-hooks.mjs';
 import { ROOT, cli, golden, inPool, transcript } from './helpers/golden.mjs';
 
 const HOOKS = path.join(ROOT, 'hooks');
@@ -82,24 +83,18 @@ test('bad hook invocations: agent-bot hook and agent-hook', async () => {
   golden('hook-errors.txt', cases.map((args, index) => transcript(args, results[index])).join('\n'));
 });
 
-// An entry's command is `<runner>; <fallback> # agent-bot agent-hook`; a long
-// fallback is the uninstalled guard script, pinned by digest.
-function pinFallbacks(value) {
-  if (typeof value === 'string') {
-    const match = /^([\s\S]*?--event [a-z-]+; )([\s\S]*)( # [\s\S]*)$/.exec(value);
-    if (!match || match[2].length <= 120) return value;
-    return `${match[1]}<uninstalled fallback sha256:${createHash('sha256').update(match[2]).digest('hex')}>${match[3]}`;
-  }
-  if (Array.isArray(value)) return value.map(pinFallbacks);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, pinFallbacks(item)]));
-  return value;
-}
-
 test('harness hooks: the config agent-bot writes into each harness user file', () => {
   const harnesses = {};
   for (const row of DIALECTS.filter((candidate) => candidate.homeFile)) {
     const rendered = withHomeMcpServer(row, renderConfig(row, '{}', undefined, { home: true }), HOME);
-    harnesses[row.key] = { file: `<home>/${row.homeFile}`, config: pinFallbacks(JSON.parse(rendered.replaceAll(HOME, '<home>'))) };
+    const events = eventsFor(row, true);
+    harnesses[row.key] = {
+      file: `<home>/${row.homeFile}`,
+      config: JSON.parse(rendered.replaceAll(HOME, '<home>')),
+      adapterDir: `<home>/${row.homeAdapterDir}`,
+      dispatcher: renderHookDispatcher(row, events),
+      policySha256: createHash('sha256').update(renderUninstalledPolicy(row, events)).digest('hex'),
+    };
   }
   golden('harness-hooks.json', { canonicalEvents: CANONICAL_EVENTS, managedMarker: MANAGED_MARKER, harnesses });
 });

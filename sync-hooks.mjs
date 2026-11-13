@@ -4,6 +4,14 @@
 // A generated entry is identified only by MANAGED_MARKER; every foreign entry,
 // every unrelated top-level setting, and the existing hook event key order
 // survive regeneration.
+//
+// An entry is one readable line: it runs the co-located dispatcher
+// (~/.<harness>/agent-bot/hook) by purpose name and, on a blocking event,
+// refuses when the dispatcher is absent (`|| exit 2`). The dispatcher and the
+// uninstalled policy it falls back to are generated files beside the harness
+// config, so the config stays readable while the policy survives an absent
+// runtime (ENG-0128 amendment: self-contained directory, not string). A
+// config synced without its folder still refuses blocking events.
 
 import process from 'node:process';
 import {
@@ -15,7 +23,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
@@ -23,17 +31,24 @@ import { accountName, configuredAccountIdentity } from './detect-harness.mjs';
 import { loadConfig, unmanagedAuthorsSnapshot } from './config.mjs';
 import { pathToFileURL } from 'node:url';
 
-import { CANONICAL_EVENTS, CLAUDE_WORKTREE_CREATE_COMMAND, DIALECTS, nativeHookEntry, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
-import { adapterFallback } from './identity-cli.mjs';
+import { CANONICAL_EVENTS, CLAUDE_WORKTREE_CREATE_COMMAND, DIALECTS, HOOK_PURPOSES, encodeDecision, isBlocking, nativeHookEntry, purposeFor, SOUL_HOOK_MARKER, vendorEvent } from './hook-dialects.mjs';
+import { UNINSTALLED_OPAQUE_REASON, UNINSTALLED_REASON } from './identity-cli.mjs';
 
 export const MANAGED_MARKER = 'agent-bot agent-hook';
 
-function command(dialectKey, event, snapshot) {
-  return `H="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"; [ -x "$H" ] && exec "$H" --dialect ${dialectKey} --event ${event}; ${adapterFallback(dialectKey, event, snapshot)} # ${MANAGED_MARKER}`;
+const POLICY_MODULE = new URL('./identity/uninstalled-policy.mjs', import.meta.url);
+
+// The whole inline surface of an entry: run the co-located dispatcher if it
+// exists, otherwise refuse (blocking) or stay silent (advisory). The guard
+// must live in the entry itself — a missing command exits 127, and Claude and
+// Qwen treat anything but 0/2 as "proceed", so a bare name would fail open.
+function command(row, event, adapterDir) {
+  const exit = isBlocking(event) ? 2 : 0;
+  return `"${adapterDir}/hook" ${row.key} ${purposeFor(event)} || exit ${exit} # ${MANAGED_MARKER} (${event})`;
 }
 
-function hookEntry(row, event, snapshot) {
-  return nativeHookEntry(row.key, event, command(row.key, event, snapshot));
+function hookEntry(row, event, adapterDir) {
+  return nativeHookEntry(row.key, event, command(row, event, adapterDir));
 }
 
 // A soul-declared hook (#378) also runs agent-hook, but it is the soul
@@ -64,12 +79,38 @@ function parseConfig(path, text) {
   return config;
 }
 
-// `snapshot` (config.mjs unmanagedAuthorsSnapshot) is what the uninstalled
-// fallback may grant; without one it grants nothing. `home` renders the
-// user-level file, which a row may limit to its `homeEvents`.
-export function renderConfig(row, current = '{}', snapshot = undefined, { home = false } = {}) {
-  const config = parseConfig(row.file, current);
+// The canonical events a row wires in its user-level file: a row may limit
+// them to its `homeEvents` (Qwen: SessionStart only, #1275).
+export function eventsFor(row, home = false) {
   const events = home && row.homeEvents ? row.homeEvents : CANONICAL_EVENTS;
+  return events.filter((event) => vendorEvent(row.key, event));
+}
+
+// The co-located adapter directory beside the harness config. Claude follows
+// CLAUDE_CONFIG_DIR, matching hookHomePath and the WorktreeCreate installer.
+export function hookAdapterDir(row, home = homedir(), env = process.env) {
+  if (!row.homeAdapterDir) throw new Error(`${row.key} has no user adapter directory`);
+  if (row.key === 'claude' && env.CLAUDE_CONFIG_DIR) return join(resolve(home, env.CLAUDE_CONFIG_DIR), 'agent-bot');
+  return join(resolve(home), row.homeAdapterDir);
+}
+
+// The entry names the dispatcher through $HOME when it lives under the home
+// it was generated for, so the config carries no machine-specific path.
+function displayAdapterDir(row, home, env) {
+  const dir = hookAdapterDir(row, home, env);
+  const base = resolve(home);
+  if (dir === base || dir.startsWith(base + sep)) return `$HOME/${relative(base, dir).replaceAll('\\', '/')}`;
+  return dir.replaceAll('\\', '/');
+}
+
+// `home` renders the user-level file, which a row may limit to its
+// `homeEvents`. `snapshot` (config.mjs unmanagedAuthorsSnapshot) is kept in
+// the signature for callers that render a config and its adapter files
+// together; the entries themselves no longer carry it — the co-located
+// policy file does (adapterFiles).
+export function renderConfig(row, current = '{}', snapshot = undefined, { home = false, adapterDir } = {}) {
+  const config = parseConfig(row.file, current);
+  const dir = adapterDir ?? displayAdapterDir(row, homedir(), process.env);
   const hooks = { ...(config.hooks ?? {}) };
   for (const [event, entries] of Object.entries(hooks)) {
     if (!Array.isArray(entries)) throw new Error(`${row.file}: hooks.${event} must be an array`);
@@ -78,9 +119,8 @@ export function renderConfig(row, current = '{}', snapshot = undefined, { home =
     // keys (WorktreeCreate, agent-guard) relative to SessionStart / PreToolUse.
     hooks[event] = entries.filter((entry) => !isManaged(entry));
   }
-  for (const event of events) {
-    if (!vendorEvent(row.key, event)) continue;
-    const generated = hookEntry(row, event, snapshot);
+  for (const event of eventsFor(row, home)) {
+    const generated = hookEntry(row, event, dir);
     hooks[generated.vendorEvent] ??= [];
     hooks[generated.vendorEvent].push(generated.entry);
   }
@@ -90,6 +130,83 @@ export function renderConfig(row, current = '{}', snapshot = undefined, { home =
   const result = { ...config, hooks };
   if (row.format === 'cursor' || row.format === 'copilot') result.version ??= 1;
   return `${JSON.stringify(result, null, 2)}\n`;
+}
+
+// The co-located dispatcher: map the purpose the config names back to the
+// canonical event, run the installed runner when present, else the policy
+// file beside it. Generated, marker-commented, never hand-edited.
+export function renderHookDispatcher(row, events) {
+  const arms = Object.entries(HOOK_PURPOSES)
+    .filter(([event, purpose]) => events.includes(event) && purpose !== event)
+    .map(([event, purpose]) => `  ${purpose}) E=${event} ;;`)
+    .join('\n');
+  return `#!/bin/sh
+# agent-bot hook dispatcher — generated by agent-bot sync-hooks; do not edit.
+# The harness config names each hook point by purpose; map it back to the
+# canonical event, run the installed runner when present, and otherwise the
+# co-located uninstalled policy (ENG-0128).
+E="$2"
+case "$2" in
+${arms}
+esac
+R="\${AGENT_BOT_HOOK_BIN:-\$HOME/.local/share/agent-bot/agent-hook}"
+[ -x "\$R" ] && exec "\$R" --dialect "\$1" --event "\$E"
+D=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
+exec node "\$D/uninstalled-policy.mjs" "\$1" "\$E"
+`;
+}
+
+// The co-located uninstalled policy: the policy module's text verbatim plus
+// this dialect's decision envelopes and the allowlist snapshot. The module
+// must stay self-contained (node builtins only) so this file runs standalone.
+export function renderUninstalledPolicy(row, events, snapshot = { sha256: null, authors: [] }) {
+  const clean = {
+    sha256: typeof snapshot?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(snapshot.sha256) ? snapshot.sha256 : null,
+    authors: Array.isArray(snapshot?.authors) ? snapshot.authors.filter((author) => typeof author === 'string' && /^[a-z0-9][a-z0-9._@+-]{0,99}$/.test(author)) : [],
+  };
+  const envelopes = Object.fromEntries(events.map((event) => [event, {
+    allow: encodeDecision({ dialectKey: row.key, event, decision: 'allow' }),
+    deny: encodeDecision({ dialectKey: row.key, event, decision: 'deny', reason: UNINSTALLED_REASON }),
+    denyOpaque: encodeDecision({ dialectKey: row.key, event, decision: 'deny', reason: UNINSTALLED_OPAQUE_REASON }),
+  }]));
+  // The module's shebang is only valid on line 1; the generated file opens
+  // with its own header, so drop it from the embedded text.
+  const source = readFileSync(POLICY_MODULE, 'utf8').replace(/^#![^\n]*\n/, '');
+  return `// Generated by agent-bot sync-hooks from identity/uninstalled-policy.mjs — do not edit.
+// Uninstalled-mode policy (ENG-0128): the dispatcher runs this file when the
+// installed agent-hook is absent.
+${source}
+const ENVELOPES = ${JSON.stringify(envelopes)};
+const SNAPSHOT = ${JSON.stringify(clean)};
+const event = process.argv[3];
+let raw = "";
+try { if (!process.stdin.isTTY) raw = readFileSync(0, "utf8"); } catch {}
+let payload = {};
+try { payload = raw.trim() ? JSON.parse(raw) : {}; } catch {}
+if (!payload || typeof payload !== "object" || Array.isArray(payload)) payload = {};
+const verdict = uninstalledDecision({
+  event,
+  command: extractCommand(payload, process.env),
+  env: process.env,
+  authors: unmanagedAuthorList(process.env, SNAPSHOT),
+});
+const envelopes = ENVELOPES[event];
+const encoded = verdict.decision !== "deny" ? envelopes.allow : verdict.reason === UNINSTALLED_OPAQUE_REASON ? envelopes.denyOpaque : envelopes.deny;
+if (encoded.stdout) process.stdout.write(encoded.stdout);
+if (encoded.stderr) process.stderr.write(encoded.stderr + "\\n");
+process.exit(encoded.exitCode);
+`;
+}
+
+// The files a row's user-level adapter needs beside its config. `snapshot`
+// is what the uninstalled policy may grant; without one it grants nothing.
+export function adapterFiles(row, snapshot = undefined, { home = homedir(), env = process.env } = {}) {
+  const dir = hookAdapterDir(row, home, env);
+  const events = eventsFor(row, true);
+  return [
+    { path: join(dir, 'hook'), text: renderHookDispatcher(row, events), mode: 0o755 },
+    { path: join(dir, 'uninstalled-policy.mjs'), text: renderUninstalledPolicy(row, events, snapshot), mode: 0o600 },
+  ];
 }
 
 // The `agent-bot mcp` server a row registers in its user file (#1275); Qwen
@@ -211,13 +328,13 @@ function assertRegularHookFile(path) {
   }
 }
 
-function writeAtomic(path, contents) {
+function writeAtomic(path, contents, mode = 0o600) {
   assertRegularHookFile(path);
   mkdirSync(dirname(path), { recursive: true });
   assertRegularHookFile(path);
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600 });
+    writeFileSync(temporary, contents, { flag: 'wx', mode });
     renameSync(temporary, path);
   } finally {
     rmSync(temporary, { force: true });
@@ -256,10 +373,18 @@ export function syncHooks({ home = homedir(), env = process.env, check = false }
     const path = hookHomePath(row, home, env);
     assertRegularHookFile(path);
     const current = existsSync(path) ? readFileSync(path, 'utf8') : '{}';
-    const desired = withHomeMcpServer(row, renderConfig(row, current, snapshot, { home: true }), home);
-    if (current === desired) continue;
-    drift.push(path);
-    if (!check) writeAtomic(path, desired);
+    const desired = withHomeMcpServer(row, renderConfig(row, current, snapshot, { home: true, adapterDir: displayAdapterDir(row, home, env) }), home);
+    if (current !== desired) {
+      drift.push(path);
+      if (!check) writeAtomic(path, desired);
+    }
+    for (const file of adapterFiles(row, snapshot, { home, env })) {
+      assertRegularHookFile(file.path);
+      const currentFile = existsSync(file.path) ? readFileSync(file.path, 'utf8') : null;
+      if (currentFile === file.text) continue;
+      drift.push(file.path);
+      if (!check) writeAtomic(file.path, file.text, file.mode);
+    }
   }
   drift.push(...ensureCodexUserPolicy(home, check));
   return drift;

@@ -279,7 +279,7 @@ sets or reads the same variable.
 | `AGENT_BOT_CREDENTIAL_NAMESPACE`, `AGENT_BOT_CREDENTIAL_VAULT` | `credential-names.mjs:34`, `:35` | public | `daemon-supervisor.mjs:37`, `readiness.mjs:37` |
 | `AGENT_BOT_KEYD_SERVICE_LABEL` | `keyd-client.mjs:49` | public | GeniusBar `src-tauri/src/bridge.rs:46`, `bridge/services.mjs:317` |
 | `AGENT_BOT_SECURITY_BIN` | `soul-credentials.mjs:154` | internal (tests) | |
-| `AGENT_BOT_UNMANAGED_AUTHORS`, `AGENT_HOOK_TOOL_COMMAND` | `uninstalled-identity-hook.mjs:359`, `:24` | public (generated hook adapters) | |
+| `AGENT_BOT_UNMANAGED_AUTHORS`, `AGENT_HOOK_TOOL_COMMAND` | `identity/uninstalled-policy.mjs:359`, `:24` | public (generated hook adapters) | |
 | `GH_AGENT_APP`, `GH_APP_ID`, `GH_APP_PRIVATE_KEY`, `GH_APP_PRIVATE_KEY_PATH`, `GH_APP_INSTALLATION_ID` | `mint-token.mjs:137` to `:269`, `git-credential-bot.mjs:143`, `owner-approval.mjs:58`, `resolve-agent.mjs:123`, `keyd-client.mjs:147` | public | |
 | `GH_APP_HOOK_INBOX_URL`, `GH_APP_HOOK_INBOX_TOKEN` | `inbox-take.mjs:207`, `:102` | public | |
 | `INBOX`, `WEBHOOK_SECRETS`, `INBOX_TOKEN` (Worker bindings) | `gh-app-hook.mjs:776` to `:784` | public (`wrangler.toml`) | |

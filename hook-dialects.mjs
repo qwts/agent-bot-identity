@@ -45,6 +45,24 @@ export function isBlocking(event) {
   return BLOCKING_EVENTS.has(event);
 }
 
+// What a generated entry calls the hook point, so a person reading their
+// settings.json sees what it does rather than lifecycle jargon. A name is the
+// event's stable ROLE, never an individual hook file: the configs wire events
+// unconditionally so hooks stay drop-in (agent-hooks/README.md). Events with
+// no shipped behavior keep their canonical name — they are extension points,
+// and inventing a purpose for them would be a lie. The co-located dispatcher
+// maps the purpose back to the canonical event before calling the runner.
+export const HOOK_PURPOSES = Object.freeze({
+  'session-start': 'bind-soul',
+  'pre-command': 'guard-identity',
+  'pre-file-write': 'guard-writes',
+  'pre-tool-use': 'guard-tools',
+});
+
+export function purposeFor(event) {
+  return HOOK_PURPOSES[event] ?? event;
+}
+
 // Candidate key lists, first present wins. Deliberately not one hard path per
 // dialect: two cells in the table below are documented weakly (Cursor's CLI
 // event coverage comes from a forum post that contradicts the docs; Copilot's
@@ -134,6 +152,7 @@ export const DIALECTS = [
     alsoServes: ['devin-cli'],
     file: '.claude/settings.json',
     homeFile: '.claude/settings.json',
+    homeAdapterDir: '.claude/agent-bot',
     format: 'claude',
     events: {
       'session-start': 'SessionStart',
@@ -160,6 +179,7 @@ export const DIALECTS = [
     key: 'codex',
     file: '.codex/hooks.json',
     homeFile: '.codex/hooks.json',
+    homeAdapterDir: '.codex/agent-bot',
     format: 'claude',
     events: {
       'session-start': 'SessionStart',
@@ -191,6 +211,7 @@ export const DIALECTS = [
     key: 'cursor',
     file: '.cursor/hooks.json',
     homeFile: '.cursor/hooks.json',
+    homeAdapterDir: '.cursor/agent-bot',
     format: 'cursor',
     events: {
       'session-start': 'sessionStart',
@@ -229,6 +250,7 @@ export const DIALECTS = [
     key: 'copilot',
     file: '.github/hooks/agent-bot.json',
     homeFile: '.copilot/hooks/agent-bot.json',
+    homeAdapterDir: '.copilot/agent-bot',
     format: 'copilot',
     events: {
       'session-start': 'sessionStart',
@@ -260,6 +282,7 @@ export const DIALECTS = [
     key: 'devin-desktop',
     file: '.windsurf/hooks.json',
     homeFile: '.windsurf/hooks.json',
+    homeAdapterDir: '.windsurf/agent-bot',
     format: 'windsurf',
     // LEGACY. Cognition acquired Windsurf; the app ships as Devin and its CLI
     // already speaks the claude dialect. This snake_case, no-matcher,
@@ -398,6 +421,7 @@ export const DIALECTS = [
     key: 'qwen',
     file: '.qwen/settings.json',
     homeFile: '.qwen/settings.json',
+    homeAdapterDir: '.qwen/agent-bot',
     homeEvents: ['session-start'],
     homeMcpKey: 'mcpServers',
     format: 'claude',
