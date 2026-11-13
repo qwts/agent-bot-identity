@@ -131,21 +131,41 @@ test('cloud down stops the daemon and unenrolls through server logout', () => {
   assert.equal(cloudDown({ env, run: failing.run }).enrollment, 'failed');
 });
 
-test('install-hooks adds SessionStart and SessionEnd once and keeps every other setting', () => {
+test('install-hooks adds SessionStart once, never SessionEnd, and keeps every other setting', () => {
   const settingsPath = join(sandbox().HOME, '.claude', 'settings.json');
   mkdirSync(dirname(settingsPath), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify({ model: 'x', hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo hi' }] }] } }));
   const exe = "/home/o'neil/.local/bin/agent-bot";
-  assert.deepEqual(installHooks({ settingsPath, executable: exe }).added, ['SessionStart', 'SessionEnd']);
+  assert.deepEqual(installHooks({ settingsPath, executable: exe }), { settings: settingsPath, added: ['SessionStart'], removed: [] });
   const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
   assert.equal(s.model, 'x');
   assert.equal(s.hooks.SessionStart.length, 2);
   assert.equal(s.hooks.SessionStart[1].hooks[0].command, "'/home/o'\\''neil/.local/bin/agent-bot' cloud up --hook");
-  assert.equal(s.hooks.SessionEnd[0].hooks[0].command, "'/home/o'\\''neil/.local/bin/agent-bot' cloud down --hook");
-  assert.deepEqual(installHooks({ settingsPath, executable: exe }).added, [], 'a second run changes nothing');
+  assert.equal(s.hooks.SessionEnd, undefined, 'SessionEnd also fires on a pause; no hook may revoke the device');
+  const again = installHooks({ settingsPath, executable: exe });
+  assert.deepEqual([again.added, again.removed], [[], []], 'a second run changes nothing');
   const fresh = join(sandbox().HOME, 'new', 'settings.json');
-  assert.deepEqual(installHooks({ settingsPath: fresh, executable: '/a/agent-bot' }).added, ['SessionStart', 'SessionEnd']);
+  assert.deepEqual(installHooks({ settingsPath: fresh, executable: '/a/agent-bot' }).added, ['SessionStart']);
   assert.ok(existsSync(fresh));
+});
+
+test('install-hooks removes a SessionEnd cloud down hook an earlier install added, and only that', () => {
+  const settingsPath = join(sandbox().HOME, '.claude', 'settings.json');
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  const down = { type: 'command', command: "'/root/.local/bin/agent-bot' cloud down --hook", timeout: 60 };
+  const other = { type: 'command', command: 'echo bye' };
+  writeFileSync(settingsPath, JSON.stringify({ hooks: {
+    SessionStart: [{ hooks: [{ type: 'command', command: "'/root/.local/bin/agent-bot' cloud up --hook" }] }],
+    SessionEnd: [{ hooks: [other] }, { hooks: [down] }, { matcher: 'x', hooks: [down, other] }],
+  } }));
+  assert.deepEqual(installHooks({ settingsPath, executable: '/root/.local/bin/agent-bot' }), { settings: settingsPath, added: [], removed: ['SessionEnd'] });
+  const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
+  assert.deepEqual(s.hooks.SessionEnd, [{ hooks: [other] }, { matcher: 'x', hooks: [other] }]);
+  assert.equal(s.hooks.SessionStart.length, 1, 'the existing up hook is kept, not duplicated');
+
+  writeFileSync(settingsPath, JSON.stringify({ hooks: { SessionEnd: [{ hooks: [down] }] } }));
+  assert.deepEqual(installHooks({ settingsPath, executable: '/root/.local/bin/agent-bot' }).removed, ['SessionEnd']);
+  assert.equal(JSON.parse(readFileSync(settingsPath, 'utf8')).hooks.SessionEnd, undefined, 'an emptied SessionEnd is dropped');
 });
 
 test('--hook prints Claude Code hook JSON carrying the approval link and never fails the session', async () => {

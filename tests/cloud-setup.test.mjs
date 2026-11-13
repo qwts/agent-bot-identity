@@ -44,7 +44,7 @@ printf '%s|%s\\n' "\${AGENT_BOT_SUPERVISOR_SKIP_LOAD:-}" "$*" >> "$HOME/calls.lo
 case "$1 $2" in
   "--version "*) echo 0.0.0-test ;;
   "cloud --help") ${cloud ? 'exit 0' : 'exit 1'} ;;
-  "cloud install-hooks") echo "added SessionStart and SessionEnd hooks" ;;
+  "cloud install-hooks") echo "added SessionStart hook" ;;
   "bootstrap "*) cat "$(dirname "$0")/../readiness.json"; exit ${bootstrapExit} ;;
 esac
 exit 0
