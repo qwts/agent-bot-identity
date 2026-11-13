@@ -1,1 +1,0 @@
-- `SECURITY.md` now states that every CI job runs on a GitHub-hosted runner: the repository is public, so the runner variables stay unset (#1404).

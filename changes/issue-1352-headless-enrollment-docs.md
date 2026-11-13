@@ -1,1 +1,0 @@
-- Surface the headless / CI enrollment and startup quickstart (`AGENT_BOT_ENROLL_TOKEN`, `AGENT_BOT_ENABLE_FEATURES=github-identity`, `agent-bot server enroll`, `agent-bot daemon start --daemonize`, and `agent-bot start`) in `README.md` and `skills/agent-bot/SKILL.md` (#1352).

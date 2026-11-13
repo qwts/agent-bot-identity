@@ -1,1 +1,0 @@
-- Platform-appropriate `sharedDir` default for `agent-comms` on headless Linux (`${XDG_STATE_HOME:-~/.local/state}/agent-comms` instead of macOS-only `/Users/Shared/Public/agent-comms`), `agent-bot broker` CLI delegation with resolved `AGENT_COMMS_SHARED_DIR`, and `comms.shared_dir` readiness diagnostic in `agent-bot doctor` and `agent-bot start` (#1348).
