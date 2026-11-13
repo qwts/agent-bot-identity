@@ -13,9 +13,10 @@
 #    --machine-only, github-identity on). Before the device is enrolled only
 #    the per-App credential checks may fail, and the gh shim waits for them;
 #    any other failed readiness check fails this script.
-# 3. Register `agent-bot cloud up` and `cloud down` as the Claude Code
-#    SessionStart and SessionEnd hooks. They start the daemon and enroll the
-#    device when a session starts, and unenroll it when the session ends.
+# 3. Register `agent-bot cloud up` as the Claude Code SessionStart hook. It
+#    starts the daemon and enrolls the device when a session starts or
+#    resumes. No hook unenrolls it: SessionEnd also fires on a pause, so the
+#    device's lifetime (or `agent-bot cloud down` by hand) retires it.
 #
 # Reads and writes no secret. AGENT_BOT_SERVER is not set here: set it as an
 # environment variable of the environment, where the hooks read it.
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
     --from-checkout) [ $# -ge 2 ] || die "--from-checkout needs a directory"; CHECKOUT=$2; shift 2 ;;
     --profile) [ $# -ge 2 ] || die "--profile needs a path or an https URL"; PROFILE=$2; shift 2 ;;
     --no-hooks) HOOKS=0; shift ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
