@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // agent-bot cloud: bring a short-lived machine (a Claude Code cloud
-// container, a CI runner) to a working state at the start of a session and
-// take it down at the end.
+// container, a CI runner) to a working state at the start of a session, and
+// take it down by hand when it is retired.
 //
 //   up             idempotent: start the identity daemon when it is not
 //                  running, and enroll the device with the agent-bot server
@@ -10,9 +10,11 @@
 //                  device grant in the background and returns the approval
 //                  link at once, so a session-start hook never blocks.
 //   down           stop the daemon and unenroll (`server logout`, which
-//                  revokes the device at the server).
-//   install-hooks  register `cloud up --hook` and `cloud down --hook` as the
-//                  Claude Code SessionStart and SessionEnd hooks.
+//                  revokes the device at the server). Run by hand to retire
+//                  a device; no hook runs it.
+//   install-hooks  register `cloud up --hook` as the Claude Code
+//                  SessionStart hook, and remove a SessionEnd `cloud down`
+//                  hook an earlier install added.
 //
 // A container's processes do not survive the container being paused while
 // its disk does, so `up` is meant to run again on every session start and
@@ -46,10 +48,13 @@ AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
 status reports the same things without changing any: whether the server
 confirms the enrollment, the daemon, the gh shim and a pending approval. It
 exits 1 until the device is enrolled and the daemon runs.
-down stops the daemon and unenrolls the device (server logout).
-install-hooks adds \`cloud up --hook\` and \`cloud down --hook\` to the Claude
-Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook
-prints Claude Code hook JSON and always exits 0, so a hook never blocks.
+down stops the daemon and unenrolls the device (server logout); run it by
+hand to retire the device.
+install-hooks adds \`cloud up --hook\` to the Claude Code SessionStart hooks
+(~/.claude/settings.json) and removes a SessionEnd \`cloud down --hook\` an
+earlier install added: SessionEnd also fires on a pause, which revoked the
+device every time. --hook prints Claude Code hook JSON and always exits 0,
+so a hook never blocks.
 `;
 
 // How long `up` waits for the background enrollment to log its prompt.
@@ -360,8 +365,16 @@ function hookContext(text, event) {
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } })}\n`;
 }
 
-// Adds the two hook entries unless an entry this command owns is already
-// there, keeping every other setting and hook as it is.
+// Any agent-bot `cloud <verb> --hook` entry is ours, whatever path it runs.
+const ownsHook = (verb) => (h) => typeof h?.command === 'string' && h.command.endsWith(` cloud ${verb} --hook`) && /agent-bot/.test(h.command);
+
+// Adds the SessionStart `cloud up` entry unless one is already there, and
+// removes any SessionEnd `cloud down` entry an earlier install added, keeping
+// every other setting and hook as it is. SessionEnd fires whenever a session
+// ends, a pause or an idle stop included, not only when it is deleted; a
+// `cloud down` there revoked the device each time, so every resume needed a
+// fresh approval. Retire a device with `agent-bot cloud down` by hand, or let
+// its lifetime expire.
 export function installHooks({ settingsPath, executable }) {
   let settings = {};
   if (existsSync(settingsPath)) {
@@ -370,21 +383,34 @@ export function installHooks({ settingsPath, executable }) {
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error(`${settingsPath} is not a JSON object`);
   }
   const quoted = `'${executable.replaceAll("'", `'\\''`)}'`;
-  const wanted = { SessionStart: 'up', SessionEnd: 'down' };
   settings.hooks ??= {};
-  const changed = [];
-  for (const [event, verb] of Object.entries(wanted)) {
-    const command = `${quoted} cloud ${verb} --hook`;
-    const groups = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
-    // Any agent-bot `cloud <verb> --hook` entry counts, whatever path it runs.
-    const owned = groups.some((g) => (g?.hooks ?? []).some((h) => typeof h?.command === 'string' && h.command.endsWith(` cloud ${verb} --hook`) && /agent-bot/.test(h.command)));
-    if (owned) continue;
-    groups.push({ hooks: [{ type: 'command', command, timeout: 60 }] });
-    settings.hooks[event] = groups;
-    changed.push(event);
+  const added = [];
+  const removed = [];
+  const start = Array.isArray(settings.hooks.SessionStart) ? settings.hooks.SessionStart : [];
+  if (!start.some((g) => (g?.hooks ?? []).some(ownsHook('up')))) {
+    start.push({ hooks: [{ type: 'command', command: `${quoted} cloud up --hook`, timeout: 60 }] });
+    settings.hooks.SessionStart = start;
+    added.push('SessionStart');
   }
-  if (changed.length) writePrivateJson(settingsPath, settings);
-  return { settings: settingsPath, added: changed };
+  if (Array.isArray(settings.hooks.SessionEnd)) {
+    const down = ownsHook('down');
+    const kept = [];
+    let dropped = false;
+    for (const g of settings.hooks.SessionEnd) {
+      const hooks = Array.isArray(g?.hooks) ? g.hooks : null;
+      if (!hooks || !hooks.some(down)) { kept.push(g); continue; }
+      dropped = true;
+      const rest = hooks.filter((h) => !down(h));
+      if (rest.length) kept.push({ ...g, hooks: rest });
+    }
+    if (dropped) {
+      if (kept.length) settings.hooks.SessionEnd = kept;
+      else delete settings.hooks.SessionEnd;
+      removed.push('SessionEnd');
+    }
+  }
+  if (added.length || removed.length) writePrivateJson(settingsPath, settings);
+  return { settings: settingsPath, added, removed };
 }
 
 export async function main(argv = process.argv.slice(2), { env = process.env, out = process.stdout, err = process.stderr, run = runAgentBot, background = startBackgroundEnroll } = {}) {
@@ -417,7 +443,10 @@ export async function main(argv = process.argv.slice(2), { env = process.env, ou
     }
     const home = env.HOME || homedir();
     const r = installHooks({ settingsPath: a.settings ?? join(home, '.claude', 'settings.json'), executable: installationPaths(home).executable });
-    out.write(a.json ? `${JSON.stringify(r)}\n` : (r.added.length ? `added ${r.added.join(' and ')} hooks to ${r.settings}\n` : `${r.settings} already runs agent-bot cloud\n`));
+    const lines = [];
+    if (r.added.length) lines.push(`added ${r.added.join(' and ')} hook to ${r.settings}`);
+    if (r.removed.length) lines.push(`removed the ${r.removed.join(' and ')} cloud down hook from ${r.settings}`);
+    out.write(a.json ? `${JSON.stringify(r)}\n` : `${lines.length ? lines.join('\n') : `${r.settings} already runs agent-bot cloud`}\n`);
     return 0;
   } catch (error) {
     if (a.hook) return 0;
