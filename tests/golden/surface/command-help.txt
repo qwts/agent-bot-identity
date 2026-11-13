@@ -133,10 +133,13 @@ AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
 status reports the same things without changing any: whether the server
 confirms the enrollment, the daemon, the gh shim and a pending approval. It
 exits 1 until the device is enrolled and the daemon runs.
-down stops the daemon and unenrolls the device (server logout).
-install-hooks adds `cloud up --hook` and `cloud down --hook` to the Claude
-Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook
-prints Claude Code hook JSON and always exits 0, so a hook never blocks.
+down stops the daemon and unenrolls the device (server logout); run it by
+hand to retire the device.
+install-hooks adds `cloud up --hook` to the Claude Code SessionStart hooks
+(~/.claude/settings.json) and removes a SessionEnd `cloud down --hook` an
+earlier install added: SessionEnd also fires on a pause, which revoked the
+device every time. --hook prints Claude Code hook JSON and always exits 0,
+so a hook never blocks.
 stderr:
 
 $ agent-bot cloud -h
@@ -162,10 +165,13 @@ AGENT_BOT_SERVER_HARNESS, else the App the detected harness maps to.
 status reports the same things without changing any: whether the server
 confirms the enrollment, the daemon, the gh shim and a pending approval. It
 exits 1 until the device is enrolled and the daemon runs.
-down stops the daemon and unenrolls the device (server logout).
-install-hooks adds `cloud up --hook` and `cloud down --hook` to the Claude
-Code SessionStart and SessionEnd hooks (~/.claude/settings.json). --hook
-prints Claude Code hook JSON and always exits 0, so a hook never blocks.
+down stops the daemon and unenrolls the device (server logout); run it by
+hand to retire the device.
+install-hooks adds `cloud up --hook` to the Claude Code SessionStart hooks
+(~/.claude/settings.json) and removes a SessionEnd `cloud down --hook` an
+earlier install added: SessionEnd also fires on a pause, which revoked the
+device every time. --hook prints Claude Code hook JSON and always exits 0,
+so a hook never blocks.
 
 
 $ agent-bot daemon --help
