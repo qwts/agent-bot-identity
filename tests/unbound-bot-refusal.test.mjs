@@ -11,9 +11,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
+import { CANONICAL_EVENTS, DIALECTS, encodeDecision, purposeFor, vendorEvent } from '../hook-dialects.mjs';
 import { runHooks } from '../agent-hook.mjs';
-import { renderConfig } from '../sync-hooks.mjs';
+import { renderConfig, renderHookDispatcher, renderUninstalledPolicy } from '../sync-hooks.mjs';
 import { unboundBotSlug } from '../resolve-agent.mjs';
 import { scanGitPublish } from '../git-publish-scan.mjs';
 import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
@@ -62,6 +62,17 @@ const hookBin = join(root, 'agent-hook');
 writeFileSync(hookBin, `#!/bin/sh\nAGENT_BOT_HOOKS_DIR='${join(ROOT, 'agent-hooks')}' exec node '${join(ROOT, 'agent-hook.mjs')}' "$@"\n`);
 chmodSync(hookBin, 0o755);
 
+// The co-located adapter files the generated entries name through $HOME,
+// over the full event surface (the project-level adapters wire every event;
+// a home file may wire fewer).
+for (const row of DIALECTS.filter((candidate) => candidate.homeFile)) {
+  const events = CANONICAL_EVENTS.filter((event) => vendorEvent(row.key, event));
+  const dir = join(home, row.homeAdapterDir);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'hook'), renderHookDispatcher(row, events), { mode: 0o755 });
+  writeFileSync(join(dir, 'uninstalled-policy.mjs'), renderUninstalledPolicy(row, events), { mode: 0o600 });
+}
+
 function baseEnv(extra = {}) {
   const stripped = Object.fromEntries(Object.entries(process.env).filter(
     ([key]) => !key.startsWith('CODEX_') && !AMBIENT.has(key),
@@ -102,9 +113,9 @@ function primaryCheckout(name = 'Owner Human') {
 
 function adapterCommand(dialectKey, event) {
   const row = DIALECTS.find((candidate) => candidate.key === dialectKey);
-  const rendered = JSON.parse(renderConfig(row));
+  const rendered = JSON.parse(renderConfig(row, '{}', undefined, { adapterDir: `$HOME/${row.homeAdapterDir}` }));
   const entry = rendered.hooks[vendorEvent(dialectKey, event).event].find((candidate) => (
-    JSON.stringify(candidate).includes(`${dialectKey} --event ${event}`)
+    JSON.stringify(candidate).includes(`${dialectKey} ${purposeFor(event)} ||`)
   ));
   return entry.command ?? entry.bash ?? entry.hooks?.[0]?.command;
 }

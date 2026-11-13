@@ -1,0 +1,724 @@
+#!/usr/bin/env node
+
+// The uninstalled-mode identity policy (ENG-0128 amendment) as one
+// self-contained module: the in-process decision path imports it, and
+// sync-hooks embeds its text verbatim as the co-located policy file each
+// harness adapter runs when the installed agent-hook is absent. Absence of
+// the binary is not a license to commit, push, or write to GitHub as the
+// human. An unmanaged session may publish only when the actor is in
+// AGENT_BOT_UNMANAGED_AUTHORS. Reads and uncommitted working-tree edits stay
+// allowed.
+//
+// This module must stay self-contained — node builtin imports only, no
+// closure over another module's scope — because its text runs standalone
+// in the generated file. tests/uninstalled-identity-hook.test.mjs enforces it.
+
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+export const UNINSTALLED_REASON = 'uninstalled identity: refuse human-attributed commit or GitHub write; finish durable bootstrap to publish as the bot';
+export const UNINSTALLED_OPAQUE_REASON = 'uninstalled identity: refuse a script, interpreter or task runner, which could commit or push as the human where this hook cannot see it; finish durable bootstrap first, or run it as an unmanaged author';
+
+export function extractCommand(payload, env = {}) {
+  if (typeof env.AGENT_HOOK_TOOL_COMMAND === "string" && env.AGENT_HOOK_TOOL_COMMAND) {
+    return env.AGENT_HOOK_TOOL_COMMAND;
+  }
+  if (!payload || typeof payload !== "object") return "";
+  return payload.command
+    || payload.tool_input?.command
+    || payload.toolArgs?.command
+    || payload.tool_info?.command_line
+    || payload.tool_input?.cmd
+    || "";
+}
+
+function tokenizeCommand(command) {
+  const tokens = [];
+  let current = "";
+  let quote = null;
+  const single = "\u0027";
+  const double = "\u0022";
+  for (const ch of String(command || "")) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === single || ch === double) {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) tokens.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function commandSegments(command) {
+  const text = String(command || "");
+  const segments = [];
+  let current = "";
+  let quote = null;
+  const single = "\u0027";
+  const double = "\u0022";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === single || ch === double) {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "\n" || ch === ";") {
+      if (current.trim()) segments.push(current);
+      current = "";
+      continue;
+    }
+    if (ch === "&") {
+      if (text[i + 1] === "&") i += 1;
+      if (current.trim()) segments.push(current);
+      current = "";
+      continue;
+    }
+    if (ch === "|") {
+      if (text[i + 1] === "|") i += 1;
+      if (current.trim()) segments.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) segments.push(current);
+  return segments;
+}
+
+function skipEnvAndWrappers(argv) {
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "command" || arg === "exec" || arg === "env") {
+      i += 1;
+      continue;
+    }
+    if (!arg.startsWith("-") && arg.includes("=") && !arg.includes("/")) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+function commandEnvAssignments(argv) {
+  const assigned = {};
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "command" || arg === "exec" || arg === "env") {
+      i += 1;
+      continue;
+    }
+    if (!arg.startsWith("-") && arg.includes("=") && !arg.includes("/")) {
+      const eq = arg.indexOf("=");
+      assigned[arg.slice(0, eq)] = arg.slice(eq + 1);
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return assigned;
+}
+
+function parseAuthorIdent(raw) {
+  const text = String(raw || "").trim();
+  const lt = text.lastIndexOf(" <");
+  if (lt > 0 && text.endsWith(">")) {
+    return { name: text.slice(0, lt).trim(), email: text.slice(lt + 2, -1).trim() };
+  }
+  if (text.includes("@") && !text.includes(" ")) return { name: "", email: text };
+  return { name: text, email: "" };
+}
+
+function gitCommitAuthorOverride(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const bin = argv[i] ?? "";
+  if (bin !== "git" && !bin.endsWith("/git")) return "";
+  i += 1;
+  const takesValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
+  let seenCommit = false;
+  let author = "";
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (!seenCommit) {
+      if (arg === "commit") {
+        seenCommit = true;
+        i += 1;
+        continue;
+      }
+      if (arg === "push") return "";
+      if (takesValue.has(arg)) {
+        i += 2;
+        continue;
+      }
+      if (
+        arg.startsWith("--git-dir=")
+        || arg.startsWith("--work-tree=")
+        || arg.startsWith("--namespace=")
+        || arg.startsWith("--config-env=")
+      ) {
+        i += 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        i += 1;
+        continue;
+      }
+      return "";
+    }
+    if (arg === "--author" && argv[i + 1] !== undefined) {
+      author = argv[i + 1];
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith("--author=")) {
+      author = arg.slice("--author=".length);
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return seenCommit ? author : "";
+}
+
+function gitCommitReusesAuthor(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const bin = argv[i] ?? "";
+  if (bin !== "git" && !bin.endsWith("/git")) return false;
+  i += 1;
+  const takesValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
+  let seenCommit = false;
+  let reuses = false;
+  let reset = false;
+  let hasAuthor = false;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (!seenCommit) {
+      if (arg === "commit") {
+        seenCommit = true;
+        i += 1;
+        continue;
+      }
+      if (arg === "push") return false;
+      if (takesValue.has(arg)) {
+        i += 2;
+        continue;
+      }
+      if (
+        arg.startsWith("--git-dir=")
+        || arg.startsWith("--work-tree=")
+        || arg.startsWith("--namespace=")
+        || arg.startsWith("--config-env=")
+      ) {
+        i += 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        i += 1;
+        continue;
+      }
+      return false;
+    }
+    if (arg === "--amend" || arg === "-C" || arg === "--reuse-message" || arg === "-c" || arg === "--reedit-message") {
+      reuses = true;
+    }
+    if (arg.startsWith("--reuse-message=") || arg.startsWith("--reedit-message=")) reuses = true;
+    if (arg === "--reset-author") reset = true;
+    if (arg === "--author" || arg.startsWith("--author=")) hasAuthor = true;
+    if (
+      (arg === "-C" || arg === "--reuse-message" || arg === "-c" || arg === "--reedit-message" || arg === "--author")
+      && argv[i + 1] !== undefined
+    ) {
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return seenCommit && reuses && !reset && !hasAuthor;
+}
+
+function extractDollarParen(text, start) {
+  let depth = 1;
+  let quote = null;
+  const single = "\u0027";
+  const double = "\u0022";
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === single || ch === double) {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return { value: text.slice(start, i), end: i };
+    }
+  }
+  return null;
+}
+
+function commandSubstitutions(command) {
+  const text = String(command || "");
+  const found = [];
+  let quote = null;
+  const single = "\u0027";
+  const double = "\u0022";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote === single) {
+      if (ch === single) quote = null;
+      continue;
+    }
+    if (ch === double && quote === double) {
+      quote = null;
+      continue;
+    }
+    if (!quote && (ch === single || ch === double)) {
+      quote = ch;
+      continue;
+    }
+    if (ch === "$" && text[i + 1] === "(") {
+      const inner = extractDollarParen(text, i + 2);
+      if (inner) {
+        found.push(inner.value);
+        i = inner.end;
+      }
+      continue;
+    }
+    if (ch === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end !== -1) {
+        found.push(text.slice(i + 1, end));
+        i = end;
+      }
+    }
+  }
+  return found;
+}
+
+function gitPublishSubcommand(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const bin = argv[i] ?? "";
+  if (bin !== "git" && !bin.endsWith("/git")) return "";
+  i += 1;
+  const takesValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "commit" || arg === "push") return arg;
+    if (takesValue.has(arg)) {
+      i += 2;
+      continue;
+    }
+    if (
+      arg.startsWith("--git-dir=")
+      || arg.startsWith("--work-tree=")
+      || arg.startsWith("--namespace=")
+      || arg.startsWith("--config-env=")
+    ) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      i += 1;
+      continue;
+    }
+    return arg === "commit" || arg === "push" ? arg : "";
+  }
+  return "";
+}
+
+function isGitPublishArgv(argv) {
+  const sub = gitPublishSubcommand(argv);
+  return sub === "commit" || sub === "push";
+}
+
+export function parseUnmanagedAuthors(env = {}) {
+  const raw = env.AGENT_BOT_UNMANAGED_AUTHORS;
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  return raw.split(",").map((part) => part.trim().toLowerCase()).filter(Boolean);
+}
+
+// The configured allowlist when the operator env does not decide (#675), as a
+// snapshot the installed runtime resolved with the shared config.mjs validator
+// when it generated these hooks: { sha256 of the config bytes, authors }. The
+// snapshot grants only while the file at the same path (AGENT_BOT_CONFIG, else
+// $HOME/.config/agent-bot/config.json) still has exactly those bytes, so the
+// fallback never re-validates config itself; an absent, unreadable or edited
+// file yields nothing and the decision refuses until hooks re-sync.
+export function snapshotUnmanagedAuthors(env = {}, snapshot = { sha256: null, authors: [] }) {
+  if (!snapshot || typeof snapshot.sha256 !== "string" || !Array.isArray(snapshot.authors)) return [];
+  const file = env.AGENT_BOT_CONFIG !== undefined
+    ? env.AGENT_BOT_CONFIG
+    : env.HOME ? env.HOME + "/.config/agent-bot/config.json" : "";
+  if (!file) return [];
+  try {
+    return createHash("sha256").update(readFileSync(file)).digest("hex") === snapshot.sha256
+      ? [...snapshot.authors]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// The operator env wins whenever it is set, even empty; otherwise the snapshot.
+export function unmanagedAuthorList(env = {}, snapshot = { sha256: null, authors: [] }) {
+  return env.AGENT_BOT_UNMANAGED_AUTHORS !== undefined
+    ? parseUnmanagedAuthors(env)
+    : snapshotUnmanagedAuthors(env, snapshot);
+}
+
+function identMatches(value, authors) {
+  if (!value || !authors.length) return false;
+  const lower = String(value).trim().toLowerCase();
+  if (authors.includes(lower)) return true;
+  const at = lower.indexOf("@");
+  return at > 0 && authors.includes(lower.slice(0, at));
+}
+
+function resolveGitAuthor(env = {}) {
+  const name = env.GIT_AUTHOR_NAME || "";
+  const email = env.GIT_AUTHOR_EMAIL || "";
+  if (name || email) return { name, email };
+  try {
+    const nameRun = spawnSync("git", ["config", "--get", "user.name"], {
+      encoding: "utf8",
+      timeout: 2000,
+      env,
+    });
+    const emailRun = spawnSync("git", ["config", "--get", "user.email"], {
+      encoding: "utf8",
+      timeout: 2000,
+      env,
+    });
+    return {
+      name: (nameRun.stdout || "").trim(),
+      email: (emailRun.stdout || "").trim(),
+    };
+  } catch {
+    return { name: "", email: "" };
+  }
+}
+
+function resolveGhLogin(env = {}) {
+  try {
+    const run = spawnSync("gh", ["api", "user", "--jq", ".login"], {
+      encoding: "utf8",
+      timeout: 4000,
+      env,
+    });
+    if (run.status === 0) return (run.stdout || "").trim().toLowerCase();
+  } catch {}
+  return "";
+}
+
+function isUnmanagedGitAuthor(env, authors, command) {
+  const argv = tokenizeCommand(command);
+  if (gitCommitReusesAuthor(argv)) return false;
+  const merged = Object.assign({}, env, commandEnvAssignments(argv));
+  const override = gitCommitAuthorOverride(argv);
+  const ident = override ? parseAuthorIdent(override) : resolveGitAuthor(merged);
+  return identMatches(ident.name, authors) || identMatches(ident.email, authors);
+}
+
+function isUnmanagedGhActor(env, authors) {
+  return authors.includes(resolveGhLogin(env));
+}
+
+function unmanagedPublishAllowed(command, env, authors, depth) {
+  if (!authors.length) return false;
+  if (depth == null) depth = 0;
+  if (depth > 8) return false;
+  for (const segment of commandSegments(command)) {
+    const argv = tokenizeCommand(segment);
+    const gitSub = gitPublishSubcommand(argv);
+    if (gitSub === "commit" && !isUnmanagedGitAuthor(env, authors, segment)) return false;
+    if (gitSub === "push" && !isUnmanagedGhActor(env, authors)) return false;
+    if (isGhWriteArgv(argv) && !isUnmanagedGhActor(env, authors)) return false;
+    const nested = shellPayload(argv);
+    if (nested && isHumanAttributedPublish(nested, depth + 1)
+      && !unmanagedPublishAllowed(nested, env, authors, depth + 1)) {
+      return false;
+    }
+  }
+  for (const nested of commandSubstitutions(command)) {
+    if (isHumanAttributedPublish(nested, depth + 1)
+      && !unmanagedPublishAllowed(nested, env, authors, depth + 1)) {
+      return false;
+    }
+  }
+  return isHumanAttributedPublish(command);
+}
+
+function ghApiWrites(rest) {
+  if (rest.includes("graphql")) return true;
+  let method = "";
+  let hasParams = false;
+  for (let j = 0; j < rest.length; j += 1) {
+    const arg = rest[j];
+    if ((arg === "-X" || arg === "--method") && rest[j + 1]) {
+      method = String(rest[j + 1]).toUpperCase();
+      j += 1;
+      continue;
+    }
+    if (arg.startsWith("--method=")) {
+      method = arg.slice("--method=".length).toUpperCase();
+      continue;
+    }
+    if (arg === "-f" || arg === "--raw-field" || arg === "-F" || arg === "--field" || arg === "--input") {
+      hasParams = true;
+      continue;
+    }
+    if (
+      arg.startsWith("-f")
+      || arg.startsWith("-F")
+      || arg.startsWith("--raw-field=")
+      || arg.startsWith("--field=")
+      || arg.startsWith("--input=")
+    ) {
+      hasParams = true;
+    }
+  }
+  if (method === "GET" || method === "HEAD") return false;
+  if (method) return true;
+  return hasParams;
+}
+
+function isGhWriteArgv(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const bin = argv[i] ?? "";
+  if (bin !== "gh" && !bin.endsWith("/gh")) return false;
+  i += 1;
+  const takesValue = new Set(["-R", "--repo", "--hostname"]);
+  while (i < argv.length && argv[i].startsWith("-")) {
+    if (takesValue.has(argv[i])) i += 2;
+    else i += 1;
+  }
+  const cmd = argv[i];
+  const sub = argv[i + 1] || "";
+  if (!cmd) return false;
+  if (cmd === "api") return ghApiWrites(argv.slice(i + 1));
+  const readSubs = {
+    pr: ["view", "list", "status", "diff", "checks", "checkout"],
+    issue: ["view", "list", "status"],
+    repo: ["view", "list"],
+    release: ["view", "list", "download"],
+    gist: ["view", "list"],
+    run: ["list", "view", "watch"],
+    workflow: ["list", "view"],
+    search: ["issues", "prs", "repos", "commits", "code"],
+    auth: ["status"],
+    config: ["get", "list"],
+    alias: ["list"],
+    cache: ["list"],
+    label: ["list"],
+    project: ["list", "view"],
+    org: ["list"],
+    ruleset: ["list", "view"],
+    secret: ["list"],
+    variable: ["list"],
+    attestation: ["download", "verify"],
+    browse: [""],
+    help: [""],
+    status: [""],
+  };
+  const allowed = readSubs[cmd];
+  if (!allowed) return true;
+  return !allowed.includes(sub);
+}
+
+function shellPayload(argv) {
+  let i = skipEnvAndWrappers(argv);
+  const base = (argv[i] ?? "").split("/").pop();
+  if (base !== "sh" && base !== "bash" && base !== "zsh" && base !== "dash" && base !== "ksh") {
+    return null;
+  }
+  i += 1;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "-c" && argv[i + 1] !== undefined) return argv[i + 1];
+    if (arg.startsWith("-") && !arg.startsWith("--") && arg.includes("c") && argv[i + 1] !== undefined) {
+      return argv[i + 1];
+    }
+    if (arg.startsWith("-")) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return null;
+}
+
+// A denylist of "opaque executors" is a losing game: wrapper flags
+// (`env -S`, `command -p`, `exec -a`), grouping and control flow, backslash
+// escapes, aliases, `$VAR` command words, shell functions, `git -c
+// alias…='!…'`, and the next interpreter not on the list all walk through it.
+// So uninstalled pre-command fails CLOSED by structure (#1064): only a bare,
+// simple command whose first word is a known read-only tool is allowed, plus
+// anything an unmanaged author runs. Everything else is denied, named or not.
+// That includes `./agent-bot bootstrap`: a launcher in the checkout is content
+// the agent can rewrite (and `.git` is agent-writable too, so binding it to
+// HEAD would mean trusting git against an agent-written config). Bootstrap is
+// for an unmanaged author, or the owner outside an agent session.
+
+// The command is one simple command with no shell machinery, checked by an
+// allowlist of characters rather than a list of dangerous ones (#1064). Each
+// shell has its own expansions (bash globs, `{a,b}`, `~`; zsh EXTENDED_GLOB
+// `#`, `^`, `~`; ksh `@(…)`; zsh `=cmd`), and arguments are checked before
+// the shell expands them, so with a file named `-exec` in the directory any
+// of them can turn into `-exec` after this check. So:
+// - unquoted text may contain only `[A-Za-z0-9_./:=,+@%-]`, space and tab;
+// - anything else must sit inside single or double quotes;
+// - `$`, backtick and backslash are refused anywhere, quoted or not (a
+//   double-quoted `$x` or backtick still expands);
+// - an unquoted `=` may not start a word (zsh EQUALS turns `=ls` into a path),
+//   empty quotes before it included (`""=ls` is still `=ls` to zsh);
+// - an unterminated quote is refused.
+function structurallySimple(command) {
+  const text = String(command || "");
+  const single = String.fromCharCode(39);
+  const double = String.fromCharCode(34);
+  const backslash = String.fromCharCode(92);
+  const dollar = String.fromCharCode(36);
+  const backtick = String.fromCharCode(96);
+  const safeUnquoted = /^[A-Za-z0-9_.\/:=,+@%-]$/;
+  let quote = null;
+  let wordStart = true;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === backslash || ch === dollar || ch === backtick) return false;
+    // Only content ends the start of a word: an empty quote pair adds
+    // nothing, so zsh still reads an empty-quoted `=ls` as `=ls`.
+    if (quote) {
+      if (ch === quote) quote = null;
+      else wordStart = false;
+      continue;
+    }
+    if (ch === single || ch === double) { quote = ch; continue; }
+    if (ch === " " || ch === "\t") { wordStart = true; continue; }
+    if (!safeUnquoted.test(ch)) return false;
+    if (ch === "=" && wordStart) return false;
+    wordStart = false;
+  }
+  return quote === null;
+}
+
+// Read-only tools that neither publish nor run code the scan cannot see. A
+// bare name only (no slash): an explicit path is a program of its own.
+// `git` is not here (#1064 re-review): .git/config is agent-writable, so a
+// core.fsmonitor, diff.external, textconv or alias planted there runs on the
+// next `git status`, and `git grep -O`, `git log --output=` and friends run
+// or write on their own; no git subcommand is reliably read-only. Neither is
+// `rg` (`--pre=` runs a program per file).
+const SAFE_COMMANDS = new Set(["ls", "cat", "head", "tail", "grep", "egrep", "fgrep",
+  "find", "wc", "diff", "echo", "pwd", "which", "true", "false", "stat", "file"]);
+const GREP_COMMANDS = new Set(["grep", "egrep", "fgrep"]);
+// `find` actions that run a program or write. bfs, which some harnesses
+// use as `find`, also takes `-rm` as `-delete`.
+const FIND_UNSAFE = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-rm",
+  "-fprint", "-fprint0", "-fprintf", "-fls"]);
+
+// Whether an argument list uses an option, by its short letter anywhere in a
+// short cluster (`-rl`) or by its long name or any prefix getopt_long would
+// accept for it (`--pag` for `--paginate`). Short clusters are matched
+// letter by letter without knowing which letters take a value, so a value
+// that happens to contain the letter is refused too: that errs closed.
+function usesOption(args, letter, long) {
+  return args.some((arg) => {
+    if (arg.startsWith("--")) {
+      const name = arg.split("=")[0];
+      return name.length > 2 && long.startsWith(name);
+    }
+    return arg.length > 1 && arg.startsWith("-") && arg.slice(1).includes(letter);
+  });
+}
+
+function isStructurallySafe(command) {
+  if (!structurallySimple(command)) return false;
+  const argv = tokenizeCommand(command);
+  if (!argv.length) return false;
+  const word = argv[0];
+  // A leading env assignment (`FOO=bar ls`) or a `/`-bearing path is not a
+  // plain safe command; neither is a wrapper (`env`, `command`, `sudo`),
+  // which is simply absent from the allowlist.
+  if (word.includes("/") || word.includes("=")) return false;
+  if (!SAFE_COMMANDS.has(word)) return false;
+  // grep takes short options only: a long option this parser cannot tell
+  // apart from a `--pre`-style one is refused.
+  if (GREP_COMMANDS.has(word)) return !argv.slice(1).some((arg) => arg.startsWith("--"));
+  if (word === "find") return !argv.some((arg) => FIND_UNSAFE.has(arg));
+  // diff -l / --paginate pipes its output through `pr` found on PATH.
+  if (word === "diff") return !usesOption(argv.slice(1), "l", "--paginate");
+  // file -C / --compile writes a compiled magic file.
+  if (word === "file") return !usesOption(argv.slice(1), "C", "--compile");
+  return true;
+}
+
+function unmanagedOpaqueAllowed(env, authors) {
+  if (!authors.length) return false;
+  return isUnmanagedGitAuthor(env, authors, "") && isUnmanagedGhActor(env, authors);
+}
+
+export function isHumanAttributedPublish(command, depth) {
+  if (depth == null) depth = 0;
+  if (depth > 8) return true;
+  for (const segment of commandSegments(command)) {
+    const argv = tokenizeCommand(segment);
+    if (isGitPublishArgv(argv) || isGhWriteArgv(argv)) return true;
+    const nested = shellPayload(argv);
+    if (nested && isHumanAttributedPublish(nested, depth + 1)) return true;
+  }
+  for (const nested of commandSubstitutions(command)) {
+    if (isHumanAttributedPublish(nested, depth + 1)) return true;
+  }
+  return false;
+}
+
+export function uninstalledDecision({ event, command = "", env = {}, authors = unmanagedAuthorList(env) }) {
+  if (event === "pre-commit") {
+    if (authors.length && isUnmanagedGitAuthor(env, authors, command)) {
+      return { decision: "allow", reason: "" };
+    }
+    return { decision: "deny", reason: UNINSTALLED_REASON };
+  }
+  if (event === "pre-push") {
+    if (authors.length && isUnmanagedGhActor(env, authors)) {
+      return { decision: "allow", reason: "" };
+    }
+    return { decision: "deny", reason: UNINSTALLED_REASON };
+  }
+  if (event === "pre-command") {
+    const publish = isHumanAttributedPublish(command);
+    // An unmanaged author acts as themselves: a publish by the listed git
+    // author or gh actor, or any command when both identities are listed.
+    if (publish && unmanagedPublishAllowed(command, env, authors)) return { decision: "allow", reason: "" };
+    if (!publish && unmanagedOpaqueAllowed(env, authors)) return { decision: "allow", reason: "" };
+    // Otherwise only a structurally safe read-only command is allowed;
+    // everything else, the source bootstrap launcher included, fails closed.
+    if (!publish && isStructurallySafe(command)) return { decision: "allow", reason: "" };
+    return { decision: "deny", reason: publish ? UNINSTALLED_REASON : UNINSTALLED_OPAQUE_REASON };
+  }
+  return { decision: "allow", reason: "" };
+}

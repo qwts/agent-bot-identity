@@ -35,7 +35,7 @@ const LAUNCH_PATHS = {
   // Caller context: the caller already holds the env it passes.
   'cli/identity.mjs': [2, 'caller context: runs the caller\'s command with the caller\'s own env plus identity; git'],
   'soul-join.mjs': [3, 'caller context: git for the owner\'s soul join; membership dispatch is classified in windows-git-shell'],
-  'identity/uninstalled-identity-hook.mjs': [3, 'caller context: git config and gh in the user\'s session'],
+  'identity/uninstalled-policy.mjs': [3, 'caller context: git config and gh in the user\'s session'],
   // First-party agent-bot code.
   'agent-daemon.mjs': [2, 'first-party: the login shell probe for PATH; git'],
   'daemon-state.mjs': [1, 'first-party: startDaemon re-executing agent-daemon.mjs run, detached (moved from agent-daemon.mjs, #1386)'],

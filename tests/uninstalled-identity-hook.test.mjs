@@ -1,20 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 
 
-import { CANONICAL_EVENTS, DIALECTS, encodeDecision, vendorEvent } from '../hook-dialects.mjs';
-import { renderConfig } from '../sync-hooks.mjs';
+import { CANONICAL_EVENTS, DIALECTS, encodeDecision, purposeFor, vendorEvent } from '../hook-dialects.mjs';
+import { renderConfig, renderHookDispatcher, renderUninstalledPolicy } from '../sync-hooks.mjs';
 import { unmanagedAuthorsSnapshot } from '../config.mjs';
 import { PROFILE_HARNESSES } from '../organization-profile-schema.mjs';
 import {
   UNINSTALLED_OPAQUE_REASON,
   UNINSTALLED_REASON,
-  adapterFallback,
   decideUninstalledHook,
   isHumanAttributedPublish,
   parseUnmanagedAuthors,
@@ -119,12 +118,21 @@ function coldEnv(home, extra = {}) {
   };
 }
 
+// Materialize the co-located adapter files as sync-hooks writes them, over
+// the full event surface (the home file may wire fewer; the policy program
+// is the same), then run the generated entry end to end: dispatcher first,
+// installed runner when AGENT_BOT_HOOK_BIN names one, else the policy file.
 function runGenerated(dialectKey, event, { payload = {}, env = {}, home, snapshot } = {}) {
   const row = DIALECTS.find((candidate) => candidate.key === dialectKey);
-  const config = JSON.parse(renderConfig(row, '{}', snapshot));
+  const events = CANONICAL_EVENTS.filter((candidate) => vendorEvent(dialectKey, candidate));
+  const dir = join(home, row.homeAdapterDir);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'hook'), renderHookDispatcher(row, events), { mode: 0o755 });
+  writeFileSync(join(dir, 'uninstalled-policy.mjs'), renderUninstalledPolicy(row, events, snapshot), { mode: 0o600 });
+  const config = JSON.parse(renderConfig(row, '{}', snapshot, { adapterDir: `$HOME/${row.homeAdapterDir}` }));
   const mapped = vendorEvent(dialectKey, event);
   const entry = config.hooks[mapped.event].find((candidate) => (
-    JSON.stringify(candidate).includes(`${dialectKey} --event ${event}`)
+    JSON.stringify(candidate).includes(`${dialectKey} ${purposeFor(event)} ||`)
   ));
   const command = entry.command ?? entry.bash ?? entry.hooks?.[0]?.command;
   return spawnSync('sh', ['-c', command], {
@@ -330,7 +338,10 @@ test('generated adapters on a cold home deny publish and allow file edits, in ev
     assert.equal(cursorWrite.status, 0);
     assert.equal(cursorWrite.stdout, '{}');
 
-    const gitCommit = spawnSync('sh', ['-c', adapterFallback('git', 'pre-commit')], {
+    const gitRow = DIALECTS.find((candidate) => candidate.key === 'git');
+    const gitPolicy = join(home, 'git-policy.mjs');
+    writeFileSync(gitPolicy, renderUninstalledPolicy(gitRow, ['pre-commit']));
+    const gitCommit = spawnSync(process.execPath, [gitPolicy, 'git', 'pre-commit'], {
       encoding: 'utf8',
       env: coldEnv(home, { AGENT_BOT_UNMANAGED_AUTHORS: '', ...HUMAN }),
     });
@@ -680,7 +691,7 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
   const AMBIENT = [
     'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'AI_AGENT', 'GH_AGENT_APP',
     ...PROFILE_HARNESSES.map((h) => `${h.toUpperCase()}_AGENT`),
-    'WINDSURF_AGENT',
+    'WINDSURF_AGENT', 'QWEN_CODE',
     'MUSE_AGENT', 'AGENT_BOT_ACCOUNT',
   ];
   const stripped = Object.fromEntries(
@@ -754,8 +765,24 @@ test('source pre-push denies an agent when the installed hook is missing', () =>
 });
 
 test('Cursor allow fallback prints {} so failClosed does not treat silence as deny', () => {
-  for (const event of CANONICAL_EVENTS.filter((name) => name !== 'pre-command' && name !== 'pre-commit' && name !== 'pre-push')) {
-    const fallback = adapterFallback('cursor', event);
-    assert.match(fallback, /printf '%s' '\{\}'/);
+  const home = mkdtempSync(join(tmpdir(), 'cursor-allow-'));
+  try {
+    for (const event of CANONICAL_EVENTS.filter((name) => name !== 'pre-command' && name !== 'pre-commit' && name !== 'pre-push')) {
+      if (!vendorEvent('cursor', event)) continue;
+      const run = runGenerated('cursor', event, { home, payload: {} });
+      assert.equal(run.status, 0, `${event}: ${run.stderr}`);
+      assert.equal(run.stdout, '{}', event);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
+});
+
+// The generated policy file runs the module's text standalone, so the module
+// must never grow a dependency the file cannot carry.
+test('the policy module stays self-contained: node builtin imports only', () => {
+  const source = readFileSync(fileURLToPath(new URL('../identity/uninstalled-policy.mjs', import.meta.url)), 'utf8');
+  const imports = [...source.matchAll(/import\s+[^;]*?from\s+["']([^"']+)["']/g)].map((match) => match[1]);
+  assert.ok(imports.length > 0, 'the module imports its node builtins');
+  for (const spec of imports) assert.match(spec, /^node:/, `non-builtin import: ${spec}`);
 });
