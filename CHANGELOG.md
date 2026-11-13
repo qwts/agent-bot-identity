@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.19
+
+- `agent-bot cloud install-hooks` no longer registers `cloud down --hook` as a Claude Code `SessionEnd` hook, and removes one an earlier install added. `SessionEnd` fires whenever a session ends, a pause or an idle stop included, not only when it is deleted, so it revoked the device on every pause and each resume needed a fresh approval. A paused container keeps its enrollment now; the device's lifetime, or `agent-bot cloud down` run by hand, retires it.
+- `agent-bot cloud status` reports, without changing anything, whether the server confirms the device's enrollment, whether the daemon runs, whether the gh shim is in place, and any pending approval link; it exits 1 until the device is enrolled and the daemon runs. The SessionStart hook now names the command, so a session asked about agent-bot runs it instead of reading state files, and labels the device key thumbprint as public. After a device-grant approval, the background worker installs the gh shim too: `cloud up` runs before the approval, so it could not.
+- Harness hook entries in `~/.claude/settings.json`, `~/.qwen/settings.json` and the other user-level configs are now one readable line each: they name the hook point by purpose (`bind-soul`, `guard-identity`, `guard-writes`, `guard-tools`) and run a co-located dispatcher (`~/.<harness>/agent-bot/hook`) instead of embedding the ~22 KB uninstalled-fallback program in the config string. The dispatcher and the policy file beside it are generated and drift-checked by `agent-bot sync-hooks`; the policy itself is now a normal module (`identity/uninstalled-policy.mjs`) rather than `fn.toString()` concatenation. Owner-approved ENG-0128 amendment: the uninstalled guard is self-contained in the config *directory*, not the config string — a config synced without its `agent-bot/` folder still refuses blocking events (`|| exit 2`), but the nuanced uninstalled policy (safe reads, listed unmanaged authors) needs the folder or a durable bootstrap.
+
 ## 0.15.18
 
 - ADR-1381 applies agent-bot-daemon D6 and platform PDR-0027. HQ runs in its own `_agent-bot-hq` / `agent-bot-hq` account, superseding ADR-0332 decision 2. HQ identity authority is HQ core in agent-bot-daemon, and this repository's plugin registers member surfaces only, superseding ADR-1183 decision 1's identity bullet (#1381).
