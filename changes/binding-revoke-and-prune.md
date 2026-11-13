@@ -1,1 +1,0 @@
-- `agent-bot binding revoke` (`DELETE /v0/binding`) verifies the one-time `x-agent-binding-proof` header once instead of consuming its nonce in a prior `resolveProof` check and failing with `HTTP 401`, and the live binding registry now prunes bindings whose worktree or `agent-binding.json` was deleted on disk without waiting for a daemon restart (#1400).

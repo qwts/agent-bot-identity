@@ -1,1 +1,0 @@
-- Web UI Approvals: after an approval the page shows the result and any command the owner still has to run, and machine proposals no longer show an empty invocation line (refs #1401).
