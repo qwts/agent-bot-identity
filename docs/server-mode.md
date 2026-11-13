@@ -23,7 +23,7 @@ The environment wins over config. The URL must be `https` (plain `http` is accep
 ## Commands
 
 ```sh
-agent-bot server enroll --harness grok [--harness claude] [--add-harness <name>] [--replace-harnesses] [--name "Chris MBP"] [--platform macos] [--tag laptop] [--force] [--json]
+agent-bot server enroll --harness grok [--harness claude] [--add-harness <name>] [--replace-harnesses] [--name "owner MBP"] [--platform macos] [--tag laptop] [--force] [--json]
 agent-bot server status [--json]
 agent-bot server logout [--local-only] [--json]
 agent-bot server reconcile [--json]
@@ -211,7 +211,7 @@ agent-comms are **signed by the identity service**, not by a host key (#1196):
 
 ## Cloud sessions (Claude Code on the web)
 
-A Claude Code cloud container starts empty and is reclaimed when the session goes idle, so its enrollment does not outlive it. Treat each container as a short-lived device: enroll it at the start of the session and run `agent-bot server logout` at the end. For a container that is reclaimed before it can log out, the device's own lifetime is the backstop, so keep it short.
+A Claude Code cloud container starts empty and is reclaimed some time after the session goes idle, so its enrollment does not outlive it. Treat each container as a short-lived device: enroll it at the start of the session, and let the device's own lifetime retire it, so keep that lifetime short. A paused session keeps its disk, and with it the enrollment, so resuming needs no new approval. To retire a container sooner, run `agent-bot cloud down` (or `agent-bot server logout`) in it.
 
 **A reusable environment.** Everything a container needs is in `scripts/cloud/setup.sh`, so an environment's setup script is one line, and no step is done by hand. Attach `true-line/agent-bot-identity` to the environment, then:
 
@@ -223,7 +223,7 @@ sh agent-bot-identity/scripts/cloud/setup.sh \
 
 The script installs the latest release (or `--version vX.Y.Z`, or `--from-checkout agent-bot-identity` for a change that is not released yet), applies the organization profile, and registers the session hooks. It needs no root, reads no secret, and can run again. Set one non-secret environment variable, `AGENT_BOT_SERVER=https://agents.true-line.ai`. Each session then runs `agent-bot cloud up` when it starts: the first message carries the approval link, and the session works as the bot once you approve.
 
-**One command each way.** `agent-bot cloud up` gets the container ready and `agent-bot cloud down` takes it down:
+**One command each way.** `agent-bot cloud up` gets the container ready and `agent-bot cloud down` retires it:
 
 ```sh
 agent-bot cloud install-hooks          # once, from the environment's setup script
@@ -232,8 +232,8 @@ agent-bot cloud down [--hook] [--json]
 ```
 
 - **up** is safe to run any number of times and repairs only what is down. It starts the identity daemon when it is not running, and enrolls the device for the App the detected harness maps to (or `--harness`, or `AGENT_BOT_SERVER_HARNESS`) when it is not enrolled. With `AGENT_BOT_ENROLL_TOKEN` set it enrolls at once; otherwise it starts the device grant in the background, prints the approval link straight away, and restarts the daemon once you approve. A container's processes do not survive the container being paused while its disk does, so run `up` again whenever the session resumes.
-- **down** stops the daemon and runs `server logout`, which revokes the device at the server.
-- **install-hooks** adds `cloud up --hook` as a Claude Code `SessionStart` hook and `cloud down --hook` as a `SessionEnd` hook in `~/.claude/settings.json`, keeping every other setting. With `--hook`, `up` prints hook JSON whose context carries the approval link, so the session's first message can show it, and neither command ever fails the session. `SessionEnd` does not run when an idle container is reclaimed, so keep the device lifetime short as the backstop.
+- **down** stops the daemon and runs `server logout`, which revokes the device at the server. Run it by hand; no hook runs it.
+- **install-hooks** adds `cloud up --hook` as a Claude Code `SessionStart` hook in `~/.claude/settings.json`, keeping every other setting, and removes a `SessionEnd` `cloud down --hook` that an earlier version added. `SessionEnd` fires whenever a session ends, a pause or an idle stop included, not only when the session is deleted, so a `cloud down` there revoked the device on every pause and each resume needed a fresh approval. With `--hook`, `up` prints hook JSON whose context carries the approval link, so the session's first message can show it, and it never fails the session.
 - `AGENT_BOT_SERVER` must be set in the environment (a non-secret environment variable).
 
 **Enrolling by hand.** `agent-bot server enroll --harness <app-slug>` prints an approval link (`https://agents.true-line.ai/device?user_code=…`) and the device key thumbprint, and you approve it in the browser. For no browser step, create an enrollment token under **Enrollment tokens** on `/devices` (1 use, 1 hour, the App slug as harness, a short device lifetime such as 24 hours) and set it as `AGENT_BOT_ENROLL_TOKEN`. A token lives at most 24 hours, so it does not carry over to the next day's containers.
