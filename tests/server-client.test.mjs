@@ -1067,3 +1067,103 @@ test('mintViaServer reuses a shared ServerSession DPoP token across calls and lo
   logout({ env });
   await assert.rejects(() => mintViaServer({ base: BASE, harness: 'grok', repo: 'o/r', env, fetchImpl: srv.fetch, taskId: 'task.after.logout' }), /not enrolled/);
 });
+
+test('a device grant interrupted mid-wait is resumed by the next enroll, with the same code', async () => {
+  const env = sandbox();
+  const srv = fakeServer({ approveAfter: 3 });
+  const grantFile = join(statePaths({ env }).dir, 'enroll-grant.json');
+  // The first run dies while polling (a paused container): the network drops
+  // after the code is shown.
+  let polls = 0;
+  const dying = async (url, init) => {
+    if (new URL(url).pathname === '/oauth/token' && ++polls === 2) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+    return srv.fetch(url, init);
+  };
+  let first;
+  await assert.rejects(enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: dying, sleep, onPrompt: (p) => { first = p; } }), /fetch failed/);
+  assert.equal(first.resumed, false);
+  const saved = JSON.parse(readFileSync(grantFile, 'utf8'));
+  assert.equal(saved.device_code, 'dc1');
+  assert.equal(saved.user_code, 'ABCD-EFGH');
+  if (process.platform !== 'win32') assert.equal(statSync(grantFile).mode & 0o777, 0o600);
+
+  // The next run polls that same code instead of asking for a new one, so an
+  // approval of the code the owner was shown is not lost.
+  const authorizations = srv.calls.filter((c) => c === '/oauth/device_authorization').length;
+  let again;
+  const dev = await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep, onPrompt: (p) => { again = p; } });
+  assert.equal(srv.calls.filter((c) => c === '/oauth/device_authorization').length, authorizations, 'no second device authorization');
+  assert.equal(again.resumed, true);
+  assert.equal(again.user_code, first.user_code);
+  assert.ok(again.expires_in > 0 && again.expires_in <= 600);
+  assert.equal(dev.device_id, 'dev_1');
+  assert.ok(!existsSync(grantFile), 'a settled grant is removed');
+});
+
+test('a saved grant is not resumed once expired, for other harnesses, or after the server settled it', async () => {
+  const env = sandbox();
+  const dir = statePaths({ env }).dir;
+  const grantFile = join(dir, 'enroll-grant.json');
+  const authorizations = (srv) => srv.calls.filter((c) => c === '/oauth/device_authorization').length;
+  const seed = (over) => {
+    const srv = fakeServer({ approveAfter: 1 });
+    return { srv, write: (key) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(grantFile, JSON.stringify({ base: BASE, staged: false, harnesses: 'grok', jkt: key, device_code: 'old', user_code: 'OLDC-ODE1', interval: 5, expires_at: Date.now() + 300_000, ...over }));
+    } };
+  };
+  // the device key exists from a first, interrupted run
+  const srv0 = fakeServer();
+  await assert.rejects(enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: async (u, i) => {
+    if (new URL(u).pathname === '/oauth/token') throw new TypeError('fetch failed');
+    return srv0.fetch(u, i);
+  }, sleep }), /fetch failed/);
+  const jkt = JSON.parse(readFileSync(grantFile, 'utf8')).jkt;
+
+  for (const [name, over] of [['expired', { expires_at: Date.now() + 5_000 }], ['other harnesses', { harnesses: 'codex grok' }], ['other key', { jkt: 'x'.repeat(43) }]]) {
+    const { srv, write } = seed(over);
+    write(over.jkt ?? jkt);
+    let p;
+    await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: srv.fetch, sleep, onPrompt: (x) => { p = x; } });
+    assert.equal(authorizations(srv), 1, `${name}: a fresh grant is started`);
+    assert.equal(p.resumed, false, name);
+    assert.ok(!existsSync(grantFile), name);
+    rmSync(statePaths({ env }).device, { force: true });
+  }
+
+  // the server no longer knows the saved code: dropped, never retried
+  const { srv, write } = seed({});
+  write(jkt);
+  const gone = async (u, i) => (new URL(u).pathname === '/oauth/token'
+    ? new Response(JSON.stringify({ error: 'expired_token' }), { status: 400, headers: { 'content-type': 'application/json' } })
+    : srv.fetch(u, i));
+  await assert.rejects(enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: gone, sleep }), /expired_token|enrollment failed/);
+  assert.ok(!existsSync(grantFile));
+});
+
+test('an interrupted forced re-enroll resumes with its staged key and then swaps the enrollment', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'abi-enroll-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = { ...sandbox(), AGENT_BOT_SERVER_STATE: dir };
+  const srv = fakeServer({ approveAfter: 3 });
+  const prior = await enroll({ base: BASE, env, enrollToken: 'abe_good', fetchImpl: srv.fetch, sleep });
+  const liveKey = readFileSync(join(dir, 'device-key.pem'), 'utf8');
+  let polls = 0;
+  const dying = async (url, init) => {
+    if (new URL(url).pathname === '/oauth/token' && f(init) && ++polls === 2) throw new TypeError('fetch failed');
+    return srv.fetch(url, init);
+  };
+  const f = (init) => init?.body instanceof URLSearchParams && init.body.get('grant_type')?.endsWith('device_code');
+  await assert.rejects(enroll({ base: BASE, env, enrollToken: '', harnesses: ['grok'], force: true, fetchImpl: dying, sleep }), /fetch failed/);
+  const stagedKey = readFileSync(join(dir, 'enroll-staging', 'device-key.pem'), 'utf8');
+  assert.equal(readFileSync(join(dir, 'device-key.pem'), 'utf8'), liveKey, 'the live enrollment is untouched meanwhile');
+  assert.equal(loadDevice({ env }).device_id, prior.device_id);
+
+  let p;
+  const dev = await enroll({ base: BASE, env, enrollToken: '', harnesses: ['grok'], force: true, fetchImpl: srv.fetch, sleep, onPrompt: (x) => { p = x; } });
+  assert.equal(p.resumed, true);
+  assert.notEqual(dev.device_id, prior.device_id);
+  assert.equal(readFileSync(join(dir, 'device-key.pem'), 'utf8'), stagedKey, 'the key the code was issued for becomes live');
+  assert.ok(!existsSync(join(dir, 'enroll-staging')));
+  assert.ok(!existsSync(join(dir, 'enroll-grant.json')));
+});
