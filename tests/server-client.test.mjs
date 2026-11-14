@@ -1167,3 +1167,31 @@ test('an interrupted forced re-enroll resumes with its staged key and then swaps
   assert.ok(!existsSync(join(dir, 'enroll-staging')));
   assert.ok(!existsSync(join(dir, 'enroll-grant.json')));
 });
+
+test('a 5xx or non-JSON reply while polling keeps polling the same code; an unknown error keeps the grant', async () => {
+  const env = sandbox();
+  const srv = fakeServer({ approveAfter: 2 });
+  const grantFile = join(statePaths({ env }).dir, 'enroll-grant.json');
+  let polls = 0;
+  const flaky = async (url, init) => {
+    if (new URL(url).pathname === '/oauth/token' && init?.body?.get?.('grant_type')?.endsWith('device_code')) {
+      polls += 1;
+      if (polls === 1) return new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } });
+      if (polls === 2) return new Response(JSON.stringify({ error: 'temporarily_unavailable' }), { status: 503, headers: { 'content-type': 'application/json' } });
+    }
+    return srv.fetch(url, init);
+  };
+  const dev = await enroll({ base: BASE, env, harnesses: ['grok'], fetchImpl: flaky, sleep });
+  assert.equal(dev.device_id, 'dev_1');
+  assert.equal(srv.calls.filter((c) => c === '/oauth/device_authorization').length, 1);
+  assert.ok(!existsSync(grantFile));
+
+  // an error the client does not know is not proof the grant is gone
+  const env2 = sandbox();
+  const srv2 = fakeServer();
+  const odd = async (url, init) => (new URL(url).pathname === '/oauth/token'
+    ? new Response(JSON.stringify({ error: 'invalid_request' }), { status: 400, headers: { 'content-type': 'application/json' } })
+    : srv2.fetch(url, init));
+  await assert.rejects(enroll({ base: BASE, env: env2, harnesses: ['grok'], fetchImpl: odd, sleep }), /invalid_request/);
+  assert.ok(existsSync(join(statePaths({ env: env2 }).dir, 'enroll-grant.json')));
+});

@@ -431,6 +431,10 @@ export function defaultPlatform(env = process.env) {
   return { darwin: 'macos', linux: 'linux', win32: 'windows', android: 'android' }[osPlatform()] ?? 'other';
 }
 
+// Token-endpoint answers after which the device code can never succeed: the
+// saved grant is dropped. Any other error leaves it for the next run.
+const GRANT_SETTLED = new Set(['access_denied', 'expired_token', 'invalid_grant']);
+
 // The saved device grant, when it can be resumed: for the same server, the
 // same staged/live target and the same harnesses, and not about to expire.
 function readGrant(file, { base, staged, harnesses }) {
@@ -534,7 +538,12 @@ export async function enroll({
         const body = await readJson(p);
         if (body.device_id) { result = body; break; }
         if (body.error === 'slow_down') interval += 5;
-        else if (body.error !== 'authorization_pending') throw Object.assign(oauthError('enrollment failed', body), { grantSettled: true });
+        else if (body.error === 'authorization_pending') continue;
+        // Only the server's final answers settle the grant. A proxy's 502 or a
+        // 5xx says nothing about it: keep polling the same code.
+        else if (GRANT_SETTLED.has(body.error)) throw Object.assign(oauthError('enrollment failed', body), { grantSettled: true });
+        else if (p.status >= 500 || body.error === 'temporarily_unavailable') continue;
+        else throw oauthError('enrollment failed', body);
       }
     }
     const record = {
