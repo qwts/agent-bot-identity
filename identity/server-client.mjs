@@ -431,6 +431,21 @@ export function defaultPlatform(env = process.env) {
   return { darwin: 'macos', linux: 'linux', win32: 'windows', android: 'android' }[osPlatform()] ?? 'other';
 }
 
+// Token-endpoint answers after which the device code can never succeed: the
+// saved grant is dropped. Any other error leaves it for the next run.
+const GRANT_SETTLED = new Set(['access_denied', 'expired_token', 'invalid_grant']);
+
+// The saved device grant, when it can be resumed: for the same server, the
+// same staged/live target and the same harnesses, and not about to expire.
+function readGrant(file, { base, staged, harnesses }) {
+  let g;
+  try { g = JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+  if (!g || g.base !== base || g.staged !== staged || g.harnesses !== harnesses) return null;
+  if (typeof g.device_code !== 'string' || typeof g.user_code !== 'string' || typeof g.jkt !== 'string') return null;
+  if (!Number.isFinite(g.expires_at) || g.expires_at - Date.now() < 15_000) return null;
+  return { ...g, interval: Number(g.interval) || 5 };
+}
+
 // Enroll this machine. Returns the stored device record.
 export async function enroll({
   base, env = process.env, home, harnesses = [], addHarnesses = [], replaceHarnesses = false,
@@ -462,12 +477,27 @@ export async function enroll({
   // action ledger and event cursors stay untouched until approval (#1243).
   const stagedDir = effectiveForce ? path.join(serverStateDir(opts), 'enroll-staging') : null;
   const sopts = stagedDir ? { env: { ...env, AGENT_BOT_SERVER_STATE: stagedDir }, home } : opts;
+  // A device grant in flight is saved, so a run killed before the grant
+  // settles (a cloud container paused mid-wait) is resumed by the next run:
+  // the owner may approve the code it showed after it died, and the server
+  // creates the device only when that code is polled again.
+  const grantFile = path.join(serverStateDir(opts), 'enroll-grant.json');
+  const grantScope = { base, staged: Boolean(stagedDir), harnesses: [...effectiveHarnesses].sort().join(' ') };
+  let grant = enrollToken ? null : readGrant(grantFile, grantScope);
+  let grantSaved = Boolean(grant);
   let result;
   try {
-    if (stagedDir) { rmSync(stagedDir, { recursive: true, force: true }); mkdirSync(stagedDir, { recursive: true, mode: 0o700 }); }
+    // A resumed forced grant keeps its staged key: the code is bound to it.
+    if (stagedDir && !(grant && existsSync(statePaths(sopts).key))) {
+      grant = null;
+      rmSync(stagedDir, { recursive: true, force: true });
+      mkdirSync(stagedDir, { recursive: true, mode: 0o700 });
+    }
     const serverKey = await pinServerKey(base, sopts, { fetchImpl });
     const deviceKey = loadDeviceKey(sopts, { create: true });
     const jkt = jwkThumbprint(publicJwk(deviceKey));
+    if (grant && grant.jkt !== jkt) grant = null;
+    if (!grant) rmSync(grantFile, { force: true });
     const meta = { device_name: deviceName, platform, key_storage: 'software', tags: tags.join(' ') };
     let method;
     if (enrollToken) {
@@ -479,21 +509,41 @@ export async function enroll({
     } else {
       method = 'device_code';
       if (effectiveHarnesses.length === 0) throw new Error('enroll needs at least one --harness');
-      const aud = `${base}/oauth/device_authorization`;
-      const res = await fetchImpl(aud, form({ ...meta, harnesses: effectiveHarnesses.join(' '), proof: enrollProof(deviceKey, aud) }));
-      const auth = await readJson(res);
-      if (!res.ok || !auth.user_code) throw oauthError('device authorization failed', auth);
-      onPrompt({ ...auth, jkt });
-      let interval = Number(auth.interval) || 5;
-      const deadline = Date.now() + (Number(auth.expires_in) || 900) * 1000;
+      let auth = grant;
+      if (!auth) {
+        const aud = `${base}/oauth/device_authorization`;
+        const res = await fetchImpl(aud, form({ ...meta, harnesses: effectiveHarnesses.join(' '), proof: enrollProof(deviceKey, aud) }));
+        const body = await readJson(res);
+        if (!res.ok || !body.user_code) throw oauthError('device authorization failed', body);
+        auth = {
+          ...grantScope, jkt, device_code: body.device_code, user_code: body.user_code,
+          verification_uri: body.verification_uri, verification_uri_complete: body.verification_uri_complete,
+          interval: Number(body.interval) || 5,
+          expires_at: Date.now() + (Number(body.expires_in) || 900) * 1000,
+        };
+        writePrivate(grantFile, `${JSON.stringify(auth, null, 2)}\n`);
+      }
+      grantSaved = true;
+      onPrompt({
+        user_code: auth.user_code, verification_uri: auth.verification_uri,
+        verification_uri_complete: auth.verification_uri_complete,
+        expires_in: Math.max(1, Math.round((auth.expires_at - Date.now()) / 1000)),
+        interval: auth.interval, jkt, resumed: Boolean(grant),
+      });
+      let interval = auth.interval;
       for (;;) {
-        if (Date.now() > deadline) throw new Error('device code expired before approval');
+        if (Date.now() > auth.expires_at) throw Object.assign(new Error('device code expired before approval'), { grantSettled: true });
         await sleep(interval * 1000);
         const p = await fetchImpl(`${base}/oauth/token`, form({ grant_type: GRANT_DEVICE_CODE, device_code: auth.device_code }));
         const body = await readJson(p);
         if (body.device_id) { result = body; break; }
         if (body.error === 'slow_down') interval += 5;
-        else if (body.error !== 'authorization_pending') throw oauthError('enrollment failed', body);
+        else if (body.error === 'authorization_pending') continue;
+        // Only the server's final answers settle the grant. A proxy's 502 or a
+        // 5xx says nothing about it: keep polling the same code.
+        else if (GRANT_SETTLED.has(body.error)) throw Object.assign(oauthError('enrollment failed', body), { grantSettled: true });
+        else if (p.status >= 500 || body.error === 'temporarily_unavailable') continue;
+        else throw oauthError('enrollment failed', body);
       }
     }
     const record = {
@@ -512,7 +562,13 @@ export async function enroll({
     } catch (e) {
       saveDevice(sopts, { ...record, verified: false, verify_error: e.message });
     }
+    rmSync(grantFile, { force: true });
   } catch (error) {
+    // A grant the server settled (denied, expired, consumed) is dropped. One
+    // that a network error interrupted is kept, with its staged key, for the
+    // next run to resume: the owner may already have approved its code.
+    if (grantSaved && !error.grantSettled) throw error;
+    rmSync(grantFile, { force: true });
     // An expired, denied or aborted grant never touches the live enrollment.
     if (stagedDir) rmSync(stagedDir, { recursive: true, force: true });
     throw error;
